@@ -55,6 +55,20 @@ target_link_libraries(camera_firmware_rtsp_tests
 
 gtest_discover_tests(camera_firmware_rtsp_tests)
 
+add_executable(camera_firmware_ai_tests
+    unit/ai/DetectionBusTest.cpp
+    unit/ai/AiFrameTapTest.cpp
+)
+
+target_link_libraries(camera_firmware_ai_tests
+    PRIVATE
+        camera_firmware_ai
+        camera_firmware_media
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_ai_tests)
+
 add_executable(gst_secure_srtp_tests
     unit/rtsp/CfSecureSrtpEncTest.cpp
 )
