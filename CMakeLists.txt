@@ -10,6 +10,7 @@ include(CTest)
 include(cmake/Dependencies.cmake)
 
 add_subdirectory(src/common)
+add_subdirectory(src/ai)
 add_subdirectory(src/config)
 add_subdirectory(src/media)
 add_subdirectory(src/rtsp)
