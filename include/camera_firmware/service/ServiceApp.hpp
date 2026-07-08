@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -28,6 +29,17 @@ using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
     std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
 
+struct AiServiceStatus {
+  bool enabled{false};
+  std::string backend{"disabled"};
+  std::string state{"disabled"};
+  std::size_t model_count{0};
+  std::size_t runner_count{0};
+  std::string reason{"disabled by config"};
+};
+
+using AiStatusProvider = std::function<AiServiceStatus()>;
+
 struct ServiceListenerConfig {
   std::string bind_address{"0.0.0.0"};
   std::uint16_t port{8080};
@@ -45,10 +57,12 @@ struct ServiceInitArgs {
   std::string health_status{"ok"};
   bool ai_enabled{false};
   CameraStatusProvider camera_status_provider;
+  AiStatusProvider ai_status_provider;
   SnapshotCallback snapshot_callback;
 };
 
 Json::Value BuildHealthJson(const std::string& status);
+Json::Value BuildAiStatusJson(const AiServiceStatus& status);
 Json::Value BuildAiStatusJson(bool requested);
 Json::Value BuildStreamJson(std::string_view public_base_url,
                             const config::SecureRtspConfig& secure_rtsp);

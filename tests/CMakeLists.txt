@@ -59,6 +59,7 @@ gtest_discover_tests(camera_firmware_rtsp_tests)
 add_executable(camera_firmware_ai_tests
     unit/ai/DetectionBusTest.cpp
     unit/ai/AiFrameTapTest.cpp
+    unit/ai/AiRuntimeTest.cpp
 )
 
 target_link_libraries(camera_firmware_ai_tests

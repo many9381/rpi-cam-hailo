@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "camera_firmware/ai/AiFrameTap.hpp"
+#include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/ai/DetectionBus.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
@@ -84,6 +86,15 @@ int ValidateConfig(const std::string& config_path) {
     }
   }
 
+  camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::ai::AiRuntime ai_runtime(&detection_bus);
+  auto ai_started = ai_runtime.Start(cfg.value());
+  if (!ai_started.ok()) {
+    return PrintError(ai_started.error());
+  }
+  const auto ai_status = ai_runtime.Status();
+  ai_runtime.Stop();
+
   Logger::instance().log(Logger::Level::kInfo,
                          "config loaded: " + config_path);
   Logger::instance().log(
@@ -99,9 +110,10 @@ int ValidateConfig(const std::string& config_path) {
           std::to_string(cfg.value().http.port));
   Logger::instance().log(
       Logger::Level::kInfo,
-      cfg.value().ai.enabled
-          ? "AI disabled: Hailo runtime not implemented"
-          : "AI disabled by config");
+      ai_status.enabled ? "AI backend " + ai_status.backend +
+                              " configured; runtime skeleton state=" +
+                              ai_status.state
+                        : "AI disabled by config");
   return EXIT_SUCCESS;
 }
 
@@ -113,6 +125,24 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
     result.push_back({status.id, status.state, status.snapshot_available});
   }
   return result;
+}
+
+camera_firmware::service::AiServiceStatus ToServiceAiStatus(
+    const camera_firmware::ai::AiRuntimeStatus& status) {
+  camera_firmware::service::AiServiceStatus service_status;
+  service_status.enabled = status.enabled;
+  service_status.backend = status.backend;
+  service_status.state = status.state;
+  service_status.model_count = status.model_count;
+  service_status.runner_count = status.runner_count;
+  if (!status.last_error_message.empty()) {
+    service_status.reason = status.last_error_message;
+  } else if (!status.enabled) {
+    service_status.reason = "disabled by config";
+  } else {
+    service_status.reason = "AI runtime skeleton ready";
+  }
+  return service_status;
 }
 
 int RunFirmware(const std::string& config_path) {
@@ -129,6 +159,8 @@ int RunFirmware(const std::string& config_path) {
 
   camera_firmware::media::SnapshotTap snapshot_tap;
   camera_firmware::ai::AiFrameTap ai_frame_tap;
+  camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::ai::AiRuntime ai_runtime(&detection_bus);
   camera_firmware::media::EncodedRing encoded_ring(128);
   camera_firmware::media::CameraPipeline camera_pipeline(
       snapshot_tap, ai_frame_tap, encoded_ring);
@@ -146,6 +178,13 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(camera.error());
   }
 
+  auto ai_started = ai_runtime.Start(cfg.value());
+  if (!ai_started.ok()) {
+    camera_pipeline.Stop();
+    rtsp_server.Stop();
+    return PrintError(ai_started.error());
+  }
+
   camera_firmware::service::ServiceInitArgs service_args;
   service_args.app_config = &cfg.value();
   service_args.bind_address = cfg.value().http.bind_ip;
@@ -156,6 +195,9 @@ int RunFirmware(const std::string& config_path) {
     return ToServiceStatus(camera_pipeline.Status());
   };
   service_args.ai_enabled = cfg.value().ai.enabled;
+  service_args.ai_status_provider = [&ai_runtime] {
+    return ToServiceAiStatus(ai_runtime.Status());
+  };
   service_args.snapshot_callback =
       [&snapshot_tap,
        configured_camera_id = cfg.value().camera.id](const std::string& camera_id) {
@@ -168,6 +210,7 @@ int RunFirmware(const std::string& config_path) {
   if (cfg.value().http.enabled) {
     auto service_started = service.Init(service_args);
     if (!service_started.ok()) {
+      ai_runtime.Stop();
       camera_pipeline.Stop();
       rtsp_server.Stop();
       return PrintError(service_started.error());
@@ -180,6 +223,7 @@ int RunFirmware(const std::string& config_path) {
   if (cfg.value().http.enabled) {
     service.Stop();
   }
+  ai_runtime.Stop();
   camera_pipeline.Stop();
   rtsp_server.Stop();
   return EXIT_SUCCESS;
