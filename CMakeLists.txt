@@ -14,6 +14,7 @@ add_subdirectory(src/ai)
 add_subdirectory(src/config)
 add_subdirectory(src/media)
 add_subdirectory(src/rtsp)
+add_subdirectory(src/service)
 add_subdirectory(plugins/gst-secure-srtp)
 
 if(BUILD_TESTING)

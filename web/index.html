@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Camera Firmware</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="status-panel">
+        <h1>Camera Firmware</h1>
+        <dl class="status-grid">
+          <div>
+            <dt>Health</dt>
+            <dd id="health-status">Loading</dd>
+          </div>
+          <div>
+            <dt>Stream</dt>
+            <dd id="stream-url">Loading</dd>
+          </div>
+          <div>
+            <dt>AI</dt>
+            <dd id="ai-status">Loading</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="content-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Cameras</h2>
+            <button id="refresh-button" type="button">Refresh</button>
+          </div>
+          <ul id="camera-list" class="camera-list"></ul>
+        </section>
+
+        <section class="panel snapshot-panel">
+          <div class="panel-header">
+            <h2>Snapshot</h2>
+            <span id="snapshot-label">Unavailable</span>
+          </div>
+          <img id="snapshot-image" alt="Latest camera snapshot">
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
