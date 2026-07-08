@@ -28,3 +28,16 @@ target_link_libraries(camera_firmware_config_tests
 gtest_discover_tests(camera_firmware_config_tests
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
+
+add_executable(camera_firmware_media_tests
+    unit/media/EncodedRingTest.cpp
+    unit/media/FrameLeaseTest.cpp
+)
+
+target_link_libraries(camera_firmware_media_tests
+    PRIVATE
+        camera_firmware_media
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_media_tests)
