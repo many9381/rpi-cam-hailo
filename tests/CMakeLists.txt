@@ -69,6 +69,18 @@ target_link_libraries(camera_firmware_ai_tests
 
 gtest_discover_tests(camera_firmware_ai_tests)
 
+add_executable(camera_firmware_service_tests
+    unit/service/ServiceResponseTest.cpp
+)
+
+target_link_libraries(camera_firmware_service_tests
+    PRIVATE
+        camera_firmware_service
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_service_tests)
+
 add_executable(gst_secure_srtp_tests
     unit/rtsp/CfSecureSrtpEncTest.cpp
 )
