@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "camera_firmware/ai/AiFramePump.hpp"
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
@@ -161,6 +162,7 @@ int RunFirmware(const std::string& config_path) {
   camera_firmware::ai::AiFrameTap ai_frame_tap;
   camera_firmware::ai::DetectionBus detection_bus;
   camera_firmware::ai::AiRuntime ai_runtime(&detection_bus);
+  camera_firmware::ai::AiFramePump ai_frame_pump(ai_frame_tap, ai_runtime);
   camera_firmware::media::EncodedRing encoded_ring(128);
   camera_firmware::media::CameraPipeline camera_pipeline(
       snapshot_tap, ai_frame_tap, encoded_ring);
@@ -172,17 +174,29 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(rtsp.error());
   }
 
-  auto camera = camera_pipeline.Start(cfg.value());
-  if (!camera.ok()) {
-    rtsp_server.Stop();
-    return PrintError(camera.error());
-  }
-
   auto ai_started = ai_runtime.Start(cfg.value());
   if (!ai_started.ok()) {
-    camera_pipeline.Stop();
     rtsp_server.Stop();
     return PrintError(ai_started.error());
+  }
+
+  const bool should_pump_ai_frames =
+      cfg.value().ai.enabled && cfg.value().camera.ai.enabled;
+  if (should_pump_ai_frames) {
+    auto pump_started = ai_frame_pump.Start();
+    if (!pump_started.ok()) {
+      ai_runtime.Stop();
+      rtsp_server.Stop();
+      return PrintError(pump_started.error());
+    }
+  }
+
+  auto camera = camera_pipeline.Start(cfg.value());
+  if (!camera.ok()) {
+    ai_frame_pump.Stop();
+    ai_runtime.Stop();
+    rtsp_server.Stop();
+    return PrintError(camera.error());
   }
 
   camera_firmware::service::ServiceInitArgs service_args;
@@ -210,6 +224,7 @@ int RunFirmware(const std::string& config_path) {
   if (cfg.value().http.enabled) {
     auto service_started = service.Init(service_args);
     if (!service_started.ok()) {
+      ai_frame_pump.Stop();
       ai_runtime.Stop();
       camera_pipeline.Stop();
       rtsp_server.Stop();
@@ -223,6 +238,7 @@ int RunFirmware(const std::string& config_path) {
   if (cfg.value().http.enabled) {
     service.Stop();
   }
+  ai_frame_pump.Stop();
   ai_runtime.Stop();
   camera_pipeline.Stop();
   rtsp_server.Stop();

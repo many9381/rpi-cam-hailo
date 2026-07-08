@@ -21,3 +21,21 @@ pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 pkg_check_modules(LIBSRTP2 REQUIRED IMPORTED_TARGET libsrtp2>=2.7.0)
 pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
 pkg_check_modules(X264 REQUIRED IMPORTED_TARGET x264)
+
+find_path(HAILORT_INCLUDE_DIR
+    NAMES hailo/hailort.h hailo/vdevice.hpp hailo/infer_model.hpp
+)
+find_library(HAILORT_LIBRARY
+    NAMES hailort
+)
+if(HAILORT_INCLUDE_DIR AND HAILORT_LIBRARY)
+  set(CF_TEST_EXPECT_HAILORT ON)
+  if(NOT TARGET HailoRT::HailoRT)
+    add_library(HailoRT::HailoRT UNKNOWN IMPORTED)
+    set_target_properties(HailoRT::HailoRT
+        PROPERTIES
+            IMPORTED_LOCATION "${HAILORT_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${HAILORT_INCLUDE_DIR}"
+    )
+  endif()
+endif()

@@ -6,6 +6,8 @@
 #include <thread>
 
 #include "camera_firmware/ai/AiBackend.hpp"
+#include "camera_firmware/ai/AiModelProcessor.hpp"
+#include "camera_firmware/ai/DetectionBus.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/FrameLease.hpp"
@@ -28,7 +30,8 @@ class AiModelRunner {
   AiModelRunner(std::string camera_id,
                 config::AiModelConfig model,
                 AiBackend* backend,
-                ModelHandle model_handle);
+                ModelHandle model_handle,
+                DetectionBus* detection_bus = nullptr);
   ~AiModelRunner();
 
   AiModelRunner(const AiModelRunner&) = delete;
@@ -51,6 +54,8 @@ class AiModelRunner {
   config::AiModelConfig model_;
   AiBackend* backend_{nullptr};
   ModelHandle model_handle_{0};
+  DetectionBus::Publisher detection_publisher_;
+  std::shared_ptr<AiModelProcessor> processor_;
   std::shared_ptr<SharedState> state_;
   std::thread worker_;
 };

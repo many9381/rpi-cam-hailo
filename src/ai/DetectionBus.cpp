@@ -39,6 +39,20 @@ void DetectionBus::Subscription::Reset() noexcept {
   shared_state_.reset();
 }
 
+DetectionBus::Publisher::Publisher(
+    std::weak_ptr<SharedState> shared_state) noexcept
+    : shared_state_(std::move(shared_state)) {}
+
+bool DetectionBus::Publisher::valid() const noexcept {
+  return !shared_state_.expired();
+}
+
+void DetectionBus::Publisher::Publish(const DetectionEvent& event) const {
+  if (auto shared_state = shared_state_.lock()) {
+    PublishToState(shared_state, event);
+  }
+}
+
 DetectionBus::Subscription DetectionBus::Subscribe(Handler handler) {
   std::lock_guard lock(shared_state_->mutex);
   const auto subscriber_id = shared_state_->next_subscriber_id++;
@@ -46,12 +60,28 @@ DetectionBus::Subscription DetectionBus::Subscribe(Handler handler) {
   return Subscription(shared_state_, subscriber_id);
 }
 
+DetectionBus::Publisher DetectionBus::PublisherHandle() const noexcept {
+  return Publisher(shared_state_);
+}
+
 void DetectionBus::Publish(const DetectionEvent& event) const {
+  PublishToState(shared_state_, event);
+}
+
+void DetectionBus::Unsubscribe(const std::shared_ptr<SharedState>& shared_state,
+                               std::uint64_t subscriber_id) noexcept {
+  std::lock_guard lock(shared_state->mutex);
+  shared_state->subscribers.erase(subscriber_id);
+}
+
+void DetectionBus::PublishToState(
+    const std::shared_ptr<SharedState>& shared_state,
+    const DetectionEvent& event) {
   std::vector<Handler> handlers;
   {
-    std::lock_guard lock(shared_state_->mutex);
-    handlers.reserve(shared_state_->subscribers.size());
-    for (const auto& [subscriber_id, handler] : shared_state_->subscribers) {
+    std::lock_guard lock(shared_state->mutex);
+    handlers.reserve(shared_state->subscribers.size());
+    for (const auto& [subscriber_id, handler] : shared_state->subscribers) {
       (void)subscriber_id;
       handlers.push_back(handler);
     }
@@ -60,12 +90,6 @@ void DetectionBus::Publish(const DetectionEvent& event) const {
   for (const auto& handler : handlers) {
     handler(event);
   }
-}
-
-void DetectionBus::Unsubscribe(const std::shared_ptr<SharedState>& shared_state,
-                               std::uint64_t subscriber_id) noexcept {
-  std::lock_guard lock(shared_state->mutex);
-  shared_state->subscribers.erase(subscriber_id);
 }
 
 }  // namespace camera_firmware::ai

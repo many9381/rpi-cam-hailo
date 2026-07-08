@@ -46,7 +46,23 @@ class DetectionBus {
     std::uint64_t subscriber_id_{0};
   };
 
+  class Publisher {
+   public:
+    Publisher() = default;
+
+    [[nodiscard]] bool valid() const noexcept;
+    void Publish(const DetectionEvent& event) const;
+
+   private:
+    friend class DetectionBus;
+
+    explicit Publisher(std::weak_ptr<SharedState> shared_state) noexcept;
+
+    std::weak_ptr<SharedState> shared_state_;
+  };
+
   [[nodiscard]] Subscription Subscribe(Handler handler);
+  [[nodiscard]] Publisher PublisherHandle() const noexcept;
   void Publish(const DetectionEvent& event) const;
 
  private:
@@ -58,6 +74,8 @@ class DetectionBus {
 
   static void Unsubscribe(const std::shared_ptr<SharedState>& shared_state,
                           std::uint64_t subscriber_id) noexcept;
+  static void PublishToState(const std::shared_ptr<SharedState>& shared_state,
+                             const DetectionEvent& event);
 
   std::shared_ptr<SharedState> shared_state_{std::make_shared<SharedState>()};
 };
