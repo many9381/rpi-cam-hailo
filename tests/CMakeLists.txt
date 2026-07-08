@@ -1,4 +1,5 @@
 find_package(GTest REQUIRED)
+pkg_check_modules(GSTREAMER_CHECK REQUIRED IMPORTED_TARGET gstreamer-check-1.0)
 
 add_executable(camera_firmware_common_tests
     unit/common/ResultTest.cpp
@@ -41,3 +42,31 @@ target_link_libraries(camera_firmware_media_tests
 )
 
 gtest_discover_tests(camera_firmware_media_tests)
+
+add_executable(camera_firmware_rtsp_tests
+    unit/rtsp/SrtpSessionKeyTest.cpp
+)
+
+target_link_libraries(camera_firmware_rtsp_tests
+    PRIVATE
+        camera_firmware_rtsp
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_rtsp_tests)
+
+add_executable(gst_secure_srtp_tests
+    unit/rtsp/CfSecureSrtpEncTest.cpp
+)
+
+target_link_libraries(gst_secure_srtp_tests
+    PRIVATE
+        PkgConfig::GSTREAMER
+        PkgConfig::GSTREAMER_CHECK
+        GTest::gtest_main
+)
+
+gtest_discover_tests(gst_secure_srtp_tests
+    PROPERTIES
+        ENVIRONMENT "GST_PLUGIN_PATH=${PROJECT_BINARY_DIR}/plugins/gst-secure-srtp"
+)
