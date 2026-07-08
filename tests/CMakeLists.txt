@@ -58,8 +58,11 @@ gtest_discover_tests(camera_firmware_rtsp_tests)
 
 add_executable(camera_firmware_ai_tests
     unit/ai/DetectionBusTest.cpp
+    unit/ai/AiFramePumpTest.cpp
     unit/ai/AiFrameTapTest.cpp
+    unit/ai/AiModelProcessorTest.cpp
     unit/ai/AiRuntimeTest.cpp
+    unit/ai/YoloPostprocessTest.cpp
 )
 
 target_link_libraries(camera_firmware_ai_tests
@@ -68,6 +71,12 @@ target_link_libraries(camera_firmware_ai_tests
         camera_firmware_media
         GTest::gtest_main
 )
+if(CF_TEST_EXPECT_HAILORT)
+    target_compile_definitions(camera_firmware_ai_tests
+        PRIVATE
+            CF_TEST_EXPECT_HAILORT=1
+    )
+endif()
 
 gtest_discover_tests(camera_firmware_ai_tests)
 

@@ -59,3 +59,14 @@ TEST(DetectionBusTest, SubscriptionDropAfterBusDestructionIsSafe) {
 
   EXPECT_FALSE(sub.valid());
 }
+
+TEST(DetectionBusTest, PublisherAfterBusDestructionIsSafeNoop) {
+  auto bus = std::make_unique<camera_firmware::ai::DetectionBus>();
+  auto publisher = bus->PublisherHandle();
+  ASSERT_TRUE(publisher.valid());
+
+  bus.reset();
+
+  EXPECT_FALSE(publisher.valid());
+  EXPECT_NO_THROW(publisher.Publish(camera_firmware::ai::DetectionEvent{}));
+}

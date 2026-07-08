@@ -28,6 +28,8 @@ struct AiRuntimeStatus {
 class AiRuntime {
  public:
   explicit AiRuntime(DetectionBus* detection_bus);
+  AiRuntime(DetectionBus* detection_bus,
+            std::shared_ptr<AiBackend> backend_override);
   ~AiRuntime();
 
   AiRuntime(const AiRuntime&) = delete;
@@ -50,6 +52,7 @@ class AiRuntime {
 
   DetectionBus* detection_bus_{nullptr};
   mutable std::mutex mutex_;
+  std::shared_ptr<AiBackend> backend_override_;
   std::shared_ptr<AiBackend> backend_;
   std::unordered_map<std::string, ModelHandle> model_handles_;
   std::vector<std::shared_ptr<AiModelRunner>> runners_;

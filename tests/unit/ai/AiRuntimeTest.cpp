@@ -1,13 +1,21 @@
 #include "camera_firmware/ai/AiRuntime.hpp"
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <cstring>
 #include <future>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -34,6 +42,10 @@ camera_firmware::config::AppConfig RuntimeConfig() {
   config.camera.ai.enabled = true;
   config.camera.ai.model_ids = {"objects", "pose"};
   return config;
+}
+
+std::shared_ptr<camera_firmware::ai::AiBackend> UnavailableBackend() {
+  return std::make_shared<camera_firmware::ai::UnavailableAiBackend>();
 }
 
 class GateBackend final : public camera_firmware::ai::AiBackend {
@@ -173,6 +185,80 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
   int submit_count_{0};
 };
 
+class CapturingSuccessBackend final : public camera_firmware::ai::AiBackend {
+ public:
+  explicit CapturingSuccessBackend(std::vector<std::uint8_t> output = {})
+      : output_(std::move(output)) {}
+
+  [[nodiscard]] std::string_view name() const noexcept override {
+    return "capture";
+  }
+
+  [[nodiscard]] bool available() const noexcept override { return true; }
+
+  [[nodiscard]] camera_firmware::common::Result<void> Init() override {
+    return camera_firmware::common::Result<void>::Ok();
+  }
+
+  void Shutdown() override {}
+
+  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  LoadModel(const camera_firmware::config::AiModelConfig&) override {
+    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
+        1);
+  }
+
+  void Unload(camera_firmware::ai::ModelHandle) override {}
+
+  [[nodiscard]] camera_firmware::common::Result<void> Submit(
+      camera_firmware::ai::ModelHandle,
+      camera_firmware::ai::InputView input,
+      camera_firmware::ai::InferCallback callback) override {
+    {
+      std::lock_guard lock(mutex_);
+      ++submit_count_;
+      last_input_size_ = input.size;
+      last_input_was_null_ = input.data == nullptr;
+    }
+    changed_.notify_all();
+    if (callback) {
+      camera_firmware::ai::OutputView output;
+      if (!output_.empty()) {
+        output.data = output_.data();
+        output.size = output_.size();
+      }
+      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
+                   Ok(output));
+    }
+    return camera_firmware::common::Result<void>::Ok();
+  }
+
+  bool WaitForSubmit() {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, std::chrono::seconds(1), [this] {
+      return submit_count_ >= 1;
+    });
+  }
+
+  [[nodiscard]] std::size_t last_input_size() const {
+    std::lock_guard lock(mutex_);
+    return last_input_size_;
+  }
+
+  [[nodiscard]] bool last_input_was_null() const {
+    std::lock_guard lock(mutex_);
+    return last_input_was_null_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  int submit_count_{0};
+  std::size_t last_input_size_{0};
+  bool last_input_was_null_{true};
+  std::vector<std::uint8_t> output_;
+};
+
 bool WaitUntilRunnerDropped(camera_firmware::ai::AiRuntime& runtime,
                             std::size_t runner_count) {
   for (int attempt = 0; attempt < 100; ++attempt) {
@@ -189,6 +275,86 @@ bool WaitUntilRunnerDropped(camera_firmware::ai::AiRuntime& runtime,
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return false;
+}
+
+int CreateRuntimeAnonymousFile(const std::vector<std::uint8_t>& bytes) {
+  std::array<char, 32> path{"/tmp/cf-ai-run-XXXXXX"};
+  int fd = ::mkstemp(path.data());
+  if (fd < 0) {
+    return -1;
+  }
+  (void)::unlink(path.data());
+  if (::ftruncate(fd, static_cast<off_t>(bytes.size())) != 0) {
+    (void)::close(fd);
+    return -1;
+  }
+  if (::write(fd, bytes.data(), bytes.size()) !=
+      static_cast<ssize_t>(bytes.size())) {
+    (void)::close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+camera_firmware::media::FrameHandle Nv12RuntimeHandle(
+    std::uint64_t sequence,
+    int fd) {
+  camera_firmware::media::FrameHandle handle;
+  handle.camera_id = "imx708-main";
+  handle.format = "NV12";
+  handle.width = 8;
+  handle.height = 4;
+  handle.sequence = sequence;
+  handle.plane_count = 2;
+  handle.planes[0].dmabuf_fd = fd;
+  handle.planes[0].stride = 8;
+  handle.planes[0].length = 32;
+  handle.planes[0].offset = 0;
+  handle.planes[1].dmabuf_fd = fd;
+  handle.planes[1].stride = 8;
+  handle.planes[1].length = 16;
+  handle.planes[1].offset = handle.planes[0].length;
+  return handle;
+}
+
+camera_firmware::media::FrameLease Nv12RuntimeLease(
+    std::uint64_t sequence,
+    camera_firmware::media::FrameLease::ReleaseCallback release_callback =
+        [] {}) {
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(8U * 4U + 8U * 2U);
+  bytes.insert(bytes.end(), 8U * 4U, 16U);
+  bytes.insert(bytes.end(), 8U * 2U, 128U);
+  const int fd = CreateRuntimeAnonymousFile(bytes);
+  auto handle = Nv12RuntimeHandle(sequence, fd);
+  return camera_firmware::media::FrameLease(std::move(handle),
+                                            [fd,
+                                             release_callback =
+                                                 std::move(release_callback)] {
+                                              if (fd >= 0) {
+                                                (void)::close(fd);
+                                              }
+                                              release_callback();
+                                            });
+}
+
+std::vector<std::uint8_t> RuntimeYoloNmsOutputBytes(float confidence) {
+  constexpr int kClassCount = 80;
+  constexpr int kMaxBoxesPerClass = 100;
+  constexpr int kValuesPerClass = 1 + (kMaxBoxesPerClass * 5);
+
+  std::vector<float> tensor(kClassCount * kValuesPerClass, 0.0F);
+  const std::size_t class_offset = 2U * kValuesPerClass;
+  tensor[class_offset] = 1.0F;
+  tensor[class_offset + 1U] = 0.20F;
+  tensor[class_offset + 2U] = 0.15F;
+  tensor[class_offset + 3U] = 0.70F;
+  tensor[class_offset + 4U] = 0.65F;
+  tensor[class_offset + 5U] = confidence;
+
+  std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
+  std::memcpy(bytes.data(), tensor.data(), bytes.size());
+  return bytes;
 }
 
 }  // namespace
@@ -211,7 +377,7 @@ TEST(AiRuntimeTest, DisabledRuntimeStartsAndStopsCleanly) {
 
 TEST(AiRuntimeTest, BuildsRunnerPerConfiguredCameraModel) {
   camera_firmware::ai::DetectionBus bus;
-  camera_firmware::ai::AiRuntime runtime(&bus);
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
 
   auto started = runtime.Start(RuntimeConfig());
 
@@ -234,7 +400,7 @@ TEST(AiRuntimeTest, BuildsRunnerPerConfiguredCameraModel) {
 
 TEST(AiRuntimeTest, GlobalAiEnabledWithoutCameraBindingIsConfigured) {
   camera_firmware::ai::DetectionBus bus;
-  camera_firmware::ai::AiRuntime runtime(&bus);
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
   auto config = RuntimeConfig();
   config.camera.ai.enabled = false;
   config.camera.ai.model_ids.clear();
@@ -253,20 +419,48 @@ TEST(AiRuntimeTest, GlobalAiEnabledWithoutCameraBindingIsConfigured) {
   EXPECT_TRUE(runtime.RunnerStatuses().empty());
 }
 
+TEST(AiRuntimeTest, BuildDetectsHailortWhenInstalled) {
+#if defined(CF_TEST_EXPECT_HAILORT)
+#if !defined(CF_HAVE_HAILORT)
+  FAIL() << "HailoRT headers/library were detected by CMake, but "
+            "CF_HAVE_HAILORT was not defined for the AI target";
+#endif
+#else
+  GTEST_SKIP() << "HailoRT is not installed on this build host";
+#endif
+}
+
+TEST(AiRuntimeTest, HailortBackendReportsDeviceInitFailureWithoutFallback) {
+#if defined(CF_HAVE_HAILORT)
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiRuntime runtime(&bus);
+
+  auto started = runtime.Start(RuntimeConfig());
+
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  const auto status = runtime.Status();
+  if (status.backend_available) {
+    GTEST_SKIP() << "Hailo device is available on this host";
+  }
+  EXPECT_EQ(status.backend, "hailo");
+  EXPECT_EQ(status.state, "backend_unavailable");
+  EXPECT_EQ(status.runner_count, 0u);
+  EXPECT_TRUE(status.last_error_code.starts_with("E_HAILO_"))
+      << status.last_error_code;
+#else
+  GTEST_SKIP() << "HailoRT is not enabled in this build";
+#endif
+}
+
 TEST(AiRuntimeTest, BackendUnavailableSubmitDropsWithoutPublishing) {
   camera_firmware::ai::DetectionBus bus;
   int published = 0;
   auto subscription = bus.Subscribe(
       [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
-  camera_firmware::ai::AiRuntime runtime(&bus);
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
   ASSERT_TRUE(runtime.Start(RuntimeConfig()).ok());
 
-  camera_firmware::media::FrameHandle handle;
-  handle.camera_id = "imx708-main";
-  handle.sequence = 9;
-  camera_firmware::media::FrameLease lease(handle, [] {});
-
-  auto submitted = runtime.SubmitFrame(std::move(lease));
+  auto submitted = runtime.SubmitFrame(Nv12RuntimeLease(9));
 
   ASSERT_TRUE(submitted.ok()) << submitted.error().message;
   ASSERT_TRUE(WaitUntilRunnerDropped(runtime, 2u));
@@ -283,16 +477,12 @@ TEST(AiRuntimeTest, BackendUnavailableSubmitDropsWithoutPublishing) {
 
 TEST(AiRuntimeTest, MultiRunnerSubmitReleasesFrameLeaseOnce) {
   camera_firmware::ai::DetectionBus bus;
-  camera_firmware::ai::AiRuntime runtime(&bus);
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
   ASSERT_TRUE(runtime.Start(RuntimeConfig()).ok());
 
   int releases = 0;
-  camera_firmware::media::FrameHandle handle;
-  handle.camera_id = "imx708-main";
-  handle.sequence = 10;
-
   {
-    camera_firmware::media::FrameLease lease(handle, [&] { ++releases; });
+    auto lease = Nv12RuntimeLease(10, [&] { ++releases; });
     ASSERT_TRUE(runtime.SubmitFrame(std::move(lease)).ok());
   }
 
@@ -308,12 +498,7 @@ TEST(AiRuntimeTest, ModelRunnerSubmitUsesLatestWinsQueue) {
 
   int releases = 0;
   auto make_lease = [&releases](std::uint64_t sequence) {
-    camera_firmware::media::FrameHandle handle;
-    handle.camera_id = "imx708-main";
-    handle.sequence = sequence;
-    return camera_firmware::media::FrameLease(handle, [&releases] {
-      ++releases;
-    });
+    return Nv12RuntimeLease(sequence, [&releases] { ++releases; });
   };
 
   auto first_submit = std::async(
@@ -353,11 +538,7 @@ TEST(AiRuntimeTest, ModelRunnerStopWaitsForAsyncBackendCallback) {
   camera_firmware::ai::AiModelRunner runner(
       "imx708-main", model, &backend, 1);
 
-  camera_firmware::media::FrameHandle handle;
-  handle.camera_id = "imx708-main";
-  handle.sequence = 4;
-  ASSERT_TRUE(runner.Submit(camera_firmware::media::FrameLease(handle, [] {}))
-                  .ok());
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(4)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
 
   auto stop = std::async(std::launch::async, [&runner] { runner.Stop(); });
@@ -380,10 +561,7 @@ TEST(AiRuntimeTest, ModelRunnerKeepsOneAsyncInferenceInFlight) {
       "imx708-main", model, &backend, 1);
 
   auto make_lease = [](std::uint64_t sequence) {
-    camera_firmware::media::FrameHandle handle;
-    handle.camera_id = "imx708-main";
-    handle.sequence = sequence;
-    return camera_firmware::media::FrameLease(handle, [] {});
+    return Nv12RuntimeLease(sequence);
   };
 
   ASSERT_TRUE(runner.Submit(make_lease(1)).ok());
@@ -402,4 +580,151 @@ TEST(AiRuntimeTest, ModelRunnerKeepsOneAsyncInferenceInFlight) {
   EXPECT_EQ(status.submitted_frames, 3u);
   EXPECT_EQ(status.processed_frames, 2u);
   EXPECT_EQ(status.dropped_frames, 1u);
+}
+
+TEST(AiRuntimeTest, ModelRunnerPreprocessesAndPublishesDetectionEvent) {
+  CapturingSuccessBackend backend;
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 2;
+
+  std::mutex event_mutex;
+  std::condition_variable event_changed;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&](const camera_firmware::ai::DetectionEvent& event) {
+        {
+          std::lock_guard lock(event_mutex);
+          events.push_back(event);
+        }
+        event_changed.notify_all();
+      });
+
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(99)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+
+  {
+    std::unique_lock lock(event_mutex);
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
+      return !events.empty();
+    }));
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_EQ(events[0].camera_id, "imx708-main");
+    EXPECT_EQ(events[0].model_id, "objects");
+    EXPECT_EQ(events[0].model_kind, "object_detection");
+    EXPECT_EQ(events[0].result_state, "skeleton_no_decoder");
+    EXPECT_EQ(events[0].frame_sequence, 99U);
+    EXPECT_TRUE(events[0].detections.empty());
+  }
+
+  EXPECT_FALSE(backend.last_input_was_null());
+  EXPECT_EQ(backend.last_input_size(), 4U * 2U * 3U);
+  runner.Stop();
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiRuntimeTest, ModelRunnerPublishesDecodedYoloDetectionEvent) {
+  CapturingSuccessBackend backend(RuntimeYoloNmsOutputBytes(0.88F));
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 2;
+  model.confidence_threshold = 0.50F;
+
+  std::mutex event_mutex;
+  std::condition_variable event_changed;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&](const camera_firmware::ai::DetectionEvent& event) {
+        {
+          std::lock_guard lock(event_mutex);
+          events.push_back(event);
+        }
+        event_changed.notify_all();
+      });
+
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(101)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+
+  {
+    std::unique_lock lock(event_mutex);
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
+      return !events.empty();
+    }));
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_EQ(events[0].camera_id, "imx708-main");
+    EXPECT_EQ(events[0].model_id, "objects");
+    EXPECT_EQ(events[0].model_kind, "object_detection");
+    EXPECT_EQ(events[0].result_state, "decoded");
+    EXPECT_EQ(events[0].frame_sequence, 101U);
+    ASSERT_EQ(events[0].detections.size(), 1U);
+    EXPECT_EQ(events[0].detections[0].label, "car");
+    EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.88F);
+    EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.15F);
+    EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.20F);
+    EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+    EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 0.50F);
+  }
+
+  runner.Stop();
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiRuntimeTest, ModelRunnerDropsMalformedYoloOutputShape) {
+  std::vector<std::uint8_t> truncated(sizeof(float) * 3U, 0U);
+  CapturingSuccessBackend backend(std::move(truncated));
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 2;
+
+  int published = 0;
+  auto subscription = bus.Subscribe(
+      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(102)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+  runner.Stop();
+
+  const auto status = runner.Status();
+  EXPECT_EQ(status.processed_frames, 0U);
+  EXPECT_EQ(status.dropped_frames, 1U);
+  EXPECT_EQ(status.last_error_code, "E_AI_POSTPROCESS");
+  EXPECT_EQ(published, 0);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiRuntimeTest, ModelRunnerStopCompletesWhenDetectionSubscriberThrows) {
+  AsyncCallbackBackend backend;
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("objects", "object_detection");
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+  auto subscription = bus.Subscribe(
+      [](const camera_firmware::ai::DetectionEvent&) {
+        throw std::runtime_error("subscriber failed");
+      });
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(100)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+
+  EXPECT_NO_THROW(backend.Complete());
+
+  auto stop = std::async(std::launch::async, [&runner] { runner.Stop(); });
+  ASSERT_EQ(stop.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  auto status = runner.Status();
+  EXPECT_EQ(status.dropped_frames, 1u);
+  EXPECT_EQ(status.last_error_code, "E_AI_POSTPROCESS");
+  EXPECT_TRUE(subscription.valid());
 }

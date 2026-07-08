@@ -1,5 +1,9 @@
 #include "camera_firmware/ai/AiRuntime.hpp"
 
+#if defined(CF_HAVE_HAILORT)
+#include "camera_firmware/ai/HailoBackend.hpp"
+#endif
+
 #include <utility>
 
 namespace camera_firmware::ai {
@@ -27,6 +31,11 @@ struct AiRuntime::RuntimeResources {
 AiRuntime::AiRuntime(DetectionBus* detection_bus)
     : detection_bus_(detection_bus) {}
 
+AiRuntime::AiRuntime(DetectionBus* detection_bus,
+                     std::shared_ptr<AiBackend> backend_override)
+    : detection_bus_(detection_bus),
+      backend_override_(std::move(backend_override)) {}
+
 AiRuntime::~AiRuntime() { Stop(); }
 
 common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
@@ -44,7 +53,8 @@ common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
     return common::Result<void>::Ok();
   }
 
-  backend_ = CreateBackend(config.ai.backend);
+  backend_ = backend_override_ != nullptr ? backend_override_
+                                          : CreateBackend(config.ai.backend);
   if (backend_ == nullptr) {
     status_.state = "backend_unavailable";
     RecordError({"E_AI_BACKEND_UNAVAILABLE",
@@ -107,7 +117,11 @@ common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
       }
 
       runners_.push_back(std::make_shared<AiModelRunner>(
-          config.camera.id, *model, backend_.get(), handle_it->second));
+          config.camera.id,
+          *model,
+          backend_.get(),
+          handle_it->second,
+          detection_bus_));
     }
   }
 
@@ -196,7 +210,11 @@ std::vector<AiModelRunnerStatus> AiRuntime::RunnerStatuses() const {
 std::shared_ptr<AiBackend> AiRuntime::CreateBackend(
     const std::string& backend_name) const {
   if (backend_name == "hailo") {
+#if defined(CF_HAVE_HAILORT)
+    return std::make_shared<HailoBackend>();
+#else
     return std::make_shared<UnavailableAiBackend>();
+#endif
   }
 
   return nullptr;

@@ -1,0 +1,9 @@
+/build-current/
+/build-no-tests/
+/reference/
+/docs/superpowers/
+/vendor/models/*.hef
+/vendor/models/*.onnx
+/vendor/models/*.tflite
+/vendor/models/*.bin
+/hailort.log

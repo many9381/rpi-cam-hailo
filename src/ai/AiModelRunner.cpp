@@ -1,8 +1,10 @@
 #include "camera_firmware/ai/AiModelRunner.hpp"
 
 #include <condition_variable>
+#include <exception>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace camera_firmware::ai {
@@ -46,15 +48,26 @@ common::Result<void> UnavailableAiBackend::Submit(
 AiModelRunner::AiModelRunner(std::string camera_id,
                              config::AiModelConfig model,
                              AiBackend* backend,
-                             ModelHandle model_handle)
+                             ModelHandle model_handle,
+                             DetectionBus* detection_bus)
     : camera_id_(std::move(camera_id)),
       model_(std::move(model)),
       backend_(backend),
       model_handle_(model_handle),
+      detection_publisher_(detection_bus != nullptr
+                               ? detection_bus->PublisherHandle()
+                               : DetectionBus::Publisher{}),
       state_(std::make_shared<SharedState>()) {
   state_->status.camera_id = camera_id_;
   state_->status.model_id = model_.id;
   state_->status.model_kind = model_.kind;
+  auto processor = CreateAiModelProcessor(model_);
+  if (processor.ok()) {
+    processor_ = processor.value();
+  } else {
+    state_->status.last_error_code = processor.error().code;
+    state_->status.last_error_message = processor.error().message;
+  }
   worker_ = std::thread([this] { Run(); });
 }
 
@@ -127,12 +140,32 @@ void AiModelRunner::Run() {
 }
 
 void AiModelRunner::ProcessFrame(media::FrameLease frame) {
-  (void)frame;
   if (backend_ == nullptr) {
     RecordDrop(state_,
                {"E_AI_BACKEND_UNAVAILABLE", "AI backend is unavailable"});
     return;
   }
+  if (processor_ == nullptr) {
+    RecordDrop(state_,
+               {"E_AI_PROCESSOR_UNAVAILABLE",
+                "AI model processor is unavailable"});
+    return;
+  }
+  if (!frame.valid()) {
+    RecordDrop(state_, {"E_AI_PREPROCESS", "AI frame lease is invalid"});
+    return;
+  }
+
+  const media::FrameHandle source_frame = frame.handle();
+  auto input = processor_->Preprocess(frame);
+  if (!input.ok()) {
+    RecordDrop(state_, input.error());
+    return;
+  }
+
+  auto input_buffer =
+      std::make_shared<ModelInputBuffer>(std::move(input).value());
+  auto processor = processor_;
 
   std::weak_ptr<SharedState> weak_state = state_;
   {
@@ -140,26 +173,55 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
     ++state_->in_flight_callbacks;
   }
   auto submitted = backend_->Submit(
-      model_handle_, InputView{},
-      [weak_state](common::Result<OutputView> output) {
+      model_handle_, input_buffer->view(),
+      [weak_state,
+       input_buffer,
+       processor,
+       source_frame,
+       detection_publisher = detection_publisher_](
+          common::Result<OutputView> output) mutable {
+        (void)input_buffer;
         auto state = weak_state.lock();
         if (state == nullptr) {
           return;
         }
 
+        struct CompletionGuard {
+          explicit CompletionGuard(std::shared_ptr<SharedState> shared_state)
+              : state(std::move(shared_state)) {}
+
+          CompletionGuard(const CompletionGuard&) = delete;
+          CompletionGuard& operator=(const CompletionGuard&) = delete;
+
+          ~CompletionGuard() {
+            {
+              std::lock_guard lock(state->mutex);
+              if (state->in_flight_callbacks > 0U) {
+                --state->in_flight_callbacks;
+              }
+            }
+            state->changed.notify_all();
+          }
+
+          std::shared_ptr<SharedState> state;
+        } completion(state);
+
         if (output.ok()) {
-          RecordProcessed(state);
+          try {
+            processor->Postprocess(std::move(output),
+                                   source_frame,
+                                   detection_publisher);
+            RecordProcessed(state);
+          } catch (const std::exception& ex) {
+            RecordDrop(state, {"E_AI_POSTPROCESS", ex.what()});
+          } catch (...) {
+            RecordDrop(state,
+                       {"E_AI_POSTPROCESS",
+                        "AI postprocess failed with an unknown exception"});
+          }
         } else {
           RecordDrop(state, output.error());
         }
-
-        {
-          std::lock_guard lock(state->mutex);
-          if (state->in_flight_callbacks > 0U) {
-            --state->in_flight_callbacks;
-          }
-        }
-        state->changed.notify_all();
       });
   if (!submitted.ok()) {
     {

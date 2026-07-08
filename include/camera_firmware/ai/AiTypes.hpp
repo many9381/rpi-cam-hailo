@@ -22,6 +22,9 @@ struct Detection {
 
 struct DetectionEvent {
   std::string camera_id;
+  std::string model_id;
+  std::string model_kind;
+  std::string result_state{"decoded"};
   std::uint64_t frame_sequence{0};
   std::chrono::nanoseconds frame_timestamp{0};
   std::vector<Detection> detections;
