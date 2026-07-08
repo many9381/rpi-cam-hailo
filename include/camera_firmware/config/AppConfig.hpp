@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "camera_firmware/common/Result.hpp"
 
@@ -50,11 +51,33 @@ struct CameraEncoderConfig {
   unsigned int gop{30};
 };
 
+struct AiModelInputConfig {
+  unsigned int width{640};
+  unsigned int height{640};
+  std::string format{"rgb8"};
+  bool letterbox{true};
+};
+
+struct AiModelConfig {
+  std::string id;
+  std::string kind{"object_detection"};
+  std::string hef_path;
+  AiModelInputConfig input;
+  float confidence_threshold{0.40F};
+  std::string labels{"coco80"};
+};
+
+struct CameraAiConfig {
+  bool enabled{false};
+  std::vector<std::string> model_ids;
+};
+
 struct CameraConfig {
   std::string id{"imx708-main"};
   CameraSourceConfig source;
   CameraVideoConfig video;
   CameraEncoderConfig encoder;
+  CameraAiConfig ai;
 };
 
 struct HttpTlsConfig {
@@ -75,6 +98,7 @@ struct HttpConfig {
 struct AiConfig {
   bool enabled{false};
   std::string backend{"disabled"};
+  std::vector<AiModelConfig> models;
 };
 
 struct AppConfig {
@@ -86,6 +110,9 @@ struct AppConfig {
 };
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);
+common::Result<void> ValidateAiConfigSemantics(
+    const AiConfig& ai_config,
+    const CameraConfig& camera_config);
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
 

@@ -152,11 +152,13 @@ void RegisterHandlers() {
         Json::Value body(Json::objectValue);
         Json::Value cameras(Json::arrayValue);
         CameraStatusProvider provider;
+        AiStatusProvider ai_status_provider;
         bool ai_enabled = false;
 
         {
           std::scoped_lock lock(StateMutex());
           provider = GlobalState().args.camera_status_provider;
+          ai_status_provider = GlobalState().args.ai_status_provider;
           ai_enabled = GlobalState().args.ai_enabled;
         }
 
@@ -166,7 +168,9 @@ void RegisterHandlers() {
           }
         }
         body["cameras"] = std::move(cameras);
-        body["ai"] = BuildAiStatusJson(ai_enabled);
+        body["ai"] = ai_status_provider
+                         ? BuildAiStatusJson(ai_status_provider())
+                         : BuildAiStatusJson(ai_enabled);
         callback(JsonResponse(std::move(body)));
       },
       {Get});
@@ -251,17 +255,26 @@ Json::Value BuildHealthJson(const std::string& status) {
   return json;
 }
 
-Json::Value BuildAiStatusJson(bool requested) {
+Json::Value BuildAiStatusJson(const AiServiceStatus& status) {
   Json::Value json(Json::objectValue);
-  json["enabled"] = false;
-  if (requested) {
-    json["backend"] = "unsupported";
-    json["reason"] = "hailo runtime not implemented";
-  } else {
-    json["backend"] = "disabled";
-    json["reason"] = "disabled by config";
-  }
+  json["enabled"] = status.enabled;
+  json["backend"] = status.backend;
+  json["state"] = status.state;
+  json["model_count"] = static_cast<Json::UInt64>(status.model_count);
+  json["runner_count"] = static_cast<Json::UInt64>(status.runner_count);
+  json["reason"] = status.reason;
   return json;
+}
+
+Json::Value BuildAiStatusJson(bool requested) {
+  AiServiceStatus status;
+  if (requested) {
+    status.enabled = true;
+    status.backend = "hailo";
+    status.state = "backend_unavailable";
+    status.reason = "Hailo backend is not implemented in this build";
+  }
+  return BuildAiStatusJson(status);
 }
 
 Json::Value BuildStreamJson(std::string_view public_base_url,

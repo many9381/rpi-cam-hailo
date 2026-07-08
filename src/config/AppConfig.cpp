@@ -4,6 +4,9 @@
 
 #include <exception>
 #include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace camera_firmware::config {
 namespace {
@@ -37,7 +40,100 @@ common::Result<AppConfig> HttpTlsError() {
        "when http.tls.enabled is true"});
 }
 
+std::vector<std::string> ReadStringList(const YAML::Node& node) {
+  std::vector<std::string> values;
+  if (!node || !node.IsSequence()) {
+    return values;
+  }
+  values.reserve(node.size());
+  for (const auto& item : node) {
+    values.push_back(item.as<std::string>());
+  }
+  return values;
+}
+
 }  // namespace
+
+common::Result<void> ValidateAiConfigSemantics(
+    const AiConfig& ai_config,
+    const CameraConfig& camera_config) {
+  if (!ai_config.enabled) {
+    if (camera_config.ai.enabled) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_BACKEND",
+           "camera.ai.enabled requires ai.enabled=true"});
+    }
+    return common::Result<void>::Ok();
+  }
+
+  if (ai_config.backend != "hailo") {
+    return common::Result<void>::Err(
+        {"E_CONFIG_AI_BACKEND", "only ai.backend=hailo is supported"});
+  }
+
+  std::unordered_set<std::string> model_ids;
+  for (const auto& model : ai_config.models) {
+    if (model.id.empty()) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL", "ai.models[].id is required"});
+    }
+    if (!model_ids.insert(model.id).second) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL_DUPLICATE",
+           "duplicate ai.models[].id: " + model.id});
+    }
+    if (model.kind != "object_detection" && model.kind != "pose") {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "unsupported ai.models[].kind for model " + model.id});
+    }
+    if (model.hef_path.empty()) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "ai.models[].hef_path is required for model " + model.id});
+    }
+    if (model.input.width == 0U || model.input.height == 0U) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "ai.models[].input width and height must be positive for model " +
+               model.id});
+    }
+    if (model.input.format != "rgb8") {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "only ai.models[].input.format=rgb8 is supported"});
+    }
+    if (model.confidence_threshold < 0.0F ||
+        model.confidence_threshold > 1.0F) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "ai.models[].confidence_threshold must be between 0 and 1"});
+    }
+  }
+
+  if (camera_config.ai.enabled) {
+    if (camera_config.ai.model_ids.empty()) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_CAMERA_MODEL",
+           "camera.ai.model_ids must not be empty when camera.ai.enabled=true"});
+    }
+    std::unordered_set<std::string> camera_model_ids;
+    for (const auto& model_id : camera_config.ai.model_ids) {
+      if (!camera_model_ids.insert(model_id).second) {
+        return common::Result<void>::Err(
+            {"E_CONFIG_AI_CAMERA_MODEL",
+             "duplicate camera.ai.model_ids entry: " + model_id});
+      }
+      if (!model_ids.contains(model_id)) {
+        return common::Result<void>::Err(
+            {"E_CONFIG_AI_CAMERA_MODEL",
+             "camera.ai.model_ids references unknown model: " + model_id});
+      }
+    }
+  }
+
+  return common::Result<void>::Ok();
+}
 
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config) {
@@ -97,6 +193,11 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
                         config.camera.encoder.bitrate_kbps);
         AssignIfPresent(encoder, "gop", config.camera.encoder.gop);
       }
+      const YAML::Node camera_ai = camera["ai"];
+      if (camera_ai) {
+        AssignIfPresent(camera_ai, "enabled", config.camera.ai.enabled);
+        config.camera.ai.model_ids = ReadStringList(camera_ai["model_ids"]);
+      }
     }
 
     const YAML::Node http = root["http"];
@@ -120,6 +221,27 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     if (ai) {
       AssignIfPresent(ai, "enabled", config.ai.enabled);
       AssignIfPresent(ai, "backend", config.ai.backend);
+      const YAML::Node models = ai["models"];
+      if (models && models.IsSequence()) {
+        config.ai.models.clear();
+        for (const auto& model : models) {
+          AiModelConfig parsed_model;
+          AssignIfPresent(model, "id", parsed_model.id);
+          AssignIfPresent(model, "kind", parsed_model.kind);
+          AssignIfPresent(model, "hef_path", parsed_model.hef_path);
+          AssignIfPresent(model, "confidence_threshold",
+                          parsed_model.confidence_threshold);
+          AssignIfPresent(model, "labels", parsed_model.labels);
+          const YAML::Node input = model["input"];
+          if (input) {
+            AssignIfPresent(input, "width", parsed_model.input.width);
+            AssignIfPresent(input, "height", parsed_model.input.height);
+            AssignIfPresent(input, "format", parsed_model.input.format);
+            AssignIfPresent(input, "letterbox", parsed_model.input.letterbox);
+          }
+          config.ai.models.push_back(std::move(parsed_model));
+        }
+      }
     }
 
     const YAML::Node secure_rtsp = root["secure_rtsp"];
@@ -155,6 +277,10 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
         config.secure_rtsp.session_key.path.empty()) {
       return SessionKeyError();
+    }
+    auto ai_semantics = ValidateAiConfigSemantics(config.ai, config.camera);
+    if (!ai_semantics.ok()) {
+      return common::Result<AppConfig>::Err(ai_semantics.error());
     }
     auto secure_rtsp_semantics =
         ValidateSecureRtspSemantics(config.secure_rtsp);

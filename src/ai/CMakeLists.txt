@@ -1,4 +1,6 @@
 add_library(camera_firmware_ai STATIC
+    AiModelRunner.cpp
+    AiRuntime.cpp
     AiFrameTap.cpp
     DetectionBus.cpp
 )

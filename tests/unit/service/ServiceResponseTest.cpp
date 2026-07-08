@@ -45,12 +45,36 @@ TEST(ServiceResponseTest,
   EXPECT_TRUE(json["media_srtp"].asBool());
 }
 
-TEST(ServiceResponseTest, AiStatusReportsUnsupportedWhenRequested) {
+TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonWhenRequested) {
   auto json = camera_firmware::service::BuildAiStatusJson(true);
 
-  EXPECT_FALSE(json["enabled"].asBool());
-  EXPECT_EQ(json["backend"].asString(), "unsupported");
-  EXPECT_EQ(json["reason"].asString(), "hailo runtime not implemented");
+  EXPECT_TRUE(json["enabled"].asBool());
+  EXPECT_EQ(json["backend"].asString(), "hailo");
+  EXPECT_EQ(json["state"].asString(), "backend_unavailable");
+  EXPECT_EQ(json["model_count"].asUInt64(), 0u);
+  EXPECT_EQ(json["runner_count"].asUInt64(), 0u);
+  EXPECT_EQ(json["reason"].asString(),
+            "Hailo backend is not implemented in this build");
+}
+
+TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonState) {
+  camera_firmware::service::AiServiceStatus status;
+  status.enabled = true;
+  status.backend = "hailo";
+  status.state = "backend_unavailable";
+  status.model_count = 2;
+  status.runner_count = 2;
+  status.reason = "Hailo backend is not implemented in this build";
+
+  auto json = camera_firmware::service::BuildAiStatusJson(status);
+
+  EXPECT_TRUE(json["enabled"].asBool());
+  EXPECT_EQ(json["backend"].asString(), "hailo");
+  EXPECT_EQ(json["state"].asString(), "backend_unavailable");
+  EXPECT_EQ(json["model_count"].asUInt64(), 2u);
+  EXPECT_EQ(json["runner_count"].asUInt64(), 2u);
+  EXPECT_EQ(json["reason"].asString(),
+            "Hailo backend is not implemented in this build");
 }
 
 TEST(ServiceResponseTest, ListenerConfigEnablesHttpsFromHttpConfig) {

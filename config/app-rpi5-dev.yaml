@@ -15,6 +15,9 @@ camera:
     backend: x264
     bitrate_kbps: 3000
     gop: 30
+  ai:
+    enabled: false
+    model_ids: []
 
 http:
   enabled: true
@@ -28,6 +31,7 @@ http:
 ai:
   enabled: false
   backend: disabled
+  models: []
 
 secure_rtsp:
   enabled: true
