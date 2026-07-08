@@ -33,6 +33,7 @@ gtest_discover_tests(camera_firmware_config_tests
 add_executable(camera_firmware_media_tests
     unit/media/EncodedRingTest.cpp
     unit/media/FrameLeaseTest.cpp
+    unit/media/SnapshotTapTest.cpp
 )
 
 target_link_libraries(camera_firmware_media_tests
@@ -71,6 +72,7 @@ gtest_discover_tests(camera_firmware_ai_tests)
 
 add_executable(camera_firmware_service_tests
     unit/service/ServiceResponseTest.cpp
+    unit/service/ServiceStartupTest.cpp
 )
 
 target_link_libraries(camera_firmware_service_tests
@@ -93,6 +95,23 @@ target_link_libraries(gst_secure_srtp_tests
 )
 
 gtest_discover_tests(gst_secure_srtp_tests
+    PROPERTIES
+        ENVIRONMENT "GST_PLUGIN_PATH=${PROJECT_BINARY_DIR}/plugins/gst-secure-srtp"
+)
+
+add_executable(camera_firmware_secure_rtsp_config_smoke
+    integration/SecureRtspConfigSmokeTest.cpp
+)
+
+target_link_libraries(camera_firmware_secure_rtsp_config_smoke
+    PRIVATE
+        camera_firmware_config
+        camera_firmware_rtsp
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_secure_rtsp_config_smoke
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     PROPERTIES
         ENVIRONMENT "GST_PLUGIN_PATH=${PROJECT_BINARY_DIR}/plugins/gst-secure-srtp"
 )

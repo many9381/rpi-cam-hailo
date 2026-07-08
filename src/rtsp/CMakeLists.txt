@@ -1,4 +1,5 @@
 add_library(camera_firmware_rtsp STATIC
+    SecureRtspServer.cpp
     SrtpSessionKey.cpp
 )
 
@@ -15,4 +16,10 @@ target_include_directories(camera_firmware_rtsp
 target_link_libraries(camera_firmware_rtsp
     PUBLIC
         camera_firmware_common
+        camera_firmware_config
+        camera_firmware_media
+        PkgConfig::GSTREAMER
+        PkgConfig::GSTREAMER_APP
+        PkgConfig::GSTREAMER_RTSP_SERVER
+        PkgConfig::GIO
 )

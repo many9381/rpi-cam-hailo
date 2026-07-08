@@ -1,4 +1,5 @@
 add_library(camera_firmware_media STATIC
+    CameraPipeline.cpp
     EncodedRing.cpp
     FrameLease.cpp
     SnapshotTap.cpp
@@ -12,4 +13,8 @@ target_include_directories(camera_firmware_media
 target_link_libraries(camera_firmware_media
     PUBLIC
         camera_firmware_common
+        camera_firmware_config
+        JPEG::JPEG
+        PkgConfig::LIBCAMERA
+        PkgConfig::X264
 )

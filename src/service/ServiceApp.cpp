@@ -1,6 +1,9 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
+#include <chrono>
 #include <filesystem>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -12,6 +15,10 @@
 #include <drogon/HttpAppFramework.h>
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
+#include <gio/gio.h>
+
+#include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/service/ServiceStartup.hpp"
 
 namespace camera_firmware::service {
 namespace {
@@ -19,6 +26,8 @@ namespace {
 struct ServiceState {
   ServiceInitArgs args;
 };
+
+constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
 
 ServiceState& GlobalState() {
   static ServiceState state;
@@ -92,13 +101,6 @@ Json::Value BuildSnapshotUnavailableJson() {
   return json;
 }
 
-Json::Value BuildAiJson(bool enabled) {
-  Json::Value json(Json::objectValue);
-  json["enabled"] = enabled;
-  json["backend"] = enabled ? "configured" : "disabled";
-  return json;
-}
-
 drogon::HttpResponsePtr JsonResponse(Json::Value json,
                                      drogon::HttpStatusCode status =
                                          drogon::k200OK) {
@@ -106,6 +108,26 @@ drogon::HttpResponsePtr JsonResponse(Json::Value json,
   response->setStatusCode(status);
   return response;
 }
+
+class ThreadCompletionReporter {
+ public:
+  explicit ThreadCompletionReporter(
+      std::shared_ptr<std::promise<void>> completion)
+      : completion_(std::move(completion)) {}
+
+  ~ThreadCompletionReporter() noexcept {
+    if (!completion_) {
+      return;
+    }
+    try {
+      completion_->set_value();
+    } catch (...) {
+    }
+  }
+
+ private:
+  std::shared_ptr<std::promise<void>> completion_;
+};
 
 void RegisterHandlers() {
   using namespace drogon;
@@ -144,7 +166,7 @@ void RegisterHandlers() {
           }
         }
         body["cameras"] = std::move(cameras);
-        body["ai"] = BuildAiJson(ai_enabled);
+        body["ai"] = BuildAiStatusJson(ai_enabled);
         callback(JsonResponse(std::move(body)));
       },
       {Get});
@@ -165,18 +187,7 @@ void RegisterHandlers() {
           return;
         }
 
-        const auto snapshot = snapshot_callback(camera_id);
-        if (!snapshot.has_value() || snapshot->empty()) {
-          callback(JsonResponse(BuildSnapshotUnavailableJson(),
-                                drogon::k503ServiceUnavailable));
-          return;
-        }
-
-        auto response = drogon::HttpResponse::newHttpResponse();
-        response->setStatusCode(drogon::k200OK);
-        response->setContentTypeCode(drogon::CT_IMAGE_JPG);
-        response->setBody(std::string(snapshot->begin(), snapshot->end()));
-        callback(response);
+        callback(BuildSnapshotResponse(snapshot_callback, camera_id));
       },
       {Get});
 
@@ -207,9 +218,49 @@ void RegisterHandlers() {
 
 }  // namespace
 
+namespace internal {
+
+common::Result<void> StopServiceThreadWithin(
+    std::thread& service_thread,
+    const std::shared_future<void>& service_thread_done,
+    std::chrono::milliseconds timeout,
+    const std::function<void()>& request_stop) {
+  if (request_stop) {
+    request_stop();
+  }
+  if (!service_thread.joinable()) {
+    return common::Result<void>::Ok();
+  }
+  if (service_thread_done.valid() &&
+      service_thread_done.wait_for(timeout) == std::future_status::ready) {
+    service_thread.join();
+    return common::Result<void>::Ok();
+  }
+
+  service_thread.detach();
+  return common::Result<void>::Err(
+      {"E_SERVICE_THREAD_STOP_TIMEOUT",
+       "service thread stop timed out; detached Drogon service thread"});
+}
+
+}  // namespace internal
+
 Json::Value BuildHealthJson(const std::string& status) {
   Json::Value json(Json::objectValue);
   json["status"] = status;
+  return json;
+}
+
+Json::Value BuildAiStatusJson(bool requested) {
+  Json::Value json(Json::objectValue);
+  json["enabled"] = false;
+  if (requested) {
+    json["backend"] = "unsupported";
+    json["reason"] = "hailo runtime not implemented";
+  } else {
+    json["backend"] = "disabled";
+    json["reason"] = "disabled by config";
+  }
   return json;
 }
 
@@ -222,37 +273,160 @@ Json::Value BuildStreamJson(std::string_view public_base_url,
   return json;
 }
 
+ServiceListenerConfig BuildServiceListenerConfig(
+    const config::HttpConfig& http_config) {
+  ServiceListenerConfig listener;
+  listener.bind_address = http_config.bind_ip;
+  listener.port = http_config.port;
+  listener.use_tls = http_config.tls.enabled;
+  listener.certificate_path = http_config.tls.certificate_path;
+  listener.private_key_path = http_config.tls.private_key_path;
+  return listener;
+}
+
+common::Result<void> ValidateHttpTlsConfigFiles(
+    const config::HttpConfig& http_config) {
+  if (!http_config.enabled || !http_config.tls.enabled) {
+    return common::Result<void>::Ok();
+  }
+
+  GError* error = nullptr;
+  GTlsCertificate* certificate = g_tls_certificate_new_from_files(
+      http_config.tls.certificate_path.c_str(),
+      http_config.tls.private_key_path.c_str(),
+      &error);
+  if (certificate == nullptr) {
+    std::string message =
+        "failed to load HTTP TLS certificate/key files from configured paths";
+    if (error != nullptr) {
+      message += ": ";
+      message += error->message;
+      g_error_free(error);
+    }
+    return common::Result<void>::Err({"E_HTTP_TLS_CERT", message});
+  }
+
+  g_object_unref(certificate);
+  return common::Result<void>::Ok();
+}
+
+drogon::HttpResponsePtr BuildSnapshotResponse(
+    const SnapshotCallback& snapshot_callback,
+    const std::string& camera_id) {
+  if (!snapshot_callback) {
+    return JsonResponse(BuildSnapshotUnavailableJson(),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  const auto snapshot = snapshot_callback(camera_id);
+  if (!snapshot.has_value() || snapshot->empty()) {
+    return JsonResponse(BuildSnapshotUnavailableJson(),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  auto response = drogon::HttpResponse::newHttpResponse();
+  response->setStatusCode(drogon::k200OK);
+  response->setContentTypeCode(drogon::CT_IMAGE_JPG);
+  response->setBody(std::string(snapshot->begin(), snapshot->end()));
+  return response;
+}
+
 ServiceApp::~ServiceApp() {
   Stop();
 }
 
-void ServiceApp::Init(const ServiceInitArgs& args) {
+common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
   if (args.app_config == nullptr) {
-    throw std::invalid_argument("ServiceApp::Init requires app_config");
+    return common::Result<void>::Err(
+        {"E_SERVICE_CONFIG", "ServiceApp::Init requires app_config"});
+  }
+  auto tls_validation = ValidateHttpTlsConfigFiles(args.app_config->http);
+  if (!tls_validation.ok()) {
+    return tls_validation;
   }
 
-  std::scoped_lock lock(StateMutex());
-  GlobalState().args = args;
-  if (!initialized_) {
-    const auto web_root = std::filesystem::absolute(args.document_root);
-    drogon::app().setThreadNum(1);
-    drogon::app().disableSession();
-    drogon::app().setDocumentRoot(web_root.string());
-    drogon::app().addListener(args.bind_address, args.port);
-    RegisterHandlers();
-    initialized_ = true;
+  try {
+    std::shared_ptr<ServiceStartupSignal> startup_signal;
+    {
+      std::scoped_lock lock(StateMutex());
+      GlobalState().args = args;
+      if (!initialized_) {
+        const auto web_root = std::filesystem::absolute(args.document_root);
+        const auto listener = BuildServiceListenerConfig(args.app_config->http);
+        drogon::app().setThreadNum(1);
+        drogon::app().disableSession();
+        drogon::app().setDocumentRoot(web_root.string());
+        drogon::app().addListener(listener.bind_address,
+                                  listener.port,
+                                  listener.use_tls,
+                                  listener.certificate_path,
+                                  listener.private_key_path);
+        RegisterHandlers();
+        initialized_ = true;
+      }
+      if (!drogon::app().isRunning()) {
+        startup_signal = std::make_shared<ServiceStartupSignal>();
+        auto thread_completion = std::make_shared<std::promise<void>>();
+        server_thread_done_ = thread_completion->get_future().share();
+        drogon::app().registerBeginningAdvice(
+            [startup_signal] { startup_signal->ReportReady(); });
+        server_thread_ = std::thread([startup_signal, thread_completion] {
+          ThreadCompletionReporter completion_reporter(thread_completion);
+          try {
+            drogon::app().run();
+            startup_signal->ReportError(
+                {"E_SERVICE_START",
+                 "Drogon service stopped before reporting startup readiness"});
+          } catch (const std::exception& ex) {
+            startup_signal->ReportError(
+                {"E_SERVICE_START",
+                 std::string("failed to start service: ") + ex.what()});
+          } catch (...) {
+            startup_signal->ReportError(
+                {"E_SERVICE_START",
+                 "failed to start service: unknown Drogon exception"});
+          }
+        });
+        running_ = true;
+      }
+    }
+
+    if (startup_signal) {
+      auto startup = startup_signal->Wait();
+      if (!startup.ok()) {
+        auto stopped = internal::StopServiceThreadWithin(
+            server_thread_,
+            server_thread_done_,
+            kServiceThreadStopTimeout,
+            [] { drogon::app().quit(); });
+        running_ = false;
+        if (!stopped.ok()) {
+          return common::Result<void>::Err(
+              {"E_SERVICE_START",
+               startup.error().message + "; " + stopped.error().message});
+        }
+        return startup;
+      }
+    }
+  } catch (const std::exception& ex) {
+    Stop();
+    return common::Result<void>::Err(
+        {"E_SERVICE_START", std::string("failed to start service: ") + ex.what()});
   }
-  if (!drogon::app().isRunning()) {
-    server_thread_ = std::thread([] { drogon::app().run(); });
-    running_ = true;
-  }
+
+  return common::Result<void>::Ok();
 }
 
 void ServiceApp::Stop() {
-  if (running_) {
-    drogon::app().quit();
-    if (server_thread_.joinable()) {
-      server_thread_.join();
+  if (running_ || server_thread_.joinable()) {
+    auto stopped = internal::StopServiceThreadWithin(
+        server_thread_,
+        server_thread_done_,
+        kServiceThreadStopTimeout,
+        [] { drogon::app().quit(); });
+    if (!stopped.ok()) {
+      common::Logger::instance().log(common::Logger::Level::kWarn,
+                                     stopped.error().message);
     }
     running_ = false;
   }

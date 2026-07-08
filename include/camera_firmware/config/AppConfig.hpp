@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 #include "camera_firmware/common/Result.hpp"
 
@@ -17,16 +18,75 @@ struct SecureRtspConfig {
   bool enabled{true};
   bool control_tls{true};
   bool media_srtp{true};
+  std::string keying{"sdes-over-rtsps"};
+  bool allow_development_self_signed_tls{false};
   std::string bind_ip{"0.0.0.0"};
   int port{8555};
   std::string mount{"/imx708/main"};
+  std::string tls_certificate_path;
+  std::string tls_private_key_path;
   SessionKeyConfig session_key;
 };
 
+struct PlatformConfig {
+  std::string target{"rpi5"};
+};
+
+struct CameraSourceConfig {
+  std::string backend{"libcamera"};
+  unsigned int camera_index{0};
+};
+
+struct CameraVideoConfig {
+  unsigned int width{1536};
+  unsigned int height{864};
+  unsigned int fps{30};
+  std::string format{"nv12"};
+};
+
+struct CameraEncoderConfig {
+  std::string backend{"x264"};
+  unsigned int bitrate_kbps{3000};
+  unsigned int gop{30};
+};
+
+struct CameraConfig {
+  std::string id{"imx708-main"};
+  CameraSourceConfig source;
+  CameraVideoConfig video;
+  CameraEncoderConfig encoder;
+};
+
+struct HttpTlsConfig {
+  bool enabled{false};
+  std::string certificate_path;
+  std::string private_key_path;
+};
+
+struct HttpConfig {
+  bool enabled{true};
+  std::string bind_ip{"0.0.0.0"};
+  std::uint16_t port{8080};
+  std::string web_root{"web"};
+  std::string public_base_url{"http://127.0.0.1:8080"};
+  HttpTlsConfig tls;
+};
+
+struct AiConfig {
+  bool enabled{false};
+  std::string backend{"disabled"};
+};
+
 struct AppConfig {
+  PlatformConfig platform;
+  CameraConfig camera;
+  HttpConfig http;
+  AiConfig ai;
   SecureRtspConfig secure_rtsp;
 };
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);
+common::Result<void> ValidateSecureRtspSemantics(
+    const SecureRtspConfig& config);
 
 }  // namespace camera_firmware::config
