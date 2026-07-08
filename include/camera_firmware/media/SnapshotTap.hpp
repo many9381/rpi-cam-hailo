@@ -2,6 +2,9 @@
 
 #include <mutex>
 #include <optional>
+#include <cstdint>
+#include <string_view>
+#include <vector>
 
 #include "camera_firmware/media/FrameLease.hpp"
 
@@ -16,5 +19,9 @@ class SnapshotTap {
   mutable std::mutex mutex_;
   std::optional<FrameLease> latest_;
 };
+
+[[nodiscard]] std::optional<std::vector<std::uint8_t>> BuildLatestSnapshotJpeg(
+    const SnapshotTap& tap,
+    std::string_view camera_id);
 
 }  // namespace camera_firmware::media

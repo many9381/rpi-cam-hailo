@@ -1,12 +1,45 @@
+platform:
+  target: rpi5
+
+camera:
+  id: imx708-main
+  source:
+    backend: libcamera
+    camera_index: 0
+  video:
+    width: 1536
+    height: 864
+    fps: 30
+    format: nv12
+  encoder:
+    backend: x264
+    bitrate_kbps: 3000
+    gop: 30
+
+http:
+  enabled: true
+  bind_ip: 0.0.0.0
+  port: 8443
+  web_root: web
+  public_base_url: http://127.0.0.1:8443
+  tls:
+    enabled: false
+
+ai:
+  enabled: false
+  backend: disabled
+
 secure_rtsp:
   enabled: true
   control_tls: true
+  keying: sdes-over-rtsps
+  allow_development_self_signed_tls: true
   media_srtp: true
   bind_ip: 0.0.0.0
   port: 8555
   mount: /imx708/main
   session_key:
     source: file
-    path: /tmp/camera-firmware/session-keys/imx708-main.hex
+    path: config/dev-srtp-session.hex
     encoding: hex
     zeroize_on_reload: true

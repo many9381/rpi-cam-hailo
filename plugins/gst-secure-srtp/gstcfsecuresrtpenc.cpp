@@ -4,11 +4,17 @@
 #include "camera_firmware/rtsp/SrtpSessionKey.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string_view>
 
 #include <srtp2/srtp.h>
+
+#if defined(CAMERA_FIRMWARE_HAS_OPENSSL)
+#include <openssl/crypto.h>
+#endif
 
 namespace {
 
@@ -24,6 +30,7 @@ enum {
   PROP_RTP_CIPHER,
   PROP_RTP_AUTH,
   PROP_ZEROIZE_COUNT,
+  PROP_CAPS_KEY_ZEROIZE_COUNT,
 };
 
 GstStaticPadTemplate kRtpSinkTemplate =
@@ -58,11 +65,6 @@ bool PadNameMatches(const gchar* name, const char* prefix) {
   return name != nullptr && g_str_has_prefix(name, prefix);
 }
 
-GstCaps* CapsForSecureMedia(bool rtcp) {
-  return gst_caps_new_empty_simple(rtcp ? "application/x-srtcp"
-                                       : "application/x-srtp");
-}
-
 }  // namespace
 
 struct _GstCfSecureSrtpEnc {
@@ -79,11 +81,121 @@ struct _GstCfSecureSrtpEnc {
   gchar* rtp_auth;
   bool rtp_cipher_supported;
   bool rtp_auth_supported;
+  std::shared_ptr<std::atomic_uint>* caps_key_zeroize_count;
 };
 
 G_DEFINE_TYPE(GstCfSecureSrtpEnc, gst_cf_secure_srtp_enc, GST_TYPE_ELEMENT)
 
 namespace {
+
+void ZeroizeMemory(guint8* data, std::size_t size) noexcept {
+  if (data == nullptr || size == 0U) {
+    return;
+  }
+#if defined(CAMERA_FIRMWARE_HAS_OPENSSL)
+  OPENSSL_cleanse(data, size);
+#else
+  volatile guint8* cursor = data;
+  for (std::size_t index = 0; index < size; ++index) {
+    cursor[index] = 0U;
+  }
+#endif
+}
+
+struct CapsKeyMemory {
+  guint8* data{nullptr};
+  std::size_t size{0};
+  std::shared_ptr<std::atomic_uint> zeroize_count;
+};
+
+void DestroyCapsKeyMemory(gpointer user_data) {
+  auto* memory = static_cast<CapsKeyMemory*>(user_data);
+  if (memory == nullptr) {
+    return;
+  }
+  ZeroizeMemory(memory->data, memory->size);
+  if (memory->data != nullptr) {
+    g_free(memory->data);
+  }
+  if (memory->size > 0U && memory->zeroize_count) {
+    memory->zeroize_count->fetch_add(1U, std::memory_order_relaxed);
+  }
+  delete memory;
+}
+
+GstBuffer* BufferFromSessionKey(GstCfSecureSrtpEnc* self) {
+  const SecureBytes& session_key = *self->session_key;
+  if (session_key.size() == 0U) {
+    return nullptr;
+  }
+
+  auto* data = static_cast<guint8*>(g_malloc(session_key.size()));
+  if (data == nullptr) {
+    return nullptr;
+  }
+  std::copy(session_key.data(), session_key.data() + session_key.size(), data);
+
+  auto* memory = new CapsKeyMemory{
+      data,
+      session_key.size(),
+      self->caps_key_zeroize_count != nullptr
+          ? *self->caps_key_zeroize_count
+          : std::shared_ptr<std::atomic_uint>()};
+  return gst_buffer_new_wrapped_full(
+      GST_MEMORY_FLAG_READONLY,
+      data,
+      session_key.size(),
+      0,
+      session_key.size(),
+      memory,
+      DestroyCapsKeyMemory);
+}
+
+GstCaps* CapsForSecureMedia(GstCfSecureSrtpEnc* self,
+                            bool rtcp,
+                            const GstCaps* upstream_caps) {
+  const char* secure_media_type =
+      rtcp ? "application/x-srtcp" : "application/x-srtp";
+  GstCaps* caps = (upstream_caps != nullptr &&
+                   !gst_caps_is_empty(upstream_caps) &&
+                   !gst_caps_is_any(upstream_caps))
+                      ? gst_caps_copy(upstream_caps)
+                      : gst_caps_new_empty_simple(secure_media_type);
+  GstBuffer* key_buffer = BufferFromSessionKey(self);
+
+  const guint structure_count = gst_caps_get_size(caps);
+  for (guint index = 0; index < structure_count; ++index) {
+    GstStructure* structure = gst_caps_get_structure(caps, index);
+    gst_structure_set_name(structure, secure_media_type);
+    gst_structure_set(structure,
+                      "srtp-cipher",
+                      G_TYPE_STRING,
+                      self->rtp_cipher,
+                      "srtp-auth",
+                      G_TYPE_STRING,
+                      self->rtp_auth,
+                      "srtcp-cipher",
+                      G_TYPE_STRING,
+                      self->rtp_cipher,
+                      "srtcp-auth",
+                      G_TYPE_STRING,
+                      self->rtp_auth,
+                      nullptr);
+    if (key_buffer != nullptr) {
+      gst_structure_set(structure,
+                        "srtp-key",
+                        GST_TYPE_BUFFER,
+                        key_buffer,
+                        nullptr);
+    }
+  }
+
+  if (key_buffer != nullptr) {
+    gst_buffer_unref(key_buffer);
+  }
+
+  return caps;
+}
 
 void CloseSrtpSession(GstCfSecureSrtpEnc* self) {
   if (self->rtp_session == nullptr) {
@@ -106,6 +218,14 @@ guint ZeroizeCount(const GstCfSecureSrtpEnc* self) {
   return static_cast<guint>(
       std::min<std::size_t>(self->session_key->zeroize_count_for_test(),
                             G_MAXUINT));
+}
+
+guint CapsKeyZeroizeCount(const GstCfSecureSrtpEnc* self) {
+  if (self->caps_key_zeroize_count == nullptr ||
+      !*self->caps_key_zeroize_count) {
+    return 0;
+  }
+  return (*self->caps_key_zeroize_count)->load(std::memory_order_relaxed);
 }
 
 bool AssignSessionKeyFromBuffer(GstCfSecureSrtpEnc* self, GstBuffer* buffer) {
@@ -228,8 +348,13 @@ void SetSupportedCryptoProperty(GstCfSecureSrtpEnc* self,
   *supported = true;
 }
 
-bool PushSecureCaps(GstPad* pad, bool rtcp) {
-  GstCaps* caps = CapsForSecureMedia(rtcp);
+bool PushSecureCaps(GstCfSecureSrtpEnc* self,
+                    GstPad* pad,
+                    bool rtcp,
+                    const GstCaps* upstream_caps) {
+  g_mutex_lock(&self->lock);
+  GstCaps* caps = CapsForSecureMedia(self, rtcp, upstream_caps);
+  g_mutex_unlock(&self->lock);
   const gboolean pushed = gst_pad_push_event(pad, gst_event_new_caps(caps));
   gst_caps_unref(caps);
   return pushed == TRUE;
@@ -241,16 +366,20 @@ gboolean SinkEvent(GstPad* pad, GstObject* parent, GstEvent* event) {
   GstPad* src = rtcp ? self->rtcp_src : self->rtp_src;
 
   if (GST_EVENT_TYPE(event) == GST_EVENT_CAPS) {
+    GstCaps* upstream_caps = nullptr;
+    gst_event_parse_caps(event, &upstream_caps);
+    const bool pushed = PushSecureCaps(self, src, rtcp, upstream_caps);
     gst_event_unref(event);
-    return PushSecureCaps(src, rtcp) ? TRUE : FALSE;
+    return pushed ? TRUE : FALSE;
   }
 
   return gst_pad_event_default(pad, parent, event);
 }
 
-GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
-  auto* self = GST_CF_SECURE_SRTP_ENC(parent);
-
+GstFlowReturn ProtectBuffer(GstCfSecureSrtpEnc* self,
+                            GstBuffer* buffer,
+                            GstPad* src,
+                            bool rtcp) {
   GstMapInfo input_map{};
   if (!gst_buffer_map(buffer, &input_map, GST_MAP_READ)) {
     gst_buffer_unref(buffer);
@@ -272,7 +401,12 @@ GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
   g_mutex_lock(&self->lock);
   const bool ready = EnsureRtpSession(self);
   const srtp_err_status_t status =
-      ready ? srtp_protect(self->rtp_session, output_map.data, &output_length)
+      ready ? (rtcp ? srtp_protect_rtcp(self->rtp_session,
+                                        output_map.data,
+                                        &output_length)
+                    : srtp_protect(self->rtp_session,
+                                   output_map.data,
+                                   &output_length))
             : srtp_err_status_fail;
   g_mutex_unlock(&self->lock);
 
@@ -285,7 +419,8 @@ GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
     GST_ELEMENT_ERROR(self,
                       STREAM,
                       FAILED,
-                      ("Unable to protect RTP packet"),
+                      (rtcp ? "Unable to protect RTCP packet"
+                            : "Unable to protect RTP packet"),
                       ("libsrtp status %d", status));
     return GST_FLOW_ERROR;
   }
@@ -294,25 +429,29 @@ GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
   gst_buffer_copy_into(output, buffer, GST_BUFFER_COPY_METADATA, 0, -1);
   gst_buffer_unref(buffer);
 
-  GstCaps* current_caps = gst_pad_get_current_caps(self->rtp_src);
+  GstCaps* current_caps = gst_pad_get_current_caps(src);
   if (current_caps == nullptr) {
-    (void)PushSecureCaps(self->rtp_src, false);
+    GstPad* sink = rtcp ? self->rtcp_sink : self->rtp_sink;
+    GstCaps* upstream_caps = gst_pad_get_current_caps(sink);
+    (void)PushSecureCaps(self, src, rtcp, upstream_caps);
+    if (upstream_caps != nullptr) {
+      gst_caps_unref(upstream_caps);
+    }
   } else {
     gst_caps_unref(current_caps);
   }
 
-  return gst_pad_push(self->rtp_src, output);
+  return gst_pad_push(src, output);
+}
+
+GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
+  auto* self = GST_CF_SECURE_SRTP_ENC(parent);
+  return ProtectBuffer(self, buffer, self->rtp_src, false);
 }
 
 GstFlowReturn RtcpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
   auto* self = GST_CF_SECURE_SRTP_ENC(parent);
-  GST_ELEMENT_ERROR(self,
-                    STREAM,
-                    FAILED,
-                    ("RTCP protection is not implemented in cfsecuresrtpenc"),
-                    (nullptr));
-  gst_buffer_unref(buffer);
-  return GST_FLOW_NOT_SUPPORTED;
+  return ProtectBuffer(self, buffer, self->rtcp_src, true);
 }
 
 GstPad* CreatePad(GstCfSecureSrtpEnc* self,
@@ -458,6 +597,11 @@ void GetProperty(GObject* object,
       g_value_set_uint(value, ZeroizeCount(self));
       g_mutex_unlock(&self->lock);
       break;
+    case PROP_CAPS_KEY_ZEROIZE_COUNT:
+      g_mutex_lock(&self->lock);
+      g_value_set_uint(value, CapsKeyZeroizeCount(self));
+      g_mutex_unlock(&self->lock);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
       break;
@@ -487,6 +631,8 @@ void Finalize(GObject* object) {
   ClearSessionKey(self);
   delete self->session_key;
   self->session_key = nullptr;
+  delete self->caps_key_zeroize_count;
+  self->caps_key_zeroize_count = nullptr;
   g_mutex_unlock(&self->lock);
 
   g_free(self->rtp_cipher);
@@ -556,6 +702,17 @@ static void gst_cf_secure_srtp_enc_class_init(
                         0,
                         static_cast<GParamFlags>(G_PARAM_READABLE |
                                                  G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property(
+      object_class,
+      PROP_CAPS_KEY_ZEROIZE_COUNT,
+      g_param_spec_uint("caps-key-zeroize-count",
+                        "Caps key zeroize count",
+                        "Number of caps-owned session key zeroizations",
+                        0,
+                        G_MAXUINT,
+                        0,
+                        static_cast<GParamFlags>(G_PARAM_READABLE |
+                                                 G_PARAM_STATIC_STRINGS)));
 
   gst_element_class_add_static_pad_template(element_class, &kRtpSinkTemplate);
   gst_element_class_add_static_pad_template(element_class, &kRtpSrcTemplate);
@@ -572,6 +729,9 @@ static void gst_cf_secure_srtp_enc_class_init(
 static void gst_cf_secure_srtp_enc_init(GstCfSecureSrtpEnc* self) {
   g_mutex_init(&self->lock);
   self->session_key = new SecureBytes();
+  self->caps_key_zeroize_count =
+      new std::shared_ptr<std::atomic_uint>(
+          std::make_shared<std::atomic_uint>(0U));
   self->rtp_cipher = g_strdup(kRtpCipherDefault.data());
   self->rtp_auth = g_strdup(kRtpAuthDefault.data());
   self->rtp_cipher_supported = true;

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.31)
+cmake_minimum_required(VERSION 3.25)
 
 project(camera_firmware LANGUAGES CXX)
 
@@ -16,6 +16,7 @@ add_subdirectory(src/media)
 add_subdirectory(src/rtsp)
 add_subdirectory(src/service)
 add_subdirectory(plugins/gst-secure-srtp)
+add_subdirectory(apps/camera-firmware)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)

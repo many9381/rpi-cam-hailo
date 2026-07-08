@@ -1,6 +1,6 @@
 #include "camera_firmware/media/FrameLease.hpp"
 
-#include <cassert>
+#include <stdexcept>
 #include <utility>
 
 namespace camera_firmware::media {
@@ -34,7 +34,9 @@ FrameLease FrameLease::CloneRef() const {
 bool FrameLease::valid() const noexcept { return static_cast<bool>(shared_state_); }
 
 const FrameHandle& FrameLease::handle() const {
-  assert(valid());
+  if (!valid()) {
+    throw std::logic_error("FrameLease has no frame handle");
+  }
   return shared_state_->handle;
 }
 
