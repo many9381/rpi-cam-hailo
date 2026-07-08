@@ -10,6 +10,7 @@ include(CTest)
 include(cmake/Dependencies.cmake)
 
 add_subdirectory(src/common)
+add_subdirectory(src/config)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)
