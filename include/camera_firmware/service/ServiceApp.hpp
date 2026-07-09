@@ -31,6 +31,17 @@ using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
     std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
 
+struct AiRunnerServiceStatus {
+  std::string camera_id;
+  std::string model_id;
+  std::string model_kind;
+  std::uint64_t submitted_frames{0};
+  std::uint64_t processed_frames{0};
+  std::uint64_t dropped_frames{0};
+  std::string last_error_code;
+  std::string last_error_message;
+};
+
 struct AiServiceStatus {
   bool enabled{false};
   std::string backend{"disabled"};
@@ -38,9 +49,11 @@ struct AiServiceStatus {
   std::size_t model_count{0};
   std::size_t runner_count{0};
   std::string reason{"disabled by config"};
+  std::vector<AiRunnerServiceStatus> runners;
 };
 
 using AiStatusProvider = std::function<AiServiceStatus()>;
+using AiControlCallback = std::function<common::Result<void>()>;
 using DetectionSnapshotProvider =
     std::function<std::vector<ai::DetectionEvent>()>;
 using DetectionEventSubscriber =
@@ -64,6 +77,7 @@ struct ServiceInitArgs {
   bool ai_enabled{false};
   CameraStatusProvider camera_status_provider;
   AiStatusProvider ai_status_provider;
+  AiControlCallback ai_restart_callback;
   DetectionSnapshotProvider detection_snapshot_provider;
   DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
@@ -72,6 +86,9 @@ struct ServiceInitArgs {
 Json::Value BuildHealthJson(const std::string& status);
 Json::Value BuildAiStatusJson(const AiServiceStatus& status);
 Json::Value BuildAiStatusJson(bool requested);
+drogon::HttpResponsePtr BuildAiRestartResponse(
+    const AiControlCallback& restart_callback,
+    const AiStatusProvider& ai_status_provider = {});
 Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event);
 Json::Value BuildDetectionSnapshotJson(
     const std::vector<ai::DetectionEvent>& events);

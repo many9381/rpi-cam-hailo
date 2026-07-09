@@ -49,6 +49,15 @@ body {
   font-weight: 600;
 }
 
+.status-detail {
+  display: block;
+  margin-top: 4px;
+  color: #5a6773;
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
@@ -57,17 +66,84 @@ body {
 }
 
 .panel h2,
-.status-panel h1 {
+.status-panel h1,
+.status-panel h2 {
   margin-top: 0;
 }
 
-#refresh-button {
+#refresh-button,
+#ai-restart-button {
   border: 1px solid #365d91;
   border-radius: 6px;
   background: #365d91;
   color: #ffffff;
   padding: 8px 12px;
   cursor: pointer;
+}
+
+#refresh-button:disabled,
+#ai-restart-button:disabled {
+  border-color: #97a5b5;
+  background: #97a5b5;
+  cursor: default;
+}
+
+.runner-status {
+  margin-top: 20px;
+}
+
+.runner-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-control-status {
+  margin-top: 8px;
+  color: #5a6773;
+  font-size: 12px;
+  min-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.runner-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.runner-row {
+  display: grid;
+  grid-template-columns:
+    minmax(96px, 1fr)
+    minmax(136px, 1.1fr)
+    minmax(120px, 1fr)
+    minmax(260px, 1.8fr)
+    minmax(120px, 1.2fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #d8dee6;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  font-size: 14px;
+}
+
+.runner-row > * {
+  overflow-wrap: anywhere;
+}
+
+.runner-error {
+  color: #8b2f2f;
+}
+
+.runner-row-error {
+  border-color: #d6a2a2;
+  background: #fff8f8;
+}
+
+.runner-empty {
+  color: #5a6773;
 }
 
 .camera-list {
@@ -181,6 +257,10 @@ body {
   }
 
   .detection-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .runner-row {
     grid-template-columns: 1fr 1fr;
   }
 

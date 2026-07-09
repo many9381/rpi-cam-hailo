@@ -6,6 +6,8 @@ function makeElement() {
     className: '',
     children: [],
     dataset: {},
+    disabled: false,
+    listeners: {},
     style: {},
     _innerHTML: '',
     textContent: '',
@@ -15,7 +17,15 @@ function makeElement() {
     appendChild(child) {
       this.children.push(child);
     },
-    addEventListener() {},
+    addEventListener(name, handler) {
+      this.listeners[name] = handler;
+    },
+    click() {
+      if (this.listeners.click) {
+        return this.listeners.click();
+      }
+      return undefined;
+    },
     removeAttribute() {},
   };
   Object.defineProperty(element, 'innerHTML', {
@@ -71,7 +81,7 @@ function deferred() {
   return {promise, resolve};
 }
 
-function loadApp() {
+function loadApp(fetchImpl) {
   delete require.cache[require.resolve('../../web/app.js')];
   delete global.EventSource;
   const elements = {};
@@ -91,7 +101,7 @@ function loadApp() {
       return 'blob:mock';
     },
   };
-  global.fetch = async (path) => ({
+  global.fetch = fetchImpl || (async (path) => ({
     ok: true,
     async json() {
       if (path === '/api/v1/health') {
@@ -111,7 +121,7 @@ function loadApp() {
     async blob() {
       return new Blob();
     },
-  });
+  }));
   return {...require('../../web/app.js'), elements};
 }
 
@@ -309,6 +319,771 @@ test('renderDetections clears stale rows before rendering empty state', () => {
   assert.equal(count.textContent, '0');
   assert.equal(list.children.length, 1);
   assert.equal(list.children[0].textContent, 'No detections');
+});
+
+test('buildAiStatusView normalizes runtime state details', () => {
+  const {buildAiStatusView} = loadApp();
+
+  assert.deepEqual(buildAiStatusView({
+    enabled: true,
+    backend: 'hailo',
+    state: 'ready',
+    model_count: 2,
+    runner_count: 1,
+    reason: 'AI runtime ready',
+  }), {
+    summary: 'hailo / ready',
+    detail: 'models 2 / runners 1 - AI runtime ready',
+  });
+});
+
+test('buildAiStatusView preserves disabled and unknown states', () => {
+  const {buildAiStatusView} = loadApp();
+
+  assert.deepEqual(buildAiStatusView({
+    enabled: false,
+    reason: 'disabled by config',
+  }), {
+    summary: 'Disabled',
+    detail: 'models 0 / runners 0 - disabled by config',
+  });
+
+  assert.deepEqual(buildAiStatusView(undefined), {
+    summary: 'Unknown',
+    detail: 'models 0 / runners 0',
+  });
+});
+
+test('renderAiStatus writes compact status details', () => {
+  const {renderAiStatus} = loadApp();
+  const summary = makeElement();
+  const detail = makeElement();
+
+  renderAiStatus({
+    enabled: true,
+    backend: 'hailo',
+    state: 'backend_unavailable',
+    model_count: 1,
+    runner_count: 0,
+    reason: 'Hailo device unavailable',
+  }, {summary, detail});
+
+  assert.equal(summary.textContent, 'hailo / backend_unavailable');
+  assert.equal(
+    detail.textContent,
+    'models 1 / runners 0 - Hailo device unavailable',
+  );
+});
+
+test('buildRunnerRows normalizes ai runner status', () => {
+  const {buildRunnerRows} = loadApp();
+
+  const rows = buildRunnerRows({
+    runners: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        model_kind: 'object_detection',
+        submitted_frames: 11,
+        processed_frames: 10,
+        dropped_frames: 1,
+        last_error_code: 'E_AI_POSTPROCESS',
+        last_error_message: 'malformed output',
+      },
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        model_kind: 'pose',
+        submitted_frames: 7,
+        processed_frames: 7,
+      },
+    ],
+  });
+
+  assert.deepEqual(rows, [
+    {
+      cameraId: 'imx708-main',
+      modelId: 'objects',
+      modelKind: 'object_detection',
+      submittedFrames: 11,
+      processedFrames: 10,
+      droppedFrames: 1,
+      lastErrorCode: 'E_AI_POSTPROCESS',
+      lastErrorMessage: 'malformed output',
+    },
+    {
+      cameraId: 'imx708-main',
+      modelId: 'pose',
+      modelKind: 'pose',
+      submittedFrames: 7,
+      processedFrames: 7,
+      droppedFrames: 0,
+      lastErrorCode: '',
+      lastErrorMessage: '',
+    },
+  ]);
+});
+
+test('renderAiRunners writes empty state', () => {
+  const {renderAiRunners} = loadApp();
+  const list = makeElement();
+  const count = makeElement();
+
+  renderAiRunners({runners: []}, {list, count});
+
+  assert.equal(count.textContent, '0 runners');
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].textContent, 'No AI runners');
+});
+
+test('renderAiRunners writes compact runner rows', () => {
+  const {renderAiRunners} = loadApp();
+  const list = makeElement();
+  const count = makeElement();
+
+  renderAiRunners({
+    runners: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        model_kind: 'object_detection',
+        submitted_frames: 11,
+        processed_frames: 10,
+        dropped_frames: 1,
+        last_error_code: 'E_AI_POSTPROCESS',
+        last_error_message: 'malformed output',
+      },
+    ],
+  }, {list, count});
+
+  assert.equal(count.textContent, '1 runner');
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[0].textContent, 'objects');
+  assert.equal(list.children[0].children[1].textContent, 'object_detection');
+  assert.equal(list.children[0].children[2].textContent, 'imx708-main');
+  assert.equal(
+    list.children[0].children[3].textContent,
+    'submitted 11 / processed 10 / dropped 1',
+  );
+  assert.equal(
+    list.children[0].children[4].textContent,
+    'E_AI_POSTPROCESS: malformed output',
+  );
+});
+
+test('startup refresh renders ai runner status from cameras response', async () => {
+  const app = loadApp(async (path) => ({
+    ok: true,
+    async json() {
+      if (path === '/api/v1/health') {
+        return {status: 'ok'};
+      }
+      if (path === '/api/v1/stream') {
+        return {url: 'rtsp://camera.local/imx708/main'};
+      }
+      if (path === '/api/v1/cameras') {
+        return {
+          ai: {
+            enabled: true,
+            runners: [
+              {
+                camera_id: 'imx708-main',
+                model_id: 'objects',
+                model_kind: 'object_detection',
+                submitted_frames: 4,
+                processed_frames: 3,
+                dropped_frames: 1,
+                last_error_code: 'E_AI_POSTPROCESS',
+                last_error_message: 'malformed output',
+              },
+            ],
+          },
+          cameras: [],
+        };
+      }
+      if (path === '/api/v1/ai/detections') {
+        return {events: []};
+      }
+      return {};
+    },
+    async blob() {
+      return new Blob();
+    },
+  }));
+
+  await settleStartupRefresh();
+
+  assert.equal(app.elements['#runner-count'].textContent, '1 runner');
+  assert.equal(app.elements['#runner-list'].children.length, 1);
+  assert.equal(app.elements['#runner-list'].children[0].children[0].textContent, 'objects');
+  assert.equal(
+    app.elements['#runner-list'].children[0].children[3].textContent,
+    'submitted 4 / processed 3 / dropped 1',
+  );
+  assert.equal(
+    app.elements['#runner-list'].children[0].children[4].textContent,
+    'E_AI_POSTPROCESS: malformed output',
+  );
+});
+
+test('startup refresh renders ai runtime status details from cameras response', async () => {
+  const app = loadApp(async (path) => ({
+    ok: true,
+    async json() {
+      if (path === '/api/v1/health') {
+        return {status: 'ok'};
+      }
+      if (path === '/api/v1/stream') {
+        return {url: 'rtsp://camera.local/imx708/main'};
+      }
+      if (path === '/api/v1/cameras') {
+        return {
+          ai: {
+            enabled: true,
+            backend: 'hailo',
+            state: 'backend_unavailable',
+            model_count: 1,
+            runner_count: 0,
+            reason: 'Hailo device unavailable',
+            runners: [],
+          },
+          cameras: [],
+        };
+      }
+      if (path === '/api/v1/ai/detections') {
+        return {events: []};
+      }
+      return {};
+    },
+    async blob() {
+      return new Blob();
+    },
+  }));
+
+  await settleStartupRefresh();
+
+  assert.equal(app.elements['#ai-status'].textContent, 'hailo / backend_unavailable');
+  assert.equal(
+    app.elements['#ai-status-detail'].textContent,
+    'models 1 / runners 0 - Hailo device unavailable',
+  );
+});
+
+test('startup refresh renders unknown ai status on request failure', async () => {
+  const app = loadApp(async (path) => ({
+    ok: path !== '/api/v1/cameras',
+    async json() {
+      if (path === '/api/v1/health') {
+        return {status: 'ok'};
+      }
+      if (path === '/api/v1/stream') {
+        return {url: 'rtsp://camera.local/imx708/main'};
+      }
+      if (path === '/api/v1/cameras') {
+        return {message: 'camera status unavailable'};
+      }
+      if (path === '/api/v1/ai/detections') {
+        return {events: []};
+      }
+      return {};
+    },
+    async blob() {
+      return new Blob();
+    },
+  }));
+
+  await settleStartupRefresh();
+
+  assert.equal(app.elements['#ai-status'].textContent, 'Unknown');
+  assert.equal(
+    app.elements['#ai-status-detail'].textContent,
+    'models 0 / runners 0 - camera status unavailable',
+  );
+});
+
+test('status-only refresh updates ai status without snapshot or detection requests', async () => {
+  const app = loadApp();
+  await settleStartupRefresh();
+  const calls = [];
+
+  global.fetch = async (path) => {
+    calls.push(path);
+    return {
+      ok: true,
+      async json() {
+        if (path === '/api/v1/health') {
+          return {status: 'ok'};
+        }
+        if (path === '/api/v1/stream') {
+          return {url: 'rtsp://camera.local/imx708/main'};
+        }
+        if (path === '/api/v1/cameras') {
+          return {
+            ai: {
+              enabled: true,
+              backend: 'hailo',
+              state: 'ready',
+              model_count: 1,
+              runner_count: 1,
+              reason: 'AI runtime ready',
+              runners: [
+                {
+                  camera_id: 'imx708-main',
+                  model_id: 'objects',
+                  model_kind: 'object_detection',
+                  submitted_frames: 12,
+                  processed_frames: 11,
+                  dropped_frames: 1,
+                },
+              ],
+            },
+            cameras: [
+              {id: 'imx708-main', state: 'running', snapshot_available: true},
+            ],
+          };
+        }
+        return {};
+      },
+      async blob() {
+        throw new Error('snapshot should not be requested');
+      },
+    };
+  };
+
+  await app.refreshStatusOnly();
+
+  assert.deepEqual(calls, [
+    '/api/v1/health',
+    '/api/v1/stream',
+    '/api/v1/cameras',
+  ]);
+  assert.equal(app.elements['#ai-status'].textContent, 'hailo / ready');
+  assert.equal(
+    app.elements['#ai-status-detail'].textContent,
+    'models 1 / runners 1 - AI runtime ready',
+  );
+  assert.equal(app.elements['#runner-count'].textContent, '1 runner');
+  assert.equal(
+    app.elements['#runner-list'].children[0].children[3].textContent,
+    'submitted 12 / processed 11 / dropped 1',
+  );
+  assert.equal(app.elements['#camera-list'].children[0].dataset.cameraId, 'imx708-main');
+});
+
+test('status-only refresh failure preserves active snapshot and overlay', async () => {
+  const app = loadApp();
+  const overlay = app.elements['#detection-overlay'];
+  await settleStartupRefresh();
+
+  global.fetch = async () => ({
+    ok: true,
+    async blob() {
+      return new Blob(['jpeg']);
+    },
+  });
+  global.URL = {
+    createObjectURL() {
+      return 'blob:snapshot';
+    },
+  };
+
+  await app.loadSnapshot('imx708-main');
+  app.renderDetectionSnapshot({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        frame_sequence: 34,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.9,
+            box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(overlay.children.length, 1);
+
+  global.fetch = async (path) => ({
+    ok: path !== '/api/v1/cameras',
+    async json() {
+      if (path === '/api/v1/cameras') {
+        return {message: 'camera status unavailable'};
+      }
+      return {};
+    },
+  });
+
+  await app.refreshStatusOnly();
+
+  assert.equal(app.elements['#snapshot-label'].textContent, 'imx708-main');
+  assert.equal(overlay.children.length, 1);
+  assert.equal(app.elements['#ai-status'].textContent, 'Unknown');
+  assert.equal(
+    app.elements['#ai-status-detail'].textContent,
+    'models 0 / runners 0 - camera status unavailable',
+  );
+});
+
+test('restartAi renders response ai status without polling endpoints', async () => {
+  const app = loadApp();
+  const overlay = app.elements['#detection-overlay'];
+  await settleStartupRefresh();
+  const calls = [];
+
+  global.fetch = async () => ({
+    ok: true,
+    async blob() {
+      return new Blob(['jpeg']);
+    },
+  });
+  global.URL = {
+    createObjectURL() {
+      return 'blob:snapshot';
+    },
+  };
+
+  await app.loadSnapshot('imx708-main');
+  app.renderDetectionSnapshot({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        frame_sequence: 36,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.9,
+            box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(overlay.children.length, 1);
+
+  global.fetch = async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET'});
+    return {
+      ok: path !== '/api/v1/ai/detections',
+      async json() {
+        if (path === '/api/v1/ai/restart') {
+          return {
+            ai: {
+              enabled: true,
+              backend: 'hailo',
+              state: 'ready',
+              model_count: 1,
+              runner_count: 1,
+              reason: 'AI runtime ready',
+              runners: [
+                {
+                  camera_id: 'imx708-main',
+                  model_id: 'objects',
+                  model_kind: 'object_detection',
+                  submitted_frames: 18,
+                  processed_frames: 17,
+                  dropped_frames: 1,
+                },
+              ],
+            },
+            status: 'restarted',
+          };
+        }
+        throw new Error(`unexpected request: ${path}`);
+      },
+      async blob() {
+        throw new Error('snapshot should not be requested');
+      },
+    };
+  };
+
+  await app.restartAi();
+
+  assert.deepEqual(calls, [
+    {path: '/api/v1/ai/restart', method: 'POST'},
+  ]);
+  assert.equal(app.elements['#ai-control-status'].textContent, 'restarted');
+  assert.equal(app.elements['#ai-restart-button'].disabled, false);
+  assert.equal(app.elements['#ai-status'].textContent, 'hailo / ready');
+  assert.equal(app.elements['#runner-count'].textContent, '1 runner');
+  assert.equal(
+    app.elements['#runner-list'].children[0].children[3].textContent,
+    'submitted 18 / processed 17 / dropped 1',
+  );
+  assert.equal(app.elements['#snapshot-label'].textContent, 'imx708-main');
+  assert.equal(overlay.children.length, 1);
+});
+
+test('restartAi falls back to status refresh when response omits ai', async () => {
+  const app = loadApp();
+  await settleStartupRefresh();
+  const calls = [];
+
+  global.fetch = async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET'});
+    return {
+      ok: true,
+      async json() {
+        if (path === '/api/v1/ai/restart') {
+          return {status: 'restarted'};
+        }
+        if (path === '/api/v1/health') {
+          return {status: 'ok'};
+        }
+        if (path === '/api/v1/stream') {
+          return {url: 'rtsp://camera.local/imx708/main'};
+        }
+        if (path === '/api/v1/cameras') {
+          return {
+            ai: {
+              enabled: true,
+              backend: 'hailo',
+              state: 'ready',
+              model_count: 1,
+              runner_count: 0,
+              reason: 'AI runtime ready',
+              runners: [],
+            },
+            cameras: [],
+          };
+        }
+        return {};
+      },
+    };
+  };
+
+  await app.restartAi();
+
+  assert.deepEqual(calls, [
+    {path: '/api/v1/ai/restart', method: 'POST'},
+    {path: '/api/v1/health', method: 'GET'},
+    {path: '/api/v1/stream', method: 'GET'},
+    {path: '/api/v1/cameras', method: 'GET'},
+  ]);
+  assert.equal(app.elements['#ai-status'].textContent, 'hailo / ready');
+});
+
+test('restartAi shows pending state while request is in flight', async () => {
+  const app = loadApp();
+  await settleStartupRefresh();
+  const restartResponse = deferred();
+
+  global.fetch = async (path, options = {}) => {
+    if (path === '/api/v1/ai/restart') {
+      assert.equal(options.method, 'POST');
+      return restartResponse.promise;
+    }
+    return {
+      ok: true,
+      async json() {
+        if (path === '/api/v1/health') {
+          return {status: 'ok'};
+        }
+        if (path === '/api/v1/stream') {
+          return {url: 'rtsp://camera.local/imx708/main'};
+        }
+        if (path === '/api/v1/cameras') {
+          return {ai: {enabled: false}, cameras: []};
+        }
+        return {};
+      },
+    };
+  };
+
+  const restart = app.restartAi();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(app.elements['#ai-restart-button'].disabled, true);
+  assert.equal(app.elements['#ai-control-status'].textContent, 'Restarting AI');
+
+  restartResponse.resolve({
+    ok: true,
+    async json() {
+      return {status: 'restarted'};
+    },
+  });
+  await restart;
+
+  assert.equal(app.elements['#ai-restart-button'].disabled, false);
+  assert.equal(app.elements['#ai-control-status'].textContent, 'restarted');
+});
+
+test('restartAi failure preserves active snapshot and overlay', async () => {
+  const app = loadApp();
+  const overlay = app.elements['#detection-overlay'];
+  await settleStartupRefresh();
+
+  global.fetch = async () => ({
+    ok: true,
+    async blob() {
+      return new Blob(['jpeg']);
+    },
+  });
+  global.URL = {
+    createObjectURL() {
+      return 'blob:snapshot';
+    },
+  };
+
+  await app.loadSnapshot('imx708-main');
+  app.renderDetectionSnapshot({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        frame_sequence: 35,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.9,
+            box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(overlay.children.length, 1);
+
+  global.fetch = async (path, options = {}) => {
+    assert.equal(path, '/api/v1/ai/restart');
+    assert.equal(options.method, 'POST');
+    return {
+      ok: false,
+      async json() {
+        return {code: 'E_AI_RESTART', message: 'AI restart failed'};
+      },
+    };
+  };
+
+  await app.restartAi();
+
+  assert.equal(app.elements['#ai-control-status'].textContent, 'AI restart failed');
+  assert.equal(app.elements['#snapshot-label'].textContent, 'imx708-main');
+  assert.equal(overlay.children.length, 1);
+  assert.equal(app.elements['#ai-restart-button'].disabled, false);
+});
+
+test('restart button click invokes ai restart request', async () => {
+  const app = loadApp();
+  await settleStartupRefresh();
+  const calls = [];
+
+  global.fetch = async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET'});
+    return {
+      ok: true,
+      async json() {
+        if (path === '/api/v1/ai/restart') {
+          return {status: 'restarted'};
+        }
+        if (path === '/api/v1/health') {
+          return {status: 'ok'};
+        }
+        if (path === '/api/v1/stream') {
+          return {url: 'rtsp://camera.local/imx708/main'};
+        }
+        if (path === '/api/v1/cameras') {
+          return {ai: {enabled: false}, cameras: []};
+        }
+        return {};
+      },
+    };
+  };
+
+  const clicked = app.elements['#ai-restart-button'].click();
+  if (clicked && typeof clicked.then === 'function') {
+    await clicked;
+  } else {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(calls[0].path, '/api/v1/ai/restart');
+  assert.equal(calls[0].method, 'POST');
+});
+
+test('startStatusPolling schedules status refresh and unrefs node timers', async () => {
+  const {startStatusPolling} = loadApp();
+  let scheduledCallback;
+  let scheduledInterval = 0;
+  let unrefCalled = false;
+  let refreshes = 0;
+  const scheduler = {
+    setInterval(callback, intervalMs) {
+      scheduledCallback = callback;
+      scheduledInterval = intervalMs;
+      return {
+        unref() {
+          unrefCalled = true;
+        },
+      };
+    },
+  };
+
+  const handle = startStatusPolling(1234, scheduler, async () => {
+    refreshes += 1;
+  });
+
+  assert.equal(scheduledInterval, 1234);
+  assert.equal(unrefCalled, true);
+  assert.equal(typeof handle.unref, 'function');
+  await scheduledCallback();
+  assert.equal(refreshes, 1);
+});
+
+test('startStatusPolling default callback refreshes status only', async () => {
+  const app = loadApp();
+  await settleStartupRefresh();
+  let scheduledCallback;
+  const scheduler = {
+    setInterval(callback) {
+      scheduledCallback = callback;
+      return {};
+    },
+  };
+  const calls = [];
+
+  global.fetch = async (path) => {
+    calls.push(path);
+    return {
+      ok: true,
+      async json() {
+        if (path === '/api/v1/health') {
+          return {status: 'ok'};
+        }
+        if (path === '/api/v1/stream') {
+          return {url: 'rtsp://camera.local/imx708/main'};
+        }
+        if (path === '/api/v1/cameras') {
+          return {
+            ai: {
+              enabled: true,
+              backend: 'hailo',
+              state: 'ready',
+              model_count: 1,
+              runner_count: 0,
+              reason: 'AI runtime ready',
+              runners: [],
+            },
+            cameras: [],
+          };
+        }
+        return {};
+      },
+    };
+  };
+
+  app.startStatusPolling(1000, scheduler);
+  await scheduledCallback();
+
+  assert.deepEqual(calls, [
+    '/api/v1/health',
+    '/api/v1/stream',
+    '/api/v1/cameras',
+  ]);
+  assert.equal(app.elements['#ai-status'].textContent, 'hailo / ready');
 });
 
 test('buildOverlayDetections returns valid detections for active camera', () => {

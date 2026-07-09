@@ -21,9 +21,25 @@
           </div>
           <div>
             <dt>AI</dt>
-            <dd id="ai-status">Loading</dd>
+            <dd>
+              <span id="ai-status">Loading</span>
+              <small id="ai-status-detail" class="status-detail">Waiting for runtime</small>
+            </dd>
           </div>
         </dl>
+        <div class="runner-status">
+          <div class="panel-header">
+            <h2>AI Runners</h2>
+            <div class="runner-controls">
+              <span id="runner-count">0 runners</span>
+              <button id="ai-restart-button" type="button">Restart AI</button>
+            </div>
+          </div>
+          <div id="ai-control-status" class="ai-control-status" aria-live="polite">Idle</div>
+          <div id="runner-list" class="runner-list" aria-live="polite">
+            <div class="runner-empty">No AI runners</div>
+          </div>
+        </div>
       </section>
 
       <section class="content-grid">

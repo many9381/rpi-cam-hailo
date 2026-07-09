@@ -288,6 +288,21 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/ai/restart",
+      [](const HttpRequestPtr&,
+         std::function<void(const HttpResponsePtr&)>&& callback) {
+        AiControlCallback restart_callback;
+        AiStatusProvider ai_status_provider;
+        {
+          std::scoped_lock lock(StateMutex());
+          restart_callback = GlobalState().args.ai_restart_callback;
+          ai_status_provider = GlobalState().args.ai_status_provider;
+        }
+        callback(BuildAiRestartResponse(restart_callback, ai_status_provider));
+      },
+      {Post});
+
+  app().registerHandler(
       "/api/v1/ai/detections/stream",
       [](const HttpRequestPtr& request,
          std::function<void(const HttpResponsePtr&)>&& callback) {
@@ -398,6 +413,24 @@ Json::Value BuildAiStatusJson(const AiServiceStatus& status) {
   json["model_count"] = static_cast<Json::UInt64>(status.model_count);
   json["runner_count"] = static_cast<Json::UInt64>(status.runner_count);
   json["reason"] = status.reason;
+
+  Json::Value runners(Json::arrayValue);
+  for (const auto& runner : status.runners) {
+    Json::Value runner_json(Json::objectValue);
+    runner_json["camera_id"] = runner.camera_id;
+    runner_json["model_id"] = runner.model_id;
+    runner_json["model_kind"] = runner.model_kind;
+    runner_json["submitted_frames"] =
+        static_cast<Json::UInt64>(runner.submitted_frames);
+    runner_json["processed_frames"] =
+        static_cast<Json::UInt64>(runner.processed_frames);
+    runner_json["dropped_frames"] =
+        static_cast<Json::UInt64>(runner.dropped_frames);
+    runner_json["last_error_code"] = runner.last_error_code;
+    runner_json["last_error_message"] = runner.last_error_message;
+    runners.append(std::move(runner_json));
+  }
+  json["runners"] = std::move(runners);
   return json;
 }
 
@@ -410,6 +443,32 @@ Json::Value BuildAiStatusJson(bool requested) {
     status.reason = "Hailo backend is not implemented in this build";
   }
   return BuildAiStatusJson(status);
+}
+
+drogon::HttpResponsePtr BuildAiRestartResponse(
+    const AiControlCallback& restart_callback,
+    const AiStatusProvider& ai_status_provider) {
+  if (!restart_callback) {
+    Json::Value body(Json::objectValue);
+    body["code"] = "E_AI_CONTROL_UNAVAILABLE";
+    body["message"] = "AI restart control is unavailable";
+    return JsonResponse(std::move(body), drogon::k503ServiceUnavailable);
+  }
+
+  auto restarted = restart_callback();
+  if (!restarted.ok()) {
+    Json::Value body(Json::objectValue);
+    body["code"] = restarted.error().code;
+    body["message"] = restarted.error().message;
+    return JsonResponse(std::move(body), drogon::k500InternalServerError);
+  }
+
+  Json::Value body(Json::objectValue);
+  body["status"] = "restarted";
+  if (ai_status_provider) {
+    body["ai"] = BuildAiStatusJson(ai_status_provider());
+  }
+  return JsonResponse(std::move(body));
 }
 
 Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {

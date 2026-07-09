@@ -57,6 +57,19 @@ TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonWhenRequested) {
   EXPECT_EQ(json["runner_count"].asUInt64(), 0u);
   EXPECT_EQ(json["reason"].asString(),
             "Hailo backend is not implemented in this build");
+  ASSERT_TRUE(json["runners"].isArray());
+  EXPECT_TRUE(json["runners"].empty());
+}
+
+TEST(ServiceResponseTest, AiStatusReportsEmptyRunnersWhenDisabled) {
+  auto json = camera_firmware::service::BuildAiStatusJson(false);
+
+  EXPECT_FALSE(json["enabled"].asBool());
+  EXPECT_EQ(json["backend"].asString(), "disabled");
+  EXPECT_EQ(json["state"].asString(), "disabled");
+  EXPECT_EQ(json["runner_count"].asUInt64(), 0u);
+  ASSERT_TRUE(json["runners"].isArray());
+  EXPECT_TRUE(json["runners"].empty());
 }
 
 TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonState) {
@@ -77,6 +90,156 @@ TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonState) {
   EXPECT_EQ(json["runner_count"].asUInt64(), 2u);
   EXPECT_EQ(json["reason"].asString(),
             "Hailo backend is not implemented in this build");
+  ASSERT_TRUE(json["runners"].isArray());
+  EXPECT_TRUE(json["runners"].empty());
+}
+
+TEST(ServiceResponseTest, AiStatusSerializesRunnerStatuses) {
+  camera_firmware::service::AiServiceStatus status;
+  status.enabled = true;
+  status.backend = "hailo";
+  status.state = "ready";
+  status.model_count = 2;
+  status.runner_count = 2;
+  status.reason = "AI runtime ready";
+
+  camera_firmware::service::AiRunnerServiceStatus objects;
+  objects.camera_id = "imx708-main";
+  objects.model_id = "objects";
+  objects.model_kind = "object_detection";
+  objects.submitted_frames = 11;
+  objects.processed_frames = 10;
+  objects.dropped_frames = 1;
+  objects.last_error_code = "E_AI_POSTPROCESS";
+  objects.last_error_message = "malformed output";
+  status.runners.push_back(objects);
+
+  camera_firmware::service::AiRunnerServiceStatus pose;
+  pose.camera_id = "imx708-main";
+  pose.model_id = "pose";
+  pose.model_kind = "pose";
+  pose.submitted_frames = 7;
+  pose.processed_frames = 7;
+  status.runners.push_back(pose);
+
+  const auto json = camera_firmware::service::BuildAiStatusJson(status);
+
+  ASSERT_TRUE(json["runners"].isArray());
+  ASSERT_EQ(json["runners"].size(), 2U);
+  const auto& first = json["runners"][0];
+  EXPECT_EQ(first["camera_id"].asString(), "imx708-main");
+  EXPECT_EQ(first["model_id"].asString(), "objects");
+  EXPECT_EQ(first["model_kind"].asString(), "object_detection");
+  EXPECT_EQ(first["submitted_frames"].asUInt64(), 11U);
+  EXPECT_EQ(first["processed_frames"].asUInt64(), 10U);
+  EXPECT_EQ(first["dropped_frames"].asUInt64(), 1U);
+  EXPECT_EQ(first["last_error_code"].asString(), "E_AI_POSTPROCESS");
+  EXPECT_EQ(first["last_error_message"].asString(), "malformed output");
+
+  const auto& second = json["runners"][1];
+  EXPECT_EQ(second["model_id"].asString(), "pose");
+  EXPECT_EQ(second["model_kind"].asString(), "pose");
+  EXPECT_EQ(second["submitted_frames"].asUInt64(), 7U);
+  EXPECT_EQ(second["processed_frames"].asUInt64(), 7U);
+  EXPECT_EQ(second["dropped_frames"].asUInt64(), 0U);
+  EXPECT_EQ(second["last_error_code"].asString(), "");
+  EXPECT_EQ(second["last_error_message"].asString(), "");
+}
+
+TEST(ServiceResponseTest, AiRestartResponseInvokesCallback) {
+  bool restarted = false;
+
+  auto response = camera_firmware::service::BuildAiRestartResponse(
+      [&restarted] {
+        restarted = true;
+        return camera_firmware::common::Result<void>::Ok();
+      });
+
+  ASSERT_TRUE(restarted);
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["status"].asString(), "restarted");
+}
+
+TEST(ServiceResponseTest, AiRestartResponseIncludesRuntimeStatus) {
+  bool restarted = false;
+
+  camera_firmware::service::AiServiceStatus status;
+  status.enabled = true;
+  status.backend = "hailo";
+  status.state = "ready";
+  status.model_count = 1;
+  status.runner_count = 1;
+  status.reason = "AI runtime ready";
+
+  auto response = camera_firmware::service::BuildAiRestartResponse(
+      [&restarted] {
+        restarted = true;
+        return camera_firmware::common::Result<void>::Ok();
+      },
+      [&status] { return status; });
+
+  ASSERT_TRUE(restarted);
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["status"].asString(), "restarted");
+  ASSERT_TRUE((*json).isMember("ai"));
+  EXPECT_TRUE((*json)["ai"]["enabled"].asBool());
+  EXPECT_EQ((*json)["ai"]["backend"].asString(), "hailo");
+  EXPECT_EQ((*json)["ai"]["state"].asString(), "ready");
+  EXPECT_EQ((*json)["ai"]["model_count"].asUInt64(), 1U);
+  EXPECT_EQ((*json)["ai"]["runner_count"].asUInt64(), 1U);
+  EXPECT_EQ((*json)["ai"]["reason"].asString(), "AI runtime ready");
+}
+
+TEST(ServiceResponseTest, AiRestartResponseReportsMissingCallback) {
+  auto response = camera_firmware::service::BuildAiRestartResponse({});
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_AI_CONTROL_UNAVAILABLE");
+}
+
+TEST(ServiceResponseTest, AiRestartResponseReportsCallbackError) {
+  auto response = camera_firmware::service::BuildAiRestartResponse([] {
+    return camera_firmware::common::Result<void>::Err(
+        {"E_AI_RESTART", "restart failed"});
+  });
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k500InternalServerError);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_AI_RESTART");
+  EXPECT_EQ((*json)["message"].asString(), "restart failed");
+}
+
+TEST(ServiceResponseTest, AiRestartResponseDoesNotReadStatusAfterCallbackError) {
+  bool status_provider_called = false;
+
+  auto response = camera_firmware::service::BuildAiRestartResponse(
+      [] {
+        return camera_firmware::common::Result<void>::Err(
+            {"E_AI_RESTART", "restart failed"});
+      },
+      [&status_provider_called] {
+        status_provider_called = true;
+        return camera_firmware::service::AiServiceStatus{};
+      });
+
+  ASSERT_FALSE(status_provider_called);
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k500InternalServerError);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_AI_RESTART");
+  EXPECT_FALSE((*json).isMember("ai"));
 }
 
 TEST(ServiceResponseTest, DetectionSnapshotJsonReturnsEmptyEventsArray) {
