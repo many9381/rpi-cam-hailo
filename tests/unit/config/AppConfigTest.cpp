@@ -55,6 +55,38 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_TRUE(cfg.value().camera.ai.model_ids.empty());
 }
 
+TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
+  auto cfg =
+      camera_firmware::config::LoadConfigFile("config/app-rpi5-ai-dev.yaml");
+
+  ASSERT_TRUE(cfg.ok()) << cfg.error().message;
+  EXPECT_EQ(cfg.value().platform.target, "rpi5");
+  EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_TRUE(cfg.value().camera.ai.enabled);
+  ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 1u);
+  EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");
+
+  EXPECT_TRUE(cfg.value().ai.enabled);
+  EXPECT_EQ(cfg.value().ai.backend, "hailo");
+  ASSERT_EQ(cfg.value().ai.models.size(), 1u);
+  const auto& model = cfg.value().ai.models[0];
+  EXPECT_EQ(model.id, "objects");
+  EXPECT_EQ(model.kind, "object_detection");
+  EXPECT_EQ(model.hef_path, "vendor/models/yolo_model.hef");
+  EXPECT_EQ(model.input.width, 640u);
+  EXPECT_EQ(model.input.height, 640u);
+  EXPECT_EQ(model.input.format, "rgb8");
+  EXPECT_TRUE(model.input.letterbox);
+  EXPECT_FLOAT_EQ(model.confidence_threshold, 0.40F);
+  EXPECT_EQ(model.labels, "coco80");
+
+  EXPECT_TRUE(cfg.value().secure_rtsp.enabled);
+  EXPECT_TRUE(cfg.value().secure_rtsp.media_srtp);
+  EXPECT_EQ(cfg.value().secure_rtsp.session_key.path,
+            "config/dev-srtp-session.hex");
+  EXPECT_TRUE(cfg.value().secure_rtsp.session_key.zeroize_on_reload);
+}
+
 TEST(AppConfigTest, LoadsMultiModelAiConfig) {
   const char* yaml = "/tmp/cf-ai-multi-model.yaml";
   std::ofstream out(yaml);
