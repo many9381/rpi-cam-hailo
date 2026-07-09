@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
@@ -223,6 +224,13 @@ int RunFirmware(const std::string& config_path) {
   };
   service_args.ai_restart_callback = [&ai_controller] {
     return ai_controller.Restart();
+  };
+  service_args.secure_stream_diagnostics_provider = [&rtsp_server] {
+    camera_firmware::service::SecureStreamDiagnostics diagnostics;
+    diagnostics.per_media_key_zeroize_count =
+        static_cast<std::uint64_t>(
+            rtsp_server.PerMediaKeyZeroizeCount());
+    return diagnostics;
   };
   service_args.detection_snapshot_provider =
       detection_event_store.SnapshotProvider();

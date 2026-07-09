@@ -48,6 +48,7 @@ class SecureRtspServer {
       const config::SecureRtspConfig& config,
       media::EncodedRing& encoded_ring);
   void Stop();
+  [[nodiscard]] std::size_t PerMediaKeyZeroizeCount() const noexcept;
 
  private:
   struct Impl;

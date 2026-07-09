@@ -105,6 +105,20 @@ Json::Value BuildSnapshotUnavailableJson() {
   return json;
 }
 
+Json::Value BuildSecureMediaJson(
+    const config::SecureRtspConfig& secure_rtsp) {
+  Json::Value json(Json::objectValue);
+  json["control_scheme"] = secure_rtsp.control_tls ? "rtsps" : "rtsp";
+  json["media_profile"] = secure_rtsp.media_srtp ? "RTP/SAVPF" : "RTP/AVP";
+  json["keying"] =
+      secure_rtsp.media_srtp && secure_rtsp.keying == "sdes-over-rtsps"
+          ? "SDES-over-RTSPS"
+          : "none";
+  json["requires_tls_control_channel"] =
+      secure_rtsp.media_srtp && secure_rtsp.keying == "sdes-over-rtsps";
+  return json;
+}
+
 drogon::HttpResponsePtr JsonResponse(Json::Value json,
                                      drogon::HttpStatusCode status =
                                          drogon::k200OK) {
@@ -351,10 +365,13 @@ void RegisterHandlers() {
          std::function<void(const HttpResponsePtr&)>&& callback) {
         const config::AppConfig* config = nullptr;
         std::string public_base_url;
+        SecureStreamDiagnosticsProvider secure_stream_diagnostics_provider;
         {
           std::scoped_lock lock(StateMutex());
           config = GlobalState().args.app_config;
           public_base_url = GlobalState().args.public_base_url;
+          secure_stream_diagnostics_provider =
+              GlobalState().args.secure_stream_diagnostics_provider;
         }
         if (config == nullptr) {
           Json::Value body(Json::objectValue);
@@ -364,8 +381,12 @@ void RegisterHandlers() {
           return;
         }
 
+        std::optional<SecureStreamDiagnostics> diagnostics;
+        if (secure_stream_diagnostics_provider) {
+          diagnostics = secure_stream_diagnostics_provider();
+        }
         callback(JsonResponse(
-            BuildStreamJson(public_base_url, config->secure_rtsp)));
+            BuildStreamJson(public_base_url, config->secure_rtsp, diagnostics)));
       },
       {Get});
 }
@@ -581,12 +602,20 @@ drogon::HttpResponsePtr BuildDetectionSseResponse(
   return response;
 }
 
-Json::Value BuildStreamJson(std::string_view public_base_url,
-                            const config::SecureRtspConfig& secure_rtsp) {
+Json::Value BuildStreamJson(
+    std::string_view public_base_url,
+    const config::SecureRtspConfig& secure_rtsp,
+    const std::optional<SecureStreamDiagnostics>& diagnostics) {
   Json::Value json(Json::objectValue);
   json["url"] = BuildRtspUrl(public_base_url, secure_rtsp);
   json["control_tls"] = secure_rtsp.control_tls;
   json["media_srtp"] = secure_rtsp.media_srtp;
+  Json::Value secure_media = BuildSecureMediaJson(secure_rtsp);
+  if (diagnostics.has_value()) {
+    secure_media["per_media_key_zeroize_count"] =
+        Json::UInt64(diagnostics->per_media_key_zeroize_count);
+  }
+  json["secure_media"] = std::move(secure_media);
   return json;
 }
 
