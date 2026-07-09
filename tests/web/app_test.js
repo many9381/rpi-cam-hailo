@@ -214,6 +214,46 @@ test('formatBox renders normalized coordinates', () => {
   assert.equal(formatBox(undefined), 'n/a');
 });
 
+test('buildStreamSecurityView renders stream transport security', () => {
+  const {buildStreamSecurityView} = loadApp();
+
+  assert.equal(
+    buildStreamSecurityView({control_tls: true, media_srtp: true}),
+    'RTSPS control / SRTP media',
+  );
+  assert.equal(
+    buildStreamSecurityView({control_tls: true, media_srtp: false}),
+    'RTSPS control / RTP media',
+  );
+  assert.equal(
+    buildStreamSecurityView({control_tls: false, media_srtp: true}),
+    'RTSP control / SRTP media',
+  );
+  assert.equal(
+    buildStreamSecurityView({control_tls: false, media_srtp: false}),
+    'RTSP control / RTP media',
+  );
+});
+
+test('buildStreamSecurityView reports unavailable for partial stream status', () => {
+  const {buildStreamSecurityView} = loadApp();
+
+  assert.equal(buildStreamSecurityView({}), 'Stream security unavailable');
+  assert.equal(
+    buildStreamSecurityView({control_tls: true}),
+    'Stream security unavailable',
+  );
+  assert.equal(
+    buildStreamSecurityView({control_tls: 'true', media_srtp: true}),
+    'Stream security unavailable',
+  );
+  assert.equal(
+    buildStreamSecurityView({control_tls: true, media_srtp: 1}),
+    'Stream security unavailable',
+  );
+  assert.equal(buildStreamSecurityView(undefined), 'Stream security unavailable');
+});
+
 test('renderDetections writes empty state', () => {
   const {renderDetections} = loadApp();
   const list = makeElement();
@@ -523,6 +563,41 @@ test('startup refresh renders ai runner status from cameras response', async () 
   assert.equal(
     app.elements['#runner-list'].children[0].children[4].textContent,
     'E_AI_POSTPROCESS: malformed output',
+  );
+});
+
+test('startup refresh renders stream security detail from stream response', async () => {
+  const app = loadApp(async (path) => ({
+    ok: true,
+    async json() {
+      if (path === '/api/v1/health') {
+        return {status: 'ok'};
+      }
+      if (path === '/api/v1/stream') {
+        return {
+          control_tls: true,
+          media_srtp: true,
+          url: 'rtsps://camera.local/imx708/main',
+        };
+      }
+      if (path === '/api/v1/cameras') {
+        return {ai: {enabled: false}, cameras: []};
+      }
+      if (path === '/api/v1/ai/detections') {
+        return {events: []};
+      }
+      return {};
+    },
+    async blob() {
+      return new Blob();
+    },
+  }));
+
+  await settleStartupRefresh();
+
+  assert.equal(
+    app.elements['#stream-security'].textContent,
+    'RTSPS control / SRTP media',
   );
 });
 
