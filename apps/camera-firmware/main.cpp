@@ -6,11 +6,13 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "camera_firmware/ai/AiFramePump.hpp"
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/ai/AiRuntimeController.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
 #include "camera_firmware/ai/DetectionEventStore.hpp"
 #include "camera_firmware/common/Logger.hpp"
@@ -130,13 +132,27 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
 }
 
 camera_firmware::service::AiServiceStatus ToServiceAiStatus(
-    const camera_firmware::ai::AiRuntimeStatus& status) {
+    const camera_firmware::ai::AiRuntimeStatus& status,
+    const std::vector<camera_firmware::ai::AiModelRunnerStatus>& runners) {
   camera_firmware::service::AiServiceStatus service_status;
   service_status.enabled = status.enabled;
   service_status.backend = status.backend;
   service_status.state = status.state;
   service_status.model_count = status.model_count;
   service_status.runner_count = status.runner_count;
+  service_status.runners.reserve(runners.size());
+  for (const auto& runner : runners) {
+    camera_firmware::service::AiRunnerServiceStatus runner_status;
+    runner_status.camera_id = runner.camera_id;
+    runner_status.model_id = runner.model_id;
+    runner_status.model_kind = runner.model_kind;
+    runner_status.submitted_frames = runner.submitted_frames;
+    runner_status.processed_frames = runner.processed_frames;
+    runner_status.dropped_frames = runner.dropped_frames;
+    runner_status.last_error_code = runner.last_error_code;
+    runner_status.last_error_message = runner.last_error_message;
+    service_status.runners.push_back(std::move(runner_status));
+  }
   if (!status.last_error_message.empty()) {
     service_status.reason = status.last_error_message;
   } else if (!status.enabled) {
@@ -169,6 +185,8 @@ int RunFirmware(const std::string& config_path) {
   camera_firmware::media::EncodedRing encoded_ring(128);
   camera_firmware::media::CameraPipeline camera_pipeline(
       snapshot_tap, ai_frame_tap, encoded_ring);
+  camera_firmware::ai::AiRuntimeController ai_controller(
+      cfg.value(), ai_runtime, ai_frame_pump);
   camera_firmware::rtsp::SecureRtspServer rtsp_server;
   camera_firmware::service::ServiceApp service;
 
@@ -177,27 +195,15 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(rtsp.error());
   }
 
-  auto ai_started = ai_runtime.Start(cfg.value());
+  auto ai_started = ai_controller.Restart();
   if (!ai_started.ok()) {
     rtsp_server.Stop();
     return PrintError(ai_started.error());
   }
 
-  const bool should_pump_ai_frames =
-      cfg.value().ai.enabled && cfg.value().camera.ai.enabled;
-  if (should_pump_ai_frames) {
-    auto pump_started = ai_frame_pump.Start();
-    if (!pump_started.ok()) {
-      ai_runtime.Stop();
-      rtsp_server.Stop();
-      return PrintError(pump_started.error());
-    }
-  }
-
   auto camera = camera_pipeline.Start(cfg.value());
   if (!camera.ok()) {
-    ai_frame_pump.Stop();
-    ai_runtime.Stop();
+    ai_controller.Stop();
     rtsp_server.Stop();
     return PrintError(camera.error());
   }
@@ -213,7 +219,10 @@ int RunFirmware(const std::string& config_path) {
   };
   service_args.ai_enabled = cfg.value().ai.enabled;
   service_args.ai_status_provider = [&ai_runtime] {
-    return ToServiceAiStatus(ai_runtime.Status());
+    return ToServiceAiStatus(ai_runtime.Status(), ai_runtime.RunnerStatuses());
+  };
+  service_args.ai_restart_callback = [&ai_controller] {
+    return ai_controller.Restart();
   };
   service_args.detection_snapshot_provider =
       detection_event_store.SnapshotProvider();
@@ -233,8 +242,9 @@ int RunFirmware(const std::string& config_path) {
   if (cfg.value().http.enabled) {
     auto service_started = service.Init(service_args);
     if (!service_started.ok()) {
-      ai_frame_pump.Stop();
-      ai_runtime.Stop();
+      ai_controller.BeginShutdown();
+      service.Stop();
+      ai_controller.Stop();
       camera_pipeline.Stop();
       rtsp_server.Stop();
       return PrintError(service_started.error());
@@ -245,10 +255,12 @@ int RunFirmware(const std::string& config_path) {
   WaitForShutdown();
 
   if (cfg.value().http.enabled) {
+    ai_controller.BeginShutdown();
     service.Stop();
+  } else {
+    ai_controller.BeginShutdown();
   }
-  ai_frame_pump.Stop();
-  ai_runtime.Stop();
+  ai_controller.Stop();
   camera_pipeline.Stop();
   rtsp_server.Stop();
   return EXIT_SUCCESS;

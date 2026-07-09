@@ -1,4 +1,7 @@
 #include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/ai/AiFramePump.hpp"
+#include "camera_firmware/ai/AiFrameTap.hpp"
+#include "camera_firmware/ai/AiRuntimeController.hpp"
 
 #include <array>
 #include <chrono>
@@ -259,6 +262,65 @@ class CapturingSuccessBackend final : public camera_firmware::ai::AiBackend {
   std::vector<std::uint8_t> output_;
 };
 
+class BlockingInitBackend final : public camera_firmware::ai::AiBackend {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override {
+    return "blocking-init";
+  }
+
+  [[nodiscard]] bool available() const noexcept override { return true; }
+
+  [[nodiscard]] camera_firmware::common::Result<void> Init() override {
+    std::unique_lock lock(mutex_);
+    init_started_ = true;
+    changed_.notify_all();
+    changed_.wait(lock, [this] { return init_released_; });
+    return camera_firmware::common::Result<void>::Ok();
+  }
+
+  void Shutdown() override {}
+
+  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  LoadModel(const camera_firmware::config::AiModelConfig&) override {
+    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
+        1);
+  }
+
+  void Unload(camera_firmware::ai::ModelHandle) override {}
+
+  [[nodiscard]] camera_firmware::common::Result<void> Submit(
+      camera_firmware::ai::ModelHandle,
+      camera_firmware::ai::InputView,
+      camera_firmware::ai::InferCallback callback) override {
+    if (callback) {
+      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
+                   Ok(camera_firmware::ai::OutputView{}));
+    }
+    return camera_firmware::common::Result<void>::Ok();
+  }
+
+  bool WaitForInit() {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, std::chrono::seconds(1), [this] {
+      return init_started_;
+    });
+  }
+
+  void ReleaseInit() {
+    {
+      std::lock_guard lock(mutex_);
+      init_released_ = true;
+    }
+    changed_.notify_all();
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  bool init_started_{false};
+  bool init_released_{false};
+};
+
 bool WaitUntilRunnerDropped(camera_firmware::ai::AiRuntime& runtime,
                             std::size_t runner_count) {
   for (int attempt = 0; attempt < 100; ++attempt) {
@@ -417,6 +479,74 @@ TEST(AiRuntimeTest, GlobalAiEnabledWithoutCameraBindingIsConfigured) {
   EXPECT_EQ(status.runner_count, 0u);
   EXPECT_EQ(status.last_error_code, "E_AI_BACKEND_UNAVAILABLE");
   EXPECT_TRUE(runtime.RunnerStatuses().empty());
+}
+
+TEST(AiRuntimeTest, ControllerRestartsRuntimeAndStartsPumpWhenCameraAiEnabled) {
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiFrameTap tap;
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
+  camera_firmware::ai::AiFramePump pump(tap, runtime);
+  const auto config = RuntimeConfig();
+  camera_firmware::ai::AiRuntimeController controller(config, runtime, pump);
+
+  auto restarted = controller.Restart();
+
+  ASSERT_TRUE(restarted.ok()) << restarted.error().message;
+  tap.PublishLatest(Nv12RuntimeLease(31));
+  EXPECT_TRUE(WaitUntilRunnerDropped(runtime, 2u));
+  controller.BeginShutdown();
+  controller.Stop();
+}
+
+TEST(AiRuntimeTest, ControllerRejectsRestartsAfterShutdownBegins) {
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiFrameTap tap;
+  camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
+  camera_firmware::ai::AiFramePump pump(tap, runtime);
+  const auto config = RuntimeConfig();
+  camera_firmware::ai::AiRuntimeController controller(config, runtime, pump);
+  ASSERT_TRUE(controller.Restart().ok());
+
+  controller.BeginShutdown();
+  auto restarted = controller.Restart();
+
+  ASSERT_FALSE(restarted.ok());
+  EXPECT_EQ(restarted.error().code, "E_AI_CONTROL_SHUTTING_DOWN");
+  controller.Stop();
+  EXPECT_FALSE(runtime.Status().enabled);
+}
+
+TEST(AiRuntimeTest, ControllerShutdownWaitsForActiveRestart) {
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiFrameTap tap;
+  auto backend = std::make_shared<BlockingInitBackend>();
+  camera_firmware::ai::AiRuntime runtime(&bus, backend);
+  camera_firmware::ai::AiFramePump pump(tap, runtime);
+  const auto config = RuntimeConfig();
+  camera_firmware::ai::AiRuntimeController controller(config, runtime, pump);
+
+  auto restart = std::async(std::launch::async, [&controller] {
+    return controller.Restart();
+  });
+  ASSERT_TRUE(backend->WaitForInit());
+
+  auto shutdown = std::async(std::launch::async, [&controller] {
+    controller.BeginShutdown();
+  });
+  EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(50)),
+            std::future_status::timeout);
+
+  backend->ReleaseInit();
+  ASSERT_EQ(restart.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  ASSERT_TRUE(restart.get().ok());
+  ASSERT_EQ(shutdown.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+
+  auto second_restart = controller.Restart();
+  ASSERT_FALSE(second_restart.ok());
+  EXPECT_EQ(second_restart.error().code, "E_AI_CONTROL_SHUTTING_DOWN");
+  controller.Stop();
 }
 
 TEST(AiRuntimeTest, BuildDetectsHailortWhenInstalled) {

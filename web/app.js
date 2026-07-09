@@ -1,13 +1,19 @@
 const healthStatus = document.querySelector('#health-status');
 const streamUrl = document.querySelector('#stream-url');
 const aiStatus = document.querySelector('#ai-status');
+const aiStatusDetail = document.querySelector('#ai-status-detail');
 const cameraList = document.querySelector('#camera-list');
 const snapshotLabel = document.querySelector('#snapshot-label');
 const snapshotImage = document.querySelector('#snapshot-image');
 const detectionOverlay = document.querySelector('#detection-overlay');
 const refreshButton = document.querySelector('#refresh-button');
+const aiRestartButton = document.querySelector('#ai-restart-button');
+const aiControlStatus = document.querySelector('#ai-control-status');
 const detectionCount = document.querySelector('#detection-count');
 const detectionList = document.querySelector('#detection-list');
+const runnerCount = document.querySelector('#runner-count');
+const runnerList = document.querySelector('#runner-list');
+const statusPollingIntervalMs = 5000;
 let detectionEventSource = null;
 let latestDetectionSnapshot = {events: []};
 let activeSnapshotCameraId = '';
@@ -33,6 +39,20 @@ function formatBox(box) {
 
 function toPercent(value) {
   return `${Number((value * 100).toFixed(3))}%`;
+}
+
+function toCounter(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
+  }
+  return value;
+}
+
+function toText(value, fallback = '') {
+  if (typeof value !== 'string' || value.length === 0) {
+    return fallback;
+  }
+  return value;
 }
 
 function normalizeOverlayBox(box) {
@@ -176,6 +196,110 @@ function renderDetections(snapshot, targets = {list: detectionList, count: detec
   }
 }
 
+function buildAiStatusView(ai) {
+  const hasStatus = ai !== null && typeof ai === 'object';
+  const enabled = ai?.enabled === true;
+  const state = toText(
+    ai?.state,
+    hasStatus ? (enabled ? 'unknown' : 'disabled') : 'unknown',
+  );
+  const backend = toText(
+    ai?.backend,
+    enabled ? 'unknown' : (state === 'unknown' ? 'unknown' : 'disabled'),
+  );
+  const modelCount = toCounter(ai?.model_count);
+  const runnerCount = toCounter(ai?.runner_count);
+  const reason = toText(ai?.reason);
+  const summary = !enabled && state === 'unknown'
+    ? 'Unknown'
+    : (enabled ? `${backend} / ${state}` : 'Disabled');
+  const counts = `models ${modelCount} / runners ${runnerCount}`;
+
+  return {
+    summary,
+    detail: reason ? `${counts} - ${reason}` : counts,
+  };
+}
+
+function renderAiStatus(
+  ai,
+  targets = {summary: aiStatus, detail: aiStatusDetail},
+) {
+  const view = buildAiStatusView(ai);
+  if (targets.summary) {
+    targets.summary.textContent = view.summary;
+  }
+  if (targets.detail) {
+    targets.detail.textContent = view.detail;
+  }
+}
+
+function buildRunnerRows(ai) {
+  const rows = [];
+  const runners = Array.isArray(ai?.runners) ? ai.runners : [];
+  for (const runner of runners) {
+    rows.push({
+      cameraId: runner.camera_id || '',
+      modelId: runner.model_id || '',
+      modelKind: runner.model_kind || '',
+      submittedFrames: toCounter(runner.submitted_frames),
+      processedFrames: toCounter(runner.processed_frames),
+      droppedFrames: toCounter(runner.dropped_frames),
+      lastErrorCode: runner.last_error_code || '',
+      lastErrorMessage: runner.last_error_message || '',
+    });
+  }
+  return rows;
+}
+
+function renderAiRunners(ai, targets = {list: runnerList, count: runnerCount}) {
+  const rows = buildRunnerRows(ai);
+  const {list, count} = targets;
+
+  if (count) {
+    count.textContent = `${rows.length} ${rows.length === 1 ? 'runner' : 'runners'}`;
+  }
+  if (!list) {
+    return;
+  }
+
+  list.innerHTML = '';
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'runner-empty';
+    empty.textContent = 'No AI runners';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const row of rows) {
+    const item = document.createElement('div');
+    item.className = row.lastErrorCode ? 'runner-row runner-row-error' : 'runner-row';
+
+    const model = document.createElement('strong');
+    model.textContent = row.modelId || 'unknown';
+
+    const kind = document.createElement('span');
+    kind.textContent = row.modelKind || 'unknown';
+
+    const camera = document.createElement('span');
+    camera.textContent = row.cameraId || 'unknown';
+
+    const counters = document.createElement('span');
+    counters.textContent =
+      `submitted ${row.submittedFrames} / processed ${row.processedFrames} / dropped ${row.droppedFrames}`;
+
+    const error = document.createElement('span');
+    error.className = 'runner-error';
+    error.textContent = row.lastErrorCode
+      ? `${row.lastErrorCode}: ${row.lastErrorMessage || 'unknown'}`
+      : 'ok';
+
+    item.append(model, kind, camera, counters, error);
+    list.appendChild(item);
+  }
+}
+
 function renderDetectionOverlay(snapshot, cameraId, target = detectionOverlay) {
   if (!target) {
     return;
@@ -251,8 +375,8 @@ function startDetectionStream(
   return source;
 }
 
-async function readJson(path) {
-  const response = await fetch(path);
+async function readJson(path, options) {
+  const response = await fetch(path, options);
   const body = await response.json();
   if (!response.ok) {
     throw new Error(body.message || body.code || `Request failed: ${path}`);
@@ -285,6 +409,22 @@ function renderCameras(cameras) {
     item.addEventListener('click', () => loadSnapshot(camera.id));
     cameraList.appendChild(item);
   }
+}
+
+function renderStatusPayload(health, stream, cameras) {
+  healthStatus.textContent = health.status || 'unknown';
+  streamUrl.textContent = stream.url || 'unavailable';
+  renderAiStatus(cameras.ai);
+  renderAiRunners(cameras.ai);
+  renderCameras(cameras.cameras || []);
+}
+
+function renderStatusError(error) {
+  healthStatus.textContent = 'error';
+  streamUrl.textContent = error.message;
+  renderAiStatus({state: 'unknown', backend: 'unknown', reason: error.message});
+  renderAiRunners({runners: []});
+  renderCameras([]);
 }
 
 async function loadSnapshot(cameraId) {
@@ -330,6 +470,20 @@ async function loadSnapshot(cameraId) {
   }
 }
 
+async function refreshStatusOnly() {
+  try {
+    const [health, stream, cameras] = await Promise.all([
+      readJson('/api/v1/health'),
+      readJson('/api/v1/stream'),
+      readJson('/api/v1/cameras'),
+    ]);
+
+    renderStatusPayload(health, stream, cameras);
+  } catch (error) {
+    renderStatusError(error);
+  }
+}
+
 async function refresh() {
   try {
     const [health, stream, cameras, detections] = await Promise.all([
@@ -339,10 +493,7 @@ async function refresh() {
       readJson('/api/v1/ai/detections'),
     ]);
 
-    healthStatus.textContent = health.status || 'unknown';
-    streamUrl.textContent = stream.url || 'unavailable';
-    aiStatus.textContent = cameras.ai?.enabled ? 'Enabled' : 'Disabled';
-    renderCameras(cameras.cameras || []);
+    renderStatusPayload(health, stream, cameras);
     renderDetectionSnapshot(detections);
 
     if ((cameras.cameras || []).length > 0) {
@@ -354,10 +505,7 @@ async function refresh() {
       snapshotLabel.textContent = 'Unavailable';
     }
   } catch (error) {
-    healthStatus.textContent = 'error';
-    streamUrl.textContent = error.message;
-    aiStatus.textContent = 'Unknown';
-    renderCameras([]);
+    renderStatusError(error);
     snapshotRequestSequence += 1;
     activeSnapshotCameraId = '';
     renderDetectionSnapshot({events: []});
@@ -365,20 +513,64 @@ async function refresh() {
   }
 }
 
+async function restartAi() {
+  aiRestartButton.disabled = true;
+  aiControlStatus.textContent = 'Restarting AI';
+
+  try {
+    const restarted = await readJson('/api/v1/ai/restart', {method: 'POST'});
+    aiControlStatus.textContent = restarted.status || 'restarted';
+    if (restarted.ai && typeof restarted.ai === 'object') {
+      renderAiStatus(restarted.ai);
+      renderAiRunners(restarted.ai);
+    } else {
+      await refreshStatusOnly();
+    }
+  } catch (error) {
+    aiControlStatus.textContent = error.message;
+  } finally {
+    aiRestartButton.disabled = false;
+  }
+}
+
+function startStatusPolling(
+  intervalMs = statusPollingIntervalMs,
+  scheduler = globalThis,
+  refreshFn = refreshStatusOnly,
+) {
+  if (!scheduler || typeof scheduler.setInterval !== 'function') {
+    return null;
+  }
+  const handle = scheduler.setInterval(() => refreshFn(), intervalMs);
+  if (handle && typeof handle.unref === 'function') {
+    handle.unref();
+  }
+  return handle;
+}
+
 refreshButton.addEventListener('click', refresh);
+aiRestartButton.addEventListener('click', restartAi);
 refresh();
 startDetectionStream();
+startStatusPolling();
 
 if (typeof module !== 'undefined') {
   module.exports = {
+    buildAiStatusView,
     buildOverlayDetections,
     buildDetectionRows,
+    buildRunnerRows,
     formatBox,
     formatConfidence,
     loadSnapshot,
+    restartAi,
+    refreshStatusOnly,
+    renderAiStatus,
+    renderAiRunners,
     renderDetectionOverlay,
     renderDetections,
     renderDetectionSnapshot,
     startDetectionStream,
+    startStatusPolling,
   };
 }
