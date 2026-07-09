@@ -62,6 +62,7 @@ struct AiModelConfig {
   std::string id;
   std::string kind{"object_detection"};
   std::string hef_path;
+  std::string output_name;
   AiModelInputConfig input;
   float confidence_threshold{0.40F};
   std::string labels{"coco80"};

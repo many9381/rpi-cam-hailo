@@ -435,6 +435,22 @@ Json::Value BuildAiStatusJson(const AiServiceStatus& status) {
   json["runner_count"] = static_cast<Json::UInt64>(status.runner_count);
   json["reason"] = status.reason;
 
+  Json::Value models(Json::arrayValue);
+  for (const auto& model : status.models) {
+    Json::Value model_json(Json::objectValue);
+    model_json["id"] = model.id;
+    model_json["kind"] = model.kind;
+    model_json["input_width"] = model.input_width;
+    model_json["input_height"] = model.input_height;
+    model_json["input_format"] = model.input_format;
+    model_json["letterbox"] = model.letterbox;
+    model_json["output_name"] = model.output_name;
+    model_json["confidence_threshold"] = model.confidence_threshold;
+    model_json["labels"] = model.labels;
+    models.append(std::move(model_json));
+  }
+  json["models"] = std::move(models);
+
   Json::Value runners(Json::arrayValue);
   for (const auto& runner : status.runners) {
     Json::Value runner_json(Json::objectValue);
@@ -500,6 +516,8 @@ Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {
   json["result_state"] = event.result_state;
   json["frame_sequence"] =
       static_cast<Json::UInt64>(event.frame_sequence);
+  json["frame_timestamp_ns"] =
+      static_cast<Json::Int64>(event.frame_timestamp.count());
 
   Json::Value detections(Json::arrayValue);
   for (const auto& detection : event.detections) {
@@ -513,6 +531,17 @@ Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {
     box["width"] = detection.box.width;
     box["height"] = detection.box.height;
     detection_json["box"] = std::move(box);
+
+    Json::Value keypoints(Json::arrayValue);
+    for (const auto& keypoint : detection.keypoints) {
+      Json::Value keypoint_json(Json::objectValue);
+      keypoint_json["name"] = keypoint.name;
+      keypoint_json["x"] = keypoint.x;
+      keypoint_json["y"] = keypoint.y;
+      keypoint_json["confidence"] = keypoint.confidence;
+      keypoints.append(std::move(keypoint_json));
+    }
+    detection_json["keypoints"] = std::move(keypoints);
 
     detections.append(std::move(detection_json));
   }

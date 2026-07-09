@@ -134,6 +134,7 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
 
 camera_firmware::service::AiServiceStatus ToServiceAiStatus(
     const camera_firmware::ai::AiRuntimeStatus& status,
+    const std::vector<camera_firmware::config::AiModelConfig>& models,
     const std::vector<camera_firmware::ai::AiModelRunnerStatus>& runners) {
   camera_firmware::service::AiServiceStatus service_status;
   service_status.enabled = status.enabled;
@@ -141,6 +142,20 @@ camera_firmware::service::AiServiceStatus ToServiceAiStatus(
   service_status.state = status.state;
   service_status.model_count = status.model_count;
   service_status.runner_count = status.runner_count;
+  service_status.models.reserve(models.size());
+  for (const auto& model : models) {
+    camera_firmware::service::AiModelServiceStatus model_status;
+    model_status.id = model.id;
+    model_status.kind = model.kind;
+    model_status.input_width = model.input.width;
+    model_status.input_height = model.input.height;
+    model_status.input_format = model.input.format;
+    model_status.letterbox = model.input.letterbox;
+    model_status.output_name = model.output_name;
+    model_status.confidence_threshold = model.confidence_threshold;
+    model_status.labels = model.labels;
+    service_status.models.push_back(std::move(model_status));
+  }
   service_status.runners.reserve(runners.size());
   for (const auto& runner : runners) {
     camera_firmware::service::AiRunnerServiceStatus runner_status;
@@ -219,8 +234,10 @@ int RunFirmware(const std::string& config_path) {
     return ToServiceStatus(camera_pipeline.Status());
   };
   service_args.ai_enabled = cfg.value().ai.enabled;
-  service_args.ai_status_provider = [&ai_runtime] {
-    return ToServiceAiStatus(ai_runtime.Status(), ai_runtime.RunnerStatuses());
+  service_args.ai_status_provider = [&ai_runtime, &cfg] {
+    return ToServiceAiStatus(ai_runtime.Status(),
+                             cfg.value().ai.models,
+                             ai_runtime.RunnerStatuses());
   };
   service_args.ai_restart_callback = [&ai_controller] {
     return ai_controller.Restart();

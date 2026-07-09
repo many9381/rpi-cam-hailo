@@ -321,6 +321,37 @@ class BlockingInitBackend final : public camera_firmware::ai::AiBackend {
   bool init_released_{false};
 };
 
+class ModelPathErrorBackend final : public camera_firmware::ai::AiBackend {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override {
+    return "model-path-error";
+  }
+
+  [[nodiscard]] bool available() const noexcept override { return true; }
+
+  [[nodiscard]] camera_firmware::common::Result<void> Init() override {
+    return camera_firmware::common::Result<void>::Ok();
+  }
+
+  void Shutdown() override {}
+
+  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  LoadModel(const camera_firmware::config::AiModelConfig& model) override {
+    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Err(
+        {"E_HAILO_HEF",
+         "failed to load model " + model.id + " from " + model.hef_path});
+  }
+
+  void Unload(camera_firmware::ai::ModelHandle) override {}
+
+  [[nodiscard]] camera_firmware::common::Result<void> Submit(
+      camera_firmware::ai::ModelHandle,
+      camera_firmware::ai::InputView,
+      camera_firmware::ai::InferCallback) override {
+    return camera_firmware::common::Result<void>::Ok();
+  }
+};
+
 bool WaitUntilRunnerDropped(camera_firmware::ai::AiRuntime& runtime,
                             std::size_t runner_count) {
   for (int attempt = 0; attempt < 100; ++attempt) {
@@ -413,6 +444,28 @@ std::vector<std::uint8_t> RuntimeYoloNmsOutputBytes(float confidence) {
   tensor[class_offset + 3U] = 0.70F;
   tensor[class_offset + 4U] = 0.65F;
   tensor[class_offset + 5U] = confidence;
+
+  std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
+  std::memcpy(bytes.data(), tensor.data(), bytes.size());
+  return bytes;
+}
+
+std::vector<std::uint8_t> RuntimeYoloPoseOutputBytes(float confidence) {
+  constexpr std::size_t kPoseRowFloats = 5U + (17U * 3U);
+
+  std::vector<float> tensor(kPoseRowFloats, 0.0F);
+  tensor[0] = 0.15F;
+  tensor[1] = 0.20F;
+  tensor[2] = 0.65F;
+  tensor[3] = 0.70F;
+  tensor[4] = confidence;
+  tensor[5] = 0.45F;
+  tensor[6] = 0.25F;
+  tensor[7] = 0.93F;
+  const std::size_t left_shoulder = 5U + (5U * 3U);
+  tensor[left_shoulder] = 0.35F;
+  tensor[left_shoulder + 1U] = 0.50F;
+  tensor[left_shoulder + 2U] = 0.86F;
 
   std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
   std::memcpy(bytes.data(), tensor.data(), bytes.size());
@@ -580,6 +633,58 @@ TEST(AiRuntimeTest, HailortBackendReportsDeviceInitFailureWithoutFallback) {
 #else
   GTEST_SKIP() << "HailoRT is not enabled in this build";
 #endif
+}
+
+TEST(AiRuntimeTest, RedactsConfiguredModelPathsFromLoadErrors) {
+  camera_firmware::config::AppConfig config;
+  config.ai.enabled = true;
+  config.ai.backend = "hailo";
+  auto model = Model("objects", "object_detection");
+  model.hef_path = "/opt/cf/models/private/objects.hef";
+  config.ai.models.push_back(model);
+  config.camera.ai.enabled = false;
+  config.camera.ai.model_ids = {};
+
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiRuntime runtime(
+      &bus,
+      std::make_shared<ModelPathErrorBackend>());
+
+  auto started = runtime.Start(config);
+
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  const auto status = runtime.Status();
+  EXPECT_EQ(status.state, "error");
+  EXPECT_EQ(status.last_error_code, "E_HAILO_HEF");
+  EXPECT_EQ(status.last_error_message,
+            "failed to load model objects from [redacted model path]");
+  EXPECT_EQ(status.last_error_message.find(model.hef_path), std::string::npos);
+}
+
+TEST(AiRuntimeTest, RedactsConfiguredModelPathsAtStatusWriteBoundary) {
+  camera_firmware::config::AppConfig config;
+  config.ai.enabled = true;
+  auto parent_path = Model("parent", "object_detection");
+  parent_path.hef_path = "/opt/cf/models/private";
+  auto model = Model("objects", "object_detection");
+  model.hef_path = "/opt/cf/models/private/objects.hef";
+  config.ai.models.push_back(parent_path);
+  config.ai.models.push_back(model);
+  config.ai.backend = model.hef_path;
+
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiRuntime runtime(&bus);
+
+  auto started = runtime.Start(config);
+
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  const auto status = runtime.Status();
+  EXPECT_EQ(status.state, "backend_unavailable");
+  EXPECT_EQ(status.last_error_code, "E_AI_BACKEND_UNAVAILABLE");
+  EXPECT_EQ(status.last_error_message,
+            "AI backend is unavailable: [redacted model path]");
+  EXPECT_EQ(status.last_error_message.find(model.hef_path), std::string::npos);
+  EXPECT_EQ(status.last_error_message.find("objects.hef"), std::string::npos);
 }
 
 TEST(AiRuntimeTest, BackendUnavailableSubmitDropsWithoutPublishing) {
@@ -807,6 +912,57 @@ TEST(AiRuntimeTest, ModelRunnerPublishesDecodedYoloDetectionEvent) {
   EXPECT_TRUE(subscription.valid());
 }
 
+TEST(AiRuntimeTest, ModelRunnerPublishesDecodedPoseKeypointEvent) {
+  CapturingSuccessBackend backend(RuntimeYoloPoseOutputBytes(0.90F));
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("pose", "pose");
+  model.input.width = 4;
+  model.input.height = 2;
+  model.confidence_threshold = 0.50F;
+
+  std::mutex event_mutex;
+  std::condition_variable event_changed;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&](const camera_firmware::ai::DetectionEvent& event) {
+        {
+          std::lock_guard lock(event_mutex);
+          events.push_back(event);
+        }
+        event_changed.notify_all();
+      });
+
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(103)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+
+  {
+    std::unique_lock lock(event_mutex);
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
+      return !events.empty();
+    }));
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_EQ(events[0].camera_id, "imx708-main");
+    EXPECT_EQ(events[0].model_id, "pose");
+    EXPECT_EQ(events[0].model_kind, "pose");
+    EXPECT_EQ(events[0].result_state, "decoded");
+    EXPECT_EQ(events[0].frame_sequence, 103U);
+    ASSERT_EQ(events[0].detections.size(), 1U);
+    EXPECT_EQ(events[0].detections[0].label, "person");
+    EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.90F);
+    ASSERT_EQ(events[0].detections[0].keypoints.size(), 2U);
+    EXPECT_EQ(events[0].detections[0].keypoints[0].name, "nose");
+    EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].x, 0.45F);
+    EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].y, 0.25F);
+    EXPECT_EQ(events[0].detections[0].keypoints[1].name, "left_shoulder");
+  }
+
+  runner.Stop();
+  EXPECT_TRUE(subscription.valid());
+}
+
 TEST(AiRuntimeTest, ModelRunnerDropsMalformedYoloOutputShape) {
   std::vector<std::uint8_t> truncated(sizeof(float) * 3U, 0U);
   CapturingSuccessBackend backend(std::move(truncated));
@@ -830,6 +986,37 @@ TEST(AiRuntimeTest, ModelRunnerDropsMalformedYoloOutputShape) {
   EXPECT_EQ(status.processed_frames, 0U);
   EXPECT_EQ(status.dropped_frames, 1U);
   EXPECT_EQ(status.last_error_code, "E_AI_POSTPROCESS");
+  EXPECT_EQ(published, 0);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiRuntimeTest, ModelRunnerDropsMalformedPoseOutputShape) {
+  std::vector<std::uint8_t> truncated(sizeof(float) * 3U, 0U);
+  CapturingSuccessBackend backend(std::move(truncated));
+  camera_firmware::ai::DetectionBus bus;
+  auto model = Model("pose", "pose");
+  model.input.width = 4;
+  model.input.height = 2;
+
+  int published = 0;
+  auto subscription = bus.Subscribe(
+      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+
+  camera_firmware::ai::AiModelRunner runner(
+      "imx708-main", model, &backend, 1, &bus);
+
+  ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(104)).ok());
+  ASSERT_TRUE(backend.WaitForSubmit());
+  runner.Stop();
+
+  const auto status = runner.Status();
+  EXPECT_EQ(status.processed_frames, 0U);
+  EXPECT_EQ(status.dropped_frames, 1U);
+  EXPECT_EQ(status.last_error_code, "E_AI_POSTPROCESS");
+  EXPECT_NE(status.last_error_message.find("3 floats"), std::string::npos)
+      << status.last_error_message;
+  EXPECT_NE(status.last_error_message.find("56-float"), std::string::npos)
+      << status.last_error_message;
   EXPECT_EQ(published, 0);
   EXPECT_TRUE(subscription.valid());
 }

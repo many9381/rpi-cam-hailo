@@ -79,11 +79,57 @@ TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   EXPECT_TRUE(model.input.letterbox);
   EXPECT_FLOAT_EQ(model.confidence_threshold, 0.40F);
   EXPECT_EQ(model.labels, "coco80");
+  EXPECT_TRUE(model.output_name.empty());
 
   EXPECT_TRUE(cfg.value().secure_rtsp.enabled);
   EXPECT_TRUE(cfg.value().secure_rtsp.media_srtp);
   EXPECT_EQ(cfg.value().secure_rtsp.session_key.path,
             "config/dev-srtp-session.hex");
+  EXPECT_TRUE(cfg.value().secure_rtsp.session_key.zeroize_on_reload);
+}
+
+TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
+  auto cfg = camera_firmware::config::LoadConfigFile(
+      "config/app-rpi5-ai-multimodel-dev.yaml");
+
+  ASSERT_TRUE(cfg.ok()) << cfg.error().message;
+  EXPECT_EQ(cfg.value().platform.target, "rpi5");
+  EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_TRUE(cfg.value().camera.ai.enabled);
+  ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);
+  EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");
+  EXPECT_EQ(cfg.value().camera.ai.model_ids[1], "pose");
+
+  EXPECT_TRUE(cfg.value().ai.enabled);
+  EXPECT_EQ(cfg.value().ai.backend, "hailo");
+  ASSERT_EQ(cfg.value().ai.models.size(), 2u);
+
+  const auto& objects = cfg.value().ai.models[0];
+  EXPECT_EQ(objects.id, "objects");
+  EXPECT_EQ(objects.kind, "object_detection");
+  EXPECT_EQ(objects.hef_path, "vendor/models/yolo_model.hef");
+  EXPECT_TRUE(objects.output_name.empty());
+  EXPECT_EQ(objects.input.width, 640u);
+  EXPECT_EQ(objects.input.height, 640u);
+  EXPECT_EQ(objects.input.format, "rgb8");
+  EXPECT_TRUE(objects.input.letterbox);
+  EXPECT_FLOAT_EQ(objects.confidence_threshold, 0.40F);
+  EXPECT_EQ(objects.labels, "coco80");
+
+  const auto& pose = cfg.value().ai.models[1];
+  EXPECT_EQ(pose.id, "pose");
+  EXPECT_EQ(pose.kind, "pose");
+  EXPECT_EQ(pose.hef_path, "vendor/models/yolov8n-pose.hef");
+  EXPECT_EQ(pose.output_name, "yolov8_pose_postprocess");
+  EXPECT_EQ(pose.input.width, 640u);
+  EXPECT_EQ(pose.input.height, 640u);
+  EXPECT_EQ(pose.input.format, "rgb8");
+  EXPECT_TRUE(pose.input.letterbox);
+  EXPECT_FLOAT_EQ(pose.confidence_threshold, 0.35F);
+  EXPECT_EQ(pose.labels, "pose17");
+
+  EXPECT_TRUE(cfg.value().secure_rtsp.enabled);
+  EXPECT_TRUE(cfg.value().secure_rtsp.media_srtp);
   EXPECT_TRUE(cfg.value().secure_rtsp.session_key.zeroize_on_reload);
 }
 
@@ -99,6 +145,7 @@ TEST(AppConfigTest, LoadsMultiModelAiConfig) {
          "    - id: objects\n"
          "      kind: object_detection\n"
          "      hef_path: /opt/cf/models/yolov8n.hef\n"
+         "      output_name: yolov8_nms_postprocess\n"
          "      input:\n"
          "        width: 640\n"
          "        height: 640\n"
@@ -109,6 +156,7 @@ TEST(AppConfigTest, LoadsMultiModelAiConfig) {
          "    - id: pose\n"
          "      kind: pose\n"
          "      hef_path: /opt/cf/models/yolov8n-pose.hef\n"
+         "      output_name: yolov8_pose_postprocess\n"
          "      input:\n"
          "        width: 640\n"
          "        height: 640\n"
@@ -131,12 +179,16 @@ TEST(AppConfigTest, LoadsMultiModelAiConfig) {
   EXPECT_EQ(cfg.value().ai.models[0].kind, "object_detection");
   EXPECT_EQ(cfg.value().ai.models[0].hef_path,
             "/opt/cf/models/yolov8n.hef");
+  EXPECT_EQ(cfg.value().ai.models[0].output_name,
+            "yolov8_nms_postprocess");
   EXPECT_EQ(cfg.value().ai.models[0].input.width, 640u);
   EXPECT_EQ(cfg.value().ai.models[0].input.height, 640u);
   EXPECT_EQ(cfg.value().ai.models[0].input.format, "rgb8");
   EXPECT_TRUE(cfg.value().ai.models[0].input.letterbox);
   EXPECT_FLOAT_EQ(cfg.value().ai.models[0].confidence_threshold, 0.40F);
   EXPECT_EQ(cfg.value().ai.models[0].labels, "coco80");
+  EXPECT_EQ(cfg.value().ai.models[1].output_name,
+            "yolov8_pose_postprocess");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");

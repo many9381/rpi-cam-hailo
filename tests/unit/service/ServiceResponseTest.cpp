@@ -1,5 +1,6 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -179,6 +180,67 @@ TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonState) {
   EXPECT_TRUE(json["runners"].empty());
 }
 
+TEST(ServiceResponseTest, AiStatusSerializesConfiguredModelInventory) {
+  camera_firmware::service::AiServiceStatus status;
+  status.enabled = true;
+  status.backend = "hailo";
+  status.state = "ready";
+  status.model_count = 2;
+  status.runner_count = 2;
+  status.reason = "AI runtime ready";
+
+  camera_firmware::service::AiModelServiceStatus objects;
+  objects.id = "objects";
+  objects.kind = "object_detection";
+  objects.input_width = 640;
+  objects.input_height = 640;
+  objects.input_format = "rgb8";
+  objects.letterbox = true;
+  objects.output_name = "yolov8_nms_postprocess";
+  objects.confidence_threshold = 0.40F;
+  objects.labels = "coco80";
+  status.models.push_back(objects);
+
+  camera_firmware::service::AiModelServiceStatus pose;
+  pose.id = "pose";
+  pose.kind = "pose";
+  pose.input_width = 256;
+  pose.input_height = 256;
+  pose.input_format = "rgb8";
+  pose.letterbox = false;
+  pose.output_name = "yolov8_pose_postprocess";
+  pose.confidence_threshold = 0.30F;
+  pose.labels = "pose17";
+  status.models.push_back(pose);
+
+  const auto json = camera_firmware::service::BuildAiStatusJson(status);
+
+  ASSERT_TRUE(json["models"].isArray());
+  ASSERT_EQ(json["models"].size(), 2U);
+  const auto& first = json["models"][0];
+  EXPECT_EQ(first["id"].asString(), "objects");
+  EXPECT_EQ(first["kind"].asString(), "object_detection");
+  EXPECT_EQ(first["input_width"].asUInt(), 640U);
+  EXPECT_EQ(first["input_height"].asUInt(), 640U);
+  EXPECT_EQ(first["input_format"].asString(), "rgb8");
+  EXPECT_TRUE(first["letterbox"].asBool());
+  EXPECT_EQ(first["output_name"].asString(), "yolov8_nms_postprocess");
+  EXPECT_FLOAT_EQ(first["confidence_threshold"].asFloat(), 0.40F);
+  EXPECT_EQ(first["labels"].asString(), "coco80");
+  EXPECT_FALSE(first.isMember("hef_path"));
+
+  const auto& second = json["models"][1];
+  EXPECT_EQ(second["id"].asString(), "pose");
+  EXPECT_EQ(second["kind"].asString(), "pose");
+  EXPECT_EQ(second["input_width"].asUInt(), 256U);
+  EXPECT_EQ(second["input_height"].asUInt(), 256U);
+  EXPECT_EQ(second["input_format"].asString(), "rgb8");
+  EXPECT_FALSE(second["letterbox"].asBool());
+  EXPECT_EQ(second["output_name"].asString(), "yolov8_pose_postprocess");
+  EXPECT_FLOAT_EQ(second["confidence_threshold"].asFloat(), 0.30F);
+  EXPECT_EQ(second["labels"].asString(), "pose17");
+}
+
 TEST(ServiceResponseTest, AiStatusSerializesRunnerStatuses) {
   camera_firmware::service::AiServiceStatus status;
   status.enabled = true;
@@ -343,6 +405,7 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   event.model_kind = "object_detection";
   event.result_state = "decoded";
   event.frame_sequence = 101;
+  event.frame_timestamp = std::chrono::nanoseconds{123456789};
 
   camera_firmware::ai::Detection detection;
   detection.label = "car";
@@ -351,6 +414,17 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   detection.box.y = 0.20F;
   detection.box.width = 0.50F;
   detection.box.height = 0.40F;
+  camera_firmware::ai::Keypoint left_shoulder;
+  left_shoulder.name = "left_shoulder";
+  left_shoulder.x = 0.34F;
+  left_shoulder.y = 0.28F;
+  left_shoulder.confidence = 0.81F;
+  camera_firmware::ai::Keypoint right_shoulder;
+  right_shoulder.name = "right_shoulder";
+  right_shoulder.x = 0.52F;
+  right_shoulder.y = 0.29F;
+  right_shoulder.confidence = 0.79F;
+  detection.keypoints = {left_shoulder, right_shoulder};
   event.detections.push_back(detection);
 
   const auto json =
@@ -364,6 +438,7 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   EXPECT_EQ(serialized_event["model_kind"].asString(), "object_detection");
   EXPECT_EQ(serialized_event["result_state"].asString(), "decoded");
   EXPECT_EQ(serialized_event["frame_sequence"].asUInt64(), 101U);
+  EXPECT_EQ(serialized_event["frame_timestamp_ns"].asInt64(), 123456789);
   ASSERT_EQ(serialized_event["detections"].size(), 1U);
   const auto& serialized_detection = serialized_event["detections"][0];
   EXPECT_EQ(serialized_detection["label"].asString(), "car");
@@ -372,6 +447,20 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   EXPECT_FLOAT_EQ(serialized_detection["box"]["y"].asFloat(), 0.20F);
   EXPECT_FLOAT_EQ(serialized_detection["box"]["width"].asFloat(), 0.50F);
   EXPECT_FLOAT_EQ(serialized_detection["box"]["height"].asFloat(), 0.40F);
+  ASSERT_TRUE(serialized_detection["keypoints"].isArray());
+  ASSERT_EQ(serialized_detection["keypoints"].size(), 2U);
+  EXPECT_EQ(serialized_detection["keypoints"][0]["name"].asString(),
+            "left_shoulder");
+  EXPECT_FLOAT_EQ(serialized_detection["keypoints"][0]["x"].asFloat(), 0.34F);
+  EXPECT_FLOAT_EQ(serialized_detection["keypoints"][0]["y"].asFloat(), 0.28F);
+  EXPECT_FLOAT_EQ(
+      serialized_detection["keypoints"][0]["confidence"].asFloat(), 0.81F);
+  EXPECT_EQ(serialized_detection["keypoints"][1]["name"].asString(),
+            "right_shoulder");
+  EXPECT_FLOAT_EQ(serialized_detection["keypoints"][1]["x"].asFloat(), 0.52F);
+  EXPECT_FLOAT_EQ(serialized_detection["keypoints"][1]["y"].asFloat(), 0.29F);
+  EXPECT_FLOAT_EQ(
+      serialized_detection["keypoints"][1]["confidence"].asFloat(), 0.79F);
 }
 
 TEST(ServiceResponseTest, DetectionSnapshotResponseReturnsEmptyWithoutProvider) {
@@ -417,6 +506,17 @@ TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
   event.model_kind = "object_detection";
   event.result_state = "decoded";
   event.frame_sequence = 88;
+  event.frame_timestamp = std::chrono::nanoseconds{987654321};
+  camera_firmware::ai::Detection detection;
+  detection.label = "person";
+  detection.confidence = 0.91F;
+  camera_firmware::ai::Keypoint keypoint;
+  keypoint.name = "nose";
+  keypoint.x = 0.45F;
+  keypoint.y = 0.18F;
+  keypoint.confidence = 0.93F;
+  detection.keypoints.push_back(keypoint);
+  event.detections.push_back(detection);
 
   const auto payload =
       camera_firmware::service::BuildDetectionSseEvent({event});
@@ -426,6 +526,10 @@ TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
             std::string::npos);
   EXPECT_NE(payload.find("\"camera_id\":\"imx708-main\""), std::string::npos);
   EXPECT_NE(payload.find("\"frame_sequence\":88"), std::string::npos);
+  EXPECT_NE(payload.find("\"frame_timestamp_ns\":987654321"),
+            std::string::npos);
+  EXPECT_NE(payload.find("\"keypoints\""), std::string::npos);
+  EXPECT_NE(payload.find("\"name\":\"nose\""), std::string::npos);
   EXPECT_TRUE(payload.ends_with("\n\n"));
 }
 

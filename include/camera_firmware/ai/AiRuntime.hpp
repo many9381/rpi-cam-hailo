@@ -56,6 +56,7 @@ class AiRuntime {
   std::shared_ptr<AiBackend> backend_;
   std::unordered_map<std::string, ModelHandle> model_handles_;
   std::vector<std::shared_ptr<AiModelRunner>> runners_;
+  std::vector<std::string> redacted_model_paths_;
   AiRuntimeStatus status_;
 };
 

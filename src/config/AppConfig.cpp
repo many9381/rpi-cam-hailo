@@ -229,6 +229,7 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
           AssignIfPresent(model, "id", parsed_model.id);
           AssignIfPresent(model, "kind", parsed_model.kind);
           AssignIfPresent(model, "hef_path", parsed_model.hef_path);
+          AssignIfPresent(model, "output_name", parsed_model.output_name);
           AssignIfPresent(model, "confidence_threshold",
                           parsed_model.confidence_threshold);
           AssignIfPresent(model, "labels", parsed_model.labels);

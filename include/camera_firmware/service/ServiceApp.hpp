@@ -42,6 +42,18 @@ struct AiRunnerServiceStatus {
   std::string last_error_message;
 };
 
+struct AiModelServiceStatus {
+  std::string id;
+  std::string kind;
+  unsigned int input_width{0};
+  unsigned int input_height{0};
+  std::string input_format;
+  bool letterbox{false};
+  std::string output_name;
+  float confidence_threshold{0.0F};
+  std::string labels;
+};
+
 struct AiServiceStatus {
   bool enabled{false};
   std::string backend{"disabled"};
@@ -49,6 +61,7 @@ struct AiServiceStatus {
   std::size_t model_count{0};
   std::size_t runner_count{0};
   std::string reason{"disabled by config"};
+  std::vector<AiModelServiceStatus> models;
   std::vector<AiRunnerServiceStatus> runners;
 };
 

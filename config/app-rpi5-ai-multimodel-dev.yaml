@@ -1,0 +1,70 @@
+platform:
+  target: rpi5
+
+camera:
+  id: imx708-main
+  source:
+    backend: libcamera
+    camera_index: 0
+  video:
+    width: 1536
+    height: 864
+    fps: 30
+    format: nv12
+  encoder:
+    backend: x264
+    bitrate_kbps: 3000
+    gop: 30
+  ai:
+    enabled: true
+    model_ids: [objects, pose]
+
+http:
+  enabled: true
+  bind_ip: 0.0.0.0
+  port: 8443
+  web_root: web
+  public_base_url: http://127.0.0.1:8443
+  tls:
+    enabled: false
+
+ai:
+  enabled: true
+  backend: hailo
+  models:
+    - id: objects
+      kind: object_detection
+      hef_path: vendor/models/yolo_model.hef
+      input:
+        width: 640
+        height: 640
+        format: rgb8
+        letterbox: true
+      confidence_threshold: 0.40
+      labels: coco80
+    - id: pose
+      kind: pose
+      hef_path: vendor/models/yolov8n-pose.hef
+      output_name: yolov8_pose_postprocess
+      input:
+        width: 640
+        height: 640
+        format: rgb8
+        letterbox: true
+      confidence_threshold: 0.35
+      labels: pose17
+
+secure_rtsp:
+  enabled: true
+  control_tls: true
+  keying: sdes-over-rtsps
+  allow_development_self_signed_tls: true
+  media_srtp: true
+  bind_ip: 0.0.0.0
+  port: 8555
+  mount: /imx708/main
+  session_key:
+    source: file
+    path: config/dev-srtp-session.hex
+    encoding: hex
+    zeroize_on_reload: true

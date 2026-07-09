@@ -1,6 +1,7 @@
 #include "camera_firmware/ai/AiModelProcessor.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -83,17 +84,23 @@ camera_firmware::media::FrameLease Nv12Lease(
   });
 }
 
-camera_firmware::media::FrameHandle SourceFrame(std::uint64_t sequence) {
+camera_firmware::media::FrameHandle SourceFrame(std::uint64_t sequence,
+                                                std::uint32_t width = 8,
+                                                std::uint32_t height = 4) {
   camera_firmware::media::FrameHandle handle;
   handle.camera_id = "imx708-main";
   handle.format = "NV12";
-  handle.width = 8;
-  handle.height = 4;
+  handle.width = width;
+  handle.height = height;
   handle.sequence = sequence;
   return handle;
 }
 
-std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence) {
+std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence,
+                                            float y_min = 0.25F,
+                                            float x_min = 0.10F,
+                                            float y_max = 0.75F,
+                                            float x_max = 0.60F) {
   constexpr int kClassCount = 80;
   constexpr int kMaxBoxesPerClass = 100;
   constexpr int kValuesPerClass = 1 + (kMaxBoxesPerClass * 5);
@@ -101,11 +108,38 @@ std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence) {
   std::vector<float> tensor(kClassCount * kValuesPerClass, 0.0F);
   const std::size_t class_offset = 2U * kValuesPerClass;
   tensor[class_offset] = 1.0F;
-  tensor[class_offset + 1U] = 0.25F;
-  tensor[class_offset + 2U] = 0.10F;
-  tensor[class_offset + 3U] = 0.75F;
-  tensor[class_offset + 4U] = 0.60F;
+  tensor[class_offset + 1U] = y_min;
+  tensor[class_offset + 2U] = x_min;
+  tensor[class_offset + 3U] = y_max;
+  tensor[class_offset + 4U] = x_max;
   tensor[class_offset + 5U] = confidence;
+
+  std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
+  std::memcpy(bytes.data(), tensor.data(), bytes.size());
+  return bytes;
+}
+
+std::vector<std::uint8_t> YoloPoseOutputBytes(
+    float confidence = 0.92F,
+    float x_min = 0.10F,
+    float y_min = 0.25F,
+    float x_max = 0.60F,
+    float y_max = 0.75F,
+    float nose_y = 0.25F) {
+  constexpr std::size_t kPoseRowFloats = 5U + (17U * 3U);
+  std::vector<float> tensor(kPoseRowFloats, 0.0F);
+  tensor[0] = x_min;
+  tensor[1] = y_min;
+  tensor[2] = x_max;
+  tensor[3] = y_max;
+  tensor[4] = confidence;
+  tensor[5] = 0.45F;
+  tensor[6] = nose_y;
+  tensor[7] = 0.95F;
+  const std::size_t left_shoulder = 5U + (5U * 3U);
+  tensor[left_shoulder] = 0.34F;
+  tensor[left_shoulder + 1U] = 0.52F;
+  tensor[left_shoulder + 2U] = 0.81F;
 
   std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
   std::memcpy(bytes.data(), tensor.data(), bytes.size());
@@ -365,6 +399,269 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedYoloDetections) {
   EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
   EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 0.50F);
   EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessMapsLetterboxYoloBoxesToSourceFrame) {
+  auto model = ProcessorModel("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 4;
+  model.input.letterbox = true;
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloNmsOutputBytes(0.91F);
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(24),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 1.0F);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest,
+     PostprocessMapsLetterboxYoloBoxesUsingIntegerPreprocessGeometry) {
+  auto model = ProcessorModel("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 4;
+  model.input.letterbox = true;
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloNmsOutputBytes(0.91F);
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(26, 10, 6),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 1.0F);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessClampsLetterboxYoloBoxesToSourceFrame) {
+  auto model = ProcessorModel("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 4;
+  model.input.letterbox = true;
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloNmsOutputBytes(0.91F, 0.0F, 0.0F, 1.0F, 1.0F);
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(27, 8, 4),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 1.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 1.0F);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessPreservesDirectResizeYoloBoxes) {
+  auto model = ProcessorModel("objects", "object_detection");
+  model.input.width = 4;
+  model.input.height = 4;
+  model.input.letterbox = false;
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloNmsOutputBytes(0.91F);
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(25),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.25F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 0.50F);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessPublishesDecodedPoseKeypoints) {
+  auto model = ProcessorModel("pose", "pose");
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloPoseOutputBytes();
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+  auto source_frame = SourceFrame(42);
+  source_frame.timestamp = std::chrono::nanoseconds{123456};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      source_frame,
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  EXPECT_EQ(events[0].camera_id, "imx708-main");
+  EXPECT_EQ(events[0].model_id, "pose");
+  EXPECT_EQ(events[0].model_kind, "pose");
+  EXPECT_EQ(events[0].result_state, "decoded");
+  EXPECT_EQ(events[0].frame_sequence, 42U);
+  EXPECT_EQ(events[0].frame_timestamp, std::chrono::nanoseconds{123456});
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_EQ(events[0].detections[0].label, "person");
+  EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.92F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.25F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 0.50F);
+  ASSERT_EQ(events[0].detections[0].keypoints.size(), 2U);
+  EXPECT_EQ(events[0].detections[0].keypoints[0].name, "nose");
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].x, 0.45F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].y, 0.25F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].confidence, 0.95F);
+  EXPECT_EQ(events[0].detections[0].keypoints[1].name, "left_shoulder");
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessMapsLetterboxPoseKeypointsToSourceFrame) {
+  auto model = ProcessorModel("pose", "pose");
+  model.input.width = 4;
+  model.input.height = 4;
+  model.input.letterbox = true;
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  auto bytes = YoloPoseOutputBytes();
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(43, 8, 4),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.y, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 1.0F);
+  ASSERT_EQ(events[0].detections[0].keypoints.size(), 2U);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].x, 0.45F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[0].y, 0.0F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[1].x, 0.34F);
+  EXPECT_FLOAT_EQ(events[0].detections[0].keypoints[1].y, 0.54F);
+  EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessRejectsUnalignedPoseOutputBytes) {
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(
+      ProcessorModel("pose", "pose"));
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  std::vector<std::uint8_t> bytes(3U, 0U);
+  camera_firmware::ai::OutputView output{bytes.data(), bytes.size()};
+  camera_firmware::ai::DetectionBus bus;
+
+  try {
+    processor.value()->Postprocess(
+        camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+            output),
+        SourceFrame(44),
+        bus.PublisherHandle());
+    FAIL() << "Expected pose postprocess to reject unaligned bytes";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("3 bytes"), std::string::npos) << message;
+    EXPECT_NE(message.find("float aligned"), std::string::npos) << message;
+  }
+}
+
+TEST(AiModelProcessorTest, PostprocessRejectsMalformedPoseOutputShape) {
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(
+      ProcessorModel("pose", "pose"));
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<std::uint8_t> truncated(sizeof(float) * 3U, 0U);
+  camera_firmware::ai::OutputView output{truncated.data(), truncated.size()};
+
+  try {
+    processor.value()->Postprocess(
+        camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+            output),
+        SourceFrame(45),
+        bus.PublisherHandle());
+    FAIL() << "Expected pose postprocess to reject malformed row shape";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("3 floats"), std::string::npos) << message;
+    EXPECT_NE(message.find("56-float"), std::string::npos) << message;
+  }
 }
 
 TEST(AiModelProcessorTest, PostprocessRejectsUnalignedYoloOutputBytes) {

@@ -4,10 +4,15 @@
 #include "camera_firmware/ai/HailoBackend.hpp"
 #endif
 
+#include <algorithm>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace camera_firmware::ai {
 namespace {
+
+constexpr const char* kRedactedModelPath = "[redacted model path]";
 
 const config::AiModelConfig* FindModelById(const config::AppConfig& config,
                                            const std::string& model_id) {
@@ -18,6 +23,46 @@ const config::AiModelConfig* FindModelById(const config::AppConfig& config,
   }
 
   return nullptr;
+}
+
+void ReplaceAll(std::string& value,
+                const std::string& needle,
+                const std::string& replacement) {
+  if (needle.empty()) {
+    return;
+  }
+
+  std::size_t pos = 0;
+  while ((pos = value.find(needle, pos)) != std::string::npos) {
+    value.replace(pos, needle.size(), replacement);
+    pos += replacement.size();
+  }
+}
+
+std::vector<std::string> BuildModelPathRedactions(
+    const config::AppConfig& config) {
+  std::vector<std::string> paths;
+  for (const auto& model : config.ai.models) {
+    if (!model.hef_path.empty()) {
+      paths.push_back(model.hef_path);
+    }
+  }
+
+  std::sort(paths.begin(), paths.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.size() != rhs.size()) {
+      return lhs.size() > rhs.size();
+    }
+    return lhs < rhs;
+  });
+  paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+  return paths;
+}
+
+void RedactConfiguredModelPaths(std::string& message,
+                                const std::vector<std::string>& paths) {
+  for (const auto& path : paths) {
+    ReplaceAll(message, path, kRedactedModelPath);
+  }
 }
 
 }  // namespace
@@ -47,6 +92,7 @@ common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
   status_.enabled = config.ai.enabled;
   status_.backend = config.ai.enabled ? config.ai.backend : "disabled";
   status_.model_count = config.ai.models.size();
+  redacted_model_paths_ = BuildModelPathRedactions(config);
 
   if (!status_.enabled) {
     status_.state = "disabled";
@@ -145,6 +191,7 @@ AiRuntime::RuntimeResources AiRuntime::ReleaseResourcesLocked() {
   resources.model_handles = std::move(model_handles_);
   resources.backend = std::move(backend_);
   status_ = AiRuntimeStatus{};
+  redacted_model_paths_.clear();
   return resources;
 }
 
@@ -223,6 +270,8 @@ std::shared_ptr<AiBackend> AiRuntime::CreateBackend(
 void AiRuntime::RecordError(const common::Error& error) {
   status_.last_error_code = error.code;
   status_.last_error_message = error.message;
+  RedactConfiguredModelPaths(status_.last_error_message,
+                             redacted_model_paths_);
 }
 
 }  // namespace camera_firmware::ai

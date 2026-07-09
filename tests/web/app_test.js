@@ -142,11 +142,16 @@ test('buildDetectionRows flattens event detections', () => {
         model_kind: 'object_detection',
         result_state: 'decoded',
         frame_sequence: 42,
+        frame_timestamp_ns: 123456789,
         detections: [
           {
             label: 'car',
             confidence: 0.876,
             box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+            ],
           },
         ],
       },
@@ -160,9 +165,14 @@ test('buildDetectionRows flattens event detections', () => {
       modelKind: 'object_detection',
       resultState: 'decoded',
       frameSequence: 42,
+      frameTimestampNs: 123456789,
       label: 'car',
       confidence: 0.876,
       box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+      keypoints: [
+        {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+        {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+      ],
     },
   ]);
 });
@@ -178,6 +188,7 @@ test('buildDetectionRows preserves event state without detections', () => {
         model_kind: 'pose',
         result_state: 'no_detections',
         frame_sequence: 43,
+        frame_timestamp_ns: 987654321,
         detections: [],
       },
     ],
@@ -190,11 +201,35 @@ test('buildDetectionRows preserves event state without detections', () => {
       modelKind: 'pose',
       resultState: 'no_detections',
       frameSequence: 43,
+      frameTimestampNs: 987654321,
       label: '',
       confidence: undefined,
       box: undefined,
+      keypoints: [],
     },
   ]);
+});
+
+test('buildDetectionRows omits malformed frame timestamps', () => {
+  const {buildDetectionRows} = loadApp();
+
+  for (const value of [-1, 1.5, '123', Number.MAX_SAFE_INTEGER + 1]) {
+    const rows = buildDetectionRows({
+      events: [
+        {
+          camera_id: 'imx708-main',
+          model_id: 'objects',
+          model_kind: 'object_detection',
+          result_state: 'decoded',
+          frame_sequence: 44,
+          frame_timestamp_ns: value,
+          detections: [],
+        },
+      ],
+    });
+
+    assert.equal(rows[0].frameTimestampNs, undefined);
+  }
 });
 
 test('formatConfidence renders percentages', () => {
@@ -315,11 +350,16 @@ test('renderDetections writes compact rows', () => {
         model_kind: 'object_detection',
         result_state: 'decoded',
         frame_sequence: 42,
+        frame_timestamp_ns: 123456789,
         detections: [
           {
             label: 'car',
             confidence: 0.876,
             box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+            ],
           },
         ],
       },
@@ -332,10 +372,10 @@ test('renderDetections writes compact rows', () => {
   assert.equal(list.children[0].children[1].textContent, '87.6%');
   assert.equal(list.children[0].children[2].textContent, 'objects / object_detection');
   assert.equal(list.children[0].children[3].textContent, 'decoded');
-  assert.equal(list.children[0].children[4].textContent, 'frame 42');
+  assert.equal(list.children[0].children[4].textContent, 'frame 42 / 123456789 ns');
   assert.equal(
     list.children[0].children[5].textContent,
-    'x 0.100, y 0.200, w 0.300, h 0.400',
+    'x 0.100, y 0.200, w 0.300, h 0.400 / 2 keypoints',
   );
 });
 
@@ -352,6 +392,7 @@ test('renderDetections writes model state rows without detections', () => {
         model_kind: 'pose',
         result_state: 'no_detections',
         frame_sequence: 43,
+        frame_timestamp_ns: 987654321,
         detections: [],
       },
     ],
@@ -363,8 +404,30 @@ test('renderDetections writes model state rows without detections', () => {
   assert.equal(list.children[0].children[1].textContent, 'n/a');
   assert.equal(list.children[0].children[2].textContent, 'pose / pose');
   assert.equal(list.children[0].children[3].textContent, 'no_detections');
-  assert.equal(list.children[0].children[4].textContent, 'frame 43');
+  assert.equal(list.children[0].children[4].textContent, 'frame 43 / 987654321 ns');
   assert.equal(list.children[0].children[5].textContent, 'n/a');
+});
+
+test('renderDetections omits malformed frame timestamps', () => {
+  const {renderDetections} = loadApp();
+  const list = makeElement();
+  const count = makeElement();
+
+  renderDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'objects',
+        model_kind: 'object_detection',
+        result_state: 'decoded',
+        frame_sequence: 44,
+        frame_timestamp_ns: Number.MAX_SAFE_INTEGER + 1,
+        detections: [],
+      },
+    ],
+  }, {list, count});
+
+  assert.equal(list.children[0].children[4].textContent, 'frame 44');
 });
 
 test('renderDetections clears stale rows before rendering empty state', () => {
@@ -448,6 +511,127 @@ test('renderAiStatus writes compact status details', () => {
   assert.equal(
     detail.textContent,
     'models 1 / runners 0 - Hailo device unavailable',
+  );
+});
+
+test('buildModelRows normalizes ai model inventory without paths', () => {
+  const {buildModelRows} = loadApp();
+
+  assert.deepEqual(buildModelRows({
+    models: [
+      {
+        id: 'objects',
+        kind: 'object_detection',
+        input_width: 640,
+        input_height: 640,
+        input_format: 'rgb8',
+        letterbox: true,
+        output_name: 'yolov8_nms_postprocess',
+        confidence_threshold: 0.4,
+        labels: 'coco80',
+        hef_path: '/opt/models/yolov8s.hef',
+      },
+      {
+        id: 'pose',
+        kind: 'pose',
+        input_width: 256,
+        input_height: 256,
+        input_format: 'rgb8',
+        letterbox: false,
+        confidence_threshold: 0.3,
+        labels: 'pose17',
+      },
+    ],
+  }), [
+    {
+      id: 'objects',
+      kind: 'object_detection',
+      inputWidth: 640,
+      inputHeight: 640,
+      inputFormat: 'rgb8',
+      letterbox: true,
+      outputName: 'yolov8_nms_postprocess',
+      confidenceThreshold: 0.4,
+      labels: 'coco80',
+    },
+    {
+      id: 'pose',
+      kind: 'pose',
+      inputWidth: 256,
+      inputHeight: 256,
+      inputFormat: 'rgb8',
+      letterbox: false,
+      outputName: '',
+      confidenceThreshold: 0.3,
+      labels: 'pose17',
+    },
+  ]);
+});
+
+test('buildModelRows skips malformed ai model entries', () => {
+  const {buildModelRows} = loadApp();
+
+  assert.deepEqual(buildModelRows({
+    models: [
+      null,
+      undefined,
+      {
+        id: 'objects',
+        kind: 'object_detection',
+        input_width: 640,
+        input_height: 640,
+        input_format: 'rgb8',
+        letterbox: true,
+        confidence_threshold: 0.4,
+        labels: 'coco80',
+      },
+      'invalid',
+    ],
+  }), [
+    {
+      id: 'objects',
+      kind: 'object_detection',
+      inputWidth: 640,
+      inputHeight: 640,
+      inputFormat: 'rgb8',
+      letterbox: true,
+      outputName: '',
+      confidenceThreshold: 0.4,
+      labels: 'coco80',
+    },
+  ]);
+});
+
+test('renderAiModels writes compact model rows', () => {
+  const {renderAiModels} = loadApp();
+  const list = makeElement();
+  const count = makeElement();
+
+  renderAiModels({
+    models: [
+      {
+        id: 'objects',
+        kind: 'object_detection',
+        input_width: 640,
+        input_height: 640,
+        input_format: 'rgb8',
+        letterbox: true,
+        output_name: 'yolov8_nms_postprocess',
+        confidence_threshold: 0.4,
+        labels: 'coco80',
+      },
+    ],
+  }, {list, count});
+
+  assert.equal(count.textContent, '1 model');
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[0].textContent, 'objects');
+  assert.equal(list.children[0].children[1].textContent, 'object_detection');
+  assert.equal(list.children[0].children[2].textContent, '640x640 rgb8');
+  assert.equal(list.children[0].children[3].textContent, 'letterbox');
+  assert.equal(
+    list.children[0].children[4].textContent,
+    'yolov8_nms_postprocess / threshold 0.4 / coco80',
   );
 });
 
@@ -561,6 +745,18 @@ test('startup refresh renders ai runner status from cameras response', async () 
         return {
           ai: {
             enabled: true,
+            models: [
+              {
+                id: 'objects',
+                kind: 'object_detection',
+                input_width: 640,
+                input_height: 640,
+                input_format: 'rgb8',
+                letterbox: true,
+                confidence_threshold: 0.4,
+                labels: 'coco80',
+              },
+            ],
             runners: [
               {
                 camera_id: 'imx708-main',
@@ -589,6 +785,13 @@ test('startup refresh renders ai runner status from cameras response', async () 
 
   await settleStartupRefresh();
 
+  assert.equal(app.elements['#model-count'].textContent, '1 model');
+  assert.equal(app.elements['#model-list'].children.length, 1);
+  assert.equal(app.elements['#model-list'].children[0].children[0].textContent, 'objects');
+  assert.equal(
+    app.elements['#model-list'].children[0].children[4].textContent,
+    'default output / threshold 0.4 / coco80',
+  );
   assert.equal(app.elements['#runner-count'].textContent, '1 runner');
   assert.equal(app.elements['#runner-list'].children.length, 1);
   assert.equal(app.elements['#runner-list'].children[0].children[0].textContent, 'objects');
@@ -702,6 +905,18 @@ test('startup refresh renders unknown ai status on request failure', async () =>
       return new Blob();
     },
   }));
+  app.renderAiModels({
+    models: [
+      {
+        id: 'stale',
+        kind: 'object_detection',
+        input_width: 640,
+        input_height: 640,
+        input_format: 'rgb8',
+        confidence_threshold: 0.4,
+      },
+    ],
+  });
 
   await settleStartupRefresh();
 
@@ -710,6 +925,9 @@ test('startup refresh renders unknown ai status on request failure', async () =>
     app.elements['#ai-status-detail'].textContent,
     'models 0 / runners 0 - camera status unavailable',
   );
+  assert.equal(app.elements['#model-count'].textContent, '0 models');
+  assert.equal(app.elements['#model-list'].children.length, 1);
+  assert.equal(app.elements['#model-list'].children[0].textContent, 'No AI models');
 });
 
 test('status-only refresh updates ai status without snapshot or detection requests', async () => {
@@ -1211,6 +1429,10 @@ test('buildOverlayDetections returns valid detections for active camera', () => 
             label: 'person',
             confidence: 0.91,
             box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+            ],
           },
         ],
       },
@@ -1235,6 +1457,222 @@ test('buildOverlayDetections returns valid detections for active camera', () => 
   assert.equal(rows[0].box.top, '20%');
   assert.equal(rows[0].box.width, '30%');
   assert.equal(rows[0].box.height, '40%');
+  assert.equal(rows[0].keypoints.length, 2);
+  assert.equal(rows[0].keypoints[0].name, 'left_shoulder');
+  assert.equal(rows[0].keypoints[0].left, '34%');
+  assert.equal(rows[0].keypoints[0].top, '28%');
+});
+
+test('buildOverlayDetections builds pose skeleton line rows', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 18,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.91,
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+              {name: 'left_elbow', x: 0.30, y: 0.45, confidence: 0.77},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].skeletons.length, 2);
+  assert.deepEqual(
+    rows[0].skeletons.map((skeleton) => `${skeleton.from}:${skeleton.to}`),
+    ['left_shoulder:right_shoulder', 'left_shoulder:left_elbow'],
+  );
+  assert.equal(rows[0].skeletons[0].fromKeypoint.left, '34%');
+  assert.equal(rows[0].skeletons[0].fromKeypoint.top, '28%');
+  assert.equal(rows[0].skeletons[0].toKeypoint.left, '52%');
+  assert.equal(rows[0].skeletons[0].toKeypoint.top, '29%');
+  assert.equal(rows[0].skeletons[0].title, 'left_shoulder to right_shoulder');
+});
+
+test('buildOverlayDetections includes full COCO17 face and shoulder skeleton pairs', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 20,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.91,
+            keypoints: [
+              {name: 'nose', x: 0.45, y: 0.16, confidence: 0.91},
+              {name: 'left_eye', x: 0.42, y: 0.13, confidence: 0.90},
+              {name: 'right_eye', x: 0.48, y: 0.13, confidence: 0.90},
+              {name: 'left_ear', x: 0.38, y: 0.15, confidence: 0.89},
+              {name: 'right_ear', x: 0.52, y: 0.15, confidence: 0.89},
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    rows[0].skeletons.map((skeleton) => `${skeleton.from}:${skeleton.to}`),
+    [
+      'left_shoulder:right_shoulder',
+      'nose:left_eye',
+      'nose:right_eye',
+      'left_eye:right_eye',
+      'left_eye:left_ear',
+      'right_eye:right_ear',
+      'left_ear:left_shoulder',
+      'right_ear:right_shoulder',
+    ],
+  );
+});
+
+test('buildOverlayDetections omits skeletons with missing endpoints', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 19,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.91,
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0},
+              {name: 'left_elbow', x: 0.30, y: 0.45, confidence: 0.77},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(
+    rows[0].skeletons.map((skeleton) => `${skeleton.from}:${skeleton.to}`),
+    ['left_shoulder:left_elbow'],
+  );
+});
+
+test('buildOverlayDetections ignores invalid keypoints', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 14,
+        detections: [
+          {
+            label: 'person',
+            confidence: 1,
+            box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+            keypoints: [
+              {name: 'nan', x: Number.NaN, y: 0.2, confidence: 0.9},
+              {name: 'missing-y', x: 0.3, confidence: 0.9},
+              {name: 'zero-confidence', x: 0.3, y: 0.4, confidence: 0},
+            ],
+          },
+        ],
+      },
+      {
+        camera_id: 'other',
+        model_id: 'pose',
+        frame_sequence: 15,
+        detections: [
+          {
+            label: 'person',
+            confidence: 1,
+            box: {x: 0.1, y: 0.2, width: 0.3, height: 0.4},
+            keypoints: [
+              {name: 'valid_other_camera', x: 0.2, y: 0.3, confidence: 0.9},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].keypoints, []);
+});
+
+test('buildOverlayDetections keeps keypoint-only pose events', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 16,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.92,
+            keypoints: [
+              {name: 'nose', x: 0.45, y: 0.18, confidence: 0.93},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].box, undefined);
+  assert.equal(rows[0].keypoints.length, 1);
+  assert.equal(rows[0].keypoints[0].name, 'nose');
+  assert.equal(rows[0].keypoints[0].left, '45%');
+  assert.equal(rows[0].keypoints[0].top, '18%');
+});
+
+test('buildOverlayDetections falls back for non-string keypoint names', () => {
+  const {buildOverlayDetections} = loadApp();
+
+  const rows = buildOverlayDetections({
+    events: [
+      {
+        camera_id: 'imx708-main',
+        model_id: 'pose',
+        frame_sequence: 17,
+        detections: [
+          {
+            label: 'person',
+            confidence: 0.92,
+            keypoints: [
+              {name: {bad: true}, x: 0.45, y: 0.18, confidence: 0.93},
+            ],
+          },
+        ],
+      },
+    ],
+  }, 'imx708-main');
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].keypoints[0].name, 'keypoint');
 });
 
 test('buildOverlayDetections ignores invalid boxes', () => {
@@ -1260,6 +1698,8 @@ test('buildOverlayDetections ignores invalid boxes', () => {
 test('renderDetectionOverlay draws positioned boxes', () => {
   const {renderDetectionOverlay} = loadApp();
   const overlay = makeElement();
+  overlay.clientWidth = 160;
+  overlay.clientHeight = 90;
 
   renderDetectionOverlay({
     events: [
@@ -1272,18 +1712,33 @@ test('renderDetectionOverlay draws positioned boxes', () => {
             label: 'person',
             confidence: 0.912,
             box: {x: 0.2, y: 0.3, width: 0.4, height: 0.5},
+            keypoints: [
+              {name: 'left_shoulder', x: 0.34, y: 0.28, confidence: 0.81},
+              {name: 'right_shoulder', x: 0.52, y: 0.29, confidence: 0.79},
+            ],
           },
         ],
       },
     ],
   }, 'imx708-main', overlay);
 
-  assert.equal(overlay.children.length, 1);
+  assert.equal(overlay.children.length, 4);
   assert.equal(overlay.children[0].style.left, '20%');
   assert.equal(overlay.children[0].style.top, '30%');
   assert.equal(overlay.children[0].style.width, '40%');
   assert.equal(overlay.children[0].style.height, '50%');
   assert.equal(overlay.children[0].children[0].textContent, 'person 91.2%');
+  assert.equal(overlay.children[1].className, 'overlay-skeleton');
+  assert.equal(overlay.children[1].style.left, '34%');
+  assert.equal(overlay.children[1].style.top, '28%');
+  assert.equal(overlay.children[1].style.width, '28.814px');
+  assert.equal(overlay.children[1].style.transform, 'translateY(-50%) rotate(1.79deg)');
+  assert.equal(overlay.children[1].title, 'left_shoulder to right_shoulder');
+  assert.equal(overlay.children[2].className, 'overlay-keypoint');
+  assert.equal(overlay.children[2].style.left, '34%');
+  assert.equal(overlay.children[2].style.top, '28%');
+  assert.equal(overlay.children[2].title, 'left_shoulder 81.0%');
+  assert.equal(overlay.children[3].className, 'overlay-keypoint');
 });
 
 test('startDetectionStream renders incoming detections events', () => {
