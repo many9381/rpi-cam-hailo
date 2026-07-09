@@ -3,6 +3,7 @@
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/FrameLease.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -85,12 +86,20 @@ camera_firmware::media::FrameLease SyntheticNv12Frame(
   });
 }
 
-bool WaitForProcessedOrDropped(camera_firmware::ai::AiRuntime& runtime) {
+bool AllRunnersProcessedOrDropped(
+    const std::vector<camera_firmware::ai::AiModelRunnerStatus>& runners,
+    std::size_t expected_runner_count) {
+  return runners.size() == expected_runner_count &&
+         std::all_of(runners.begin(), runners.end(), [](const auto& runner) {
+           return runner.processed_frames >= 1U || runner.dropped_frames >= 1U;
+         });
+}
+
+bool WaitForProcessedOrDropped(camera_firmware::ai::AiRuntime& runtime,
+                               std::size_t expected_runner_count) {
   for (int attempt = 0; attempt < 500; ++attempt) {
     const auto runners = runtime.RunnerStatuses();
-    if (runners.size() == 1U &&
-        (runners[0].processed_frames >= 1U ||
-         runners[0].dropped_frames >= 1U)) {
+    if (AllRunnersProcessedOrDropped(runners, expected_runner_count)) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -114,6 +123,23 @@ std::string RunnerStatusMessage(
 }
 
 }  // namespace
+
+TEST(AiHardwareSmokeHelperTest, RequiresEveryExpectedRunnerToFinish) {
+  camera_firmware::ai::AiModelRunnerStatus objects;
+  objects.processed_frames = 1;
+  camera_firmware::ai::AiModelRunnerStatus pose;
+  pose.dropped_frames = 1;
+
+  const std::vector<camera_firmware::ai::AiModelRunnerStatus> complete{
+      objects, pose};
+  EXPECT_TRUE(AllRunnersProcessedOrDropped(complete, 2U));
+  EXPECT_FALSE(AllRunnersProcessedOrDropped(complete, 1U));
+
+  pose.dropped_frames = 0;
+  const std::vector<camera_firmware::ai::AiModelRunnerStatus> incomplete{
+      objects, pose};
+  EXPECT_FALSE(AllRunnersProcessedOrDropped(incomplete, 2U));
+}
 
 TEST(AiHardwareSmokeTest, StartsConfiguredHailoRuntimeWhenEnabled) {
   if (!HailoHardwareSmokeEnabled()) {
@@ -196,7 +222,7 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
 
   auto submitted = runtime->SubmitFrame(SyntheticNv12Frame(1));
   ASSERT_TRUE(submitted.ok()) << submitted.error().message;
-  if (!WaitForProcessedOrDropped(*runtime)) {
+  if (!WaitForProcessedOrDropped(*runtime, 1U)) {
     ADD_FAILURE() << "timed out waiting for Hailo inference callback; "
                   << RunnerStatusMessage(runtime->RunnerStatuses());
     (void)runtime.release();
@@ -212,6 +238,128 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
   EXPECT_EQ(runners[0].dropped_frames, 0u)
       << runners[0].last_error_code << ": "
       << runners[0].last_error_message;
+
+  runtime->Stop();
+#endif
+}
+
+TEST(AiHardwareSmokeTest,
+     StartsConfiguredMultiModelHailoRuntimeWhenPoseModelAvailable) {
+  if (!HailoHardwareSmokeEnabled()) {
+    GTEST_SKIP()
+        << "set CF_RUN_HAILO_HARDWARE_SMOKE=1 to require Hailo hardware";
+  }
+
+#if !defined(CF_HAVE_HAILORT)
+  FAIL() << "CF_RUN_HAILO_HARDWARE_SMOKE=1 requires a build with HailoRT";
+#else
+  auto config = camera_firmware::config::LoadConfigFile(
+      "config/app-rpi5-ai-multimodel-dev.yaml");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  ASSERT_EQ(config.value().ai.models.size(), 2U);
+  ASSERT_EQ(config.value().camera.ai.model_ids.size(), 2U);
+  ASSERT_EQ(config.value().ai.models[0].id, "objects");
+  ASSERT_EQ(config.value().ai.models[1].id, "pose");
+
+  const std::filesystem::path object_hef{
+      config.value().ai.models[0].hef_path};
+  ASSERT_TRUE(std::filesystem::exists(object_hef))
+      << "missing Hailo model: " << object_hef;
+  const std::filesystem::path pose_hef{
+      config.value().ai.models[1].hef_path};
+  if (!std::filesystem::exists(pose_hef)) {
+    GTEST_SKIP() << "missing deferred Hailo pose model: " << pose_hef;
+  }
+
+  camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::ai::AiRuntime runtime(&detection_bus);
+  auto started = runtime.Start(config.value());
+  ASSERT_TRUE(started.ok()) << started.error().message;
+
+  const auto status = runtime.Status();
+  EXPECT_TRUE(status.enabled);
+  EXPECT_EQ(status.backend, "hailo");
+  EXPECT_TRUE(status.backend_available)
+      << status.last_error_code << ": " << status.last_error_message;
+  ASSERT_EQ(status.state, "ready")
+      << status.last_error_code << ": " << status.last_error_message;
+  EXPECT_EQ(status.model_count, 2U);
+  EXPECT_EQ(status.runner_count, 2U);
+  EXPECT_TRUE(status.last_error_code.empty()) << status.last_error_message;
+
+  const auto runners = runtime.RunnerStatuses();
+  ASSERT_EQ(runners.size(), 2U);
+  EXPECT_EQ(runners[0].camera_id, "imx708-main");
+  EXPECT_EQ(runners[0].model_id, "objects");
+  EXPECT_EQ(runners[0].model_kind, "object_detection");
+  EXPECT_EQ(runners[1].camera_id, "imx708-main");
+  EXPECT_EQ(runners[1].model_id, "pose");
+  EXPECT_EQ(runners[1].model_kind, "pose");
+
+  runtime.Stop();
+#endif
+}
+
+TEST(AiHardwareSmokeTest,
+     SubmitsSyntheticFrameToConfiguredMultiModelRunnersWhenPoseModelAvailable) {
+  if (!HailoHardwareSmokeEnabled()) {
+    GTEST_SKIP()
+        << "set CF_RUN_HAILO_HARDWARE_SMOKE=1 to require Hailo hardware";
+  }
+
+#if !defined(CF_HAVE_HAILORT)
+  FAIL() << "CF_RUN_HAILO_HARDWARE_SMOKE=1 requires a build with HailoRT";
+#else
+  auto config = camera_firmware::config::LoadConfigFile(
+      "config/app-rpi5-ai-multimodel-dev.yaml");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  ASSERT_EQ(config.value().ai.models.size(), 2U);
+
+  const std::filesystem::path object_hef{
+      config.value().ai.models[0].hef_path};
+  ASSERT_TRUE(std::filesystem::exists(object_hef))
+      << "missing Hailo model: " << object_hef;
+  const std::filesystem::path pose_hef{
+      config.value().ai.models[1].hef_path};
+  if (!std::filesystem::exists(pose_hef)) {
+    GTEST_SKIP() << "missing deferred Hailo pose model: " << pose_hef;
+  }
+
+  camera_firmware::ai::DetectionBus detection_bus;
+  auto runtime =
+      std::make_unique<camera_firmware::ai::AiRuntime>(&detection_bus);
+  auto started = runtime->Start(config.value());
+  ASSERT_TRUE(started.ok()) << started.error().message;
+
+  const auto started_status = runtime->Status();
+  ASSERT_EQ(started_status.state, "ready")
+      << started_status.last_error_code << ": "
+      << started_status.last_error_message;
+  ASSERT_EQ(started_status.model_count, 2U);
+  ASSERT_EQ(started_status.runner_count, 2U);
+
+  auto submitted = runtime->SubmitFrame(SyntheticNv12Frame(1));
+  ASSERT_TRUE(submitted.ok()) << submitted.error().message;
+  if (!WaitForProcessedOrDropped(*runtime, 2U)) {
+    ADD_FAILURE() << "timed out waiting for all Hailo inference callbacks; "
+                  << RunnerStatusMessage(runtime->RunnerStatuses());
+    (void)runtime.release();
+    return;
+  }
+
+  const auto runners = runtime->RunnerStatuses();
+  ASSERT_EQ(runners.size(), 2U);
+  EXPECT_EQ(runners[0].model_id, "objects");
+  EXPECT_EQ(runners[1].model_id, "pose");
+  for (const auto& runner : runners) {
+    EXPECT_EQ(runner.submitted_frames, 1U) << runner.model_id;
+    EXPECT_EQ(runner.processed_frames, 1U)
+        << runner.model_id << " " << runner.last_error_code << ": "
+        << runner.last_error_message;
+    EXPECT_EQ(runner.dropped_frames, 0U)
+        << runner.model_id << " " << runner.last_error_code << ": "
+        << runner.last_error_message;
+  }
 
   runtime->Stop();
 #endif

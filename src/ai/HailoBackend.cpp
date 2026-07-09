@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <unistd.h>
 
@@ -62,6 +63,11 @@ std::shared_ptr<PageAlignedBuffer> AllocatePageAligned(std::size_t size) {
   return buffer;
 }
 
+struct HailoOutputBinding {
+  std::string name;
+  std::size_t size{0};
+};
+
 }  // namespace
 
 struct HailoBackend::LoadedModel {
@@ -69,8 +75,8 @@ struct HailoBackend::LoadedModel {
   std::shared_ptr<hailort::InferModel> infer_model;
   std::unique_ptr<hailort::ConfiguredInferModel> configured;
   std::string input_name;
-  std::string output_name;
-  std::size_t output_size{0};
+  std::vector<HailoOutputBinding> outputs;
+  std::size_t selected_output_index{0};
 };
 
 HailoBackend::HailoBackend() = default;
@@ -136,8 +142,8 @@ common::Result<ModelHandle> HailoBackend::LoadModel(
     if (!created_model) {
       return common::Result<ModelHandle>::Err(
           {"E_HAILO_HEF",
-           StatusMessage("failed to create Hailo infer model from " +
-                             model.hef_path,
+           StatusMessage("failed to create Hailo infer model for " +
+                             model.id,
                          created_model.status())});
     }
     infer_model = std::move(created_model.value());
@@ -152,11 +158,44 @@ common::Result<ModelHandle> HailoBackend::LoadModel(
   input.value().set_format_type(HAILO_FORMAT_TYPE_UINT8);
   input.value().set_format_order(HAILO_FORMAT_ORDER_NHWC);
 
-  auto output = infer_model->output();
+  auto output = model.output_name.empty()
+                    ? infer_model->output()
+                    : infer_model->output(model.output_name);
   if (!output) {
+    const std::string output_error =
+        model.output_name.empty()
+            ? "HEF must expose one output"
+            : "HEF output stream is unavailable for " + model.id +
+                  ": " + model.output_name;
     return common::Result<ModelHandle>::Err(
-        {"E_HAILO_OUTPUT", StatusMessage("HEF must expose one output",
-                                         output.status())});
+        {"E_HAILO_OUTPUT", StatusMessage(output_error, output.status())});
+  }
+  const std::string selected_output_name = output.value().name();
+
+  std::vector<HailoOutputBinding> output_bindings;
+  output_bindings.reserve(infer_model->outputs().size());
+  std::size_t selected_output_index = 0;
+  bool selected_output_found = false;
+  for (const auto& output_stream : infer_model->outputs()) {
+    const auto output_name = output_stream.name();
+    const auto output_size = output_stream.get_frame_size();
+    if (output_size == 0U) {
+      return common::Result<ModelHandle>::Err(
+          {"E_HAILO_OUTPUT_SIZE",
+           "HEF output frame size is zero for " + model.id + ": " +
+               output_name});
+    }
+    if (output_name == selected_output_name) {
+      selected_output_index = output_bindings.size();
+      selected_output_found = true;
+    }
+    output_bindings.push_back({output_name, output_size});
+  }
+  if (output_bindings.empty() || !selected_output_found) {
+    return common::Result<ModelHandle>::Err(
+        {"E_HAILO_OUTPUT",
+         "HEF selected output stream is not present for " + model.id + ": " +
+             selected_output_name});
   }
 
   auto configured = infer_model->configure();
@@ -174,12 +213,8 @@ common::Result<ModelHandle> HailoBackend::LoadModel(
       std::make_unique<hailort::ConfiguredInferModel>(
           std::move(configured.value()));
   loaded->input_name = input.value().name();
-  loaded->output_name = output.value().name();
-  loaded->output_size = output.value().get_frame_size();
-  if (loaded->output_size == 0U) {
-    return common::Result<ModelHandle>::Err(
-        {"E_HAILO_OUTPUT_SIZE", "HEF output frame size is zero"});
-  }
+  loaded->outputs = std::move(output_bindings);
+  loaded->selected_output_index = selected_output_index;
 
   std::lock_guard lock(mutex_);
   models_.push_back(std::move(loaded));
@@ -241,12 +276,6 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
     bool active{true};
   } in_flight(this);
 
-  auto output_buffer = AllocatePageAligned(model->output_size);
-  if (output_buffer == nullptr) {
-    return common::Result<void>::Err(
-        {"E_HAILO_ALLOC", "failed to allocate page-aligned output buffer"});
-  }
-
   auto bindings = model->configured->create_bindings();
   if (!bindings) {
     return common::Result<void>::Err(
@@ -271,18 +300,44 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
                                         input_status)});
   }
 
-  auto output_stream = binding_state->output(model->output_name);
-  if (!output_stream) {
-    return common::Result<void>::Err(
-        {"E_HAILO_OUTPUT",
-         StatusMessage("failed to bind Hailo output", output_stream.status())});
+  std::vector<std::shared_ptr<PageAlignedBuffer>> output_buffers;
+  output_buffers.reserve(model->outputs.size());
+  std::shared_ptr<PageAlignedBuffer> selected_output_buffer;
+  for (std::size_t index = 0; index < model->outputs.size(); ++index) {
+    const auto& output = model->outputs[index];
+    auto output_buffer = AllocatePageAligned(output.size);
+    if (output_buffer == nullptr) {
+      return common::Result<void>::Err(
+          {"E_HAILO_ALLOC",
+           "failed to allocate page-aligned output buffer for " +
+               output.name});
+    }
+
+    auto output_stream = binding_state->output(output.name);
+    if (!output_stream) {
+      return common::Result<void>::Err(
+          {"E_HAILO_OUTPUT",
+           StatusMessage("failed to bind Hailo output " + output.name,
+                         output_stream.status())});
+    }
+    const hailo_status output_status = output_stream.value().set_buffer(
+        hailort::MemoryView(output_buffer->data, output_buffer->size));
+    if (output_status != HAILO_SUCCESS) {
+      return common::Result<void>::Err(
+          {"E_HAILO_OUTPUT",
+           StatusMessage("failed to set Hailo output buffer for " +
+                             output.name,
+                         output_status)});
+    }
+
+    if (index == model->selected_output_index) {
+      selected_output_buffer = output_buffer;
+    }
+    output_buffers.push_back(std::move(output_buffer));
   }
-  const hailo_status output_status = output_stream.value().set_buffer(
-      hailort::MemoryView(output_buffer->data, output_buffer->size));
-  if (output_status != HAILO_SUCCESS) {
+  if (selected_output_buffer == nullptr) {
     return common::Result<void>::Err(
-        {"E_HAILO_OUTPUT", StatusMessage("failed to set Hailo output buffer",
-                                         output_status)});
+        {"E_HAILO_OUTPUT", "selected Hailo output buffer was not allocated"});
   }
 
   const hailo_status ready_status =
@@ -298,7 +353,8 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
       [this,
        callback = std::move(callback),
        binding_state,
-       output_buffer,
+       output_buffers,
+       selected_output_buffer,
        model](
           const hailort::AsyncInferCompletionInfo& info) mutable {
         struct CompletionGuard {
@@ -315,6 +371,7 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
         } completion(this);
 
         (void)binding_state;
+        (void)output_buffers;
         (void)model;
         if (!callback) {
           return;
@@ -326,7 +383,8 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
           return;
         }
         callback(common::Result<OutputView>::Ok(
-            OutputView{output_buffer->data, output_buffer->size}));
+            OutputView{selected_output_buffer->data,
+                       selected_output_buffer->size}));
       });
   if (!job) {
     return common::Result<void>::Err(
