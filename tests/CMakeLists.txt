@@ -101,6 +101,27 @@ endif()
 
 gtest_discover_tests(camera_firmware_ai_tests)
 
+add_executable(camera_firmware_ai_hardware_smoke
+    integration/AiHardwareSmokeTest.cpp
+)
+
+target_link_libraries(camera_firmware_ai_hardware_smoke
+    PRIVATE
+        camera_firmware_ai
+        camera_firmware_config
+        GTest::gtest_main
+)
+
+gtest_add_tests(TARGET camera_firmware_ai_hardware_smoke
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TEST_LIST camera_firmware_ai_hardware_smoke_tests
+)
+
+set_tests_properties(${camera_firmware_ai_hardware_smoke_tests}
+    PROPERTIES
+        TIMEOUT 30
+)
+
 add_executable(camera_firmware_service_tests
     unit/service/ServiceResponseTest.cpp
     unit/service/ServiceStartupTest.cpp
