@@ -1,5 +1,6 @@
 const healthStatus = document.querySelector('#health-status');
 const streamUrl = document.querySelector('#stream-url');
+const streamSecurity = document.querySelector('#stream-security');
 const aiStatus = document.querySelector('#ai-status');
 const aiStatusDetail = document.querySelector('#ai-status-detail');
 const cameraList = document.querySelector('#camera-list');
@@ -53,6 +54,17 @@ function toText(value, fallback = '') {
     return fallback;
   }
   return value;
+}
+
+function buildStreamSecurityView(stream) {
+  if (typeof stream?.control_tls !== 'boolean' ||
+      typeof stream?.media_srtp !== 'boolean') {
+    return 'Stream security unavailable';
+  }
+
+  const control = stream.control_tls ? 'RTSPS control' : 'RTSP control';
+  const media = stream.media_srtp ? 'SRTP media' : 'RTP media';
+  return `${control} / ${media}`;
 }
 
 function normalizeOverlayBox(box) {
@@ -414,6 +426,7 @@ function renderCameras(cameras) {
 function renderStatusPayload(health, stream, cameras) {
   healthStatus.textContent = health.status || 'unknown';
   streamUrl.textContent = stream.url || 'unavailable';
+  streamSecurity.textContent = buildStreamSecurityView(stream);
   renderAiStatus(cameras.ai);
   renderAiRunners(cameras.ai);
   renderCameras(cameras.cameras || []);
@@ -422,6 +435,7 @@ function renderStatusPayload(health, stream, cameras) {
 function renderStatusError(error) {
   healthStatus.textContent = 'error';
   streamUrl.textContent = error.message;
+  streamSecurity.textContent = 'Stream security unavailable';
   renderAiStatus({state: 'unknown', backend: 'unknown', reason: error.message});
   renderAiRunners({runners: []});
   renderCameras([]);
@@ -560,6 +574,7 @@ if (typeof module !== 'undefined') {
     buildOverlayDetections,
     buildDetectionRows,
     buildRunnerRows,
+    buildStreamSecurityView,
     formatBox,
     formatConfidence,
     loadSnapshot,
