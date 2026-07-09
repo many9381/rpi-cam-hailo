@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include "camera_firmware/ai/AiTypes.hpp"
+
 TEST(ServiceResponseTest, HealthJsonContainsStatus) {
   auto json = camera_firmware::service::BuildHealthJson("ok");
   ASSERT_TRUE(json.isMember("status"));
@@ -75,6 +77,174 @@ TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonState) {
   EXPECT_EQ(json["runner_count"].asUInt64(), 2u);
   EXPECT_EQ(json["reason"].asString(),
             "Hailo backend is not implemented in this build");
+}
+
+TEST(ServiceResponseTest, DetectionSnapshotJsonReturnsEmptyEventsArray) {
+  const auto json =
+      camera_firmware::service::BuildDetectionSnapshotJson({});
+
+  ASSERT_TRUE(json.isMember("events"));
+  ASSERT_TRUE(json["events"].isArray());
+  EXPECT_TRUE(json["events"].empty());
+}
+
+TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.model_kind = "object_detection";
+  event.result_state = "decoded";
+  event.frame_sequence = 101;
+
+  camera_firmware::ai::Detection detection;
+  detection.label = "car";
+  detection.confidence = 0.88F;
+  detection.box.x = 0.15F;
+  detection.box.y = 0.20F;
+  detection.box.width = 0.50F;
+  detection.box.height = 0.40F;
+  event.detections.push_back(detection);
+
+  const auto json =
+      camera_firmware::service::BuildDetectionSnapshotJson({event});
+
+  ASSERT_TRUE(json.isMember("events"));
+  ASSERT_EQ(json["events"].size(), 1U);
+  const auto& serialized_event = json["events"][0];
+  EXPECT_EQ(serialized_event["camera_id"].asString(), "imx708-main");
+  EXPECT_EQ(serialized_event["model_id"].asString(), "objects");
+  EXPECT_EQ(serialized_event["model_kind"].asString(), "object_detection");
+  EXPECT_EQ(serialized_event["result_state"].asString(), "decoded");
+  EXPECT_EQ(serialized_event["frame_sequence"].asUInt64(), 101U);
+  ASSERT_EQ(serialized_event["detections"].size(), 1U);
+  const auto& serialized_detection = serialized_event["detections"][0];
+  EXPECT_EQ(serialized_detection["label"].asString(), "car");
+  EXPECT_FLOAT_EQ(serialized_detection["confidence"].asFloat(), 0.88F);
+  EXPECT_FLOAT_EQ(serialized_detection["box"]["x"].asFloat(), 0.15F);
+  EXPECT_FLOAT_EQ(serialized_detection["box"]["y"].asFloat(), 0.20F);
+  EXPECT_FLOAT_EQ(serialized_detection["box"]["width"].asFloat(), 0.50F);
+  EXPECT_FLOAT_EQ(serialized_detection["box"]["height"].asFloat(), 0.40F);
+}
+
+TEST(ServiceResponseTest, DetectionSnapshotResponseReturnsEmptyWithoutProvider) {
+  const auto response =
+      camera_firmware::service::BuildDetectionSnapshotResponse({});
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  ASSERT_TRUE(json->isMember("events"));
+  EXPECT_TRUE((*json)["events"].empty());
+}
+
+TEST(ServiceResponseTest, DetectionSnapshotResponseUsesProvider) {
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.model_kind = "object_detection";
+  event.result_state = "decoded";
+  event.frame_sequence = 77;
+
+  const auto response =
+      camera_firmware::service::BuildDetectionSnapshotResponse(
+          [&event] {
+            return std::vector<camera_firmware::ai::DetectionEvent>{event};
+          });
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  ASSERT_EQ((*json)["events"].size(), 1U);
+  EXPECT_EQ((*json)["events"][0]["camera_id"].asString(), "imx708-main");
+  EXPECT_EQ((*json)["events"][0]["model_id"].asString(), "objects");
+  EXPECT_EQ((*json)["events"][0]["frame_sequence"].asUInt64(), 77U);
+}
+
+TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.model_kind = "object_detection";
+  event.result_state = "decoded";
+  event.frame_sequence = 88;
+
+  const auto payload =
+      camera_firmware::service::BuildDetectionSseEvent({event});
+
+  EXPECT_NE(payload.find("event: detections\n"), std::string::npos);
+  EXPECT_NE(payload.find("id: imx708-main/objects/88/decoded\n"),
+            std::string::npos);
+  EXPECT_NE(payload.find("\"camera_id\":\"imx708-main\""), std::string::npos);
+  EXPECT_NE(payload.find("\"frame_sequence\":88"), std::string::npos);
+  EXPECT_TRUE(payload.ends_with("\n\n"));
+}
+
+TEST(ServiceResponseTest, DetectionSseIdChangesWithSnapshotContent) {
+  camera_firmware::ai::DetectionEvent first;
+  first.camera_id = "imx708-main";
+  first.model_id = "objects";
+  first.result_state = "decoded";
+  first.frame_sequence = 88;
+
+  camera_firmware::ai::DetectionEvent second = first;
+  second.frame_sequence = 89;
+
+  EXPECT_NE(camera_firmware::service::BuildDetectionSseId({first}),
+            camera_firmware::service::BuildDetectionSseId({second}));
+  EXPECT_EQ(camera_firmware::service::BuildDetectionSseId({}), "empty");
+}
+
+TEST(ServiceResponseTest, DetectionSseResponseUsesEventStreamBody) {
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.model_kind = "object_detection";
+  event.result_state = "decoded";
+  event.frame_sequence = 89;
+
+  const auto response =
+      camera_firmware::service::BuildDetectionSseResponse({event});
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  EXPECT_EQ(response->contentTypeString(), "text/event-stream");
+  EXPECT_EQ(response->getHeader("Cache-Control"), "no-cache");
+  EXPECT_NE(response->body().find("\"frame_sequence\":89"), std::string::npos);
+}
+
+TEST(ServiceResponseTest, DetectionSseMergeAddsLiveEventToStaleSnapshot) {
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.model_kind = "object_detection";
+  event.result_state = "decoded";
+  event.frame_sequence = 90;
+
+  const auto merged =
+      camera_firmware::service::MergeDetectionSnapshotWithEvent({}, event);
+
+  ASSERT_EQ(merged.size(), 1U);
+  EXPECT_EQ(merged[0].frame_sequence, 90U);
+}
+
+TEST(ServiceResponseTest, DetectionSseMergeReplacesMatchingCameraModel) {
+  camera_firmware::ai::DetectionEvent stored;
+  stored.camera_id = "imx708-main";
+  stored.model_id = "objects";
+  stored.model_kind = "object_detection";
+  stored.result_state = "decoded";
+  stored.frame_sequence = 91;
+
+  camera_firmware::ai::DetectionEvent live = stored;
+  live.frame_sequence = 92;
+
+  const auto merged =
+      camera_firmware::service::MergeDetectionSnapshotWithEvent({stored}, live);
+
+  ASSERT_EQ(merged.size(), 1U);
+  EXPECT_EQ(merged[0].frame_sequence, 92U);
 }
 
 TEST(ServiceResponseTest, ListenerConfigEnablesHttpsFromHttpConfig) {

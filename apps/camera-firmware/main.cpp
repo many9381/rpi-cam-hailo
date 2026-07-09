@@ -12,6 +12,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
+#include "camera_firmware/ai/DetectionEventStore.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
@@ -161,6 +162,8 @@ int RunFirmware(const std::string& config_path) {
   camera_firmware::media::SnapshotTap snapshot_tap;
   camera_firmware::ai::AiFrameTap ai_frame_tap;
   camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::ai::DetectionEventStore detection_event_store(
+      detection_bus);
   camera_firmware::ai::AiRuntime ai_runtime(&detection_bus);
   camera_firmware::ai::AiFramePump ai_frame_pump(ai_frame_tap, ai_runtime);
   camera_firmware::media::EncodedRing encoded_ring(128);
@@ -212,6 +215,12 @@ int RunFirmware(const std::string& config_path) {
   service_args.ai_status_provider = [&ai_runtime] {
     return ToServiceAiStatus(ai_runtime.Status());
   };
+  service_args.detection_snapshot_provider =
+      detection_event_store.SnapshotProvider();
+  service_args.detection_event_subscriber =
+      [&detection_bus](camera_firmware::ai::DetectionBus::Handler handler) {
+        return detection_bus.Subscribe(std::move(handler));
+      };
   service_args.snapshot_callback =
       [&snapshot_tap,
        configured_camera_id = cfg.value().camera.id](const std::string& camera_id) {

@@ -1,4 +1,24 @@
 find_package(GTest REQUIRED)
+find_program(NODE_EXECUTABLE node)
+set(CF_NODE_TESTS_ENABLED OFF)
+set(CF_NODE_MIN_VERSION 18.0.0)
+if(NODE_EXECUTABLE)
+    execute_process(
+        COMMAND ${NODE_EXECUTABLE} --version
+        OUTPUT_VARIABLE CF_NODE_VERSION_OUTPUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    string(REGEX REPLACE "^v" "" CF_NODE_VERSION "${CF_NODE_VERSION_OUTPUT}")
+    if(CF_NODE_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$" AND
+            CF_NODE_VERSION VERSION_GREATER_EQUAL "${CF_NODE_MIN_VERSION}")
+        set(CF_NODE_TESTS_ENABLED ON)
+    else()
+        message(STATUS
+            "Skipping WebAppTest: Node.js ${CF_NODE_VERSION_OUTPUT} is older than ${CF_NODE_MIN_VERSION}"
+        )
+    endif()
+endif()
 pkg_check_modules(GSTREAMER_CHECK REQUIRED IMPORTED_TARGET gstreamer-check-1.0)
 
 add_executable(camera_firmware_common_tests
@@ -62,6 +82,7 @@ add_executable(camera_firmware_ai_tests
     unit/ai/AiFrameTapTest.cpp
     unit/ai/AiModelProcessorTest.cpp
     unit/ai/AiRuntimeTest.cpp
+    unit/ai/DetectionEventStoreTest.cpp
     unit/ai/YoloPostprocessTest.cpp
 )
 
@@ -125,3 +146,11 @@ gtest_discover_tests(camera_firmware_secure_rtsp_config_smoke
     PROPERTIES
         ENVIRONMENT "GST_PLUGIN_PATH=${PROJECT_BINARY_DIR}/plugins/gst-secure-srtp"
 )
+
+if(CF_NODE_TESTS_ENABLED)
+    add_test(
+        NAME WebAppTest
+        COMMAND ${NODE_EXECUTABLE} --test tests/web/app_test.js
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    )
+endif()

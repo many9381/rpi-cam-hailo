@@ -15,6 +15,7 @@ target_include_directories(camera_firmware_service
 
 target_link_libraries(camera_firmware_service
     PUBLIC
+        camera_firmware_ai
         camera_firmware_config
         Drogon::Drogon
         PkgConfig::GIO

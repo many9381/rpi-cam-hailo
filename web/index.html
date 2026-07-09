@@ -40,8 +40,21 @@
             <h2>Snapshot</h2>
             <span id="snapshot-label">Unavailable</span>
           </div>
-          <img id="snapshot-image" alt="Latest camera snapshot">
+          <div id="snapshot-stage" class="snapshot-stage">
+            <img id="snapshot-image" alt="Latest camera snapshot">
+            <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+          </div>
         </section>
+      </section>
+
+      <section class="panel detections-panel">
+        <div class="panel-header">
+          <h2>Detections</h2>
+          <span><span id="detection-count">0</span> results</span>
+        </div>
+        <div id="detection-list" class="detection-list" aria-live="polite">
+          <div class="detection-empty">No detections</div>
+        </div>
       </section>
     </main>
 

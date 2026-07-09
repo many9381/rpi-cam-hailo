@@ -14,6 +14,8 @@
 #include <json/value.h>
 #include <drogon/HttpResponse.h>
 
+#include "camera_firmware/ai/DetectionBus.hpp"
+#include "camera_firmware/ai/AiTypes.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 
@@ -39,6 +41,10 @@ struct AiServiceStatus {
 };
 
 using AiStatusProvider = std::function<AiServiceStatus()>;
+using DetectionSnapshotProvider =
+    std::function<std::vector<ai::DetectionEvent>()>;
+using DetectionEventSubscriber =
+    std::function<ai::DetectionBus::Subscription(ai::DetectionBus::Handler)>;
 
 struct ServiceListenerConfig {
   std::string bind_address{"0.0.0.0"};
@@ -58,12 +64,28 @@ struct ServiceInitArgs {
   bool ai_enabled{false};
   CameraStatusProvider camera_status_provider;
   AiStatusProvider ai_status_provider;
+  DetectionSnapshotProvider detection_snapshot_provider;
+  DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
 };
 
 Json::Value BuildHealthJson(const std::string& status);
 Json::Value BuildAiStatusJson(const AiServiceStatus& status);
 Json::Value BuildAiStatusJson(bool requested);
+Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event);
+Json::Value BuildDetectionSnapshotJson(
+    const std::vector<ai::DetectionEvent>& events);
+drogon::HttpResponsePtr BuildDetectionSnapshotResponse(
+    const DetectionSnapshotProvider& detection_snapshot_provider);
+std::vector<ai::DetectionEvent> MergeDetectionSnapshotWithEvent(
+    std::vector<ai::DetectionEvent> events,
+    const ai::DetectionEvent& event);
+std::string BuildDetectionSseId(
+    const std::vector<ai::DetectionEvent>& events);
+std::string BuildDetectionSseEvent(
+    const std::vector<ai::DetectionEvent>& events);
+drogon::HttpResponsePtr BuildDetectionSseResponse(
+    const std::vector<ai::DetectionEvent>& events);
 Json::Value BuildStreamJson(std::string_view public_base_url,
                             const config::SecureRtspConfig& secure_rtsp);
 ServiceListenerConfig BuildServiceListenerConfig(
