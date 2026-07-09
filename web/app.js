@@ -64,7 +64,12 @@ function buildStreamSecurityView(stream) {
 
   const control = stream.control_tls ? 'RTSPS control' : 'RTSP control';
   const media = stream.media_srtp ? 'SRTP media' : 'RTP media';
-  return `${control} / ${media}`;
+  const zeroizeCount = stream.secure_media?.per_media_key_zeroize_count;
+  const zeroizeDetail =
+      Number.isSafeInteger(zeroizeCount) && zeroizeCount >= 0
+          ? ` / key zeroize ${zeroizeCount}`
+          : '';
+  return `${control} / ${media}${zeroizeDetail}`;
 }
 
 function normalizeOverlayBox(box) {

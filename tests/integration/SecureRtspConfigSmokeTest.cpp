@@ -74,6 +74,7 @@ TEST(SecureRtspConfigSmokeTest, SecureServerStartsAndStopsWithoutCamera) {
   std::filesystem::remove(key_path);
   ASSERT_TRUE(started.ok()) << started.error().code << ": "
                             << started.error().message;
+  EXPECT_EQ(server.PerMediaKeyZeroizeCount(), 0u);
   server.Stop();
 }
 

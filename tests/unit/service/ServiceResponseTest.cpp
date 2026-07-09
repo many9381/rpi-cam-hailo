@@ -47,6 +47,91 @@ TEST(ServiceResponseTest,
   EXPECT_TRUE(json["media_srtp"].asBool());
 }
 
+TEST(ServiceResponseTest, StreamJsonIncludesSrtpSecureMediaDiagnostics) {
+  camera_firmware::config::SecureRtspConfig secure_rtsp;
+  secure_rtsp.control_tls = true;
+  secure_rtsp.media_srtp = true;
+  secure_rtsp.keying = "sdes-over-rtsps";
+  secure_rtsp.port = 8555;
+  secure_rtsp.mount = "/imx708/main";
+
+  const auto json = camera_firmware::service::BuildStreamJson(
+      "https://camera.example:9443/service", secure_rtsp);
+
+  EXPECT_EQ(json["url"].asString(), "rtsps://camera.example:8555/imx708/main");
+  EXPECT_TRUE(json["control_tls"].asBool());
+  EXPECT_TRUE(json["media_srtp"].asBool());
+  ASSERT_TRUE(json.isMember("secure_media"));
+  EXPECT_EQ(json["secure_media"]["control_scheme"].asString(), "rtsps");
+  EXPECT_EQ(json["secure_media"]["media_profile"].asString(), "RTP/SAVPF");
+  EXPECT_EQ(json["secure_media"]["keying"].asString(), "SDES-over-RTSPS");
+  EXPECT_TRUE(
+      json["secure_media"]["requires_tls_control_channel"].asBool());
+}
+
+TEST(ServiceResponseTest,
+     StreamJsonIncludesRuntimeSrtpZeroizeDiagnosticsWhenAvailable) {
+  camera_firmware::config::SecureRtspConfig secure_rtsp;
+  secure_rtsp.control_tls = true;
+  secure_rtsp.media_srtp = true;
+  secure_rtsp.keying = "sdes-over-rtsps";
+  secure_rtsp.port = 8555;
+  secure_rtsp.mount = "/imx708/main";
+
+  camera_firmware::service::SecureStreamDiagnostics diagnostics;
+  diagnostics.per_media_key_zeroize_count = 7U;
+
+  const auto json = camera_firmware::service::BuildStreamJson(
+      "https://camera.example:9443/service", secure_rtsp, diagnostics);
+
+  ASSERT_TRUE(json.isMember("secure_media"));
+  ASSERT_TRUE(
+      json["secure_media"].isMember("per_media_key_zeroize_count"));
+  EXPECT_EQ(
+      json["secure_media"]["per_media_key_zeroize_count"].asUInt64(), 7U);
+}
+
+TEST(ServiceResponseTest,
+     StreamJsonOmitsRuntimeSrtpZeroizeDiagnosticsWithoutProvider) {
+  camera_firmware::config::SecureRtspConfig secure_rtsp;
+  secure_rtsp.control_tls = true;
+  secure_rtsp.media_srtp = true;
+  secure_rtsp.keying = "sdes-over-rtsps";
+  secure_rtsp.port = 8555;
+  secure_rtsp.mount = "/imx708/main";
+
+  const auto json = camera_firmware::service::BuildStreamJson(
+      "https://camera.example:9443/service", secure_rtsp);
+
+  ASSERT_TRUE(json.isMember("secure_media"));
+  EXPECT_FALSE(
+      json["secure_media"].isMember("per_media_key_zeroize_count"));
+}
+
+TEST(ServiceResponseTest, StreamJsonIncludesPlainMediaDiagnostics) {
+  camera_firmware::config::SecureRtspConfig secure_rtsp;
+  secure_rtsp.control_tls = false;
+  secure_rtsp.media_srtp = false;
+  secure_rtsp.keying = "";
+  secure_rtsp.port = 8555;
+  secure_rtsp.mount = "/imx708/main";
+
+  const auto json = camera_firmware::service::BuildStreamJson(
+      "http://camera.example:8080/service", secure_rtsp);
+
+  EXPECT_EQ(json["url"].asString(), "rtsp://camera.example:8555/imx708/main");
+  EXPECT_FALSE(json["control_tls"].asBool());
+  EXPECT_FALSE(json["media_srtp"].asBool());
+  ASSERT_TRUE(json.isMember("secure_media"));
+  EXPECT_EQ(json["secure_media"]["control_scheme"].asString(), "rtsp");
+  EXPECT_EQ(json["secure_media"]["media_profile"].asString(), "RTP/AVP");
+  EXPECT_EQ(json["secure_media"]["keying"].asString(), "none");
+  EXPECT_FALSE(
+      json["secure_media"]["requires_tls_control_channel"].asBool());
+  EXPECT_FALSE(
+      json["secure_media"].isMember("per_media_key_zeroize_count"));
+}
+
 TEST(ServiceResponseTest, AiStatusReportsRuntimeSkeletonWhenRequested) {
   auto json = camera_firmware::service::BuildAiStatusJson(true);
 

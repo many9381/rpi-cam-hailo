@@ -54,6 +54,14 @@ struct AiServiceStatus {
 
 using AiStatusProvider = std::function<AiServiceStatus()>;
 using AiControlCallback = std::function<common::Result<void>()>;
+
+struct SecureStreamDiagnostics {
+  std::uint64_t per_media_key_zeroize_count{0};
+};
+
+using SecureStreamDiagnosticsProvider =
+    std::function<SecureStreamDiagnostics()>;
+
 using DetectionSnapshotProvider =
     std::function<std::vector<ai::DetectionEvent>()>;
 using DetectionEventSubscriber =
@@ -78,6 +86,7 @@ struct ServiceInitArgs {
   CameraStatusProvider camera_status_provider;
   AiStatusProvider ai_status_provider;
   AiControlCallback ai_restart_callback;
+  SecureStreamDiagnosticsProvider secure_stream_diagnostics_provider;
   DetectionSnapshotProvider detection_snapshot_provider;
   DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
@@ -103,8 +112,10 @@ std::string BuildDetectionSseEvent(
     const std::vector<ai::DetectionEvent>& events);
 drogon::HttpResponsePtr BuildDetectionSseResponse(
     const std::vector<ai::DetectionEvent>& events);
-Json::Value BuildStreamJson(std::string_view public_base_url,
-                            const config::SecureRtspConfig& secure_rtsp);
+Json::Value BuildStreamJson(
+    std::string_view public_base_url,
+    const config::SecureRtspConfig& secure_rtsp,
+    const std::optional<SecureStreamDiagnostics>& diagnostics = std::nullopt);
 ServiceListenerConfig BuildServiceListenerConfig(
     const config::HttpConfig& http_config);
 common::Result<void> ValidateHttpTlsConfigFiles(

@@ -235,6 +235,42 @@ test('buildStreamSecurityView renders stream transport security', () => {
   );
 });
 
+test('buildStreamSecurityView renders SRTP zeroize diagnostics when available', () => {
+  const {buildStreamSecurityView} = loadApp();
+
+  assert.equal(
+    buildStreamSecurityView({
+      control_tls: true,
+      media_srtp: true,
+      secure_media: {
+        per_media_key_zeroize_count: 7,
+      },
+    }),
+    'RTSPS control / SRTP media / key zeroize 7',
+  );
+});
+
+test('buildStreamSecurityView omits malformed SRTP zeroize diagnostics', () => {
+  const {buildStreamSecurityView} = loadApp();
+
+  for (const value of [NaN, Infinity, '7', -1, 7.5]) {
+    assert.equal(
+      buildStreamSecurityView({
+        control_tls: true,
+        media_srtp: true,
+        secure_media: {
+          per_media_key_zeroize_count: value,
+        },
+      }),
+      'RTSPS control / SRTP media',
+    );
+  }
+  assert.equal(
+    buildStreamSecurityView({control_tls: true, media_srtp: true}),
+    'RTSPS control / SRTP media',
+  );
+});
+
 test('buildStreamSecurityView reports unavailable for partial stream status', () => {
   const {buildStreamSecurityView} = loadApp();
 

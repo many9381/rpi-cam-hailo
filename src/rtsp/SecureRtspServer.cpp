@@ -45,7 +45,7 @@ GQuark SecureAttachFailureQuark() {
   return g_quark_from_static_string("camera-firmware-secure-attach-failure");
 }
 
-std::atomic<std::size_t>& PerMediaKeyZeroizeCount() {
+std::atomic<std::size_t>& PerMediaKeyZeroizeCounter() {
   static std::atomic<std::size_t> count{0};
   return count;
 }
@@ -95,7 +95,7 @@ std::size_t ZeroizeGstBuffer(GstBuffer* buffer) {
 void ZeroizeAndUnrefGstBuffer(gpointer user_data) {
   auto* buffer = static_cast<GstBuffer*>(user_data);
   if (ZeroizeGstBuffer(buffer) > 0U) {
-    PerMediaKeyZeroizeCount().fetch_add(1U, std::memory_order_relaxed);
+    PerMediaKeyZeroizeCounter().fetch_add(1U, std::memory_order_relaxed);
   }
   gst_buffer_unref(buffer);
 }
@@ -448,6 +448,7 @@ struct SecureRtspServer::Impl {
       return Result<void>::Err({"E_RTSP_ALREADY_RUNNING",
                                 "SecureRtspServer is already running"});
     }
+    ResetRuntimeZeroizeBaseline();
     if (!config.enabled) {
       Logger::instance().log(Logger::Level::kInfo, "RTSP disabled by config");
       return Result<void>::Ok();
@@ -464,6 +465,7 @@ struct SecureRtspServer::Impl {
       if (!verification.ok()) {
         return Result<void>::Err(verification.error());
       }
+      ResetRuntimeZeroizeBaseline();
       auto loaded_key = LoadSrtpSessionKey(config.session_key);
       if (!loaded_key.ok()) {
         return Result<void>::Err(loaded_key.error());
@@ -620,6 +622,20 @@ struct SecureRtspServer::Impl {
     Logger::instance().log(Logger::Level::kInfo, "SRTP key cleanup complete");
   }
 
+  void ResetRuntimeZeroizeBaseline() noexcept {
+    per_media_key_zeroize_baseline =
+        PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::size_t RuntimePerMediaKeyZeroizeCount() const noexcept {
+    const std::size_t current =
+        PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed);
+    if (current < per_media_key_zeroize_baseline) {
+      return 0;
+    }
+    return current - per_media_key_zeroize_baseline;
+  }
+
   GstRTSPServer* server{nullptr};
   GstRTSPMountPoints* mounts{nullptr};
   GstRTSPMediaFactory* factory{nullptr};
@@ -634,6 +650,8 @@ struct SecureRtspServer::Impl {
   std::atomic<bool> stop_requested{false};
   bool media_srtp_enabled{false};
   bool running{false};
+  std::size_t per_media_key_zeroize_baseline{
+      PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed)};
   config::SecureRtspConfig config_cache;
 };
 
@@ -708,7 +726,7 @@ Result<void> ValidateSecureRtspConfigFiles(
 Result<SecureEncoderHookProbe> VerifySecureEncoderHooks() {
   gst_init(nullptr, nullptr);
   const std::size_t zeroize_count_before =
-      PerMediaKeyZeroizeCount().load(std::memory_order_relaxed);
+      PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed);
   GstElement* rtpbin = gst_element_factory_make("rtpbin", nullptr);
   if (rtpbin == nullptr) {
     return Result<SecureEncoderHookProbe>::Err(
@@ -775,7 +793,7 @@ Result<SecureEncoderHookProbe> VerifySecureEncoderHooks() {
   gst_object_unref(media);
   gst_object_unref(rtpbin);
   probe.per_media_key_zeroize_count =
-      PerMediaKeyZeroizeCount().load(std::memory_order_relaxed) -
+      PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed) -
       zeroize_count_before;
 
   if (probe.rtp_element_factory_name != kSecureEncoderName) {
@@ -805,5 +823,9 @@ Result<void> SecureRtspServer::Start(const config::SecureRtspConfig& config,
 }
 
 void SecureRtspServer::Stop() { impl_->Stop(); }
+
+std::size_t SecureRtspServer::PerMediaKeyZeroizeCount() const noexcept {
+  return impl_->RuntimePerMediaKeyZeroizeCount();
+}
 
 }  // namespace camera_firmware::rtsp
