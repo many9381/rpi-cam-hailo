@@ -3,6 +3,7 @@ add_library(camera_firmware_ai STATIC
     AiModelProcessor.cpp
     AiModelRunner.cpp
     AiRuntime.cpp
+    DetectionEventStore.cpp
     AiFrameTap.cpp
     DetectionBus.cpp
     YoloPostprocess.cpp

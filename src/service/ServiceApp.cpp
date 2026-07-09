@@ -1,5 +1,6 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -16,6 +17,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <gio/gio.h>
+#include <json/writer.h>
 
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
@@ -28,6 +30,8 @@ struct ServiceState {
 };
 
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
+constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
+constexpr std::uint32_t kDetectionSseReconnectMs{1000};
 
 ServiceState& GlobalState() {
   static ServiceState state;
@@ -108,6 +112,80 @@ drogon::HttpResponsePtr JsonResponse(Json::Value json,
   response->setStatusCode(status);
   return response;
 }
+
+std::string CompactJson(Json::Value json) {
+  Json::StreamWriterBuilder writer;
+  writer["indentation"] = "";
+  return Json::writeString(writer, json);
+}
+
+class DetectionSsePendingResponse {
+ public:
+  using ResponseCallback =
+      std::function<void(const drogon::HttpResponsePtr&)>;
+
+  DetectionSsePendingResponse(
+      DetectionSnapshotProvider detection_snapshot_provider,
+      ResponseCallback response_callback)
+      : detection_snapshot_provider_(
+            std::move(detection_snapshot_provider)),
+        response_callback_(std::move(response_callback)) {}
+
+  DetectionSsePendingResponse(const DetectionSsePendingResponse&) = delete;
+  DetectionSsePendingResponse& operator=(
+      const DetectionSsePendingResponse&) = delete;
+
+  void SetSubscription(ai::DetectionBus::Subscription subscription) {
+    std::lock_guard lock(mutex_);
+    if (!completed_) {
+      subscription_ = std::move(subscription);
+    }
+  }
+
+  void CompleteWithEvent(const ai::DetectionEvent& event) {
+    Complete(MergeDetectionSnapshotWithEvent(Snapshot(), event));
+  }
+
+  void CompleteWithSnapshot() {
+    Complete(Snapshot());
+  }
+
+ private:
+  std::vector<ai::DetectionEvent> Snapshot() const {
+    if (detection_snapshot_provider_) {
+      return detection_snapshot_provider_();
+    }
+    return {};
+  }
+
+  void Complete(std::vector<ai::DetectionEvent> events) {
+    ResponseCallback callback;
+    ai::DetectionBus::Subscription subscription;
+    {
+      std::lock_guard lock(mutex_);
+      if (completed_) {
+        return;
+      }
+      completed_ = true;
+      callback = std::move(response_callback_);
+      subscription = std::move(subscription_);
+    }
+    if (callback) {
+      auto response = BuildDetectionSseResponse(events);
+      drogon::app().getLoop()->queueInLoop(
+          [callback = std::move(callback),
+           response = std::move(response)]() mutable {
+            callback(response);
+          });
+    }
+  }
+
+  DetectionSnapshotProvider detection_snapshot_provider_;
+  mutable std::mutex mutex_;
+  ResponseCallback response_callback_;
+  ai::DetectionBus::Subscription subscription_;
+  bool completed_{false};
+};
 
 class ThreadCompletionReporter {
  public:
@@ -196,6 +274,63 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/ai/detections",
+      [](const HttpRequestPtr&,
+         std::function<void(const HttpResponsePtr&)>&& callback) {
+        DetectionSnapshotProvider detection_snapshot_provider;
+        {
+          std::scoped_lock lock(StateMutex());
+          detection_snapshot_provider =
+              GlobalState().args.detection_snapshot_provider;
+        }
+        callback(BuildDetectionSnapshotResponse(detection_snapshot_provider));
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/ai/detections/stream",
+      [](const HttpRequestPtr& request,
+         std::function<void(const HttpResponsePtr&)>&& callback) {
+        DetectionSnapshotProvider detection_snapshot_provider;
+        DetectionEventSubscriber detection_event_subscriber;
+        {
+          std::scoped_lock lock(StateMutex());
+          detection_snapshot_provider =
+              GlobalState().args.detection_snapshot_provider;
+          detection_event_subscriber =
+              GlobalState().args.detection_event_subscriber;
+        }
+        const std::string last_event_id =
+            request ? request->getHeader("Last-Event-ID") : "";
+        DetectionSnapshotProvider snapshot_provider_for_check =
+            detection_snapshot_provider;
+        auto pending = std::make_shared<DetectionSsePendingResponse>(
+            std::move(detection_snapshot_provider),
+            std::move(callback));
+        if (!detection_event_subscriber) {
+          pending->CompleteWithSnapshot();
+          return;
+        }
+
+        pending->SetSubscription(detection_event_subscriber(
+            [pending](const ai::DetectionEvent& event) {
+              pending->CompleteWithEvent(event);
+            }));
+        if (snapshot_provider_for_check) {
+          const auto snapshot = snapshot_provider_for_check();
+          const auto snapshot_id = BuildDetectionSseId(snapshot);
+          if (last_event_id.empty() || last_event_id != snapshot_id) {
+            pending->CompleteWithSnapshot();
+            return;
+          }
+        }
+        app().getLoop()->runAfter(kDetectionSsePendingTimeout, [pending] {
+          pending->CompleteWithSnapshot();
+        });
+      },
+      {Get});
+
+  app().registerHandler(
       "/api/v1/stream",
       [](const HttpRequestPtr&,
          std::function<void(const HttpResponsePtr&)>&& callback) {
@@ -275,6 +410,116 @@ Json::Value BuildAiStatusJson(bool requested) {
     status.reason = "Hailo backend is not implemented in this build";
   }
   return BuildAiStatusJson(status);
+}
+
+Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {
+  Json::Value json(Json::objectValue);
+  json["camera_id"] = event.camera_id;
+  json["model_id"] = event.model_id;
+  json["model_kind"] = event.model_kind;
+  json["result_state"] = event.result_state;
+  json["frame_sequence"] =
+      static_cast<Json::UInt64>(event.frame_sequence);
+
+  Json::Value detections(Json::arrayValue);
+  for (const auto& detection : event.detections) {
+    Json::Value detection_json(Json::objectValue);
+    detection_json["label"] = detection.label;
+    detection_json["confidence"] = detection.confidence;
+
+    Json::Value box(Json::objectValue);
+    box["x"] = detection.box.x;
+    box["y"] = detection.box.y;
+    box["width"] = detection.box.width;
+    box["height"] = detection.box.height;
+    detection_json["box"] = std::move(box);
+
+    detections.append(std::move(detection_json));
+  }
+  json["detections"] = std::move(detections);
+  return json;
+}
+
+Json::Value BuildDetectionSnapshotJson(
+    const std::vector<ai::DetectionEvent>& events) {
+  Json::Value json(Json::objectValue);
+  Json::Value event_array(Json::arrayValue);
+  for (const auto& event : events) {
+    event_array.append(BuildDetectionEventJson(event));
+  }
+  json["events"] = std::move(event_array);
+  return json;
+}
+
+drogon::HttpResponsePtr BuildDetectionSnapshotResponse(
+    const DetectionSnapshotProvider& detection_snapshot_provider) {
+  std::vector<ai::DetectionEvent> events;
+  if (detection_snapshot_provider) {
+    events = detection_snapshot_provider();
+  }
+  return JsonResponse(BuildDetectionSnapshotJson(events));
+}
+
+std::string BuildDetectionSseEvent(
+    const std::vector<ai::DetectionEvent>& events) {
+  return "id: " + BuildDetectionSseId(events) +
+         "\nretry: " + std::to_string(kDetectionSseReconnectMs) +
+         "\nevent: detections\ndata: " +
+         CompactJson(BuildDetectionSnapshotJson(events)) + "\n\n";
+}
+
+std::string BuildDetectionSseId(
+    const std::vector<ai::DetectionEvent>& events) {
+  if (events.empty()) {
+    return "empty";
+  }
+
+  std::vector<std::string> parts;
+  parts.reserve(events.size());
+  for (const auto& event : events) {
+    parts.push_back(event.camera_id + "/" + event.model_id + "/" +
+                    std::to_string(event.frame_sequence) + "/" +
+                    event.result_state);
+  }
+  std::sort(parts.begin(), parts.end());
+
+  std::string id;
+  for (const auto& part : parts) {
+    if (!id.empty()) {
+      id += "|";
+    }
+    id += part;
+  }
+  return id;
+}
+
+std::vector<ai::DetectionEvent> MergeDetectionSnapshotWithEvent(
+    std::vector<ai::DetectionEvent> events,
+    const ai::DetectionEvent& event) {
+  const auto same_binding = [&event](const ai::DetectionEvent& stored) {
+    return stored.camera_id == event.camera_id &&
+           stored.model_id == event.model_id;
+  };
+  const auto existing =
+      std::find_if(events.begin(), events.end(), same_binding);
+  if (existing != events.end()) {
+    *existing = event;
+  } else {
+    events.push_back(event);
+  }
+  return events;
+}
+
+drogon::HttpResponsePtr BuildDetectionSseResponse(
+    const std::vector<ai::DetectionEvent>& events) {
+  auto response = drogon::HttpResponse::newHttpResponse();
+  response->setStatusCode(drogon::k200OK);
+  response->setContentTypeCodeAndCustomString(drogon::CT_CUSTOM,
+                                              "text/event-stream");
+  response->addHeader("Cache-Control", "no-cache");
+  response->addHeader("X-Accel-Buffering", "no");
+  response->setBody(BuildDetectionSseEvent(events));
+  return response;
 }
 
 Json::Value BuildStreamJson(std::string_view public_base_url,
