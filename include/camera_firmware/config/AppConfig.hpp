@@ -15,6 +15,14 @@ struct SessionKeyConfig {
   bool zeroize_on_reload{true};
 };
 
+struct RtspClientAuthConfig {
+  bool enabled{false};
+  std::string realm;
+  std::string credential_file;
+  std::vector<std::string> algorithms{"sha-256"};
+  std::uint32_t nonce_ttl_seconds{300};
+};
+
 struct SecureRtspConfig {
   bool enabled{true};
   bool control_tls{true};
@@ -27,6 +35,7 @@ struct SecureRtspConfig {
   std::string tls_certificate_path;
   std::string tls_private_key_path;
   SessionKeyConfig session_key;
+  RtspClientAuthConfig client_auth;
 };
 
 struct PlatformConfig {

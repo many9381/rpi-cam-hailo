@@ -1,8 +1,11 @@
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
+#include "GstRtspClientLifecycle.hpp"
+
 #include <gst/app/gstappsrc.h>
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <gst/rtsp-server/rtsp-sdp.h>
 #include <gio/gio.h>
 
 #include <algorithm>
@@ -12,6 +15,7 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -26,6 +30,8 @@
 #endif
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/rtsp/GstRtspDigestAuth.hpp"
+#include "camera_firmware/rtsp/RtspDigestVerifier.hpp"
 #include "camera_firmware/rtsp/SrtpSessionKey.hpp"
 
 namespace camera_firmware::rtsp {
@@ -48,6 +54,16 @@ GQuark SecureAttachFailureQuark() {
 std::atomic<std::size_t>& PerMediaKeyZeroizeCounter() {
   static std::atomic<std::size_t> count{0};
   return count;
+}
+
+std::atomic<std::size_t>& PerMediaKeyAllocationCounter() {
+  static std::atomic<std::size_t> count{0};
+  return count;
+}
+
+GstRTSPFilterResult CloseManagedClient(GstRTSPServer*, GstRTSPClient*,
+                                       gpointer) {
+  return GST_RTSP_FILTER_REMOVE;
 }
 
 struct MediaFeedState {
@@ -100,6 +116,10 @@ void ZeroizeAndUnrefGstBuffer(gpointer user_data) {
   gst_buffer_unref(buffer);
 }
 
+void ClearPerMediaKeyOnUnprepare(GstRTSPMedia* media, gpointer) {
+  g_object_set_qdata_full(G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
+}
+
 void SetAttachFailure(GstRTSPMedia* media, const char* message) {
   g_object_set_qdata_full(G_OBJECT(media),
                           SecureAttachFailureQuark(),
@@ -123,7 +143,8 @@ GstBuffer* BufferFromSessionKey(const SrtpSessionKey& session_key) {
   return BufferFromBytes(session_key.data(), session_key.size());
 }
 
-GstElement* NewSecureEncoder(GstRTSPMedia* media) {
+GstElement* NewSecureEncoder(GstRTSPMedia* media,
+                             std::string_view sink_pad_name) {
   auto* key = static_cast<GstBuffer*>(
       g_object_get_qdata(G_OBJECT(media), SecureKeyQuark()));
   if (key == nullptr) {
@@ -142,15 +163,33 @@ GstElement* NewSecureEncoder(GstRTSPMedia* media) {
   }
 
   g_object_set(encoder, "session-key", key, nullptr);
+  const std::string pad_name(sink_pad_name);
+  GstPad* sink = gst_element_request_pad_simple(encoder, pad_name.c_str());
+  if (sink == nullptr) {
+    gst_object_unref(encoder);
+    SetAttachFailure(
+        media,
+        "E_SRTP_ENCODER_PAD: secure encoder request pad is unavailable");
+    return nullptr;
+  }
+  gst_object_unref(sink);
   return encoder;
 }
 
-GstElement* RequestRtpEncoder(GstElement*, guint, gpointer user_data) {
-  return NewSecureEncoder(GST_RTSP_MEDIA(user_data));
+GstElement* RequestRtpEncoder(GstElement* rtpbin,
+                              guint session,
+                              gpointer user_data) {
+  g_signal_stop_emission_by_name(rtpbin, "request-rtp-encoder");
+  return NewSecureEncoder(GST_RTSP_MEDIA(user_data),
+                          "rtp_sink_" + std::to_string(session));
 }
 
-GstElement* RequestRtcpEncoder(GstElement*, guint, gpointer user_data) {
-  return NewSecureEncoder(GST_RTSP_MEDIA(user_data));
+GstElement* RequestRtcpEncoder(GstElement* rtpbin,
+                               guint session,
+                               gpointer user_data) {
+  g_signal_stop_emission_by_name(rtpbin, "request-rtcp-encoder");
+  return NewSecureEncoder(GST_RTSP_MEDIA(user_data),
+                          "rtcp_sink_" + std::to_string(session));
 }
 
 struct _CfSecureRtspMedia {
@@ -209,9 +248,137 @@ gboolean SetupSecureRtpbin(GstRTSPMedia* media, GstElement* rtpbin) {
   return AttachSecureEncoderHooks(media, rtpbin).ok() ? TRUE : FALSE;
 }
 
+bool AddSdesCryptoAttribute(GstRTSPMedia* media, GstSDPMedia* sdp_media) {
+  auto* key = static_cast<GstBuffer*>(
+      g_object_get_qdata(G_OBJECT(media), SecureKeyQuark()));
+  if (key == nullptr) {
+    SetAttachFailure(media,
+                     "E_SRTP_KEY_MISSING: secure SDP has no session key");
+    return false;
+  }
+  GstMapInfo map{};
+  const bool mapped = gst_buffer_map(key, &map, GST_MAP_READ);
+  if (!mapped || map.data == nullptr ||
+      map.size != SrtpSessionKey::kAes128IcmHmacSha180Bytes) {
+    if (mapped) {
+      gst_buffer_unmap(key, &map);
+    }
+    SetAttachFailure(media,
+                     "E_SRTP_KEY_LENGTH: secure SDP session key is invalid");
+    return false;
+  }
+
+  gchar* encoded = g_base64_encode(map.data, map.size);
+  gst_buffer_unmap(key, &map);
+  if (encoded == nullptr) {
+    SetAttachFailure(media,
+                     "E_SRTP_KEY_ENCODE: secure SDP key encoding failed");
+    return false;
+  }
+  gchar* attribute = g_strdup_printf(
+      "1 AES_CM_128_HMAC_SHA1_80 inline:%s", encoded);
+  bool added = attribute != nullptr &&
+               gst_sdp_media_add_attribute(sdp_media, "crypto", attribute) ==
+                   GST_SDP_OK;
+  ZeroizeMemory(reinterpret_cast<unsigned char*>(encoded),
+                std::strlen(encoded));
+  g_free(encoded);
+  if (attribute != nullptr) {
+    ZeroizeMemory(reinterpret_cast<unsigned char*>(attribute),
+                  std::strlen(attribute));
+    g_free(attribute);
+  }
+  if (!added) {
+    SetAttachFailure(media,
+                     "E_SRTP_SDP: secure SDP crypto attribute failed");
+  }
+  return added;
+}
+
+gboolean SetupSecureSdp(GstRTSPMedia* media,
+                        GstSDPMessage* sdp,
+                        GstSDPInfo* info) {
+  gchar* range =
+      gst_rtsp_media_get_range_string(media, FALSE, GST_RTSP_RANGE_NPT);
+  if (range == nullptr) {
+    return FALSE;
+  }
+  const bool range_added =
+      gst_sdp_message_add_attribute(sdp, "range", range) == GST_SDP_OK;
+  g_free(range);
+  if (!range_added) {
+    return FALSE;
+  }
+
+  const guint stream_count = gst_rtsp_media_n_streams(media);
+  for (guint index = 0U; index < stream_count; ++index) {
+    GstRTSPStream* stream = gst_rtsp_media_get_stream(media, index);
+    GstCaps* source_caps =
+        stream != nullptr ? gst_rtsp_stream_get_caps(stream) : nullptr;
+    if (source_caps == nullptr) {
+      return FALSE;
+    }
+    GstCaps* public_caps = gst_caps_copy(source_caps);
+    gst_caps_unref(source_caps);
+    if (public_caps == nullptr || gst_caps_is_empty(public_caps)) {
+      if (public_caps != nullptr) {
+        gst_caps_unref(public_caps);
+      }
+      return FALSE;
+    }
+    for (guint structure_index = 0U;
+         structure_index < gst_caps_get_size(public_caps);
+         ++structure_index) {
+      GstStructure* structure =
+          gst_caps_get_structure(public_caps, structure_index);
+      gst_structure_set_name(structure, "application/x-rtp");
+      gst_structure_remove_fields(structure,
+                                  "srtp-cipher",
+                                  "srtp-auth",
+                                  "srtcp-cipher",
+                                  "srtcp-auth",
+                                  "srtp-key",
+                                  nullptr);
+    }
+
+    GstSDPMessage* stream_sdp = nullptr;
+    if (gst_sdp_message_new(&stream_sdp) != GST_SDP_OK ||
+        stream_sdp == nullptr ||
+        !gst_rtsp_sdp_make_media(stream_sdp,
+                                 info,
+                                 stream,
+                                 public_caps,
+                                 GST_RTSP_PROFILE_SAVPF)) {
+      gst_caps_unref(public_caps);
+      if (stream_sdp != nullptr) {
+        gst_sdp_message_free(stream_sdp);
+      }
+      return FALSE;
+    }
+    gst_caps_unref(public_caps);
+
+    const GstSDPMedia* generated = gst_sdp_message_get_media(stream_sdp, 0U);
+    GstSDPMedia* media_copy = nullptr;
+    const bool copied = generated != nullptr &&
+                        gst_sdp_media_copy(generated, &media_copy) == GST_SDP_OK;
+    gst_sdp_message_free(stream_sdp);
+    if (!copied || media_copy == nullptr) {
+      return FALSE;
+    }
+    const bool added = AddSdesCryptoAttribute(media, media_copy) &&
+                       gst_sdp_message_add_media(sdp, media_copy) == GST_SDP_OK;
+    gst_sdp_media_free(media_copy);
+    if (!added) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
 void cf_secure_rtsp_media_class_init(CfSecureRtspMediaClass* klass) {
   auto* media_class = GST_RTSP_MEDIA_CLASS(klass);
   media_class->setup_rtpbin = SetupSecureRtpbin;
+  media_class->setup_sdp = SetupSecureSdp;
 }
 
 void cf_secure_rtsp_media_init(CfSecureRtspMedia*) {}
@@ -448,7 +615,8 @@ struct SecureRtspServer::Impl {
       return Result<void>::Err({"E_RTSP_ALREADY_RUNNING",
                                 "SecureRtspServer is already running"});
     }
-    ResetRuntimeZeroizeBaseline();
+    config_cache = config;
+    ResetRuntimeKeyBaselines();
     if (!config.enabled) {
       Logger::instance().log(Logger::Level::kInfo, "RTSP disabled by config");
       return Result<void>::Ok();
@@ -465,7 +633,7 @@ struct SecureRtspServer::Impl {
       if (!verification.ok()) {
         return Result<void>::Err(verification.error());
       }
-      ResetRuntimeZeroizeBaseline();
+      ResetRuntimeKeyBaselines();
       auto loaded_key = LoadSrtpSessionKey(config.session_key);
       if (!loaded_key.ok()) {
         return Result<void>::Err(loaded_key.error());
@@ -474,12 +642,27 @@ struct SecureRtspServer::Impl {
     }
 
     server = gst_rtsp_server_new();
+    auto tracked_clients = internal::GstRtspClientLifecycle::Attach(server);
+    if (!tracked_clients.ok()) {
+      Stop();
+      return Result<void>::Err(tracked_clients.error());
+    }
+    client_lifecycle = std::move(tracked_clients).value();
     gst_rtsp_server_set_address(server, config.bind_ip.c_str());
     const std::string service = std::to_string(config.port);
     gst_rtsp_server_set_service(server, service.c_str());
 
     if (config.control_tls) {
-      auth = gst_rtsp_auth_new();
+      if (config.client_auth.enabled) {
+        auto created = NewGstCfRtspDigestAuth(config.client_auth);
+        if (!created.ok()) {
+          Stop();
+          return Result<void>::Err(created.error());
+        }
+        auth = created.value();
+      } else {
+        auth = gst_rtsp_auth_new();
+      }
       auto certificate = NewTlsCertificate(config);
       if (!certificate.ok()) {
         Stop();
@@ -500,9 +683,25 @@ struct SecureRtspServer::Impl {
         "! rtph264pay name=pay0 pt=96 config-interval=1 )");
     gst_rtsp_media_factory_set_shared(factory, TRUE);
     gst_rtsp_media_factory_set_enable_rtcp(factory, TRUE);
+    gst_rtsp_media_factory_set_stop_on_disconnect(factory, TRUE);
     if (config.media_srtp) {
       gst_rtsp_media_factory_set_profiles(factory, GST_RTSP_PROFILE_SAVPF);
       gst_rtsp_media_factory_set_media_gtype(factory, SecureRtspMediaGType());
+    }
+    if (config.client_auth.enabled) {
+      GstRTSPPermissions* permissions = gst_rtsp_permissions_new();
+      gst_rtsp_permissions_add_role(
+          permissions,
+          "viewer",
+          GST_RTSP_PERM_MEDIA_FACTORY_ACCESS,
+          G_TYPE_BOOLEAN,
+          TRUE,
+          GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT,
+          G_TYPE_BOOLEAN,
+          TRUE,
+          nullptr);
+      gst_rtsp_media_factory_set_permissions(factory, permissions);
+      gst_rtsp_permissions_unref(permissions);
     }
     g_signal_connect(factory,
                      "media-configure",
@@ -512,6 +711,8 @@ struct SecureRtspServer::Impl {
     media_srtp_enabled = config.media_srtp;
 
     gst_rtsp_mount_points_add_factory(mounts, config.mount.c_str(), factory);
+    factory = nullptr;
+    factory_mounted = true;
 
     context = g_main_context_new();
     source_id = gst_rtsp_server_attach(server, context);
@@ -536,6 +737,22 @@ struct SecureRtspServer::Impl {
     return Result<void>::Ok();
   }
 
+  Result<void> ReloadClientCredentials() {
+    if (!running) {
+      return Result<void>::Err(
+          {"E_RTSP_NOT_RUNNING", "RTSP server is not running"});
+    }
+    if (!config_cache.client_auth.enabled) {
+      return Result<void>::Err(
+          {"E_RTSP_AUTH_DISABLED", "RTSP client authentication is disabled"});
+    }
+    if (!IsGstCfRtspDigestAuth(auth)) {
+      return Result<void>::Err(
+          {"E_RTSP_AUTH_TYPE", "RTSP server is not using custom Digest auth"});
+    }
+    return ReloadGstCfRtspDigestCredentials(auth);
+  }
+
   void ConfigureRtspMedia(GstRTSPMedia* media) {
     if (media_srtp_enabled) {
       gst_rtsp_media_set_profiles(media, GST_RTSP_PROFILE_SAVPF);
@@ -546,6 +763,12 @@ struct SecureRtspServer::Impl {
                                 SecureKeyQuark(),
                                 media_key_buffer,
                                 ZeroizeAndUnrefGstBuffer);
+        g_signal_connect(media,
+                         "unprepared",
+                         G_CALLBACK(ClearPerMediaKeyOnUnprepare),
+                         nullptr);
+        PerMediaKeyAllocationCounter().fetch_add(1U,
+                                                 std::memory_order_relaxed);
       } else {
         SetAttachFailure(
             media,
@@ -584,23 +807,51 @@ struct SecureRtspServer::Impl {
       thread.join();
     }
     if (source_id != 0 && context != nullptr) {
-      g_source_remove(source_id);
+      GSource* source =
+          g_main_context_find_source_by_id(context, source_id);
+      if (source != nullptr) {
+        g_source_destroy(source);
+      }
       source_id = 0;
     }
     if (loop != nullptr) {
       g_main_loop_unref(loop);
       loop = nullptr;
     }
+    if (client_lifecycle != nullptr) {
+      client_lifecycle->CloseAndWait();
+      client_lifecycle.reset();
+    } else if (server != nullptr) {
+      (void)gst_rtsp_server_client_filter(server, CloseManagedClient, nullptr);
+    }
+    if (IsGstCfRtspDigestAuth(auth)) {
+      auto shutdown = ShutdownGstCfRtspDigestAuth(auth);
+      if (!shutdown.ok()) {
+        Logger::instance().log(Logger::Level::kError,
+                               shutdown.error().code +
+                                   ": category=adapter-shutdown");
+      }
+    }
+    if (factory_mounted && mounts != nullptr) {
+      gst_rtsp_mount_points_remove_factory(mounts, config_cache.mount.c_str());
+      factory_mounted = false;
+    }
     if (factory != nullptr) {
-      gst_object_unref(factory);
+      g_object_unref(factory);
       factory = nullptr;
     }
+    if (server != nullptr && mounts != nullptr) {
+      gst_rtsp_server_set_mount_points(server, nullptr);
+    }
     if (mounts != nullptr) {
-      gst_object_unref(mounts);
+      g_object_unref(mounts);
       mounts = nullptr;
     }
+    if (server != nullptr && auth != nullptr) {
+      gst_rtsp_server_set_auth(server, nullptr);
+    }
     if (auth != nullptr) {
-      gst_object_unref(auth);
+      g_object_unref(auth);
       auth = nullptr;
     }
     if (tls_certificate != nullptr) {
@@ -608,7 +859,7 @@ struct SecureRtspServer::Impl {
       tls_certificate = nullptr;
     }
     if (server != nullptr) {
-      gst_object_unref(server);
+      g_object_unref(server);
       server = nullptr;
     }
     if (context != nullptr) {
@@ -622,21 +873,39 @@ struct SecureRtspServer::Impl {
     Logger::instance().log(Logger::Level::kInfo, "SRTP key cleanup complete");
   }
 
-  void ResetRuntimeZeroizeBaseline() noexcept {
-    per_media_key_zeroize_baseline =
-        PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed);
+  void ResetRuntimeKeyBaselines() noexcept {
+    per_media_key_allocation_baseline.store(
+        PerMediaKeyAllocationCounter().load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    per_media_key_zeroize_baseline.store(
+        PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] std::size_t RuntimePerMediaKeyAllocationCount() const noexcept {
+    const std::size_t current =
+        PerMediaKeyAllocationCounter().load(std::memory_order_relaxed);
+    const std::size_t baseline =
+        per_media_key_allocation_baseline.load(std::memory_order_relaxed);
+    if (current < baseline) {
+      return 0;
+    }
+    return current - baseline;
   }
 
   [[nodiscard]] std::size_t RuntimePerMediaKeyZeroizeCount() const noexcept {
     const std::size_t current =
         PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed);
-    if (current < per_media_key_zeroize_baseline) {
+    const std::size_t baseline =
+        per_media_key_zeroize_baseline.load(std::memory_order_relaxed);
+    if (current < baseline) {
       return 0;
     }
-    return current - per_media_key_zeroize_baseline;
+    return current - baseline;
   }
 
   GstRTSPServer* server{nullptr};
+  std::unique_ptr<internal::GstRtspClientLifecycle> client_lifecycle;
   GstRTSPMountPoints* mounts{nullptr};
   GstRTSPMediaFactory* factory{nullptr};
   GstRTSPAuth* auth{nullptr};
@@ -649,8 +918,12 @@ struct SecureRtspServer::Impl {
   SrtpSessionKey session_key;
   std::atomic<bool> stop_requested{false};
   bool media_srtp_enabled{false};
+  bool factory_mounted{false};
   bool running{false};
-  std::size_t per_media_key_zeroize_baseline{
+  std::mutex lifecycle_mutex;
+  std::atomic<std::size_t> per_media_key_allocation_baseline{
+      PerMediaKeyAllocationCounter().load(std::memory_order_relaxed)};
+  std::atomic<std::size_t> per_media_key_zeroize_baseline{
       PerMediaKeyZeroizeCounter().load(std::memory_order_relaxed)};
   config::SecureRtspConfig config_cache;
 };
@@ -706,6 +979,14 @@ Result<void> ValidateSecureRtspConfigFiles(
   auto semantics = config::ValidateSecureRtspSemantics(config);
   if (!semantics.ok()) {
     return Result<void>::Err(semantics.error());
+  }
+  if (config.client_auth.enabled) {
+    auto verifier = RtspDigestVerifier::Create(config.client_auth);
+    if (!verifier.ok()) {
+      return Result<void>::Err(verifier.error());
+    }
+    auto loaded = std::move(verifier).value();
+    loaded->Clear();
   }
   if (config.media_srtp) {
     auto key = LoadSrtpSessionKey(config.session_key);
@@ -818,11 +1099,24 @@ SecureRtspServer::~SecureRtspServer() = default;
 
 Result<void> SecureRtspServer::Start(const config::SecureRtspConfig& config,
                                      media::EncodedRing& encoded_ring) {
+  std::lock_guard lock(impl_->lifecycle_mutex);
   impl_->config_cache = config;
   return impl_->Start(config, encoded_ring);
 }
 
-void SecureRtspServer::Stop() { impl_->Stop(); }
+Result<void> SecureRtspServer::ReloadClientCredentials() {
+  std::lock_guard lock(impl_->lifecycle_mutex);
+  return impl_->ReloadClientCredentials();
+}
+
+void SecureRtspServer::Stop() {
+  std::lock_guard lock(impl_->lifecycle_mutex);
+  impl_->Stop();
+}
+
+std::size_t SecureRtspServer::PerMediaKeyAllocationCount() const noexcept {
+  return impl_->RuntimePerMediaKeyAllocationCount();
+}
 
 std::size_t SecureRtspServer::PerMediaKeyZeroizeCount() const noexcept {
   return impl_->RuntimePerMediaKeyZeroizeCount();
