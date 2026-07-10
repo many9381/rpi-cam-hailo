@@ -2,8 +2,10 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <exception>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -50,6 +52,13 @@ std::vector<std::string> ReadStringList(const YAML::Node& node) {
     values.push_back(item.as<std::string>());
   }
   return values;
+}
+
+bool IsVisibleAuthField(std::string_view value, std::size_t maximum) {
+  return !value.empty() && value.size() <= maximum &&
+         std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+           return ch >= 0x21U && ch <= 0x7eU;
+         });
 }
 
 }  // namespace
@@ -137,6 +146,43 @@ common::Result<void> ValidateAiConfigSemantics(
 
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config) {
+  if (config.client_auth.enabled) {
+    if (!config.enabled || !config.control_tls) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_TLS",
+           "secure_rtsp.client_auth requires enabled RTSPS"});
+    }
+    if (!IsVisibleAuthField(config.client_auth.realm, 128U) ||
+        config.client_auth.realm.find_first_of(":\"\\\r\n") !=
+            std::string::npos) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_REALM",
+           "secure_rtsp.client_auth.realm is invalid"});
+    }
+    if (config.client_auth.credential_file.empty()) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH",
+           "secure_rtsp.client_auth.credential_file is required"});
+    }
+    const std::unordered_set<std::string> algorithms(
+        config.client_auth.algorithms.begin(),
+        config.client_auth.algorithms.end());
+    if (algorithms.size() != config.client_auth.algorithms.size() ||
+        !algorithms.contains("sha-256") ||
+        (algorithms.size() == 2U && !algorithms.contains("md5")) ||
+        algorithms.size() > 2U) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_ALGORITHM",
+           "secure_rtsp.client_auth.algorithms is invalid"});
+    }
+    if (config.client_auth.nonce_ttl_seconds < 30U ||
+        config.client_auth.nonce_ttl_seconds > 3600U) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH",
+           "secure_rtsp.client_auth.nonce_ttl_seconds is invalid"});
+    }
+  }
+
   if (!config.enabled) {
     return common::Result<void>::Ok();
   }
@@ -263,6 +309,23 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       AssignIfPresent(secure_rtsp,
                       "tls_private_key_path",
                       config.secure_rtsp.tls_private_key_path);
+
+      const YAML::Node client_auth = secure_rtsp["client_auth"];
+      if (client_auth) {
+        AssignIfPresent(client_auth, "enabled",
+                        config.secure_rtsp.client_auth.enabled);
+        AssignIfPresent(client_auth, "realm",
+                        config.secure_rtsp.client_auth.realm);
+        AssignIfPresent(client_auth, "credential_file",
+                        config.secure_rtsp.client_auth.credential_file);
+        const YAML::Node algorithms = client_auth["algorithms"];
+        if (algorithms) {
+          config.secure_rtsp.client_auth.algorithms =
+              ReadStringList(algorithms);
+        }
+        AssignIfPresent(client_auth, "nonce_ttl_seconds",
+                        config.secure_rtsp.client_auth.nonce_ttl_seconds);
+      }
 
       const YAML::Node session_key = secure_rtsp["session_key"];
       if (session_key) {

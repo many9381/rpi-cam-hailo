@@ -37,6 +37,52 @@ int FindFreeLoopbackPort() {
   return port;
 }
 
+bool CanBindLoopbackPort(int port) {
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return false;
+  }
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = htons(static_cast<std::uint16_t>(port));
+  const bool bound =
+      bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+  close(fd);
+  return bound;
+}
+
+camera_firmware::config::SecureRtspConfig ClientAuthConfig(
+    int port, const std::filesystem::path& credential_file) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.bind_ip = "127.0.0.1";
+  config.port = port;
+  config.mount = "/test/auth";
+  config.control_tls = true;
+  config.allow_development_self_signed_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = credential_file.string();
+  config.client_auth.algorithms = {"sha-256"};
+  config.client_auth.nonce_ttl_seconds = 30U;
+  return config;
+}
+
+void WriteValidClientCredentials(const std::filesystem::path& path,
+                                 char digest_digit) {
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << "CFDIGEST1\noperator:rpi-camera:sha-256:"
+        << std::string(64U, digest_digit) << "\n";
+  }
+  std::filesystem::permissions(
+      path,
+      std::filesystem::perms::owner_read |
+          std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace);
+}
+
 }  // namespace
 
 TEST(SecureRtspConfigSmokeTest, AppConfigCanBuildRtspUrl) {
@@ -223,4 +269,111 @@ TEST(SecureRtspConfigSmokeTest, SecureFileValidationRejectsInvalidRtspTlsPair) {
   std::filesystem::remove(key_path);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RTSP_TLS_CERT");
+}
+
+TEST(SecureRtspConfigSmokeTest,
+     ClientAuthMissingCredentialsFailsBeforeListenerAttach) {
+  const auto missing = std::filesystem::temp_directory_path() /
+                       "cf-missing-rtsp-client-auth.credentials";
+  std::filesystem::remove(missing);
+  const int port = FindFreeLoopbackPort();
+  auto config = ClientAuthConfig(port, missing);
+  camera_firmware::media::EncodedRing ring(4);
+  camera_firmware::rtsp::SecureRtspServer server;
+
+  auto started = server.Start(config, ring);
+
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_RTSP_AUTH_CREDENTIALS");
+  EXPECT_TRUE(CanBindLoopbackPort(port));
+}
+
+TEST(SecureRtspConfigSmokeTest,
+     ClientAuthMalformedCredentialsFailsBeforeListenerAttach) {
+  const auto credentials = std::filesystem::temp_directory_path() /
+                           "cf-malformed-rtsp-client-auth.credentials";
+  {
+    std::ofstream out(credentials);
+    out << "not-a-credential-file\n";
+  }
+  std::filesystem::permissions(
+      credentials, std::filesystem::perms::owner_read |
+                       std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace);
+  const int port = FindFreeLoopbackPort();
+  auto config = ClientAuthConfig(port, credentials);
+  camera_firmware::media::EncodedRing ring(4);
+  camera_firmware::rtsp::SecureRtspServer server;
+
+  auto started = server.Start(config, ring);
+
+  std::filesystem::remove(credentials);
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_RTSP_AUTH_CREDENTIALS");
+  EXPECT_TRUE(CanBindLoopbackPort(port));
+}
+
+TEST(SecureRtspConfigSmokeTest,
+     ClientAuthInsecureCredentialsFailsBeforeListenerAttach) {
+  const auto credentials = std::filesystem::temp_directory_path() /
+                           "cf-insecure-rtsp-client-auth.credentials";
+  WriteValidClientCredentials(credentials, '0');
+  std::filesystem::permissions(
+      credentials,
+      std::filesystem::perms::owner_read |
+          std::filesystem::perms::owner_write |
+          std::filesystem::perms::group_read,
+      std::filesystem::perm_options::replace);
+  const int port = FindFreeLoopbackPort();
+  auto config = ClientAuthConfig(port, credentials);
+  camera_firmware::media::EncodedRing ring(4);
+  camera_firmware::rtsp::SecureRtspServer server;
+
+  auto started = server.Start(config, ring);
+
+  std::filesystem::remove(credentials);
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_RTSP_AUTH_CREDENTIALS");
+  EXPECT_TRUE(CanBindLoopbackPort(port));
+}
+
+TEST(SecureRtspConfigSmokeTest,
+     ClientAuthEnabledStartsAndReloadsCredentials) {
+  const auto credentials = std::filesystem::temp_directory_path() /
+                           "cf-valid-rtsp-client-auth.credentials";
+  WriteValidClientCredentials(credentials, '0');
+  const int port = FindFreeLoopbackPort();
+  auto config = ClientAuthConfig(port, credentials);
+  camera_firmware::media::EncodedRing ring(4);
+  camera_firmware::rtsp::SecureRtspServer server;
+
+  auto started = server.Start(config, ring);
+  ASSERT_TRUE(started.ok()) << started.error().code << ": "
+                            << started.error().message;
+  WriteValidClientCredentials(credentials, '1');
+  auto reloaded = server.ReloadClientCredentials();
+
+  EXPECT_TRUE(reloaded.ok())
+      << (reloaded.ok() ? std::string{} : reloaded.error().message);
+  server.Stop();
+  std::filesystem::remove(credentials);
+  EXPECT_TRUE(CanBindLoopbackPort(port));
+}
+
+TEST(SecureRtspConfigSmokeTest, ClientAuthDisabledPreservesStartupBehavior) {
+  const int port = FindFreeLoopbackPort();
+  auto config = ClientAuthConfig(
+      port, std::filesystem::temp_directory_path() /
+                "cf-unused-disabled-client-auth.credentials");
+  config.client_auth.enabled = false;
+  camera_firmware::media::EncodedRing ring(4);
+  camera_firmware::rtsp::SecureRtspServer server;
+
+  auto started = server.Start(config, ring);
+
+  ASSERT_TRUE(started.ok()) << started.error().code << ": "
+                            << started.error().message;
+  auto reload = server.ReloadClientCredentials();
+  EXPECT_FALSE(reload.ok());
+  server.Stop();
 }

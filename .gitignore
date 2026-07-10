@@ -7,3 +7,4 @@
 /vendor/models/*.tflite
 /vendor/models/*.bin
 /hailort.log
+/config/*.credentials

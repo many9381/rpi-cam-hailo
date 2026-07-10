@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 
 find_package(PkgConfig REQUIRED)
-find_package(OpenSSL)
+find_package(OpenSSL 3.0 REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(yaml-cpp REQUIRED)
 if(POLICY CMP0153)

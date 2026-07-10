@@ -47,7 +47,9 @@ class SecureRtspServer {
   [[nodiscard]] common::Result<void> Start(
       const config::SecureRtspConfig& config,
       media::EncodedRing& encoded_ring);
+  [[nodiscard]] common::Result<void> ReloadClientCredentials();
   void Stop();
+  [[nodiscard]] std::size_t PerMediaKeyAllocationCount() const noexcept;
   [[nodiscard]] std::size_t PerMediaKeyZeroizeCount() const noexcept;
 
  private:

@@ -17,6 +17,7 @@ add_subdirectory(src/rtsp)
 add_subdirectory(src/service)
 add_subdirectory(plugins/gst-secure-srtp)
 add_subdirectory(apps/camera-firmware)
+add_subdirectory(apps/rtsp-digest-credential)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)

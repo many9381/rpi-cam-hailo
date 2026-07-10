@@ -55,6 +55,258 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_TRUE(cfg.value().camera.ai.model_ids.empty());
 }
 
+TEST(AppConfigTest, RtspClientAuthDefaultsToDisabledSha256Policy) {
+  camera_firmware::config::SecureRtspConfig config;
+
+  EXPECT_FALSE(config.client_auth.enabled);
+  EXPECT_TRUE(config.client_auth.realm.empty());
+  EXPECT_TRUE(config.client_auth.credential_file.empty());
+  EXPECT_EQ(config.client_auth.algorithms,
+            std::vector<std::string>({"sha-256"}));
+  EXPECT_EQ(config.client_auth.nonce_ttl_seconds, 300U);
+}
+
+TEST(AppConfigTest, LoadsEnabledRtspClientAuthConfig) {
+  const char* yaml = "/tmp/cf-rtsp-client-auth.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: true\n"
+         "  control_tls: true\n"
+         "  media_srtp: false\n"
+         "  tls_certificate_path: /etc/camera-firmware/tls.crt\n"
+         "  tls_private_key_path: /etc/camera-firmware/tls.key\n"
+         "  client_auth:\n"
+         "    enabled: true\n"
+         "    realm: rpi-camera\n"
+         "    credential_file: /etc/camera-firmware/rtsp.credentials\n"
+         "    algorithms: [sha-256, md5]\n"
+         "    nonce_ttl_seconds: 600\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_TRUE(cfg.ok()) << cfg.error().message;
+  EXPECT_TRUE(cfg.value().secure_rtsp.client_auth.enabled);
+  EXPECT_EQ(cfg.value().secure_rtsp.client_auth.realm, "rpi-camera");
+  EXPECT_EQ(cfg.value().secure_rtsp.client_auth.credential_file,
+            "/etc/camera-firmware/rtsp.credentials");
+  EXPECT_EQ(cfg.value().secure_rtsp.client_auth.algorithms,
+            std::vector<std::string>({"sha-256", "md5"}));
+  EXPECT_EQ(cfg.value().secure_rtsp.client_auth.nonce_ttl_seconds, 600U);
+}
+
+TEST(AppConfigTest, LoadsEnabledRtspClientAuthWithDefaultAlgorithms) {
+  const char* yaml = "/tmp/cf-rtsp-client-auth-default-algorithms.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: true\n"
+         "  control_tls: true\n"
+         "  media_srtp: false\n"
+         "  tls_certificate_path: /etc/camera-firmware/tls.crt\n"
+         "  tls_private_key_path: /etc/camera-firmware/tls.key\n"
+         "  client_auth:\n"
+         "    enabled: true\n"
+         "    realm: rpi-camera\n"
+         "    credential_file: /etc/camera-firmware/rtsp.credentials\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_TRUE(cfg.ok()) << cfg.error().message;
+  EXPECT_EQ(cfg.value().secure_rtsp.client_auth.algorithms,
+            std::vector<std::string>({"sha-256"}));
+}
+
+TEST(AppConfigTest, RejectsExplicitlyEmptyRtspClientAuthAlgorithms) {
+  const char* yaml = "/tmp/cf-rtsp-client-auth-empty-algorithms.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: true\n"
+         "  control_tls: true\n"
+         "  media_srtp: false\n"
+         "  tls_certificate_path: /etc/camera-firmware/tls.crt\n"
+         "  tls_private_key_path: /etc/camera-firmware/tls.key\n"
+         "  client_auth:\n"
+         "    enabled: true\n"
+         "    realm: rpi-camera\n"
+         "    credential_file: /etc/camera-firmware/rtsp.credentials\n"
+         "    algorithms: []\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_FALSE(cfg.ok());
+  EXPECT_EQ(cfg.error().code, "E_CONFIG_RTSP_AUTH_ALGORITHM");
+  EXPECT_EQ(cfg.error().message,
+            "secure_rtsp.client_auth.algorithms is invalid");
+}
+
+TEST(AppConfigTest, RejectsScalarRtspClientAuthAlgorithms) {
+  const char* yaml = "/tmp/cf-rtsp-client-auth-scalar-algorithms.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: true\n"
+         "  control_tls: true\n"
+         "  media_srtp: false\n"
+         "  tls_certificate_path: /etc/camera-firmware/tls.crt\n"
+         "  tls_private_key_path: /etc/camera-firmware/tls.key\n"
+         "  client_auth:\n"
+         "    enabled: true\n"
+         "    realm: rpi-camera\n"
+         "    credential_file: /etc/camera-firmware/rtsp.credentials\n"
+         "    algorithms: sha-256\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_FALSE(cfg.ok());
+  EXPECT_EQ(cfg.error().code, "E_CONFIG_RTSP_AUTH_ALGORITHM");
+  EXPECT_EQ(cfg.error().message,
+            "secure_rtsp.client_auth.algorithms is invalid");
+}
+
+TEST(AppConfigTest, AcceptsEnabledRtspClientAuthWithSha256) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  EXPECT_TRUE(result.ok()) << result.error().message;
+}
+
+TEST(AppConfigTest, RejectsEnabledRtspClientAuthWithoutTls) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = false;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH_TLS");
+}
+
+TEST(AppConfigTest, RejectsMd5OnlyRtspClientAuth) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+  config.client_auth.algorithms = {"md5"};
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH_ALGORITHM");
+}
+
+TEST(AppConfigTest, RejectsRtspClientAuthWithMissingRealm) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.credential_file = "/tmp/test.credentials";
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH_REALM");
+}
+
+TEST(AppConfigTest, RejectsRtspClientAuthWithMissingCredentialFile) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH");
+  EXPECT_EQ(result.error().message,
+            "secure_rtsp.client_auth.credential_file is required");
+}
+
+TEST(AppConfigTest, RejectsDuplicateRtspClientAuthAlgorithms) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+  config.client_auth.algorithms = {"sha-256", "sha-256"};
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH_ALGORITHM");
+}
+
+TEST(AppConfigTest, RejectsRtspClientAuthRealmWithForbiddenBytes) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi:camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH_REALM");
+}
+
+TEST(AppConfigTest, RejectsRtspClientAuthNonceTtlBelowMinimum) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+  config.client_auth.nonce_ttl_seconds = 29;
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH");
+  EXPECT_EQ(result.error().message,
+            "secure_rtsp.client_auth.nonce_ttl_seconds is invalid");
+}
+
+TEST(AppConfigTest, RejectsRtspClientAuthNonceTtlAboveMaximum) {
+  camera_firmware::config::SecureRtspConfig config;
+  config.enabled = true;
+  config.control_tls = true;
+  config.media_srtp = false;
+  config.client_auth.enabled = true;
+  config.client_auth.realm = "rpi-camera";
+  config.client_auth.credential_file = "/tmp/test.credentials";
+  config.client_auth.nonce_ttl_seconds = 3601;
+
+  auto result = camera_firmware::config::ValidateSecureRtspSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_RTSP_AUTH");
+  EXPECT_EQ(result.error().message,
+            "secure_rtsp.client_auth.nonce_ttl_seconds is invalid");
+}
+
 TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   auto cfg =
       camera_firmware::config::LoadConfigFile("config/app-rpi5-ai-dev.yaml");

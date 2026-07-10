@@ -65,7 +65,18 @@ target_link_libraries(camera_firmware_media_tests
 gtest_discover_tests(camera_firmware_media_tests)
 
 add_executable(camera_firmware_rtsp_tests
+    unit/rtsp/GstRtspDigestAuthTest.cpp
+    unit/rtsp/GstRtspClientLifecycleTest.cpp
+    unit/rtsp/RtspDigestCredentialsTest.cpp
+    unit/rtsp/RtspDigestCryptoTest.cpp
+    unit/rtsp/RtspDigestNonceTest.cpp
+    unit/rtsp/RtspDigestVerifierTest.cpp
     unit/rtsp/SrtpSessionKeyTest.cpp
+)
+
+target_include_directories(camera_firmware_rtsp_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/rtsp
 )
 
 target_link_libraries(camera_firmware_rtsp_tests
@@ -74,7 +85,10 @@ target_link_libraries(camera_firmware_rtsp_tests
         GTest::gtest_main
 )
 
-gtest_discover_tests(camera_firmware_rtsp_tests)
+gtest_discover_tests(camera_firmware_rtsp_tests
+    PROPERTIES
+        TIMEOUT 10
+)
 
 add_executable(camera_firmware_ai_tests
     unit/ai/DetectionBusTest.cpp
@@ -152,7 +166,18 @@ gtest_discover_tests(gst_secure_srtp_tests
 )
 
 add_executable(camera_firmware_secure_rtsp_config_smoke
+    integration/RtspDigestAuthIntegrationTest.cpp
+    integration/RtspDigestCredentialCliTest.cpp
     integration/SecureRtspConfigSmokeTest.cpp
+)
+
+target_compile_definitions(camera_firmware_secure_rtsp_config_smoke
+    PRIVATE
+        CF_RTSP_DIGEST_CREDENTIAL_TOOL="$<TARGET_FILE:rtsp-digest-credential>"
+)
+
+add_dependencies(camera_firmware_secure_rtsp_config_smoke
+    rtsp-digest-credential
 )
 
 target_link_libraries(camera_firmware_secure_rtsp_config_smoke
@@ -160,6 +185,8 @@ target_link_libraries(camera_firmware_secure_rtsp_config_smoke
         camera_firmware_config
         camera_firmware_rtsp
         GTest::gtest_main
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 gtest_discover_tests(camera_firmware_secure_rtsp_config_smoke
