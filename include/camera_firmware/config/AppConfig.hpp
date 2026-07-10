@@ -92,6 +92,7 @@ struct CameraConfig {
 
 struct HttpTlsConfig {
   bool enabled{false};
+  bool allow_development_self_signed_tls{false};
   std::string certificate_path;
   std::string private_key_path;
 };
@@ -111,12 +112,18 @@ struct AiConfig {
   std::vector<AiModelConfig> models;
 };
 
+struct SecurityConfig {
+  bool enabled{true};
+  std::string state_directory{"/var/lib/camera-firmware/security"};
+};
+
 struct AppConfig {
   PlatformConfig platform;
   CameraConfig camera;
   HttpConfig http;
   AiConfig ai;
   SecureRtspConfig secure_rtsp;
+  SecurityConfig security;
 };
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);
@@ -125,5 +132,6 @@ common::Result<void> ValidateAiConfigSemantics(
     const CameraConfig& camera_config);
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
+common::Result<void> ValidateSecuritySemantics(const AppConfig& config);
 
 }  // namespace camera_firmware::config

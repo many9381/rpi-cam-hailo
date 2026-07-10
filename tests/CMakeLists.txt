@@ -50,6 +50,33 @@ gtest_discover_tests(camera_firmware_config_tests
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
+add_executable(camera_firmware_security_tests
+    unit/security/SecurityStoreTest.cpp
+)
+
+target_link_libraries(camera_firmware_security_tests
+    PRIVATE
+        camera_firmware_security
+        camera_firmware_common
+        GTest::gtest_main
+)
+
+target_link_options(camera_firmware_security_tests
+    PRIVATE
+        -Wl,--wrap=lstat
+        -Wl,--wrap=sqlite3_open_v2
+        -Wl,--wrap=sqlite3_busy_timeout
+        -Wl,--wrap=sqlite3_close_v2
+        -Wl,--wrap=sqlite3_exec
+)
+
+target_compile_definitions(camera_firmware_security_tests
+    PRIVATE
+        CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+gtest_discover_tests(camera_firmware_security_tests)
+
 add_executable(camera_firmware_media_tests
     unit/media/EncodedRingTest.cpp
     unit/media/FrameLeaseTest.cpp

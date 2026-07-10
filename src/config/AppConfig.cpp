@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -59,6 +60,26 @@ bool IsVisibleAuthField(std::string_view value, std::size_t maximum) {
          std::all_of(value.begin(), value.end(), [](unsigned char ch) {
            return ch >= 0x21U && ch <= 0x7eU;
          });
+}
+
+bool IsLexicallyBeneath(const std::filesystem::path& path,
+                        const std::filesystem::path& directory) {
+  const auto normalized_path = path.lexically_normal();
+  const auto normalized_directory = directory.lexically_normal();
+  if (normalized_path.empty() || normalized_directory.empty()) {
+    return false;
+  }
+
+  auto path_component = normalized_path.begin();
+  for (auto directory_component = normalized_directory.begin();
+       directory_component != normalized_directory.end(); ++directory_component,
+            ++path_component) {
+    if (path_component == normalized_path.end() ||
+        *path_component != *directory_component) {
+      return false;
+    }
+  }
+  return path_component != normalized_path.end();
 }
 
 }  // namespace
@@ -206,6 +227,36 @@ common::Result<void> ValidateSecureRtspSemantics(
   return common::Result<void>::Ok();
 }
 
+common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
+  if (!config.security.enabled) {
+    return common::Result<void>::Ok();
+  }
+
+  if (!config.http.enabled || !config.http.tls.enabled) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_TLS", "security requires enabled HTTPS"});
+  }
+  if (!config.http.public_base_url.starts_with("https://")) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_PUBLIC_URL", "security requires an https public URL"});
+  }
+  if (!config.secure_rtsp.client_auth.enabled ||
+      config.secure_rtsp.client_auth.algorithms.size() != 1U ||
+      config.secure_rtsp.client_auth.algorithms.front() != "sha-256") {
+    return common::Result<void>::Err(
+        {"E_SECURITY_RTSP_AUTH",
+         "security requires SHA-256 RTSP Digest authentication"});
+  }
+  if (!IsLexicallyBeneath(config.secure_rtsp.client_auth.credential_file,
+                          config.security.state_directory)) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_CREDENTIAL_PATH",
+         "RTSP credentials must be located beneath the security state directory"});
+  }
+
+  return common::Result<void>::Ok();
+}
+
 common::Result<AppConfig> LoadConfigFile(const std::string& path) {
   try {
     const YAML::Node root = YAML::LoadFile(path);
@@ -256,11 +307,20 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       const YAML::Node tls = http["tls"];
       if (tls) {
         AssignIfPresent(tls, "enabled", config.http.tls.enabled);
+        AssignIfPresent(tls, "allow_development_self_signed_tls",
+                        config.http.tls.allow_development_self_signed_tls);
         AssignIfPresent(tls, "certificate_path",
                         config.http.tls.certificate_path);
         AssignIfPresent(tls, "private_key_path",
                         config.http.tls.private_key_path);
       }
+    }
+
+    const YAML::Node security = root["security"];
+    if (security) {
+      AssignIfPresent(security, "enabled", config.security.enabled);
+      AssignIfPresent(security, "state_directory",
+                      config.security.state_directory);
     }
 
     const YAML::Node ai = root["ai"];
@@ -366,6 +426,11 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       if (!has_cert || !has_key) {
         return HttpTlsError();
       }
+    }
+
+    auto security_semantics = ValidateSecuritySemantics(config);
+    if (!security_semantics.ok()) {
+      return common::Result<AppConfig>::Err(security_semantics.error());
     }
 
     return common::Result<AppConfig>::Ok(std::move(config));

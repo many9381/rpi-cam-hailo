@@ -1,6 +1,10 @@
 #include "camera_firmware/config/AppConfig.hpp"
 
+#include <atomic>
+#include <filesystem>
 #include <fstream>
+#include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
 
@@ -24,7 +28,135 @@ camera_firmware::config::AiConfig MakeValidAiConfig() {
   return ai;
 }
 
+camera_firmware::common::Result<camera_firmware::config::AppConfig>
+LoadInlineConfig(std::string_view yaml) {
+  static std::atomic<unsigned int> next_file{0U};
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("cf-app-config-" +
+                     std::to_string(next_file.fetch_add(1U)) + ".yaml");
+  {
+    std::ofstream out(path);
+    out << yaml;
+  }
+  auto config = camera_firmware::config::LoadConfigFile(path.string());
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+  return config;
+}
+
+std::string SecurityConfigWithTls(bool tls_enabled) {
+  return std::string(R"(
+http:
+  enabled: true
+  public_base_url: https://camera.local:8443
+  tls:
+    enabled: )") +
+         (tls_enabled ? "true" : "false") + R"(
+    certificate_path: /tmp/camera.crt
+    private_key_path: /tmp/camera.key
+security:
+  enabled: true
+  state_directory: /var/lib/camera-firmware/security
+secure_rtsp:
+  enabled: true
+  control_tls: true
+  media_srtp: false
+  allow_development_self_signed_tls: true
+  client_auth:
+    enabled: true
+    realm: rpi-camera
+    credential_file: /var/lib/camera-firmware/security/rtsp.credentials
+    algorithms: [sha-256]
+)";
+}
+
+std::string SecurityConfigWithRtspAuth(bool auth_enabled) {
+  std::string yaml = SecurityConfigWithTls(true);
+  const auto marker = std::string("    enabled: true\n    realm: rpi-camera");
+  const auto position = yaml.rfind(marker);
+  EXPECT_NE(position, std::string::npos);
+  yaml.replace(position, marker.size(),
+               auth_enabled ? marker : "    enabled: false\n    realm: rpi-camera");
+  return yaml;
+}
+
+std::string SecurityConfigWithPublicUrl(std::string_view public_url) {
+  std::string yaml = SecurityConfigWithTls(true);
+  constexpr std::string_view kDefaultUrl = "https://camera.local:8443";
+  const auto position = yaml.find(kDefaultUrl);
+  EXPECT_NE(position, std::string::npos);
+  yaml.replace(position, kDefaultUrl.size(), public_url);
+  return yaml;
+}
+
+std::string SecurityConfigWithAlgorithms(std::string_view algorithms) {
+  std::string yaml = SecurityConfigWithTls(true);
+  constexpr std::string_view kDefaultAlgorithms = "[sha-256]";
+  const auto position = yaml.find(kDefaultAlgorithms);
+  EXPECT_NE(position, std::string::npos);
+  yaml.replace(position, kDefaultAlgorithms.size(), algorithms);
+  return yaml;
+}
+
+std::string SecurityConfigWithCredentialFile(std::string_view credential_file) {
+  std::string yaml = SecurityConfigWithTls(true);
+  constexpr std::string_view kDefaultCredential =
+      "/var/lib/camera-firmware/security/rtsp.credentials";
+  const auto position = yaml.find(kDefaultCredential);
+  EXPECT_NE(position, std::string::npos);
+  yaml.replace(position, kDefaultCredential.size(), credential_file);
+  return yaml;
+}
+
+void ExpectConfigError(std::string_view yaml, std::string_view code) {
+  const auto config = LoadInlineConfig(yaml);
+  ASSERT_FALSE(config.ok());
+  EXPECT_EQ(config.error().code, code);
+}
+
 }  // namespace
+
+TEST(AppConfigTest, LoadsEnabledBootstrapSecurityConfig) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  enabled: true
+  public_base_url: https://camera.local:8443
+  tls:
+    enabled: true
+    certificate_path: /tmp/camera.crt
+    private_key_path: /tmp/camera.key
+security:
+  enabled: true
+  state_directory: /var/lib/camera-firmware/security
+secure_rtsp:
+  enabled: true
+  control_tls: true
+  media_srtp: false
+  allow_development_self_signed_tls: true
+  client_auth:
+    enabled: true
+    realm: rpi-camera
+    credential_file: /var/lib/camera-firmware/security/rtsp.credentials
+    algorithms: [sha-256]
+)");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_TRUE(config.value().security.enabled);
+  EXPECT_EQ(config.value().security.state_directory,
+            "/var/lib/camera-firmware/security");
+}
+
+TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
+  ExpectConfigError(SecurityConfigWithTls(false), "E_SECURITY_TLS");
+  ExpectConfigError(SecurityConfigWithRtspAuth(false), "E_SECURITY_RTSP_AUTH");
+  ExpectConfigError(SecurityConfigWithPublicUrl("http://camera.local"),
+                    "E_SECURITY_PUBLIC_URL");
+  ExpectConfigError(SecurityConfigWithAlgorithms("[sha-256, md5]"),
+                    "E_SECURITY_RTSP_AUTH");
+  ExpectConfigError(
+      SecurityConfigWithCredentialFile(
+          "/var/lib/camera-firmware/security/../rtsp.credentials"),
+      "E_SECURITY_CREDENTIAL_PATH");
+}
 
 TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   auto cfg = camera_firmware::config::LoadConfigFile("config/app-rpi5-dev.yaml");
@@ -49,6 +181,7 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_EQ(cfg.value().http.port, 8443u);
   EXPECT_EQ(cfg.value().http.public_base_url, "http://127.0.0.1:8443");
   EXPECT_EQ(cfg.value().http.web_root, "web");
+  EXPECT_FALSE(cfg.value().security.enabled);
   EXPECT_FALSE(cfg.value().ai.enabled);
   EXPECT_TRUE(cfg.value().ai.models.empty());
   EXPECT_FALSE(cfg.value().camera.ai.enabled);
@@ -80,7 +213,9 @@ TEST(AppConfigTest, LoadsEnabledRtspClientAuthConfig) {
          "    realm: rpi-camera\n"
          "    credential_file: /etc/camera-firmware/rtsp.credentials\n"
          "    algorithms: [sha-256, md5]\n"
-         "    nonce_ttl_seconds: 600\n";
+         "    nonce_ttl_seconds: 600\n"
+         "security:\n"
+         "  enabled: false\n";
   out.close();
 
   auto cfg = camera_firmware::config::LoadConfigFile(yaml);
@@ -107,7 +242,9 @@ TEST(AppConfigTest, LoadsEnabledRtspClientAuthWithDefaultAlgorithms) {
          "  client_auth:\n"
          "    enabled: true\n"
          "    realm: rpi-camera\n"
-         "    credential_file: /etc/camera-firmware/rtsp.credentials\n";
+         "    credential_file: /etc/camera-firmware/rtsp.credentials\n"
+         "security:\n"
+         "  enabled: false\n";
   out.close();
 
   auto cfg = camera_firmware::config::LoadConfigFile(yaml);
@@ -338,6 +475,7 @@ TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   EXPECT_EQ(cfg.value().secure_rtsp.session_key.path,
             "config/dev-srtp-session.hex");
   EXPECT_TRUE(cfg.value().secure_rtsp.session_key.zeroize_on_reload);
+  EXPECT_FALSE(cfg.value().security.enabled);
 }
 
 TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
@@ -383,12 +521,15 @@ TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
   EXPECT_TRUE(cfg.value().secure_rtsp.enabled);
   EXPECT_TRUE(cfg.value().secure_rtsp.media_srtp);
   EXPECT_TRUE(cfg.value().secure_rtsp.session_key.zeroize_on_reload);
+  EXPECT_FALSE(cfg.value().security.enabled);
 }
 
 TEST(AppConfigTest, LoadsMultiModelAiConfig) {
   const char* yaml = "/tmp/cf-ai-multi-model.yaml";
   std::ofstream out(yaml);
   out << "secure_rtsp:\n"
+         "  enabled: false\n"
+         "security:\n"
          "  enabled: false\n"
          "ai:\n"
          "  enabled: true\n"
@@ -553,7 +694,9 @@ TEST(AppConfigTest, LoadsConfiguredTlsCertificateAndKeyPaths) {
          "  control_tls: true\n"
          "  media_srtp: false\n"
          "  tls_certificate_path: /etc/camera-firmware/tls.crt\n"
-         "  tls_private_key_path: /etc/camera-firmware/tls.key\n";
+         "  tls_private_key_path: /etc/camera-firmware/tls.key\n"
+         "security:\n"
+         "  enabled: false\n";
   out.close();
 
   auto cfg = camera_firmware::config::LoadConfigFile(yaml);

@@ -28,6 +28,9 @@ http:
   tls:
     enabled: false
 
+security:
+  enabled: false
+
 ai:
   enabled: false
   backend: disabled
