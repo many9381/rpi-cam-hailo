@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #if defined(CAMERA_FIRMWARE_HAS_OPENSSL)
 #include <openssl/bio.h>
@@ -114,10 +115,6 @@ void ZeroizeAndUnrefGstBuffer(gpointer user_data) {
     PerMediaKeyZeroizeCounter().fetch_add(1U, std::memory_order_relaxed);
   }
   gst_buffer_unref(buffer);
-}
-
-void ClearPerMediaKeyOnUnprepare(GstRTSPMedia* media, gpointer) {
-  g_object_set_qdata_full(G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
 }
 
 void SetAttachFailure(GstRTSPMedia* media, const char* message) {
@@ -601,12 +598,21 @@ std::string ElementFactoryName(GstElement* element) {
 }  // namespace
 
 struct SecureRtspServer::Impl {
+  struct TrackedMediaKey {
+    GstRTSPMedia* media{nullptr};
+    gulong unprepared_handler{0U};
+  };
+
   ~Impl() { Stop(); }
 
   static void OnMediaConfigure(GstRTSPMediaFactory*,
                                GstRTSPMedia* media,
                                gpointer user_data) {
     static_cast<Impl*>(user_data)->ConfigureRtspMedia(media);
+  }
+
+  static void OnMediaUnprepared(GstRTSPMedia* media, gpointer user_data) {
+    static_cast<Impl*>(user_data)->ReleaseTrackedMediaKey(media);
   }
 
   Result<void> Start(const config::SecureRtspConfig& config,
@@ -753,6 +759,64 @@ struct SecureRtspServer::Impl {
     return ReloadGstCfRtspDigestCredentials(auth);
   }
 
+  bool TrackMediaKey(GstRTSPMedia* media) noexcept {
+    auto* retained_media = g_object_ref(media);
+    std::lock_guard lock(media_key_mutex);
+    const gulong handler = g_signal_connect(media,
+                                            "unprepared",
+                                            G_CALLBACK(OnMediaUnprepared),
+                                            this);
+    if (handler == 0U) {
+      g_object_unref(retained_media);
+      return false;
+    }
+    try {
+      tracked_media_keys.push_back(TrackedMediaKey{retained_media, handler});
+    } catch (...) {
+      g_signal_handler_disconnect(media, handler);
+      g_object_unref(retained_media);
+      return false;
+    }
+    return true;
+  }
+
+  void ReleaseTrackedMediaKey(GstRTSPMedia* media) noexcept {
+    g_object_set_qdata_full(G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
+
+    TrackedMediaKey tracked;
+    {
+      std::lock_guard lock(media_key_mutex);
+      const auto found = std::find_if(
+          tracked_media_keys.begin(),
+          tracked_media_keys.end(),
+          [media](const TrackedMediaKey& candidate) {
+            return candidate.media == media;
+          });
+      if (found == tracked_media_keys.end()) {
+        return;
+      }
+      tracked = *found;
+      tracked_media_keys.erase(found);
+    }
+
+    g_signal_handler_disconnect(tracked.media, tracked.unprepared_handler);
+    g_object_unref(tracked.media);
+  }
+
+  void ClearTrackedMediaKeys() noexcept {
+    std::vector<TrackedMediaKey> tracked;
+    {
+      std::lock_guard lock(media_key_mutex);
+      tracked.swap(tracked_media_keys);
+    }
+    for (const auto& entry : tracked) {
+      g_signal_handler_disconnect(entry.media, entry.unprepared_handler);
+      g_object_set_qdata_full(
+          G_OBJECT(entry.media), SecureKeyQuark(), nullptr, nullptr);
+      g_object_unref(entry.media);
+    }
+  }
+
   void ConfigureRtspMedia(GstRTSPMedia* media) {
     if (media_srtp_enabled) {
       gst_rtsp_media_set_profiles(media, GST_RTSP_PROFILE_SAVPF);
@@ -763,12 +827,16 @@ struct SecureRtspServer::Impl {
                                 SecureKeyQuark(),
                                 media_key_buffer,
                                 ZeroizeAndUnrefGstBuffer);
-        g_signal_connect(media,
-                         "unprepared",
-                         G_CALLBACK(ClearPerMediaKeyOnUnprepare),
-                         nullptr);
-        PerMediaKeyAllocationCounter().fetch_add(1U,
-                                                 std::memory_order_relaxed);
+        if (TrackMediaKey(media)) {
+          PerMediaKeyAllocationCounter().fetch_add(1U,
+                                                   std::memory_order_relaxed);
+        } else {
+          g_object_set_qdata_full(
+              G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
+          SetAttachFailure(
+              media,
+              "E_SRTP_KEY_TRACKING: failed to track per-media SRTP key");
+        }
       } else {
         SetAttachFailure(
             media,
@@ -824,6 +892,7 @@ struct SecureRtspServer::Impl {
     } else if (server != nullptr) {
       (void)gst_rtsp_server_client_filter(server, CloseManagedClient, nullptr);
     }
+    ClearTrackedMediaKeys();
     if (IsGstCfRtspDigestAuth(auth)) {
       auto shutdown = ShutdownGstCfRtspDigestAuth(auth);
       if (!shutdown.ok()) {
@@ -920,6 +989,8 @@ struct SecureRtspServer::Impl {
   bool media_srtp_enabled{false};
   bool factory_mounted{false};
   bool running{false};
+  std::mutex media_key_mutex;
+  std::vector<TrackedMediaKey> tracked_media_keys;
   std::mutex lifecycle_mutex;
   std::atomic<std::size_t> per_media_key_allocation_baseline{
       PerMediaKeyAllocationCounter().load(std::memory_order_relaxed)};
