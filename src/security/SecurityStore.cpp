@@ -1850,6 +1850,50 @@ SecurityStore::ReadAuthenticationContext(
   return common::Result<AuthenticationContext>::Ok(std::move(context));
 }
 
+common::Result<bool> SecurityStore::IsManagementPeer(
+    std::string_view normalized_peer_ip) {
+  const auto failure = [] {
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  };
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return failure();
+  }
+  auto transaction = std::move(started).value();
+  sqlite3_stmt* raw_peer = nullptr;
+  constexpr const char* kReadPeer =
+      "SELECT EXISTS(SELECT 1 FROM management_ips "
+      "WHERE normalized_ip = ?1 AND role_scope = 'administrator' "
+      "AND enabled = 1);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kReadPeer, -1, &raw_peer,
+                           nullptr) != SQLITE_OK) {
+    (void)transaction.Rollback();
+    return failure();
+  }
+  const auto finalize = [](sqlite3_stmt* statement) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+  };
+  std::unique_ptr<sqlite3_stmt, decltype(finalize)> peer(raw_peer, finalize);
+  if (::sqlite3_bind_text(peer.get(), 1, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(peer.get()) != SQLITE_ROW) {
+    (void)transaction.Rollback();
+    return failure();
+  }
+  const bool enabled = ::sqlite3_column_int(peer.get(), 0) == 1;
+  if (::sqlite3_step(peer.get()) != SQLITE_DONE) {
+    (void)transaction.Rollback();
+    return failure();
+  }
+  peer.reset();
+  auto committed = transaction.Commit();
+  return committed.ok() ? common::Result<bool>::Ok(enabled) : failure();
+}
+
 common::Result<void> SecurityStore::SetLoginFailureState(
     Transaction& transaction,
     std::int64_t user_id,

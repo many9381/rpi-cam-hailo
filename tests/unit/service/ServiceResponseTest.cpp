@@ -758,7 +758,7 @@ TEST(ServiceResponseTest, TlsInitRejectsSecurityWithoutTlsInsteadOfDowngrade) {
   EXPECT_EQ(initialized.error().code, "E_HTTP_TLS_REQUIRED");
 }
 
-TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesDetachedStopTimeout) {
+TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesTimeoutUntilSafeJoin) {
   TemporaryTlsDirectory state;
   camera_firmware::config::HttpTlsConfig tls;
   tls.enabled = true;
@@ -786,13 +786,16 @@ TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesDetachedStopTimeout) {
 
   ASSERT_FALSE(stopped.ok());
   EXPECT_EQ(stopped.error().code, "E_SERVICE_THREAD_STOP_TIMEOUT");
-  EXPECT_FALSE(service_thread.joinable());
+  EXPECT_TRUE(service_thread.joinable());
   EXPECT_EQ(::access(certificate_path.c_str(), R_OK), 0);
   EXPECT_EQ(::access(private_key_path.c_str(), R_OK), 0);
 
   release->set_value();
   ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(1)),
             std::future_status::ready);
+  if (service_thread.joinable()) {
+    service_thread.join();
+  }
   for (int attempt = 0; attempt < 1000; ++attempt) {
     if (::access(certificate_path.c_str(), F_OK) != 0 &&
         ::access(private_key_path.c_str(), F_OK) != 0) {

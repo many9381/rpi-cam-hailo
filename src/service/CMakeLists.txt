@@ -1,4 +1,6 @@
 add_library(camera_firmware_service STATIC
+    BoundedWorker.cpp
+    SecurityRequestGate.cpp
     ServiceApp.cpp
     ServiceStartup.cpp
 )
@@ -19,4 +21,7 @@ target_link_libraries(camera_firmware_service
         camera_firmware_config
         camera_firmware_security
         Drogon::Drogon
+    PRIVATE
+        OpenSSL::Crypto
+        PkgConfig::GIO
 )

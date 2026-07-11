@@ -76,6 +76,8 @@ class SecurityStore {
       BootstrapRecord record,
       const CredentialInstaller& install_credential);
   common::Result<DeviceState> State() const;
+  common::Result<bool> IsManagementPeer(
+      std::string_view normalized_peer_ip);
   [[nodiscard]] const std::filesystem::path& state_directory() const noexcept;
   [[nodiscard]] const std::filesystem::path& database_path() const noexcept;
 

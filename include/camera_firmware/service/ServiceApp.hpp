@@ -2,9 +2,12 @@
 
 #include <cstddef>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <future>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,7 +21,15 @@
 #include "camera_firmware/ai/AiTypes.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/security/AuthService.hpp"
+#include "camera_firmware/security/BootstrapService.hpp"
 #include "camera_firmware/security/DeviceTlsManager.hpp"
+#include "camera_firmware/security/SecurityStore.hpp"
+#include "camera_firmware/service/BoundedWorker.hpp"
+
+namespace trantor {
+class EventLoop;
+}
 
 namespace camera_firmware::service {
 
@@ -68,6 +79,7 @@ struct AiServiceStatus {
 
 using AiStatusProvider = std::function<AiServiceStatus()>;
 using AiControlCallback = std::function<common::Result<void>()>;
+using RuntimeStartCallback = std::function<common::Result<void>()>;
 
 struct SecureStreamDiagnostics {
   std::uint64_t per_media_key_zeroize_count{0};
@@ -105,6 +117,10 @@ struct ServiceInitArgs {
   DetectionSnapshotProvider detection_snapshot_provider;
   DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
+  RuntimeStartCallback runtime_start_callback;
+  std::shared_ptr<security::SecurityStore> security_store;
+  std::shared_ptr<security::BootstrapService> bootstrap_service;
+  std::shared_ptr<security::AuthService> auth_service;
 };
 
 Json::Value BuildHealthJson(const std::string& status);
@@ -168,11 +184,24 @@ class ServiceApp {
   void Stop();
 
  private:
+  void RunShutdownCoordinator() noexcept;
+  void PerformShutdown(trantor::EventLoop* drain_loop) noexcept;
+  void JoinShutdownCoordinator() noexcept;
+
   bool initialized_{false};
   bool running_{false};
+  std::shared_ptr<BoundedWorker> security_worker_;
   std::optional<security::ResolvedTlsMaterial> tls_material_;
   std::thread server_thread_;
   std::shared_future<void> server_thread_done_;
+  std::mutex shutdown_mutex_;
+  std::condition_variable shutdown_condition_;
+  std::thread shutdown_thread_;
+  trantor::EventLoop* shutdown_drain_loop_{nullptr};
+  bool shutdown_thread_started_{false};
+  bool shutdown_requested_{false};
+  bool shutdown_join_in_progress_{false};
+  bool shutdown_thread_released_{false};
 };
 
 }  // namespace camera_firmware::service

@@ -174,6 +174,7 @@ set_tests_properties(${camera_firmware_ai_hardware_smoke_tests}
 )
 
 add_executable(camera_firmware_service_tests
+    unit/service/SecurityRequestGateTest.cpp
     unit/service/ServiceResponseTest.cpp
     unit/service/ServiceStartupTest.cpp
 )
@@ -185,6 +186,45 @@ target_link_libraries(camera_firmware_service_tests
 )
 
 gtest_discover_tests(camera_firmware_service_tests)
+
+add_executable(camera_firmware_https_auth_integration
+    integration/HttpsAuthIntegrationTest.cpp
+)
+
+target_compile_definitions(camera_firmware_https_auth_integration
+    PRIVATE
+        CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(camera_firmware_https_auth_integration
+    PRIVATE
+        camera_firmware_service
+        GTest::gtest_main
+        OpenSSL::SSL
+)
+
+gtest_discover_tests(camera_firmware_https_auth_integration
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    PROPERTIES
+        TIMEOUT 90
+)
+
+if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
+    find_program(CF_TEST_GIT_EXECUTABLE NAMES git REQUIRED)
+    add_test(
+        NAME DrogonSourceIdentityConfigureTest
+        COMMAND ${CMAKE_COMMAND}
+            -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -DCF_DROGON_SOURCE_DIR=${CAMERA_FIRMWARE_DROGON_SOURCE_DIR}
+            -DCF_GIT_EXECUTABLE=${CF_TEST_GIT_EXECUTABLE}
+            -DCF_TEST_ROOT=${PROJECT_BINARY_DIR}/drogon-source-identity-test
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DrogonSourceIdentityTest.cmake
+    )
+    set_tests_properties(DrogonSourceIdentityConfigureTest
+        PROPERTIES
+            TIMEOUT 120
+    )
+endif()
 
 add_executable(gst_secure_srtp_tests
     unit/rtsp/CfSecureSrtpEncTest.cpp

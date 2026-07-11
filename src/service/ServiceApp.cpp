@@ -1,6 +1,8 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -17,8 +19,10 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <json/writer.h>
+#include <trantor/net/EventLoop.h>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
 
 namespace camera_firmware::service {
@@ -26,6 +30,9 @@ namespace {
 
 struct ServiceState {
   ServiceInitArgs args;
+  std::shared_ptr<BoundedWorker> security_worker;
+  security::DeviceState device_state{security::DeviceState::kDefault};
+  bool shutting_down{false};
 };
 
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
@@ -40,6 +47,32 @@ ServiceState& GlobalState() {
 std::mutex& StateMutex() {
   static std::mutex mutex;
   return mutex;
+}
+
+bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
+  if (method == drogon::Get) {
+    if (path == "/api/v1/setup/status" || path == "/api/v1/auth/me" ||
+        path == "/api/v1/health" || path == "/api/v1/cameras" ||
+        path == "/api/v1/ai/detections" ||
+        path == "/api/v1/ai/detections/stream" ||
+        path == "/api/v1/stream") {
+      return true;
+    }
+    constexpr std::string_view prefix = "/api/v1/cameras/";
+    constexpr std::string_view suffix = "/snapshot.jpg";
+    if (path.starts_with(prefix) && path.ends_with(suffix) &&
+        path.size() > prefix.size() + suffix.size()) {
+      const auto camera_id =
+          path.substr(prefix.size(), path.size() - prefix.size() - suffix.size());
+      return camera_id.find('/') == std::string_view::npos;
+    }
+    return false;
+  }
+  return method == drogon::Post &&
+         (path == "/api/v1/setup/initialize" ||
+          path == "/api/v1/auth/login" ||
+          path == "/api/v1/auth/logout" ||
+          path == "/api/v1/ai/restart");
 }
 
 std::string ExtractPublicHost(std::string_view public_base_url) {
@@ -126,6 +159,316 @@ drogon::HttpResponsePtr JsonResponse(Json::Value json,
   return response;
 }
 
+using DrogonCallback =
+    std::function<void(const drogon::HttpResponsePtr&)>;
+
+class TerminalResponse {
+ public:
+  TerminalResponse(trantor::EventLoop* event_loop, DrogonCallback callback)
+      : event_loop_(event_loop), callback_(std::move(callback)) {}
+
+  void Respond(drogon::HttpResponsePtr response) {
+    if (completed_.exchange(true)) {
+      return;
+    }
+    callback_(response);
+  }
+
+  void Queue(drogon::HttpResponsePtr response) {
+    if (completed_.exchange(true)) {
+      return;
+    }
+    event_loop_->queueInLoop(
+        [callback = std::move(callback_),
+         response = std::move(response)]() mutable { callback(response); });
+  }
+
+ private:
+  trantor::EventLoop* event_loop_;
+  DrogonCallback callback_;
+  std::atomic<bool> completed_{false};
+};
+
+class HttpCallback {
+ public:
+  HttpCallback() = default;
+  explicit HttpCallback(std::shared_ptr<TerminalResponse> terminal)
+      : terminal_(std::move(terminal)) {}
+
+  void operator()(drogon::HttpResponsePtr response) const {
+    terminal_->Respond(std::move(response));
+  }
+
+  void Queue(drogon::HttpResponsePtr response) const {
+    terminal_->Queue(std::move(response));
+  }
+
+  explicit operator bool() const noexcept {
+    return static_cast<bool>(terminal_);
+  }
+
+ private:
+  std::shared_ptr<TerminalResponse> terminal_;
+};
+
+using AuthorizedContinuation =
+    std::function<void(std::optional<security::Principal>, HttpCallback)>;
+
+drogon::HttpResponsePtr SecurityErrorResponse(const common::Error& error) {
+  Json::Value body(Json::objectValue);
+  body["code"] = error.code;
+  drogon::HttpStatusCode status = drogon::k403Forbidden;
+  std::string message = "request denied";
+  if (error.code == "E_AUTHENTICATION_REQUIRED" ||
+      error.code == "E_AUTHENTICATION_FAILED") {
+    status = drogon::k401Unauthorized;
+    message = "authentication required";
+  } else if (error.code == "E_SECURITY_UNAVAILABLE" ||
+             error.code == "E_AUTHENTICATION_UNAVAILABLE" ||
+             error.code == "E_AUTHENTICATION_STORE") {
+    status = drogon::k503ServiceUnavailable;
+    body["code"] = "E_SECURITY_UNAVAILABLE";
+    message = "security service unavailable";
+  } else if (error.code == "E_REQUEST_TOO_LARGE") {
+    status = drogon::k413RequestEntityTooLarge;
+    message = "request could not be processed";
+  } else if (error.code == "E_INVALID_REQUEST") {
+    status = drogon::k400BadRequest;
+    message = "request could not be processed";
+  }
+  body["message"] = message;
+  return JsonResponse(std::move(body), status);
+}
+
+drogon::HttpResponsePtr SecurityUnavailableResponse() {
+  return SecurityErrorResponse(
+      {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+}
+
+drogon::HttpResponsePtr BootstrapErrorResponse(const common::Error& error) {
+  const bool validation =
+      error.code == "E_BOOTSTRAP_PEER" ||
+      error.code.starts_with("E_USERNAME_") ||
+      error.code.starts_with("E_PASSWORD_");
+  if (!validation && error.code != "E_BOOTSTRAP_UNAVAILABLE") {
+    return SecurityUnavailableResponse();
+  }
+  Json::Value body(Json::objectValue);
+  body["code"] = error.code;
+  body["message"] = validation ? "device setup request is invalid"
+                                : "device setup is already complete";
+  return JsonResponse(std::move(body),
+                      validation ? drogon::k400BadRequest
+                                 : drogon::k409Conflict);
+}
+
+class AsyncAuthorization final
+    : public std::enable_shared_from_this<AsyncAuthorization> {
+ public:
+  AsyncAuthorization(trantor::EventLoop* event_loop,
+                     DrogonCallback callback,
+                     AuthorizedContinuation continuation)
+      : event_loop_(event_loop),
+        terminal_(HttpCallback(std::make_shared<TerminalResponse>(
+            event_loop, std::move(callback)))),
+        continuation_(std::move(continuation)) {}
+
+  void Deny(common::Error error) {
+    auto response = SecurityErrorResponse(error);
+    Dispatch([response = std::move(response)](HttpCallback terminal,
+                                               AuthorizedContinuation) {
+      terminal(response);
+    });
+  }
+
+  void Allow(std::optional<security::Principal> principal) {
+    Dispatch([principal = std::move(principal)](
+                 HttpCallback terminal,
+                 AuthorizedContinuation continuation) mutable {
+      try {
+        continuation(std::move(principal), terminal);
+      } catch (...) {
+        terminal(SecurityUnavailableResponse());
+      }
+    });
+  }
+
+ private:
+  using DispatchAction =
+      std::function<void(HttpCallback, AuthorizedContinuation)>;
+
+  void Dispatch(DispatchAction action) {
+    if (completed_.exchange(true)) {
+      return;
+    }
+    auto terminal = terminal_;
+    auto continuation = std::move(continuation_);
+    event_loop_->queueInLoop(
+        [action = std::move(action), terminal = std::move(terminal),
+         continuation = std::move(continuation)]() mutable {
+          action(std::move(terminal), std::move(continuation));
+        });
+  }
+
+  trantor::EventLoop* event_loop_;
+  HttpCallback terminal_;
+  AuthorizedContinuation continuation_;
+  std::atomic<bool> completed_{false};
+};
+
+struct SecurityDependencies {
+  bool enabled{false};
+  bool shutting_down{false};
+  std::string expected_origin;
+  std::shared_ptr<security::SecurityStore> store;
+  std::shared_ptr<security::AuthService> auth_service;
+  std::shared_ptr<BoundedWorker> worker;
+};
+
+SecurityDependencies CopySecurityDependencies() {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return {state.args.app_config != nullptr &&
+              state.args.app_config->security.enabled,
+          state.shutting_down,
+          state.args.public_base_url,
+          state.args.security_store,
+          state.args.auth_service,
+          state.security_worker};
+}
+
+void AuthorizeRequest(const drogon::HttpRequestPtr& request,
+                      DrogonCallback callback,
+                      AuthorizedContinuation continuation) {
+  auto completion = std::make_shared<AsyncAuthorization>(
+      drogon::app().getLoop(), std::move(callback), std::move(continuation));
+  const auto dependencies = CopySecurityDependencies();
+  if (!dependencies.enabled) {
+    completion->Allow(std::nullopt);
+    return;
+  }
+  if (dependencies.shutting_down) {
+    completion->Deny(
+        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+    return;
+  }
+  if (!request || !dependencies.store || !dependencies.auth_service ||
+      !dependencies.worker) {
+    completion->Deny(
+        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+    return;
+  }
+
+  auto normalized_peer = NormalizePeerIp(request->peerAddr().toIp());
+  if (!normalized_peer.ok()) {
+    completion->Deny({"E_ACCESS_DENIED", "request denied"});
+    return;
+  }
+  SecurityRequestContext context;
+  context.path = request->path();
+  context.method = request->methodString();
+  context.normalized_peer_ip = std::move(normalized_peer).value();
+  context.origin = request->getHeader("origin");
+  context.expected_origin = dependencies.expected_origin;
+  context.has_management_header =
+      request->getHeader("x-camera-request") == "management";
+  std::shared_ptr<common::SecureBytes> session_token;
+  auto parsed_token =
+      ParseSessionCookieHeaders(request->getRawCookieHeaders());
+  if (parsed_token.ok()) {
+    session_token = std::make_shared<common::SecureBytes>(
+        std::move(parsed_token).value());
+  }
+
+  auto submitted = dependencies.worker->Submit(
+      [context = std::move(context), session_token,
+       dependencies, completion]() mutable {
+        try {
+          auto state = dependencies.store->State();
+          if (!state.ok()) {
+            completion->Deny(
+                {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+            return;
+          }
+          context.state = state.value();
+          const bool setup_initialize =
+              context.path == "/api/v1/setup/initialize";
+          const bool login = context.path == "/api/v1/auth/login" &&
+                             context.method == "POST";
+          if (context.state == security::DeviceState::kOperational &&
+              !setup_initialize) {
+            auto management = dependencies.store->IsManagementPeer(
+                context.normalized_peer_ip);
+            if (!management.ok()) {
+              completion->Deny({"E_SECURITY_UNAVAILABLE",
+                                "security service unavailable"});
+              return;
+            }
+            context.peer_is_management = management.value();
+            if (!login && context.peer_is_management && session_token) {
+              if (session_token->size() != 0U) {
+                auto principal = dependencies.auth_service->Verify(
+                    {session_token->data(), session_token->size()},
+                    context.normalized_peer_ip);
+                if (principal.ok()) {
+                  context.principal = std::move(principal).value();
+                } else if (principal.error().code ==
+                           "E_AUTHENTICATION_UNAVAILABLE") {
+                  completion->Deny({"E_SECURITY_UNAVAILABLE",
+                                    "security service unavailable"});
+                  return;
+                }
+              }
+            }
+          }
+          auto authorized = AuthorizeSecurityRequest(context);
+          if (!authorized.ok()) {
+            completion->Deny(authorized.error());
+            return;
+          }
+          completion->Allow(std::move(context.principal));
+        } catch (...) {
+          completion->Deny(
+              {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+        }
+      });
+  if (!submitted.ok()) {
+    completion->Deny(submitted.error());
+  }
+}
+
+void QueueResponse(trantor::EventLoop* event_loop,
+                   HttpCallback callback,
+                   drogon::HttpResponsePtr response) {
+  (void)event_loop;
+  callback.Queue(std::move(response));
+}
+
+std::string EncodeSessionToken(common::SecureBytes& token) {
+  static constexpr std::array<char, 16> kHex = {
+      '0', '1', '2', '3', '4', '5', '6', '7',
+      '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+  std::string encoded(token.size() * 2U, '0');
+  for (std::size_t index = 0; index < token.size(); ++index) {
+    encoded[index * 2U] = kHex[token.data()[index] >> 4U];
+    encoded[index * 2U + 1U] = kHex[token.data()[index] & 0x0fU];
+  }
+  token.clear();
+  return encoded;
+}
+
+drogon::Cookie SessionCookie(std::string value, int max_age = -1) {
+  drogon::Cookie cookie(std::string(kSessionCookieName), std::move(value));
+  cookie.setSecure(true);
+  cookie.setHttpOnly(true);
+  cookie.setSameSite(drogon::Cookie::SameSite::kStrict);
+  cookie.setPath("/");
+  if (max_age >= 0) {
+    cookie.setMaxAge(max_age);
+  }
+  return cookie;
+}
+
 std::string CompactJson(Json::Value json) {
   Json::StreamWriterBuilder writer;
   writer["indentation"] = "";
@@ -134,8 +477,7 @@ std::string CompactJson(Json::Value json) {
 
 class DetectionSsePendingResponse {
  public:
-  using ResponseCallback =
-      std::function<void(const drogon::HttpResponsePtr&)>;
+  using ResponseCallback = HttpCallback;
 
   DetectionSsePendingResponse(
       DetectionSnapshotProvider detection_snapshot_provider,
@@ -185,11 +527,7 @@ class DetectionSsePendingResponse {
     }
     if (callback) {
       auto response = BuildDetectionSseResponse(events);
-      drogon::app().getLoop()->queueInLoop(
-          [callback = std::move(callback),
-           response = std::move(response)]() mutable {
-            callback(response);
-          });
+      callback.Queue(std::move(response));
     }
   }
 
@@ -223,169 +561,469 @@ class ThreadCompletionReporter {
 void RegisterHandlers() {
   using namespace drogon;
 
-  app().registerHandler(
-      "/api/v1/health",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
-        std::string status;
-        {
-          std::scoped_lock lock(StateMutex());
-          status = GlobalState().args.health_status;
-        }
-        callback(JsonResponse(BuildHealthJson(status)));
-      },
-      {Get});
+  app().registerPreSendingAdvice(
+      [](const HttpRequestPtr&, const HttpResponsePtr& response) {
+        response->addHeader("Cache-Control", "no-store");
+        response->addHeader("Strict-Transport-Security", "max-age=31536000");
+        response->addHeader("X-Content-Type-Options", "nosniff");
+        response->addHeader("Referrer-Policy", "no-referrer");
+        response->addHeader("X-Frame-Options", "DENY");
+        response->addHeader(
+            "Content-Security-Policy",
+            "default-src 'self'; object-src 'none'; base-uri 'none'; "
+            "frame-ancestors 'none'");
+      });
 
-  app().registerHandler(
-      "/api/v1/cameras",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
+  app().registerPreRoutingAdvice(
+      [](const HttpRequestPtr& request, AdviceCallback&& callback,
+         AdviceChainCallback&& chain) {
+        const std::string_view path = request->path();
+        const bool api = IsRegisteredApiRoute(path, request->method());
+        const bool static_asset =
+            request->method() == Get &&
+            (path == "/" || path == "/index.html" || path == "/app.js" ||
+             path == "/styles.css");
+        if (api || static_asset) {
+          chain();
+          return;
+        }
         Json::Value body(Json::objectValue);
-        Json::Value cameras(Json::arrayValue);
-        CameraStatusProvider provider;
-        AiStatusProvider ai_status_provider;
-        bool ai_enabled = false;
+        body["code"] = "E_NOT_FOUND";
+        body["message"] = "resource not found";
+        callback(JsonResponse(std::move(body), k404NotFound));
+      });
 
+  app().registerHandler(
+      "/api/v1/setup/status",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        security::DeviceState state;
+        bool security_enabled = false;
         {
           std::scoped_lock lock(StateMutex());
-          provider = GlobalState().args.camera_status_provider;
-          ai_status_provider = GlobalState().args.ai_status_provider;
-          ai_enabled = GlobalState().args.ai_enabled;
+          state = GlobalState().device_state;
+          security_enabled = GlobalState().args.app_config != nullptr &&
+                             GlobalState().args.app_config->security.enabled;
         }
-
-        if (provider) {
-          for (const auto& camera : provider()) {
-            cameras.append(BuildCameraJson(camera));
+        if (!security_enabled) {
+          callback(SecurityErrorResponse(
+              {"E_ACCESS_DENIED", "request denied"}));
+          return;
+        }
+        Json::Value body(Json::objectValue);
+        const bool required = state == security::DeviceState::kDefault;
+        body["required"] = required;
+        if (required) {
+          auto peer = NormalizePeerIp(request->peerAddr().toIp());
+          if (!peer.ok()) {
+            callback(SecurityUnavailableResponse());
+            return;
           }
+          body["tls"] = "ready";
+          body["peer_ip"] = std::move(peer).value();
         }
-        body["cameras"] = std::move(cameras);
-        body["ai"] = ai_status_provider
-                         ? BuildAiStatusJson(ai_status_provider())
-                         : BuildAiStatusJson(ai_enabled);
         callback(JsonResponse(std::move(body)));
       },
       {Get});
 
   app().registerHandler(
-      "/api/v1/cameras/{1}/snapshot.jpg",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback,
-         const std::string& camera_id) {
-        SnapshotCallback snapshot_callback;
-        {
-          std::scoped_lock lock(StateMutex());
-          snapshot_callback = GlobalState().args.snapshot_callback;
-        }
-        if (!snapshot_callback) {
-          callback(JsonResponse(BuildSnapshotUnavailableJson(),
-                                drogon::k503ServiceUnavailable));
-          return;
-        }
+      "/api/v1/setup/initialize",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        auto peer = NormalizePeerIp(request->peerAddr().toIp());
+        const std::string actual_peer = peer.ok() ? peer.value() : "";
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, actual_peer](
+                std::optional<security::Principal>, HttpCallback callback) {
+              auto parsed = ParseSetupJson(request->getBody(),
+                                           request->getHeader("content-type"));
+              if (!parsed.ok()) {
+                callback(SecurityErrorResponse(parsed.error()));
+                return;
+              }
+              std::shared_ptr<security::BootstrapService> bootstrap;
+              std::shared_ptr<BoundedWorker> worker;
+              RuntimeStartCallback runtime_start;
+              {
+                std::scoped_lock lock(StateMutex());
+                bootstrap = GlobalState().args.bootstrap_service;
+                worker = GlobalState().security_worker;
+                runtime_start = GlobalState().args.runtime_start_callback;
+              }
+              if (!bootstrap || !worker || actual_peer.empty()) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto parsed_request =
+                  std::make_shared<ParsedSetupRequest>(std::move(parsed).value());
+              auto submitted = worker->Submit(
+                  [parsed_request, actual_peer, bootstrap, runtime_start,
+                   callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      security::BootstrapRequest bootstrap_request;
+                      bootstrap_request.username = parsed_request->username;
+                      bootstrap_request.password =
+                          std::move(parsed_request->password);
+                      bootstrap_request.confirmed_peer_ip =
+                          parsed_request->confirmed_peer_ip;
+                      bootstrap_request.actual_peer_ip = actual_peer;
+                      auto initialized =
+                          bootstrap->Initialize(std::move(bootstrap_request));
+                      if (!initialized.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BootstrapErrorResponse(
+                                          initialized.error()));
+                        return;
+                      }
+                      {
+                        std::scoped_lock lock(StateMutex());
+                        GlobalState().device_state =
+                            security::DeviceState::kOperational;
+                      }
+                      std::string runtime_state = "deferred";
+                      if (runtime_start) {
+                        auto runtime = runtime_start();
+                        if (!runtime.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        SecurityUnavailableResponse());
+                          return;
+                        }
+                        runtime_state = "running";
+                      }
+                      Json::Value response(Json::objectValue);
+                      response["required"] = false;
+                      response["runtime"] = runtime_state;
+                      QueueResponse(event_loop, std::move(callback),
+                                    JsonResponse(std::move(response)));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    SecurityUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
 
-        callback(BuildSnapshotResponse(snapshot_callback, camera_id));
+  app().registerHandler(
+      "/api/v1/auth/login",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        const std::string peer_ip = request->peerAddr().toIp();
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, peer_ip](
+                std::optional<security::Principal>, HttpCallback callback) {
+              auto parsed = ParseLoginJson(request->getBody(),
+                                           request->getHeader("content-type"));
+              if (!parsed.ok()) {
+                callback(SecurityErrorResponse(parsed.error()));
+                return;
+              }
+              std::shared_ptr<security::AuthService> auth;
+              std::shared_ptr<BoundedWorker> worker;
+              {
+                std::scoped_lock lock(StateMutex());
+                auth = GlobalState().args.auth_service;
+                worker = GlobalState().security_worker;
+              }
+              if (!auth || !worker) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto parsed_request =
+                  std::make_shared<ParsedLoginRequest>(std::move(parsed).value());
+              auto submitted = worker->Submit(
+                  [parsed_request, peer_ip, auth, callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      security::LoginRequest login_request;
+                      login_request.username = parsed_request->username;
+                      login_request.password = std::move(parsed_request->password);
+                      login_request.peer_ip = peer_ip;
+                      auto login = auth->Login(std::move(login_request));
+                      if (!login.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityErrorResponse(login.error()));
+                        return;
+                      }
+                      auto result = std::move(login).value();
+                      Json::Value response_body(Json::objectValue);
+                      response_body["role"] = "administrator";
+                      response_body["idle_expires_at_seconds"] =
+                          static_cast<Json::Int64>(
+                              result.idle_expires_at_seconds);
+                      auto response = JsonResponse(std::move(response_body));
+                      response->addCookie(SessionCookie(
+                          EncodeSessionToken(result.session_token)));
+                      QueueResponse(event_loop, std::move(callback),
+                                    std::move(response));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    SecurityUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/auth/me",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal> principal,
+               HttpCallback callback) {
+              if (!principal.has_value()) {
+                callback(SecurityErrorResponse(
+                    {"E_AUTHENTICATION_REQUIRED", "authentication required"}));
+                return;
+              }
+              Json::Value body(Json::objectValue);
+              body["username"] = principal->username;
+              body["role"] = principal->role == security::UserRole::kAdministrator
+                                   ? "administrator"
+                                   : "viewer";
+              callback(JsonResponse(std::move(body)));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/auth/logout",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        const std::string peer_ip = request->peerAddr().toIp();
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, peer_ip](std::optional<security::Principal>,
+                               HttpCallback callback) {
+              auto token =
+                  ParseSessionCookieHeaders(request->getRawCookieHeaders());
+              if (!token.ok()) {
+                callback(SecurityErrorResponse(token.error()));
+                return;
+              }
+              std::shared_ptr<security::AuthService> auth;
+              std::shared_ptr<BoundedWorker> worker;
+              {
+                std::scoped_lock lock(StateMutex());
+                auth = GlobalState().args.auth_service;
+                worker = GlobalState().security_worker;
+              }
+              if (!auth || !worker) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto secure_token = std::make_shared<common::SecureBytes>(
+                  std::move(token).value());
+              auto submitted = worker->Submit(
+                  [secure_token, peer_ip, auth, callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      auto logged_out = auth->Logout(
+                          {secure_token->data(), secure_token->size()}, peer_ip);
+                      secure_token->clear();
+                      if (!logged_out.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityErrorResponse(logged_out.error()));
+                        return;
+                      }
+                      Json::Value body(Json::objectValue);
+                      body["logged_out"] = true;
+                      auto response = JsonResponse(std::move(body));
+                      response->addCookie(SessionCookie("", 0));
+                      QueueResponse(event_loop, std::move(callback),
+                                    std::move(response));
+                    } catch (...) {
+                      secure_token->clear();
+                      QueueResponse(event_loop, std::move(callback),
+                                    SecurityUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                secure_token->clear();
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/health",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              std::string status;
+              {
+                std::scoped_lock lock(StateMutex());
+                status = GlobalState().args.health_status;
+              }
+              callback(JsonResponse(BuildHealthJson(status)));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/cameras",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              Json::Value body(Json::objectValue);
+              Json::Value cameras(Json::arrayValue);
+              CameraStatusProvider provider;
+              AiStatusProvider ai_status_provider;
+              bool ai_enabled = false;
+              {
+                std::scoped_lock lock(StateMutex());
+                provider = GlobalState().args.camera_status_provider;
+                ai_status_provider = GlobalState().args.ai_status_provider;
+                ai_enabled = GlobalState().args.ai_enabled;
+              }
+              if (provider) {
+                for (const auto& camera : provider()) {
+                  cameras.append(BuildCameraJson(camera));
+                }
+              }
+              body["cameras"] = std::move(cameras);
+              body["ai"] = ai_status_provider
+                               ? BuildAiStatusJson(ai_status_provider())
+                               : BuildAiStatusJson(ai_enabled);
+              callback(JsonResponse(std::move(body)));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/cameras/{1}/snapshot.jpg",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& camera_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [camera_id](std::optional<security::Principal>,
+                        HttpCallback callback) {
+              SnapshotCallback snapshot_callback;
+              {
+                std::scoped_lock lock(StateMutex());
+                snapshot_callback = GlobalState().args.snapshot_callback;
+              }
+              callback(BuildSnapshotResponse(snapshot_callback, camera_id));
+            });
       },
       {Get});
 
   app().registerHandler(
       "/api/v1/ai/detections",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
-        DetectionSnapshotProvider detection_snapshot_provider;
-        {
-          std::scoped_lock lock(StateMutex());
-          detection_snapshot_provider =
-              GlobalState().args.detection_snapshot_provider;
-        }
-        callback(BuildDetectionSnapshotResponse(detection_snapshot_provider));
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              DetectionSnapshotProvider provider;
+              {
+                std::scoped_lock lock(StateMutex());
+                provider = GlobalState().args.detection_snapshot_provider;
+              }
+              callback(BuildDetectionSnapshotResponse(provider));
+            });
       },
       {Get});
 
   app().registerHandler(
       "/api/v1/ai/restart",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
-        AiControlCallback restart_callback;
-        AiStatusProvider ai_status_provider;
-        {
-          std::scoped_lock lock(StateMutex());
-          restart_callback = GlobalState().args.ai_restart_callback;
-          ai_status_provider = GlobalState().args.ai_status_provider;
-        }
-        callback(BuildAiRestartResponse(restart_callback, ai_status_provider));
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              AiControlCallback restart;
+              AiStatusProvider status;
+              {
+                std::scoped_lock lock(StateMutex());
+                restart = GlobalState().args.ai_restart_callback;
+                status = GlobalState().args.ai_status_provider;
+              }
+              callback(BuildAiRestartResponse(restart, status));
+            });
       },
       {Post});
 
   app().registerHandler(
       "/api/v1/ai/detections/stream",
-      [](const HttpRequestPtr& request,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
-        DetectionSnapshotProvider detection_snapshot_provider;
-        DetectionEventSubscriber detection_event_subscriber;
-        {
-          std::scoped_lock lock(StateMutex());
-          detection_snapshot_provider =
-              GlobalState().args.detection_snapshot_provider;
-          detection_event_subscriber =
-              GlobalState().args.detection_event_subscriber;
-        }
-        const std::string last_event_id =
-            request ? request->getHeader("Last-Event-ID") : "";
-        DetectionSnapshotProvider snapshot_provider_for_check =
-            detection_snapshot_provider;
-        auto pending = std::make_shared<DetectionSsePendingResponse>(
-            std::move(detection_snapshot_provider),
-            std::move(callback));
-        if (!detection_event_subscriber) {
-          pending->CompleteWithSnapshot();
-          return;
-        }
-
-        pending->SetSubscription(detection_event_subscriber(
-            [pending](const ai::DetectionEvent& event) {
-              pending->CompleteWithEvent(event);
-            }));
-        if (snapshot_provider_for_check) {
-          const auto snapshot = snapshot_provider_for_check();
-          const auto snapshot_id = BuildDetectionSseId(snapshot);
-          if (last_event_id.empty() || last_event_id != snapshot_id) {
-            pending->CompleteWithSnapshot();
-            return;
-          }
-        }
-        app().getLoop()->runAfter(kDetectionSsePendingTimeout, [pending] {
-          pending->CompleteWithSnapshot();
-        });
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        const std::string last_event_id = request->getHeader("Last-Event-ID");
+        AuthorizeRequest(
+            request, std::move(callback),
+            [last_event_id](std::optional<security::Principal>,
+                            HttpCallback callback) mutable {
+              DetectionSnapshotProvider snapshot_provider;
+              DetectionEventSubscriber subscriber;
+              {
+                std::scoped_lock lock(StateMutex());
+                snapshot_provider =
+                    GlobalState().args.detection_snapshot_provider;
+                subscriber = GlobalState().args.detection_event_subscriber;
+              }
+              DetectionSnapshotProvider provider_for_check = snapshot_provider;
+              auto pending = std::make_shared<DetectionSsePendingResponse>(
+                  std::move(snapshot_provider), std::move(callback));
+              if (!subscriber) {
+                pending->CompleteWithSnapshot();
+                return;
+              }
+              pending->SetSubscription(subscriber(
+                  [pending](const ai::DetectionEvent& event) {
+                    pending->CompleteWithEvent(event);
+                  }));
+              if (provider_for_check) {
+                const auto snapshot = provider_for_check();
+                if (last_event_id.empty() ||
+                    last_event_id != BuildDetectionSseId(snapshot)) {
+                  pending->CompleteWithSnapshot();
+                  return;
+                }
+              }
+              app().getLoop()->runAfter(kDetectionSsePendingTimeout, [pending] {
+                pending->CompleteWithSnapshot();
+              });
+            });
       },
       {Get});
 
   app().registerHandler(
       "/api/v1/stream",
-      [](const HttpRequestPtr&,
-         std::function<void(const HttpResponsePtr&)>&& callback) {
-        const config::AppConfig* config = nullptr;
-        std::string public_base_url;
-        SecureStreamDiagnosticsProvider secure_stream_diagnostics_provider;
-        {
-          std::scoped_lock lock(StateMutex());
-          config = GlobalState().args.app_config;
-          public_base_url = GlobalState().args.public_base_url;
-          secure_stream_diagnostics_provider =
-              GlobalState().args.secure_stream_diagnostics_provider;
-        }
-        if (config == nullptr) {
-          Json::Value body(Json::objectValue);
-          body["code"] = "E_CONFIG";
-          body["message"] = "service config unavailable";
-          callback(JsonResponse(std::move(body), drogon::k500InternalServerError));
-          return;
-        }
-
-        std::optional<SecureStreamDiagnostics> diagnostics;
-        if (secure_stream_diagnostics_provider) {
-          diagnostics = secure_stream_diagnostics_provider();
-        }
-        callback(JsonResponse(
-            BuildStreamJson(public_base_url, config->secure_rtsp, diagnostics)));
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              const config::AppConfig* config = nullptr;
+              std::string public_base_url;
+              SecureStreamDiagnosticsProvider diagnostics_provider;
+              {
+                std::scoped_lock lock(StateMutex());
+                config = GlobalState().args.app_config;
+                public_base_url = GlobalState().args.public_base_url;
+                diagnostics_provider =
+                    GlobalState().args.secure_stream_diagnostics_provider;
+              }
+              if (config == nullptr) {
+                Json::Value body(Json::objectValue);
+                body["code"] = "E_CONFIG";
+                body["message"] = "service config unavailable";
+                callback(JsonResponse(std::move(body),
+                                      k500InternalServerError));
+                return;
+              }
+              std::optional<SecureStreamDiagnostics> diagnostics;
+              if (diagnostics_provider) {
+                diagnostics = diagnostics_provider();
+              }
+              callback(JsonResponse(BuildStreamJson(
+                  public_base_url, config->secure_rtsp, diagnostics)));
+            });
       },
       {Get});
 }
@@ -421,10 +1059,9 @@ common::Result<void> StopServiceThreadWithin(
     return common::Result<void>::Ok();
   }
 
-  service_thread.detach();
   return common::Result<void>::Err(
       {"E_SERVICE_THREAD_STOP_TIMEOUT",
-       "service thread stop timed out; detached Drogon service thread"});
+       "service thread stop timed out; thread remains joinable"});
 }
 
 }  // namespace internal
@@ -740,22 +1377,65 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         {"E_HTTP_TLS_REQUIRED", "security requires an HTTPS listener"});
   }
 
-  std::optional<security::ResolvedTlsMaterial> tls_material;
-  if (args.app_config->http.tls.enabled) {
-    auto resolved = security::ResolveTlsMaterial(
-        args.app_config->http.tls,
-        args.app_config->security.state_directory);
-    if (!resolved.ok()) {
-      return common::Result<void>::Err(resolved.error());
-    }
-    tls_material = std::move(resolved).value();
-  }
-
   try {
+    ServiceInitArgs effective_args = args;
+    security::DeviceState initial_device_state =
+        security::DeviceState::kDefault;
+    std::shared_ptr<BoundedWorker> security_worker;
+    if (args.app_config->security.enabled) {
+      if (!effective_args.security_store) {
+        auto opened = security::SecurityStore::Open(
+            {args.app_config->security.state_directory});
+        if (!opened.ok()) {
+          return common::Result<void>::Err(opened.error());
+        }
+        effective_args.security_store =
+            std::shared_ptr<security::SecurityStore>(std::move(opened).value());
+      }
+      auto state = effective_args.security_store->State();
+      if (!state.ok()) {
+        return common::Result<void>::Err(state.error());
+      }
+      initial_device_state = state.value();
+      if (!effective_args.bootstrap_service) {
+        effective_args.bootstrap_service =
+            std::make_shared<security::BootstrapService>(
+                *effective_args.security_store, *args.app_config,
+                security::BuildReservedIdentities(*args.app_config));
+      }
+      if (!effective_args.auth_service) {
+        effective_args.auth_service = std::make_shared<security::AuthService>(
+            *effective_args.security_store);
+      }
+      security_worker = std::make_shared<BoundedWorker>(16U);
+    }
+
+    std::optional<security::ResolvedTlsMaterial> tls_material;
+    if (args.app_config->http.tls.enabled) {
+      auto resolved = security::ResolveTlsMaterial(
+          args.app_config->http.tls,
+          args.app_config->security.state_directory);
+      if (!resolved.ok()) {
+        return common::Result<void>::Err(resolved.error());
+      }
+      tls_material = std::move(resolved).value();
+    }
     std::shared_ptr<ServiceStartupSignal> startup_signal;
     {
       std::scoped_lock lock(StateMutex());
-      GlobalState().args = args;
+      GlobalState().args = effective_args;
+      GlobalState().security_worker = security_worker;
+      GlobalState().device_state = initial_device_state;
+      GlobalState().shutting_down = false;
+      security_worker_ = security_worker;
+      {
+        std::lock_guard shutdown_lock(shutdown_mutex_);
+        if (!shutdown_thread_started_) {
+          shutdown_thread_ =
+              std::thread([this] { RunShutdownCoordinator(); });
+          shutdown_thread_started_ = true;
+        }
+      }
       if (!initialized_) {
         const auto web_root = std::filesystem::absolute(args.document_root);
         ServiceListenerConfig listener;
@@ -769,6 +1449,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         }
         drogon::app().setThreadNum(1);
         drogon::app().disableSession();
+        drogon::app().setClientMaxBodySize(kMaximumSecurityBodyBytes);
+        drogon::app().setClientMaxMemoryBodySize(kMaximumSecurityBodyBytes);
         drogon::app().setDocumentRoot(web_root.string());
         drogon::app().addListener(listener.bind_address,
                                   listener.port,
@@ -816,10 +1498,13 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
             [] { drogon::app().quit(); });
         running_ = false;
         if (!stopped.ok()) {
-          return common::Result<void>::Err(
+          auto error = common::Result<void>::Err(
               {"E_SERVICE_START",
                startup.error().message + "; " + stopped.error().message});
+          Stop();
+          return error;
         }
+        Stop();
         return startup;
       }
     }
@@ -827,23 +1512,144 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
     Stop();
     return common::Result<void>::Err(
         {"E_SERVICE_START", std::string("failed to start service: ") + ex.what()});
+  } catch (...) {
+    Stop();
+    return common::Result<void>::Err(
+        {"E_SERVICE_START", "failed to start service"});
   }
 
   return common::Result<void>::Ok();
 }
 
-void ServiceApp::Stop() {
-  if (running_ || server_thread_.joinable()) {
-    auto stopped = internal::StopServiceThreadWithin(
-        server_thread_,
-        server_thread_done_,
-        kServiceThreadStopTimeout,
-        [] { drogon::app().quit(); });
-    if (!stopped.ok()) {
-      common::Logger::instance().log(common::Logger::Level::kWarn,
-                                     stopped.error().message);
+void ServiceApp::RunShutdownCoordinator() noexcept {
+  trantor::EventLoop* drain_loop = nullptr;
+  {
+    std::unique_lock shutdown_lock(shutdown_mutex_);
+    shutdown_condition_.wait(
+        shutdown_lock, [this] { return shutdown_requested_; });
+    drain_loop = shutdown_drain_loop_;
+  }
+  PerformShutdown(drain_loop);
+  shutdown_condition_.notify_all();
+}
+
+void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
+  try {
+    std::shared_ptr<BoundedWorker> security_worker;
+    {
+      std::scoped_lock lock(StateMutex());
+      GlobalState().shutting_down = true;
+      security_worker = GlobalState().security_worker;
     }
-    running_ = false;
+    if (security_worker) {
+      security_worker->Stop();
+    }
+
+    if (running_ || server_thread_.joinable()) {
+      try {
+        auto drained = std::make_shared<std::promise<void>>();
+        auto drained_future = drained->get_future();
+        auto* loop = drain_loop != nullptr ? drain_loop : drogon::app().getLoop();
+        loop->runAfter(0.01, [drained] {
+          try {
+            drained->set_value();
+          } catch (...) {
+          }
+        });
+        if (drained_future.wait_for(kServiceThreadStopTimeout) !=
+            std::future_status::ready) {
+          common::Logger::instance().log(
+              common::Logger::Level::kWarn,
+              "service event-loop response drain timed out");
+        }
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to schedule service response drain");
+      }
+
+      drogon::app().quit();
+      if (server_thread_.joinable()) {
+        if (server_thread_done_.valid() &&
+            server_thread_done_.wait_for(kServiceThreadStopTimeout) !=
+                std::future_status::ready) {
+          common::Logger::instance().log(
+              common::Logger::Level::kWarn,
+              "service thread stop timed out; waiting for safe join");
+        }
+        server_thread_.join();
+      }
+      running_ = false;
+    }
+  } catch (...) {
+    common::Logger::instance().log(common::Logger::Level::kWarn,
+                                   "service shutdown failed");
+  }
+
+  {
+    std::scoped_lock lock(StateMutex());
+    GlobalState().args = {};
+    GlobalState().security_worker.reset();
+    GlobalState().device_state = security::DeviceState::kDefault;
+  }
+  security_worker_.reset();
+  tls_material_.reset();
+  server_thread_done_ = {};
+}
+
+void ServiceApp::JoinShutdownCoordinator() noexcept {
+  std::thread join_owner;
+  {
+    std::unique_lock shutdown_lock(shutdown_mutex_);
+    shutdown_condition_.wait(
+        shutdown_lock, [this] { return !shutdown_join_in_progress_; });
+    if (!shutdown_thread_started_ || shutdown_thread_released_) {
+      return;
+    }
+    shutdown_join_in_progress_ = true;
+    shutdown_thread_released_ = true;
+    join_owner = std::move(shutdown_thread_);
+  }
+  join_owner.join();
+  {
+    std::lock_guard shutdown_lock(shutdown_mutex_);
+    shutdown_join_in_progress_ = false;
+  }
+  shutdown_condition_.notify_all();
+}
+
+void ServiceApp::Stop() {
+  auto* current_loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+  bool on_service_loop = false;
+  if (current_loop != nullptr && drogon::app().isRunning()) {
+    on_service_loop = current_loop == drogon::app().getLoop();
+    for (std::size_t index = 0;
+         !on_service_loop && index < drogon::app().getThreadNum(); ++index) {
+      on_service_loop = current_loop == drogon::app().getIOLoop(index);
+    }
+  }
+  {
+    std::scoped_lock lock(StateMutex());
+    GlobalState().shutting_down = true;
+  }
+
+  bool coordinator_started = false;
+  {
+    std::lock_guard shutdown_lock(shutdown_mutex_);
+    if (on_service_loop && shutdown_drain_loop_ == nullptr) {
+      shutdown_drain_loop_ = current_loop;
+    }
+    shutdown_requested_ = true;
+    coordinator_started = shutdown_thread_started_;
+  }
+  shutdown_condition_.notify_all();
+
+  if (!coordinator_started) {
+    PerformShutdown(nullptr);
+    return;
+  }
+  if (!on_service_loop) {
+    JoinShutdownCoordinator();
   }
 }
 
