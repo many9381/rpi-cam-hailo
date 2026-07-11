@@ -423,7 +423,8 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     if (config.http.enabled && config.http.tls.enabled) {
       const bool has_cert = !config.http.tls.certificate_path.empty();
       const bool has_key = !config.http.tls.private_key_path.empty();
-      if (!has_cert || !has_key) {
+      if (has_cert != has_key ||
+          (!config.http.tls.allow_development_self_signed_tls && !has_cert)) {
         return HttpTlsError();
       }
     }

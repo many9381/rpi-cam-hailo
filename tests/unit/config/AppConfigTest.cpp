@@ -760,6 +760,27 @@ TEST(AppConfigTest, RejectsHttpTlsWithoutCertificatePair) {
   EXPECT_EQ(cfg.error().code, "E_CONFIG_HTTP_TLS");
 }
 
+TEST(AppConfigTest, LoadsExplicitDevelopmentHttpTlsWithoutCertificatePair) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  enabled: true
+  public_base_url: https://camera.local:8443
+  tls:
+    enabled: true
+    allow_development_self_signed_tls: true
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_TRUE(config.value().http.tls.enabled);
+  EXPECT_TRUE(config.value().http.tls.allow_development_self_signed_tls);
+  EXPECT_TRUE(config.value().http.tls.certificate_path.empty());
+  EXPECT_TRUE(config.value().http.tls.private_key_path.empty());
+}
+
 TEST(AppConfigTest, RejectsCameraAiWhenGlobalAiDisabled) {
   const char* yaml = "/tmp/cf-camera-ai-without-global.yaml";
   std::ofstream out(yaml);

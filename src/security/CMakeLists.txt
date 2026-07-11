@@ -1,5 +1,7 @@
 add_library(camera_firmware_security STATIC
     BootstrapService.cpp
+    DeviceTlsManager.cpp
+    DeviceTlsPlatform.cpp
     PasswordHasher.cpp
     PasswordPolicy.cpp
     SecurityStore.cpp

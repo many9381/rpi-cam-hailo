@@ -16,7 +16,6 @@
 #include <drogon/HttpAppFramework.h>
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
-#include <gio/gio.h>
 #include <json/writer.h>
 
 #include "camera_firmware/common/Logger.hpp"
@@ -395,6 +394,16 @@ void RegisterHandlers() {
 
 namespace internal {
 
+std::thread StartServiceThreadWithTlsOwner(
+    std::optional<security::ResolvedTlsMaterial> tls_material,
+    std::function<void()> run) {
+  return std::thread(
+      [tls_material = std::move(tls_material), run = std::move(run)]() mutable {
+        (void)tls_material;
+        run();
+      });
+}
+
 common::Result<void> StopServiceThreadWithin(
     std::thread& service_thread,
     const std::shared_future<void>& service_thread_done,
@@ -649,13 +658,15 @@ Json::Value BuildStreamJson(
 }
 
 ServiceListenerConfig BuildServiceListenerConfig(
-    const config::HttpConfig& http_config) {
+    const config::HttpConfig& http_config,
+    const security::ResolvedTlsMaterial& tls_material) {
   ServiceListenerConfig listener;
   listener.bind_address = http_config.bind_ip;
   listener.port = http_config.port;
-  listener.use_tls = http_config.tls.enabled;
-  listener.certificate_path = http_config.tls.certificate_path;
-  listener.private_key_path = http_config.tls.private_key_path;
+  listener.use_tls = true;
+  listener.certificate_path = tls_material.certificate_path.string();
+  listener.private_key_path = tls_material.private_key_path.string();
+  listener.tls_material = tls_material;
   return listener;
 }
 
@@ -665,23 +676,27 @@ common::Result<void> ValidateHttpTlsConfigFiles(
     return common::Result<void>::Ok();
   }
 
-  GError* error = nullptr;
-  GTlsCertificate* certificate = g_tls_certificate_new_from_files(
-      http_config.tls.certificate_path.c_str(),
-      http_config.tls.private_key_path.c_str(),
-      &error);
-  if (certificate == nullptr) {
-    std::string message =
-        "failed to load HTTP TLS certificate/key files from configured paths";
-    if (error != nullptr) {
-      message += ": ";
-      message += error->message;
-      g_error_free(error);
+  const bool has_certificate = !http_config.tls.certificate_path.empty();
+  const bool has_private_key = !http_config.tls.private_key_path.empty();
+  if (has_certificate != has_private_key) {
+    return common::Result<void>::Err(
+        {"E_HTTP_TLS_REQUIRED",
+         "a complete HTTP TLS certificate and private-key pair is required"});
+  }
+  if (!has_certificate) {
+    if (http_config.tls.allow_development_self_signed_tls) {
+      return common::Result<void>::Ok();
     }
-    return common::Result<void>::Err({"E_HTTP_TLS_CERT", message});
+    return common::Result<void>::Err(
+        {"E_HTTP_TLS_REQUIRED", "configured HTTP TLS material is required"});
   }
 
-  g_object_unref(certificate);
+  auto resolved = security::ResolveTlsMaterial(http_config.tls, {});
+  if (!resolved.ok()) {
+    return common::Result<void>::Err(
+        {"E_HTTP_TLS_CERT",
+         "failed to validate configured HTTP TLS certificate/key files"});
+  }
   return common::Result<void>::Ok();
 }
 
@@ -719,6 +734,22 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
   if (!tls_validation.ok()) {
     return tls_validation;
   }
+  if (args.app_config->security.enabled &&
+      (!args.app_config->http.enabled || !args.app_config->http.tls.enabled)) {
+    return common::Result<void>::Err(
+        {"E_HTTP_TLS_REQUIRED", "security requires an HTTPS listener"});
+  }
+
+  std::optional<security::ResolvedTlsMaterial> tls_material;
+  if (args.app_config->http.tls.enabled) {
+    auto resolved = security::ResolveTlsMaterial(
+        args.app_config->http.tls,
+        args.app_config->security.state_directory);
+    if (!resolved.ok()) {
+      return common::Result<void>::Err(resolved.error());
+    }
+    tls_material = std::move(resolved).value();
+  }
 
   try {
     std::shared_ptr<ServiceStartupSignal> startup_signal;
@@ -727,7 +758,15 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       GlobalState().args = args;
       if (!initialized_) {
         const auto web_root = std::filesystem::absolute(args.document_root);
-        const auto listener = BuildServiceListenerConfig(args.app_config->http);
+        ServiceListenerConfig listener;
+        if (tls_material.has_value()) {
+          tls_material_ = *tls_material;
+          listener = BuildServiceListenerConfig(args.app_config->http,
+                                                *tls_material_);
+        } else {
+          listener.bind_address = args.app_config->http.bind_ip;
+          listener.port = args.app_config->http.port;
+        }
         drogon::app().setThreadNum(1);
         drogon::app().disableSession();
         drogon::app().setDocumentRoot(web_root.string());
@@ -745,23 +784,24 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         server_thread_done_ = thread_completion->get_future().share();
         drogon::app().registerBeginningAdvice(
             [startup_signal] { startup_signal->ReportReady(); });
-        server_thread_ = std::thread([startup_signal, thread_completion] {
-          ThreadCompletionReporter completion_reporter(thread_completion);
-          try {
-            drogon::app().run();
-            startup_signal->ReportError(
-                {"E_SERVICE_START",
-                 "Drogon service stopped before reporting startup readiness"});
-          } catch (const std::exception& ex) {
-            startup_signal->ReportError(
-                {"E_SERVICE_START",
-                 std::string("failed to start service: ") + ex.what()});
-          } catch (...) {
-            startup_signal->ReportError(
-                {"E_SERVICE_START",
-                 "failed to start service: unknown Drogon exception"});
-          }
-        });
+        server_thread_ = internal::StartServiceThreadWithTlsOwner(
+            tls_material_, [startup_signal, thread_completion] {
+              ThreadCompletionReporter completion_reporter(thread_completion);
+              try {
+                drogon::app().run();
+                startup_signal->ReportError(
+                    {"E_SERVICE_START",
+                     "Drogon service stopped before reporting startup readiness"});
+              } catch (const std::exception& ex) {
+                startup_signal->ReportError(
+                    {"E_SERVICE_START",
+                     std::string("failed to start service: ") + ex.what()});
+              } catch (...) {
+                startup_signal->ReportError(
+                    {"E_SERVICE_START",
+                     "failed to start service: unknown Drogon exception"});
+              }
+            });
         running_ = true;
       }
     }

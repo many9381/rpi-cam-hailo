@@ -1,17 +1,82 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
 #include <chrono>
+#include <array>
+#include <cerrno>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
 #include "camera_firmware/ai/AiTypes.hpp"
+
+namespace {
+
+class TemporaryTlsDirectory {
+ public:
+  TemporaryTlsDirectory() {
+    std::array<char, 40> pattern{"/tmp/cf-service-tls-XXXXXX"};
+    char* created = ::mkdtemp(pattern.data());
+    if (created == nullptr) {
+      throw std::system_error(errno, std::generic_category(), "mkdtemp");
+    }
+    path_ = created;
+  }
+
+  ~TemporaryTlsDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  [[nodiscard]] const std::filesystem::path& path() const noexcept {
+    return path_;
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+void WriteExclusiveTlsFile(const std::filesystem::path& directory,
+                           std::string_view name,
+                           mode_t mode,
+                           std::string_view contents) {
+  const int directory_fd =
+      ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (directory_fd < 0) {
+    throw std::system_error(errno, std::generic_category(), "open directory");
+  }
+  const int file_fd =
+      ::openat(directory_fd, name.data(),
+               O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, mode);
+  if (file_fd < 0 || ::fchmod(file_fd, mode) != 0 ||
+      ::write(file_fd, contents.data(), contents.size()) !=
+          static_cast<ssize_t>(contents.size())) {
+    const int error = errno;
+    if (file_fd >= 0) {
+      (void)::close(file_fd);
+    }
+    (void)::close(directory_fd);
+    throw std::system_error(error, std::generic_category(), "write TLS file");
+  }
+  const int file_close = ::close(file_fd);
+  const int directory_close = ::close(directory_fd);
+  if (file_close != 0 || directory_close != 0) {
+    throw std::system_error(errno, std::generic_category(), "close TLS file");
+  }
+}
+
+}  // namespace
 
 TEST(ServiceResponseTest, HealthJsonContainsStatus) {
   auto json = camera_firmware::service::BuildHealthJson("ok");
@@ -599,35 +664,154 @@ TEST(ServiceResponseTest, DetectionSseMergeReplacesMatchingCameraModel) {
   EXPECT_EQ(merged[0].frame_sequence, 92U);
 }
 
-TEST(ServiceResponseTest, ListenerConfigEnablesHttpsFromHttpConfig) {
+TEST(ServiceResponseTest, TlsListenerConfigUsesResolvedMaterial) {
+  TemporaryTlsDirectory state;
   camera_firmware::config::AppConfig config;
   config.http.bind_ip = "127.0.0.1";
   config.http.port = 9443;
   config.http.tls.enabled = true;
-  config.http.tls.certificate_path = "/tmp/http.crt";
-  config.http.tls.private_key_path = "/tmp/http.key";
-
-  const auto listener =
-      camera_firmware::service::BuildServiceListenerConfig(config.http);
+  config.http.tls.allow_development_self_signed_tls = true;
+  camera_firmware::service::ServiceListenerConfig listener;
+  struct stat validated_certificate {};
+  {
+    auto resolved = camera_firmware::security::ResolveTlsMaterial(
+        config.http.tls, state.path());
+    ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+    listener = camera_firmware::service::BuildServiceListenerConfig(
+        config.http, resolved.value());
+    ASSERT_EQ(::stat(listener.certificate_path.c_str(),
+                     &validated_certificate),
+              0);
+  }
+  std::filesystem::rename(state.path() / "device-tls",
+                          state.path() / "validated-device-tls");
+  ASSERT_TRUE(std::filesystem::create_directory(state.path() / "device-tls"));
+  ASSERT_EQ(::chmod((state.path() / "device-tls").c_str(), 0700), 0);
+  WriteExclusiveTlsFile(state.path() / "device-tls", "certificate.pem", 0644,
+                        "replacement certificate\n");
+  WriteExclusiveTlsFile(state.path() / "device-tls", "private-key.pem", 0600,
+                        "replacement key\n");
 
   EXPECT_EQ(listener.bind_address, "127.0.0.1");
   EXPECT_EQ(listener.port, 9443u);
   EXPECT_TRUE(listener.use_tls);
-  EXPECT_EQ(listener.certificate_path, "/tmp/http.crt");
-  EXPECT_EQ(listener.private_key_path, "/tmp/http.key");
+  EXPECT_TRUE(listener.certificate_path.starts_with("/proc/self/fd/"));
+  EXPECT_TRUE(listener.private_key_path.starts_with("/proc/self/fd/"));
+  EXPECT_TRUE(std::filesystem::exists(listener.certificate_path));
+  EXPECT_TRUE(std::filesystem::exists(listener.private_key_path));
+  struct stat listener_certificate {};
+  ASSERT_EQ(::stat(listener.certificate_path.c_str(), &listener_certificate), 0);
+  EXPECT_EQ(listener_certificate.st_dev, validated_certificate.st_dev);
+  EXPECT_EQ(listener_certificate.st_ino, validated_certificate.st_ino);
+}
+
+TEST(ServiceResponseTest, HttpTlsValidationPermitsMissingExplicitDevelopmentPair) {
+  camera_firmware::config::HttpConfig http;
+  http.enabled = true;
+  http.tls.enabled = true;
+  http.tls.allow_development_self_signed_tls = true;
+
+  const auto validated =
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+
+  ASSERT_TRUE(validated.ok()) << validated.error().message;
+}
+
+TEST(ServiceResponseTest, HttpTlsValidationRejectsMissingProductionPair) {
+  camera_firmware::config::HttpConfig http;
+  http.enabled = true;
+  http.tls.enabled = true;
+
+  const auto validated =
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_HTTP_TLS_REQUIRED");
+}
+
+TEST(ServiceResponseTest, HttpTlsValidationRejectsIncompleteDevelopmentPair) {
+  camera_firmware::config::HttpConfig http;
+  http.enabled = true;
+  http.tls.enabled = true;
+  http.tls.allow_development_self_signed_tls = true;
+  http.tls.certificate_path = "/configured/http.crt";
+
+  const auto validated =
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_HTTP_TLS_REQUIRED");
+}
+
+TEST(ServiceResponseTest, TlsInitRejectsSecurityWithoutTlsInsteadOfDowngrade) {
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.http.enabled = true;
+  config.http.tls.enabled = false;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  camera_firmware::service::ServiceApp service;
+
+  const auto initialized = service.Init(args);
+
+  ASSERT_FALSE(initialized.ok());
+  EXPECT_EQ(initialized.error().code, "E_HTTP_TLS_REQUIRED");
+}
+
+TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesDetachedStopTimeout) {
+  TemporaryTlsDirectory state;
+  camera_firmware::config::HttpTlsConfig tls;
+  tls.enabled = true;
+  tls.allow_development_self_signed_tls = true;
+  auto resolved = camera_firmware::security::ResolveTlsMaterial(tls, state.path());
+  ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+  const auto certificate_path = resolved.value().certificate_path;
+  const auto private_key_path = resolved.value().private_key_path;
+
+  auto release = std::make_shared<std::promise<void>>();
+  auto release_future = release->get_future().share();
+  auto completion = std::make_shared<std::promise<void>>();
+  auto completion_future = completion->get_future().share();
+  auto service_thread =
+      camera_firmware::service::internal::StartServiceThreadWithTlsOwner(
+          std::optional<camera_firmware::security::ResolvedTlsMaterial>{
+              std::move(resolved).value()},
+          [release_future, completion] {
+            release_future.wait();
+            completion->set_value();
+          });
+
+  auto stopped = camera_firmware::service::internal::StopServiceThreadWithin(
+      service_thread, completion_future, std::chrono::milliseconds(10), [] {});
+
+  ASSERT_FALSE(stopped.ok());
+  EXPECT_EQ(stopped.error().code, "E_SERVICE_THREAD_STOP_TIMEOUT");
+  EXPECT_FALSE(service_thread.joinable());
+  EXPECT_EQ(::access(certificate_path.c_str(), R_OK), 0);
+  EXPECT_EQ(::access(private_key_path.c_str(), R_OK), 0);
+
+  release->set_value();
+  ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  for (int attempt = 0; attempt < 1000; ++attempt) {
+    if (::access(certificate_path.c_str(), F_OK) != 0 &&
+        ::access(private_key_path.c_str(), F_OK) != 0) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_NE(::access(certificate_path.c_str(), F_OK), 0);
+  EXPECT_NE(::access(private_key_path.c_str(), F_OK), 0);
 }
 
 TEST(ServiceResponseTest, HttpTlsValidationRejectsUnreadableOrInvalidFiles) {
-  const auto cert_path =
-      std::filesystem::temp_directory_path() / "cf-invalid-http.crt";
-  const auto key_path =
-      std::filesystem::temp_directory_path() / "cf-invalid-http.key";
-  {
-    std::ofstream cert(cert_path);
-    cert << "not a certificate";
-    std::ofstream key(key_path);
-    key << "not a key";
-  }
+  TemporaryTlsDirectory state;
+  WriteExclusiveTlsFile(state.path(), "invalid-http.crt", 0644,
+                        "not a certificate\n");
+  WriteExclusiveTlsFile(state.path(), "invalid-http.key", 0600,
+                        "not a private key\n");
+  const auto cert_path = state.path() / "invalid-http.crt";
+  const auto key_path = state.path() / "invalid-http.key";
 
   camera_firmware::config::HttpConfig http;
   http.enabled = true;
@@ -637,8 +821,6 @@ TEST(ServiceResponseTest, HttpTlsValidationRejectsUnreadableOrInvalidFiles) {
 
   auto validated = camera_firmware::service::ValidateHttpTlsConfigFiles(http);
 
-  std::filesystem::remove(cert_path);
-  std::filesystem::remove(key_path);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_HTTP_TLS_CERT");
 }

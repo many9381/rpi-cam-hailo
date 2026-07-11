@@ -18,6 +18,7 @@
 #include "camera_firmware/ai/AiTypes.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/security/DeviceTlsManager.hpp"
 
 namespace camera_firmware::service {
 
@@ -86,6 +87,7 @@ struct ServiceListenerConfig {
   bool use_tls{false};
   std::string certificate_path;
   std::string private_key_path;
+  std::optional<security::ResolvedTlsMaterial> tls_material;
 };
 
 struct ServiceInitArgs {
@@ -130,7 +132,8 @@ Json::Value BuildStreamJson(
     const config::SecureRtspConfig& secure_rtsp,
     const std::optional<SecureStreamDiagnostics>& diagnostics = std::nullopt);
 ServiceListenerConfig BuildServiceListenerConfig(
-    const config::HttpConfig& http_config);
+    const config::HttpConfig& http_config,
+    const security::ResolvedTlsMaterial& tls_material);
 common::Result<void> ValidateHttpTlsConfigFiles(
     const config::HttpConfig& http_config);
 drogon::HttpResponsePtr BuildSnapshotResponse(
@@ -138,6 +141,10 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
     const std::string& camera_id);
 
 namespace internal {
+
+std::thread StartServiceThreadWithTlsOwner(
+    std::optional<security::ResolvedTlsMaterial> tls_material,
+    std::function<void()> run);
 
 common::Result<void> StopServiceThreadWithin(
     std::thread& service_thread,
@@ -163,6 +170,7 @@ class ServiceApp {
  private:
   bool initialized_{false};
   bool running_{false};
+  std::optional<security::ResolvedTlsMaterial> tls_material_;
   std::thread server_thread_;
   std::shared_future<void> server_thread_done_;
 };

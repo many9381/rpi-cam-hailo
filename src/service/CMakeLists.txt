@@ -17,6 +17,6 @@ target_link_libraries(camera_firmware_service
     PUBLIC
         camera_firmware_ai
         camera_firmware_config
+        camera_firmware_security
         Drogon::Drogon
-        PkgConfig::GIO
 )
