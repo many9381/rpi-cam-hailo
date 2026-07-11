@@ -51,6 +51,8 @@ gtest_discover_tests(camera_firmware_config_tests
 )
 
 add_executable(camera_firmware_security_tests
+    unit/security/PasswordHasherTest.cpp
+    unit/security/PasswordPolicyTest.cpp
     unit/security/SecurityStoreTest.cpp
 )
 
