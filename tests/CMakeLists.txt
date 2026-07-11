@@ -51,6 +51,7 @@ gtest_discover_tests(camera_firmware_config_tests
 )
 
 add_executable(camera_firmware_security_tests
+    unit/security/BootstrapServiceTest.cpp
     unit/security/PasswordHasherTest.cpp
     unit/security/PasswordPolicyTest.cpp
     unit/security/SecurityStoreTest.cpp
@@ -60,6 +61,7 @@ target_link_libraries(camera_firmware_security_tests
     PRIVATE
         camera_firmware_security
         camera_firmware_common
+        camera_firmware_rtsp
         GTest::gtest_main
 )
 

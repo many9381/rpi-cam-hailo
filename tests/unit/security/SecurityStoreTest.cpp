@@ -1,7 +1,11 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 
+#include "camera_firmware/security/PasswordHasher.hpp"
+
 #include <array>
 #include <cerrno>
+#include <chrono>
+#include <future>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -37,8 +41,15 @@ extern "C" int __real_sqlite3_exec(sqlite3* database,
 namespace {
 
 using camera_firmware::security::DeviceState;
+using camera_firmware::security::BootstrapRecord;
+using camera_firmware::security::PasswordRecord;
 using camera_firmware::security::SecurityStore;
 using camera_firmware::security::SecurityStoreConfig;
+
+template <typename T>
+concept HasPublicSetDeviceState = requires(T& transaction) {
+  transaction.SetDeviceState(DeviceState::kOperational);
+};
 
 std::optional<std::filesystem::path> spoofed_owner_path;
 std::function<void(const char*, int)> before_sqlite_open;
@@ -148,6 +159,24 @@ int QueryInt(sqlite3* database, const char* sql) {
   return value;
 }
 
+camera_firmware::common::SecureBytes FilledBytes(std::size_t size,
+                                                  unsigned char value) {
+  camera_firmware::common::SecureBytes bytes;
+  bytes.resize(size);
+  std::fill_n(bytes.data(), size, value);
+  return bytes;
+}
+
+BootstrapRecord MakeBootstrapRecord() {
+  PasswordRecord password;
+  password.salt = FilledBytes(camera_firmware::security::kPasswordSaltBytes,
+                              0x31U);
+  password.derived = FilledBytes(
+      camera_firmware::security::kPasswordDerivedBytes, 0xa7U);
+  return {"operator.one", "Operator.One", std::move(password),
+          "2001:db8::10", 1720000000};
+}
+
 std::string QueryText(sqlite3* database, const char* sql) {
   sqlite3_stmt* statement = nullptr;
   if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
@@ -205,6 +234,39 @@ void CreateDatabaseWithSql(const std::filesystem::path& path, const char* sql) {
   }
 }
 
+void ExecuteDatabaseSql(const std::filesystem::path& path, const char* sql) {
+  sqlite3* database = nullptr;
+  if (__real_sqlite3_open_v2(path.c_str(), &database,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
+                             nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_open_v2 failed");
+  }
+  char* error_message = nullptr;
+  const int execute =
+      __real_sqlite3_exec(database, sql, nullptr, nullptr, &error_message);
+  if (error_message != nullptr) {
+    ::sqlite3_free(error_message);
+  }
+  const int close = __real_sqlite3_close_v2(database);
+  if (execute != SQLITE_OK || close != SQLITE_OK) {
+    throw std::runtime_error("failed to mutate test database");
+  }
+}
+
+int QueryDatabaseInt(const std::filesystem::path& path, const char* sql) {
+  sqlite3* database = nullptr;
+  if (__real_sqlite3_open_v2(path.c_str(), &database,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
+                             nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_open_v2 failed");
+  }
+  const int value = QueryInt(database, sql);
+  if (__real_sqlite3_close_v2(database) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_close_v2 failed");
+  }
+  return value;
+}
+
 bool GitIgnores(std::string_view path) {
   const pid_t child = ::fork();
   if (child < 0) {
@@ -249,7 +311,50 @@ void ExpectStoreErrorWithMode(mode_t mode, std::string_view code) {
   EXPECT_EQ(store.error().code, code);
 }
 
+void ExpectReopenRejectsSchemaMutation(const char* mutation) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", mutation);
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+void ExpectOperationalReopenRejectsDataMutation(const char* mutation) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_TRUE(store.value()
+                    ->InitializeDevice(MakeBootstrapRecord(), [] {
+                      return camera_firmware::common::Result<void>::Ok();
+                    })
+                    .ok());
+  }
+  ExecuteDatabaseSql(state / "security.db", mutation);
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
 }  // namespace
+
+void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
+                                                       bool rollback) {
+  fail_commit = commit;
+  fail_rollback = rollback;
+}
 
 extern "C" int __wrap_lstat(const char* path, struct stat* status) {
   const int result = __real_lstat(path, status);
@@ -415,7 +520,7 @@ TEST(SecurityStoreTest, BusyTimeoutFailureClosesOpenedDatabase) {
   EXPECT_EQ(close_calls, 1);
 }
 
-TEST(SecurityStoreTest, TransactionCommitPersistsTypedStateChange) {
+TEST(SecurityStoreTest, GenericTransactionCommitPreservesDefaultState) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -424,15 +529,81 @@ TEST(SecurityStoreTest, TransactionCommitPersistsTypedStateChange) {
   ASSERT_TRUE(started.ok()) << started.error().message;
   auto transaction = std::move(started).value();
 
-  ASSERT_TRUE(transaction.SetDeviceState(DeviceState::kOperational).ok());
   ASSERT_TRUE(transaction.Commit().ok());
   EXPECT_FALSE(transaction.active());
-  EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
 }
 
 TEST(SecurityStoreTest, TransactionMoveContractIsConstructionOnly) {
   EXPECT_TRUE(std::is_move_constructible_v<SecurityStore::Transaction>);
   EXPECT_FALSE(std::is_move_assignable_v<SecurityStore::Transaction>);
+}
+
+TEST(SecurityStoreTest, GenericTransactionCannotSetOperationalState) {
+  EXPECT_FALSE(HasPublicSetDeviceState<SecurityStore::Transaction>);
+}
+
+TEST(SecurityStoreTest, StateWaitsForBootstrapConnectionLease) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  std::promise<void> installer_entered;
+  std::promise<void> release_installer;
+  auto release = release_installer.get_future().share();
+  auto initialization = std::async(std::launch::async, [&] {
+    return store.value()->InitializeDevice(MakeBootstrapRecord(), [&] {
+      installer_entered.set_value();
+      release.wait();
+      return camera_firmware::common::Result<void>::Ok();
+    });
+  });
+  installer_entered.get_future().wait();
+
+  auto state = std::async(std::launch::async,
+                          [&] { return store.value()->State(); });
+  auto contender = std::async(std::launch::async, [&] {
+    return store.value()->InitializeDevice(MakeBootstrapRecord(), [] {
+      return camera_firmware::common::Result<void>::Ok();
+    });
+  });
+
+  EXPECT_EQ(state.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(contender.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  release_installer.set_value();
+  ASSERT_TRUE(initialization.get().ok());
+  auto losing_result = contender.get();
+  ASSERT_FALSE(losing_result.ok());
+  EXPECT_EQ(losing_result.error().code, "E_BOOTSTRAP_UNAVAILABLE");
+  auto committed_state = state.get();
+  ASSERT_TRUE(committed_state.ok()) << committed_state.error().message;
+  EXPECT_EQ(committed_state.value(), DeviceState::kOperational);
+}
+
+TEST(SecurityStoreTest, RollbackFailurePoisonsStoreAndHidesLocalState) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  fail_commit = true;
+  fail_rollback = true;
+
+  auto initialized = store.value()->InitializeDevice(
+      MakeBootstrapRecord(), [] {
+        return camera_firmware::common::Result<void>::Ok();
+      });
+
+  fail_commit = false;
+  fail_rollback = false;
+  ASSERT_FALSE(initialized.ok());
+  auto state = store.value()->State();
+  ASSERT_FALSE(state.ok());
+  EXPECT_EQ(state.error().code, "E_SECURITY_DB_POISONED");
+  auto transaction = store.value()->BeginTransaction();
+  ASSERT_FALSE(transaction.ok());
+  EXPECT_EQ(transaction.error().code, "E_SECURITY_DB_POISONED");
 }
 
 TEST(SecurityStoreTest, TransactionCanCommitAfterStoreIsDestroyed) {
@@ -449,13 +620,12 @@ TEST(SecurityStoreTest, TransactionCanCommitAfterStoreIsDestroyed) {
     store.value().reset();
   }
 
-  ASSERT_TRUE(transaction->SetDeviceState(DeviceState::kOperational).ok());
   ASSERT_TRUE(transaction->Commit().ok());
   transaction.reset();
 
   auto reopened = SecurityStore::Open({state});
   ASSERT_TRUE(reopened.ok()) << reopened.error().message;
-  EXPECT_EQ(reopened.value()->State().value(), DeviceState::kOperational);
+  EXPECT_EQ(reopened.value()->State().value(), DeviceState::kDefault);
 }
 
 TEST(SecurityStoreTest, TransactionDestructorRollsBackAfterStoreIsDestroyed) {
@@ -469,8 +639,6 @@ TEST(SecurityStoreTest, TransactionDestructorRollsBackAfterStoreIsDestroyed) {
     auto started = store.value()->BeginTransaction();
     ASSERT_TRUE(started.ok()) << started.error().message;
     transaction.emplace(std::move(started).value());
-    ASSERT_TRUE(
-        transaction->SetDeviceState(DeviceState::kOperational).ok());
     store.value().reset();
   }
 
@@ -482,7 +650,7 @@ TEST(SecurityStoreTest, TransactionDestructorRollsBackAfterStoreIsDestroyed) {
   EXPECT_EQ(reopened.value()->State().value(), DeviceState::kDefault);
 }
 
-TEST(SecurityStoreTest, TransactionRollbackDiscardsTypedStateChange) {
+TEST(SecurityStoreTest, GenericTransactionCanRollback) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -491,7 +659,6 @@ TEST(SecurityStoreTest, TransactionRollbackDiscardsTypedStateChange) {
   ASSERT_TRUE(started.ok()) << started.error().message;
   auto transaction = std::move(started).value();
 
-  ASSERT_TRUE(transaction.SetDeviceState(DeviceState::kOperational).ok());
   ASSERT_TRUE(transaction.Rollback().ok());
   EXPECT_FALSE(transaction.active());
   EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
@@ -506,14 +673,13 @@ TEST(SecurityStoreTest, TransactionDestructorRollsBackActiveWork) {
     auto started = store.value()->BeginTransaction();
     ASSERT_TRUE(started.ok()) << started.error().message;
     auto transaction = std::move(started).value();
-    ASSERT_TRUE(transaction.SetDeviceState(DeviceState::kOperational).ok());
   }
 
   EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
   EXPECT_EQ(rollback_calls, 1);
 }
 
-TEST(SecurityStoreTest, TransactionErrorsRemainActiveForCleanupRetry) {
+TEST(SecurityStoreTest, CommitFailureRetainsLeaseUntilRollback) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -521,8 +687,6 @@ TEST(SecurityStoreTest, TransactionErrorsRemainActiveForCleanupRetry) {
   auto started = store.value()->BeginTransaction();
   ASSERT_TRUE(started.ok()) << started.error().message;
   auto transaction = std::move(started).value();
-  ASSERT_TRUE(transaction.SetDeviceState(DeviceState::kOperational).ok());
-
   fail_commit = true;
   const auto commit = transaction.Commit();
   fail_commit = false;
@@ -530,15 +694,16 @@ TEST(SecurityStoreTest, TransactionErrorsRemainActiveForCleanupRetry) {
   EXPECT_EQ(commit.error().code, "E_SECURITY_DB_TRANSACTION");
   EXPECT_TRUE(transaction.active());
 
-  fail_rollback = true;
-  const auto first_rollback = transaction.Rollback();
-  fail_rollback = false;
-  ASSERT_FALSE(first_rollback.ok());
-  EXPECT_TRUE(transaction.active());
+  auto state = std::async(std::launch::async,
+                          [&] { return store.value()->State(); });
+  EXPECT_EQ(state.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
 
   ASSERT_TRUE(transaction.Rollback().ok());
   EXPECT_FALSE(transaction.active());
-  EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
+  auto released_state = state.get();
+  ASSERT_TRUE(released_state.ok()) << released_state.error().message;
+  EXPECT_EQ(released_state.value(), DeviceState::kDefault);
 }
 
 TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
@@ -553,7 +718,9 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
                 "SELECT name FROM sqlite_schema "
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
                 "ORDER BY name;"),
-            std::vector<std::string>({"device_state", "schema_version"}));
+            std::vector<std::string>({"audit_events", "device_state",
+                                      "management_ips", "schema_version",
+                                      "sessions", "users"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
@@ -563,7 +730,64 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('device_state') ORDER BY cid;"),
-            std::vector<std::string>({"id:INTEGER:0:1", "state:TEXT:1:0"}));
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "state:TEXT:1:0",
+                "schema_revision:INTEGER:1:0",
+                "setup_completed_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('users') ORDER BY cid;"),
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "canonical_username:TEXT:1:0",
+                "display_username:TEXT:1:0", "role:TEXT:1:0",
+                "enabled:INTEGER:1:0", "password_algorithm:TEXT:1:0",
+                "password_iterations:INTEGER:1:0", "password_salt:BLOB:1:0",
+                "password_derived:BLOB:1:0",
+                "password_changed_at_seconds:INTEGER:1:0",
+                "failed_login_count:INTEGER:1:0",
+                "lock_until_seconds:INTEGER:0:0",
+                "created_at_seconds:INTEGER:1:0",
+                "last_login_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('management_ips') ORDER BY cid;"),
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "normalized_ip:TEXT:1:0",
+                "role_scope:TEXT:1:0", "enabled:INTEGER:1:0",
+                "created_at_seconds:INTEGER:1:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('sessions') ORDER BY cid;"),
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "token_hash:BLOB:1:0",
+                "user_id:INTEGER:1:0", "role:TEXT:1:0",
+                "created_at_seconds:INTEGER:1:0",
+                "last_activity_at_seconds:INTEGER:1:0",
+                "expires_at_seconds:INTEGER:1:0", "peer_ip:TEXT:1:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('audit_events') ORDER BY cid;"),
+            std::vector<std::string>({
+                "sequence:INTEGER:0:1", "server_timestamp_seconds:INTEGER:1:0",
+                "event_type:TEXT:1:0", "outcome:TEXT:1:0",
+                "actor_user_id:INTEGER:0:0", "peer_ip:TEXT:1:0",
+                "detail_code:TEXT:1:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name FROM sqlite_schema WHERE type = 'index' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name;"),
+            std::vector<std::string>({
+                "audit_events_timestamp_index",
+                "management_ips_normalized_ip_unique",
+                "sessions_expiry_index",
+                "sessions_single_administrator_unique",
+                "sessions_token_hash_unique",
+                "users_canonical_username_unique",
+                "users_single_administrator_unique"}));
   EXPECT_NE(QueryText(last_opened_database,
                       "SELECT sql FROM sqlite_schema "
                       "WHERE type = 'table' AND name = 'device_state';")
@@ -578,9 +802,130 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
             1);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT version FROM schema_version;"),
             1);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT schema_revision FROM device_state WHERE id = 1;"),
+            1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA foreign_keys;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA secure_delete;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA busy_timeout;"), 1000);
+}
+
+TEST(SecurityStoreTest, BootstrapTransactionCommitsAllSecurityRows) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  int installer_calls = 0;
+
+  auto initialized = store.value()->InitializeDevice(
+      MakeBootstrapRecord(), [&installer_calls] {
+        ++installer_calls;
+        return camera_firmware::common::Result<void>::Ok();
+      });
+
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+  EXPECT_EQ(installer_calls, 1);
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
+  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 1);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT COUNT(*) FROM management_ips;"),
+            1);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT COUNT(*) FROM audit_events "
+                     "WHERE event_type = 'bootstrap_completed' "
+                     "AND outcome = 'success';"),
+            1);
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT canonical_username || '|' || display_username || "
+                      "'|' || role || '|' || enabled FROM users;"),
+            "operator.one|Operator.One|administrator|1");
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT normalized_ip || '|' || role_scope || '|' || "
+                      "enabled FROM management_ips;"),
+            "2001:db8::10|administrator|1");
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT setup_completed_at_seconds FROM device_state;"),
+            1720000000);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT length(password_salt) FROM users;"),
+            16);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT length(password_derived) FROM users;"),
+            32);
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT typeof(password_salt) || '|' || "
+                      "typeof(password_derived) FROM users;"),
+            "blob|blob");
+}
+
+TEST(SecurityStoreTest, InstallerFailureRollsBackBootstrapRowsAndState) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+
+  auto initialized = store.value()->InitializeDevice(
+      MakeBootstrapRecord(), [] {
+        return camera_firmware::common::Result<void>::Err(
+            {"E_TEST", "installer failed with secret material"});
+      });
+
+  ASSERT_FALSE(initialized.ok());
+  EXPECT_EQ(initialized.error().code, "E_BOOTSTRAP_CREDENTIAL");
+  EXPECT_EQ(initialized.error().message.find("secret"), std::string::npos);
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
+  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 0);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT COUNT(*) FROM management_ips;"),
+            0);
+  EXPECT_EQ(QueryInt(last_opened_database,
+                     "SELECT COUNT(*) FROM audit_events;"),
+            0);
+}
+
+TEST(SecurityStoreTest, InstallerExceptionRollsBackBootstrapRowsAndState) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+
+  auto initialized = store.value()->InitializeDevice(
+      MakeBootstrapRecord(), []() -> camera_firmware::common::Result<void> {
+        throw std::runtime_error("secret callback exception");
+      });
+
+  ASSERT_FALSE(initialized.ok());
+  EXPECT_EQ(initialized.error().code, "E_BOOTSTRAP_CREDENTIAL");
+  EXPECT_EQ(initialized.error().message.find("secret"), std::string::npos);
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
+  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 0);
+}
+
+TEST(SecurityStoreTest, OperationalStateRejectsBootstrapBeforeInstaller) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+  int installer_calls = 0;
+
+  auto repeated = store.value()->InitializeDevice(
+      MakeBootstrapRecord(), [&installer_calls] {
+        ++installer_calls;
+        return camera_firmware::common::Result<void>::Ok();
+      });
+
+  ASSERT_FALSE(repeated.ok());
+  EXPECT_EQ(repeated.error().code, "E_BOOTSTRAP_UNAVAILABLE");
+  EXPECT_EQ(installer_calls, 0);
+  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 1);
 }
 
 TEST(SecurityStoreTest, ReopensInitializedSchemaWithoutChangingState) {
@@ -590,11 +935,11 @@ TEST(SecurityStoreTest, ReopensInitializedSchemaWithoutChangingState) {
   {
     auto first = SecurityStore::Open({state});
     ASSERT_TRUE(first.ok()) << first.error().message;
-    auto started = first.value()->BeginTransaction();
-    ASSERT_TRUE(started.ok()) << started.error().message;
-    auto transaction = std::move(started).value();
-    ASSERT_TRUE(transaction.SetDeviceState(DeviceState::kOperational).ok());
-    ASSERT_TRUE(transaction.Commit().ok());
+    ASSERT_TRUE(first.value()
+                    ->InitializeDevice(MakeBootstrapRecord(), [] {
+                      return camera_firmware::common::Result<void>::Ok();
+                    })
+                    .ok());
   }
 
   auto reopened = SecurityStore::Open({state});
@@ -640,6 +985,197 @@ INSERT INTO device_state (id, state) VALUES (1, 'default');
 
   ASSERT_FALSE(store.ok());
   EXPECT_EQ(store.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsNamedIndexesWithWrongSecurityDefinition) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+DROP INDEX users_canonical_username_unique;
+CREATE INDEX users_canonical_username_unique ON users(canonical_username);
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+DROP INDEX users_canonical_username_unique;
+CREATE UNIQUE INDEX users_canonical_username_unique
+  ON users(canonical_username COLLATE BINARY);
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+DROP INDEX users_single_administrator_unique;
+CREATE UNIQUE INDEX users_single_administrator_unique
+  ON users(role) WHERE role = 'disabled';
+)sql");
+}
+
+TEST(SecurityStoreTest, RejectsWrongSessionForeignKeyDefinition) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA foreign_keys=OFF;
+ALTER TABLE sessions RENAME TO sessions_old;
+CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
+  user_id INTEGER NOT NULL REFERENCES management_ips(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  last_activity_at_seconds INTEGER NOT NULL
+    CHECK (last_activity_at_seconds >= created_at_seconds),
+  expires_at_seconds INTEGER NOT NULL
+    CHECK (expires_at_seconds >= last_activity_at_seconds),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+);
+DROP TABLE sessions_old;
+CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
+CREATE UNIQUE INDEX sessions_single_administrator_unique
+  ON sessions(role) WHERE role = 'administrator';
+CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);
+)sql");
+}
+
+TEST(SecurityStoreTest, RejectsMissingSessionTokenLengthConstraint) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA foreign_keys=OFF;
+ALTER TABLE sessions RENAME TO sessions_old;
+CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  token_hash BLOB NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  last_activity_at_seconds INTEGER NOT NULL
+    CHECK (last_activity_at_seconds >= created_at_seconds),
+  expires_at_seconds INTEGER NOT NULL
+    CHECK (expires_at_seconds >= last_activity_at_seconds),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+);
+DROP TABLE sessions_old;
+CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
+CREATE UNIQUE INDEX sessions_single_administrator_unique
+  ON sessions(role) WHERE role = 'administrator';
+CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);
+)sql");
+}
+
+TEST(SecurityStoreTest, RejectsUnexpectedTriggerAndViewObjects) {
+  ExpectOperationalReopenRejectsDataMutation(R"sql(
+CREATE TRIGGER remove_bootstrap_admin
+AFTER UPDATE OF state ON device_state
+WHEN NEW.state = 'operational' AND
+     NEW.setup_completed_at_seconds IS NOT NULL
+BEGIN
+  DELETE FROM users WHERE role = 'administrator';
+END;
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+CREATE VIEW bootstrap_usernames AS
+SELECT canonical_username FROM users;
+)sql");
+
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  MakeDirectory(state);
+  const auto database = state / "security.db";
+  CreateDatabaseWithSql(database,
+                        "CREATE VIEW unexpected_view AS SELECT 1 AS value;");
+
+  auto store = SecurityStore::Open({state});
+
+  ASSERT_FALSE(store.ok());
+  EXPECT_EQ(store.error().code, "E_SECURITY_DB_SCHEMA");
+  EXPECT_EQ(QueryDatabaseInt(database, "SELECT COUNT(*) FROM sqlite_schema;"),
+            1);
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithStaleBootstrapRows) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt,
+   password_derived, password_changed_at_seconds, failed_login_count,
+   created_at_seconds)
+VALUES
+  ('operator.one', 'Operator.One', 'administrator', 1,
+   'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 1, 0, 1);
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+INSERT INTO management_ips
+  (normalized_ip, role_scope, enabled, created_at_seconds)
+VALUES ('192.0.2.10', 'administrator', 1, 1);
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+INSERT INTO sessions
+  (token_hash, user_id, role, created_at_seconds,
+   last_activity_at_seconds, expires_at_seconds, peer_ip)
+VALUES (zeroblob(32), 999, 'administrator', 1, 1, 2, '192.0.2.10');
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code)
+VALUES (1, 'bootstrap_completed', 'success', NULL,
+        '192.0.2.10', 'initial_administrator');
+)sql");
+}
+
+TEST(SecurityStoreTest, RejectsOperationalStateMissingRequiredBootstrapRows) {
+  ExpectOperationalReopenRejectsDataMutation("DELETE FROM users;");
+  ExpectOperationalReopenRejectsDataMutation("DELETE FROM management_ips;");
+  ExpectOperationalReopenRejectsDataMutation(
+      "DELETE FROM audit_events WHERE event_type = 'bootstrap_completed' "
+      "AND outcome = 'success';");
+  ExpectOperationalReopenRejectsDataMutation(
+      "UPDATE users SET enabled = 0 WHERE role = 'administrator';");
+  ExpectOperationalReopenRejectsDataMutation(
+      "UPDATE management_ips SET enabled = 0;");
+}
+
+TEST(SecurityStoreTest, RejectsOperationalStateWithBrokenBootstrapLinks) {
+  ExpectOperationalReopenRejectsDataMutation(
+      "UPDATE audit_events SET actor_user_id = NULL "
+      "WHERE event_type = 'bootstrap_completed' AND outcome = 'success';");
+  ExpectOperationalReopenRejectsDataMutation(
+      "UPDATE audit_events SET peer_ip = '198.51.100.20' "
+      "WHERE event_type = 'bootstrap_completed' AND outcome = 'success';");
+  ExpectOperationalReopenRejectsDataMutation(R"sql(
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code)
+SELECT 2, 'bootstrap_completed', 'success', id,
+       '2001:db8::10', 'duplicate_bootstrap'
+FROM users WHERE role = 'administrator';
+)sql");
+}
+
+TEST(SecurityStoreTest, OperationalStateAllowsLaterNonBootstrapRows) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_TRUE(store.value()
+                    ->InitializeDevice(MakeBootstrapRecord(), [] {
+                      return camera_firmware::common::Result<void>::Ok();
+                    })
+                    .ok());
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO management_ips
+  (normalized_ip, role_scope, enabled, created_at_seconds)
+VALUES ('192.0.2.20', 'administrator', 1, 2);
+INSERT INTO sessions
+  (token_hash, user_id, role, created_at_seconds,
+   last_activity_at_seconds, expires_at_seconds, peer_ip)
+SELECT randomblob(32), id, 'administrator', 2, 2, 3, '192.0.2.20'
+FROM users WHERE role = 'administrator';
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code)
+SELECT 2, 'login_completed', 'success', id,
+       '192.0.2.20', 'session_created'
+FROM users WHERE role = 'administrator';
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_EQ(reopened.value()->State().value(), DeviceState::kOperational);
 }
 
 TEST(SecurityStoreTest, ProtectsNestedGeneratedSecurityFilesFromGit) {

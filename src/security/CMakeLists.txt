@@ -1,4 +1,5 @@
 add_library(camera_firmware_security STATIC
+    BootstrapService.cpp
     PasswordHasher.cpp
     PasswordPolicy.cpp
     SecurityStore.cpp
@@ -12,7 +13,10 @@ target_include_directories(camera_firmware_security
 target_link_libraries(camera_firmware_security
     PUBLIC
         camera_firmware_common
+        camera_firmware_config
     PRIVATE
+        camera_firmware_rtsp
         OpenSSL::Crypto
+        PkgConfig::GIO
         SQLite::SQLite3
 )
