@@ -5,9 +5,11 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
@@ -15,6 +17,7 @@
 namespace camera_firmware::security {
 
 class BootstrapService;
+class AuthService;
 
 enum class DeviceState { kDefault, kOperational };
 
@@ -78,10 +81,112 @@ class SecurityStore {
 
  private:
   friend class BootstrapService;
+  friend class AuthService;
+
+  struct AuthenticationUser {
+    std::int64_t id{0};
+    std::string display_username;
+    std::string role;
+    bool enabled{false};
+    PasswordRecord password;
+    std::int64_t failed_login_count{0};
+    std::optional<std::int64_t> lock_until_seconds;
+    std::int64_t created_at_seconds{0};
+    std::optional<std::int64_t> last_login_at_seconds;
+  };
+
+  struct AuthenticationContext {
+    DeviceState state{DeviceState::kDefault};
+    bool peer_registered{false};
+    std::optional<AuthenticationUser> user;
+  };
+
+  struct StoredSession {
+    std::int64_t id{0};
+    common::SecureBytes token_hash;
+    std::int64_t user_id{0};
+    std::string username;
+    std::string role;
+    std::int64_t created_at_seconds{0};
+    std::int64_t last_activity_at_seconds{0};
+    std::int64_t expires_at_seconds{0};
+    std::string peer_ip;
+  };
+
+  struct FirmwareLogOutboxEntry {
+    std::int64_t id{0};
+    std::string category;
+    std::string peer_ip;
+  };
 
   explicit SecurityStore(std::shared_ptr<Impl> impl) noexcept;
   common::Result<void> InitializeSchema();
+  common::Result<Transaction> BeginReadTransaction();
   common::Result<DeviceState> StateUnderConnectionLease() const;
+  common::Result<AuthenticationContext> ReadAuthenticationContext(
+      Transaction& transaction,
+      std::string_view canonical_username,
+      std::string_view normalized_peer_ip) const;
+  common::Result<void> SetLoginFailureState(
+      Transaction& transaction,
+      std::int64_t user_id,
+      std::int64_t failed_login_count,
+      std::optional<std::int64_t> lock_until_seconds);
+  common::Result<void> SetLoginSuccessState(Transaction& transaction,
+                                            std::int64_t user_id,
+                                            std::int64_t now_seconds);
+  common::Result<void> InsertAuditEvent(
+      Transaction& transaction,
+      std::int64_t now_seconds,
+      std::string_view event_type,
+      std::string_view outcome,
+      std::optional<std::int64_t> actor_user_id,
+      std::string_view normalized_peer_ip,
+      std::string_view detail_code);
+  common::Result<void> CoalesceFirmwareLogOutbox(
+      Transaction& transaction,
+      std::int64_t now_seconds,
+      std::string_view category,
+      std::string_view normalized_peer_ip);
+  common::Result<std::optional<FirmwareLogOutboxEntry>>
+  ClaimFirmwareLogOutbox(std::span<const unsigned char> lease_owner,
+                         std::span<const unsigned char> lease_token,
+                         std::int64_t now_seconds,
+                         std::int64_t lease_expires_at_seconds);
+  common::Result<bool> HasClaimableFirmwareLogOutbox(
+      std::int64_t now_seconds);
+  common::Result<void> AcknowledgeFirmwareLogOutbox(
+      std::int64_t outbox_id,
+      std::span<const unsigned char> lease_owner,
+      std::span<const unsigned char> lease_token);
+  common::Result<void> ReleaseFirmwareLogOutbox(
+      std::int64_t outbox_id,
+      std::span<const unsigned char> lease_owner,
+      std::span<const unsigned char> lease_token);
+  common::Result<void> DeleteExpiredSessions(Transaction& transaction,
+                                              std::int64_t now_seconds);
+  common::Result<std::optional<StoredSession>> ReadAdministratorSession(
+      Transaction& transaction) const;
+  common::Result<std::optional<StoredSession>> ReadSessionByTokenHash(
+      Transaction& transaction,
+      std::span<const unsigned char> token_hash) const;
+  common::Result<bool> SessionTokenHashExists(
+      Transaction& transaction,
+      std::span<const unsigned char> token_hash) const;
+  common::Result<void> InsertSession(
+      Transaction& transaction,
+      std::span<const unsigned char> token_hash,
+      std::int64_t user_id,
+      std::string_view role,
+      std::int64_t now_seconds,
+      std::int64_t expires_at_seconds,
+      std::string_view normalized_peer_ip);
+  common::Result<void> RefreshSession(Transaction& transaction,
+                                      std::int64_t session_id,
+                                      std::int64_t now_seconds,
+                                      std::int64_t expires_at_seconds);
+  common::Result<void> DeleteSession(Transaction& transaction,
+                                     std::int64_t session_id);
   common::Result<void> InstallBootstrapRtspCredential(
       const std::filesystem::path& configured_path,
       std::string_view username,

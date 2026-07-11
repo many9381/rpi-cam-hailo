@@ -493,6 +493,75 @@ bool ValidateIndex(sqlite3* database,
   return ValidateSchemaObjectSql(database, index_name, expected_sql);
 }
 
+bool ValidateTwoColumnIndex(sqlite3* database,
+                            const char* table_name,
+                            const char* index_name,
+                            bool expected_unique,
+                            const std::array<const char*, 2>& expected_columns,
+                            std::string_view expected_sql) {
+  sqlite3_stmt* list = nullptr;
+  constexpr const char* kListSql =
+      "SELECT \"unique\", origin, partial FROM pragma_index_list(?1) "
+      "WHERE name = ?2;";
+  if (::sqlite3_prepare_v2(database, kListSql, -1, &list, nullptr) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_text(list, 1, table_name, -1, SQLITE_STATIC) != SQLITE_OK ||
+      ::sqlite3_bind_text(list, 2, index_name, -1, SQLITE_STATIC) != SQLITE_OK ||
+      ::sqlite3_step(list) != SQLITE_ROW) {
+    if (list != nullptr) {
+      (void)::sqlite3_finalize(list);
+    }
+    return false;
+  }
+  const auto* origin = ::sqlite3_column_text(list, 1);
+  const bool list_valid =
+      ::sqlite3_column_int(list, 0) == (expected_unique ? 1 : 0) &&
+      origin != nullptr &&
+      std::string_view(reinterpret_cast<const char*>(origin)) == "c" &&
+      ::sqlite3_column_int(list, 2) == 0 &&
+      ::sqlite3_step(list) == SQLITE_DONE;
+  const bool list_finalized = ::sqlite3_finalize(list) == SQLITE_OK;
+  if (!list_valid || !list_finalized) {
+    return false;
+  }
+
+  sqlite3_stmt* columns = nullptr;
+  constexpr const char* kColumnsSql =
+      "SELECT name, coll, desc FROM pragma_index_xinfo(?1) "
+      "WHERE key = 1 ORDER BY seqno;";
+  if (::sqlite3_prepare_v2(database, kColumnsSql, -1, &columns, nullptr) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_text(columns, 1, index_name, -1, SQLITE_STATIC) !=
+          SQLITE_OK) {
+    if (columns != nullptr) {
+      (void)::sqlite3_finalize(columns);
+    }
+    return false;
+  }
+  bool columns_valid = true;
+  for (const char* expected_column : expected_columns) {
+    if (::sqlite3_step(columns) != SQLITE_ROW) {
+      columns_valid = false;
+      break;
+    }
+    const auto* column = ::sqlite3_column_text(columns, 0);
+    const auto* collation = ::sqlite3_column_text(columns, 1);
+    columns_valid = column != nullptr && collation != nullptr &&
+                    std::string_view(reinterpret_cast<const char*>(column)) ==
+                        expected_column &&
+                    std::string_view(reinterpret_cast<const char*>(collation)) ==
+                        "BINARY" &&
+                    ::sqlite3_column_int(columns, 2) == 0;
+    if (!columns_valid) {
+      break;
+    }
+  }
+  columns_valid = columns_valid && ::sqlite3_step(columns) == SQLITE_DONE;
+  const bool columns_finalized = ::sqlite3_finalize(columns) == SQLITE_OK;
+  return columns_valid && columns_finalized &&
+         ValidateSchemaObjectSql(database, index_name, expected_sql);
+}
+
 struct ForeignKeyInfo {
   std::string referenced_table;
   std::string from_column;
@@ -546,7 +615,7 @@ bool ReadForeignKeys(sqlite3* database,
 
 bool HasExactSchemaObjectInventory(sqlite3* database) {
   int value = 0;
-  // Revision 1 has no SQLite-generated autoindexes: all approved uniqueness is
+  // Revision 2 has no SQLite-generated autoindexes: all approved uniqueness is
   // represented by the named indexes below. Requiring the complete inventory
   // rejects internal autoindexes as well as application triggers and views.
   constexpr const char* kUnexpectedObjectCount = R"sql(
@@ -559,7 +628,8 @@ WHERE NOT (
     (name = 'users' AND tbl_name = 'users') OR
     (name = 'management_ips' AND tbl_name = 'management_ips') OR
     (name = 'sessions' AND tbl_name = 'sessions') OR
-    (name = 'audit_events' AND tbl_name = 'audit_events')
+    (name = 'audit_events' AND tbl_name = 'audit_events') OR
+    (name = 'firmware_log_outbox' AND tbl_name = 'firmware_log_outbox')
   )) OR
   (type = 'index' AND (
     (name = 'users_canonical_username_unique' AND tbl_name = 'users') OR
@@ -570,19 +640,29 @@ WHERE NOT (
     (name = 'sessions_single_administrator_unique' AND
      tbl_name = 'sessions') OR
     (name = 'sessions_expiry_index' AND tbl_name = 'sessions') OR
-    (name = 'audit_events_timestamp_index' AND tbl_name = 'audit_events')
+    (name = 'audit_events_timestamp_index' AND tbl_name = 'audit_events') OR
+    (name = 'firmware_log_outbox_category_peer_unique' AND
+     tbl_name = 'firmware_log_outbox') OR
+    (name = 'firmware_log_outbox_lease_expiry_index' AND
+     tbl_name = 'firmware_log_outbox')
   ))
 );
 )sql";
   return QuerySingleInt(database, kUnexpectedObjectCount, value) && value == 0 &&
          QuerySingleInt(database, "SELECT COUNT(*) FROM sqlite_schema;", value) &&
-         value == 13;
+         value == 16;
 }
 
 bool HasValidCommittedState(sqlite3* database) {
   int value = 0;
   if (!QuerySingleInt(database,
                       "SELECT COUNT(*) FROM pragma_foreign_key_check;", value) ||
+      value != 0 ||
+      !QuerySingleInt(
+          database,
+          "SELECT COUNT(*) FROM users WHERE failed_login_count < 0 OR "
+          "failed_login_count > 5;",
+          value) ||
       value != 0) {
     return false;
   }
@@ -634,21 +714,22 @@ common::Result<void> ValidateSchema(sqlite3* database) {
           "SELECT COUNT(*) FROM sqlite_schema "
           "WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
           value) ||
-      value != 6 ||
+      value != 7 ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema "
           "WHERE type = 'table' "
           "AND name IN ('schema_version', 'device_state', 'users', "
-          "'management_ips', 'sessions', 'audit_events');",
+          "'management_ips', 'sessions', 'audit_events', "
+          "'firmware_log_outbox');",
           value) ||
-      value != 6 ||
+      value != 7 ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' "
           "AND name NOT LIKE 'sqlite_%';",
           value) ||
-      value != 7 ||
+      value != 9 ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name IN "
@@ -657,9 +738,11 @@ common::Result<void> ValidateSchema(sqlite3* database) {
           "'management_ips_normalized_ip_unique', "
           "'sessions_token_hash_unique', "
           "'sessions_single_administrator_unique', "
-          "'sessions_expiry_index', 'audit_events_timestamp_index');",
+          "'sessions_expiry_index', 'audit_events_timestamp_index', "
+          "'firmware_log_outbox_category_peer_unique', "
+          "'firmware_log_outbox_lease_expiry_index');",
           value) ||
-      value != 7) {
+      value != 9) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -694,7 +777,18 @@ common::Result<void> ValidateSchema(sqlite3* database) {
       !ValidateIndex(database, "audit_events", "audit_events_timestamp_index",
                      false, false, "server_timestamp_seconds", "BINARY",
                      "CREATE INDEX audit_events_timestamp_index "
-                     "ON audit_events(server_timestamp_seconds)")) {
+                     "ON audit_events(server_timestamp_seconds)") ||
+      !ValidateTwoColumnIndex(
+          database, "firmware_log_outbox",
+          "firmware_log_outbox_category_peer_unique", true,
+          {"category", "peer_ip"},
+          "CREATE UNIQUE INDEX firmware_log_outbox_category_peer_unique "
+          "ON firmware_log_outbox(category, peer_ip)") ||
+      !ValidateIndex(database, "firmware_log_outbox",
+                     "firmware_log_outbox_lease_expiry_index", false, false,
+                     "lease_expires_at_seconds", "BINARY",
+                     "CREATE INDEX firmware_log_outbox_lease_expiry_index "
+                     "ON firmware_log_outbox(lease_expires_at_seconds)")) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -705,6 +799,7 @@ common::Result<void> ValidateSchema(sqlite3* database) {
   std::vector<ForeignKeyInfo> management_foreign_keys;
   std::vector<ForeignKeyInfo> session_foreign_keys;
   std::vector<ForeignKeyInfo> audit_foreign_keys;
+  std::vector<ForeignKeyInfo> outbox_foreign_keys;
   if (!ReadForeignKeys(database, "schema_version",
                        schema_version_foreign_keys) ||
       !schema_version_foreign_keys.empty() ||
@@ -721,7 +816,10 @@ common::Result<void> ValidateSchema(sqlite3* database) {
       !ReadForeignKeys(database, "audit_events", audit_foreign_keys) ||
       audit_foreign_keys !=
           std::vector<ForeignKeyInfo>{{"users", "actor_user_id", "id",
-                                       "NO ACTION", "SET NULL", "NONE"}}) {
+                                       "NO ACTION", "SET NULL", "NONE"}} ||
+      !ReadForeignKeys(database, "firmware_log_outbox",
+                       outbox_foreign_keys) ||
+      !outbox_foreign_keys.empty()) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -732,6 +830,7 @@ common::Result<void> ValidateSchema(sqlite3* database) {
   std::vector<ColumnInfo> management_ip_columns;
   std::vector<ColumnInfo> sessions_columns;
   std::vector<ColumnInfo> audit_columns;
+  std::vector<ColumnInfo> outbox_columns;
   if (!ReadColumns(database, "schema_version", schema_version_columns) ||
       schema_version_columns !=
           std::vector<ColumnInfo>{{"version", "INTEGER", 1, 0}} ||
@@ -787,8 +886,19 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                                   {"actor_user_id", "INTEGER", 0, 0},
                                   {"peer_ip", "TEXT", 1, 0},
                                   {"detail_code", "TEXT", 1, 0}} ||
+      !ReadColumns(database, "firmware_log_outbox", outbox_columns) ||
+      outbox_columns !=
+          std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
+                                  {"category", "TEXT", 1, 0},
+                                  {"peer_ip", "TEXT", 1, 0},
+                                  {"created_at_seconds", "INTEGER", 1, 0},
+                                  {"dirty", "INTEGER", 1, 0},
+                                  {"lease_owner", "BLOB", 0, 0},
+                                  {"lease_token", "BLOB", 0, 0},
+                                  {"lease_expires_at_seconds", "INTEGER", 0,
+                                   0}} ||
       !QuerySingleInt(database,
-                      "SELECT COUNT(*) FROM schema_version WHERE version = 1;",
+                      "SELECT COUNT(*) FROM schema_version WHERE version = 2;",
                       value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM schema_version;", value) ||
@@ -796,7 +906,7 @@ common::Result<void> ValidateSchema(sqlite3* database) {
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM device_state "
-          "WHERE id = 1 AND schema_revision = 1 AND "
+          "WHERE id = 1 AND schema_revision = 2 AND "
           "((state = 'default' AND setup_completed_at_seconds IS NULL) OR "
           "(state = 'operational' AND setup_completed_at_seconds >= 0));",
           value) ||
@@ -807,17 +917,17 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                       "security database schema is invalid");
   }
 
-  const std::array<std::pair<const char*, std::string_view>, 6>
+  const std::array<std::pair<const char*, std::string_view>, 7>
       expected_table_definitions = {{
           {"schema_version", R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 1)
+  version INTEGER NOT NULL CHECK (version = 2)
 ))sql"},
           {"device_state", R"sql(
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 1),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 2),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -833,7 +943,7 @@ CREATE TABLE users (
     CHECK (canonical_username = lower(canonical_username)),
   display_username TEXT NOT NULL
     CHECK (length(display_username) BETWEEN 5 AND 32),
-  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
   password_algorithm TEXT NOT NULL
     CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
@@ -844,7 +954,7 @@ CREATE TABLE users (
   password_changed_at_seconds INTEGER NOT NULL
     CHECK (password_changed_at_seconds >= 0),
   failed_login_count INTEGER NOT NULL DEFAULT 0
-    CHECK (failed_login_count >= 0),
+    CHECK (failed_login_count BETWEEN 0 AND 5),
   lock_until_seconds INTEGER CHECK (lock_until_seconds >= 0),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_login_at_seconds INTEGER CHECK (last_login_at_seconds >= 0)
@@ -862,7 +972,7 @@ CREATE TABLE sessions (
   id INTEGER PRIMARY KEY,
   token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_activity_at_seconds INTEGER NOT NULL
     CHECK (last_activity_at_seconds >= created_at_seconds),
@@ -880,6 +990,25 @@ CREATE TABLE audit_events (
   actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
   detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64)
+))sql"},
+          {"firmware_log_outbox", R"sql(
+CREATE TABLE firmware_log_outbox (
+  id INTEGER PRIMARY KEY,
+  category TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+  lease_owner BLOB,
+  lease_token BLOB,
+  lease_expires_at_seconds INTEGER,
+  CHECK (
+    (lease_owner IS NULL AND lease_token IS NULL AND
+     lease_expires_at_seconds IS NULL) OR
+    (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND
+     lease_expires_at_seconds IS NOT NULL AND
+     length(lease_owner) = 16 AND length(lease_token) = 32 AND
+     lease_expires_at_seconds >= 0)
+  )
 ))sql"},
       }};
   for (const auto& [table_name, expected_sql] : expected_table_definitions) {
@@ -902,7 +1031,8 @@ CREATE TABLE audit_events (
   }
   const auto preparation = Execute(
       database,
-      "DELETE FROM audit_events; DELETE FROM sessions; "
+      "DELETE FROM firmware_log_outbox; DELETE FROM audit_events; "
+      "DELETE FROM sessions; "
       "DELETE FROM management_ips; DELETE FROM users; "
       "UPDATE device_state SET state = 'default', "
       "setup_completed_at_seconds = NULL WHERE id = 1;",
@@ -915,10 +1045,10 @@ CREATE TABLE audit_events (
           "INSERT INTO schema_version (version) VALUES (NULL);") &&
       StatementIsRejectedByConstraint(
           database,
-          "INSERT INTO schema_version (version) VALUES (2);") &&
+          "INSERT INTO schema_version (version) VALUES (3);") &&
       StatementIsRejectedByConstraint(
           database, "INSERT INTO device_state "
-                    "(id, state, schema_revision) VALUES (2, 'default', 1);") &&
+                    "(id, state, schema_revision) VALUES (2, 'default', 2);") &&
       StatementIsRejectedByConstraint(
           database,
           "UPDATE device_state SET state = 'invalid' WHERE id = 1;") &&
@@ -953,6 +1083,19 @@ CREATE TABLE audit_events (
           "failed_login_count, created_at_seconds) VALUES "
           "('operator.one', 'Operator.One', 'administrator', 1, "
           "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 1, 0, 1);") &&
+      StatementSucceeds(
+          database,
+          "INSERT INTO users "
+          "(canonical_username, display_username, role, enabled, "
+          "password_algorithm, password_iterations, password_salt, "
+          "password_derived, password_changed_at_seconds, "
+          "failed_login_count, created_at_seconds) VALUES "
+          "('viewer.one', 'Viewer.One', 'viewer', 1, "
+          "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 1, 0, 1);") &&
+      StatementIsRejectedByConstraint(
+          database,
+          "UPDATE users SET failed_login_count = 6 "
+          "WHERE canonical_username = 'operator.one';") &&
       StatementIsRejectedByConstraint(
           database,
           "INSERT INTO users "
@@ -1017,7 +1160,39 @@ CREATE TABLE audit_events (
           "INSERT INTO audit_events "
           "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
           "peer_ip, detail_code) "
-          "VALUES (1, 'event', 'success', 999999, '192.0.2.1', 'detail');");
+          "VALUES (1, 'event', 'success', 999999, '192.0.2.1', 'detail');") &&
+      StatementSucceeds(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds) "
+          "VALUES ('authentication_limit_reached', '192.0.2.1', 1);") &&
+      StatementIsRejectedByConstraint(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds) "
+          "VALUES ('authentication_limit_reached', '192.0.2.1', 2);") &&
+      StatementIsRejectedByConstraint(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds, dirty) "
+          "VALUES ('event', '192.0.2.2', 1, 2);") &&
+      StatementIsRejectedByConstraint(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds, lease_owner) "
+          "VALUES ('event', '192.0.2.2', 1, zeroblob(16));") &&
+      StatementIsRejectedByConstraint(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds, lease_owner, lease_token, "
+          "lease_expires_at_seconds) VALUES "
+          "('event', '192.0.2.2', 1, zeroblob(15), zeroblob(32), 2);") &&
+      StatementSucceeds(
+          database,
+          "INSERT INTO firmware_log_outbox "
+          "(category, peer_ip, created_at_seconds, lease_owner, lease_token, "
+          "lease_expires_at_seconds) VALUES "
+          "('event', '192.0.2.2', 1, zeroblob(16), zeroblob(32), 2);");
   auto rollback = Execute(database, "ROLLBACK TO schema_validation;",
                           "E_SECURITY_DB_SCHEMA",
                           "failed to validate security database schema");
@@ -1217,13 +1392,13 @@ common::Result<void> SecurityStore::InitializeSchema() {
 
   constexpr const char* kSchema = R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 1)
+  version INTEGER NOT NULL CHECK (version = 2)
 );
-INSERT INTO schema_version (version) VALUES (1);
+INSERT INTO schema_version (version) VALUES (2);
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 1),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 2),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -1232,7 +1407,7 @@ CREATE TABLE device_state (
   )
 );
 INSERT INTO device_state (id, state, schema_revision)
-VALUES (1, 'default', 1);
+VALUES (1, 'default', 2);
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -1241,7 +1416,7 @@ CREATE TABLE users (
     CHECK (canonical_username = lower(canonical_username)),
   display_username TEXT NOT NULL
     CHECK (length(display_username) BETWEEN 5 AND 32),
-  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
   password_algorithm TEXT NOT NULL
     CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
@@ -1252,7 +1427,7 @@ CREATE TABLE users (
   password_changed_at_seconds INTEGER NOT NULL
     CHECK (password_changed_at_seconds >= 0),
   failed_login_count INTEGER NOT NULL DEFAULT 0
-    CHECK (failed_login_count >= 0),
+    CHECK (failed_login_count BETWEEN 0 AND 5),
   lock_until_seconds INTEGER CHECK (lock_until_seconds >= 0),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_login_at_seconds INTEGER CHECK (last_login_at_seconds >= 0)
@@ -1276,7 +1451,7 @@ CREATE TABLE sessions (
   id INTEGER PRIMARY KEY,
   token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('administrator')),
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_activity_at_seconds INTEGER NOT NULL
     CHECK (last_activity_at_seconds >= created_at_seconds),
@@ -1301,6 +1476,29 @@ CREATE TABLE audit_events (
 );
 CREATE INDEX audit_events_timestamp_index
   ON audit_events(server_timestamp_seconds);
+
+CREATE TABLE firmware_log_outbox (
+  id INTEGER PRIMARY KEY,
+  category TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+  lease_owner BLOB,
+  lease_token BLOB,
+  lease_expires_at_seconds INTEGER,
+  CHECK (
+    (lease_owner IS NULL AND lease_token IS NULL AND
+     lease_expires_at_seconds IS NULL) OR
+    (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND
+     lease_expires_at_seconds IS NOT NULL AND
+     length(lease_owner) = 16 AND length(lease_token) = 32 AND
+     lease_expires_at_seconds >= 0)
+  )
+);
+CREATE UNIQUE INDEX firmware_log_outbox_category_peer_unique
+  ON firmware_log_outbox(category, peer_ip);
+CREATE INDEX firmware_log_outbox_lease_expiry_index
+  ON firmware_log_outbox(lease_expires_at_seconds);
 )sql";
   auto begin = Execute(impl_->database.get(), "BEGIN IMMEDIATE;",
                        "E_SECURITY_DB_SCHEMA",
@@ -1340,6 +1538,29 @@ common::Result<SecurityStore::Transaction> SecurityStore::BeginTransaction() {
   auto result = Execute(impl_->database.get(), "BEGIN IMMEDIATE;",
                         "E_SECURITY_DB_TRANSACTION",
                         "failed to begin security transaction");
+  if (!result.ok()) {
+    return common::Result<Transaction>::Err(result.error());
+  }
+  return common::Result<Transaction>::Ok(
+      Transaction(impl_, std::move(connection_lease)));
+}
+
+common::Result<SecurityStore::Transaction>
+SecurityStore::BeginReadTransaction() {
+  std::unique_lock<std::mutex> connection_lease;
+  try {
+    connection_lease = std::unique_lock(impl_->connection_mutex);
+  } catch (...) {
+    return common::Result<Transaction>::Err(
+        {"E_SECURITY_DB_TRANSACTION", "failed to lease security connection"});
+  }
+  if (impl_->poisoned || impl_->database == nullptr) {
+    return common::Result<Transaction>::Err(
+        {"E_SECURITY_DB_POISONED", "security store is unavailable"});
+  }
+  auto result = Execute(impl_->database.get(), "BEGIN;",
+                        "E_SECURITY_DB_TRANSACTION",
+                        "failed to begin security read transaction");
   if (!result.ok()) {
     return common::Result<Transaction>::Err(result.error());
   }
@@ -1512,6 +1733,887 @@ common::Result<void> SecurityStore::InitializeDevice(
     }
     return StoreError("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
   }
+}
+
+common::Result<SecurityStore::AuthenticationContext>
+SecurityStore::ReadAuthenticationContext(
+    Transaction& transaction,
+    std::string_view canonical_username,
+    std::string_view normalized_peer_ip) const {
+  const auto failure = [] {
+    return StoreError<AuthenticationContext>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return failure();
+  }
+
+  AuthenticationContext context;
+  auto state = StateUnderConnectionLease();
+  if (!state.ok()) {
+    return failure();
+  }
+  context.state = state.value();
+
+  sqlite3_stmt* raw_peer = nullptr;
+  constexpr const char* kReadPeer =
+      "SELECT EXISTS(SELECT 1 FROM management_ips "
+      "WHERE normalized_ip = ?1 AND role_scope = 'administrator' "
+      "AND enabled = 1);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kReadPeer, -1, &raw_peer,
+                           nullptr) != SQLITE_OK) {
+    return failure();
+  }
+  const auto finalize = [](sqlite3_stmt* statement) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+  };
+  std::unique_ptr<sqlite3_stmt, decltype(finalize)> peer(raw_peer, finalize);
+  if (::sqlite3_bind_text(peer.get(), 1, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(peer.get()) != SQLITE_ROW) {
+    return failure();
+  }
+  context.peer_registered = ::sqlite3_column_int(peer.get(), 0) == 1;
+  if (::sqlite3_step(peer.get()) != SQLITE_DONE) {
+    return failure();
+  }
+  peer.reset();
+
+  sqlite3_stmt* raw_user = nullptr;
+  constexpr const char* kReadUser =
+      "SELECT id, display_username, role, enabled, password_algorithm, "
+      "password_iterations, password_salt, password_derived, "
+      "failed_login_count, lock_until_seconds, created_at_seconds, "
+      "last_login_at_seconds FROM users "
+      "WHERE canonical_username = ?1 COLLATE NOCASE;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kReadUser, -1, &raw_user,
+                           nullptr) != SQLITE_OK) {
+    return failure();
+  }
+  std::unique_ptr<sqlite3_stmt, decltype(finalize)> user(raw_user, finalize);
+  if (::sqlite3_bind_text(user.get(), 1, canonical_username.data(),
+                          static_cast<int>(canonical_username.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK) {
+    return failure();
+  }
+  const int user_step = ::sqlite3_step(user.get());
+  if (user_step == SQLITE_DONE) {
+    return common::Result<AuthenticationContext>::Ok(std::move(context));
+  }
+  if (user_step != SQLITE_ROW) {
+    return failure();
+  }
+
+  const auto* display_username = ::sqlite3_column_text(user.get(), 1);
+  const auto* role = ::sqlite3_column_text(user.get(), 2);
+  const auto* algorithm = ::sqlite3_column_text(user.get(), 4);
+  const auto* salt = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(user.get(), 6));
+  const auto* derived = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(user.get(), 7));
+  const int salt_size = ::sqlite3_column_bytes(user.get(), 6);
+  const int derived_size = ::sqlite3_column_bytes(user.get(), 7);
+  if (display_username == nullptr || role == nullptr || algorithm == nullptr ||
+      salt == nullptr || derived == nullptr || salt_size < 0 ||
+      derived_size < 0) {
+    return failure();
+  }
+
+  AuthenticationUser loaded;
+  loaded.id = ::sqlite3_column_int64(user.get(), 0);
+  loaded.display_username =
+      reinterpret_cast<const char*>(display_username);
+  loaded.role = reinterpret_cast<const char*>(role);
+  loaded.enabled = ::sqlite3_column_int(user.get(), 3) == 1;
+  loaded.password.algorithm = reinterpret_cast<const char*>(algorithm);
+  loaded.password.iterations =
+      static_cast<std::uint32_t>(::sqlite3_column_int64(user.get(), 5));
+  loaded.password.salt.assign(salt, static_cast<std::size_t>(salt_size));
+  loaded.password.derived.assign(derived,
+                                 static_cast<std::size_t>(derived_size));
+  loaded.failed_login_count = ::sqlite3_column_int64(user.get(), 8);
+  if (::sqlite3_column_type(user.get(), 9) != SQLITE_NULL) {
+    loaded.lock_until_seconds = ::sqlite3_column_int64(user.get(), 9);
+  }
+  loaded.created_at_seconds = ::sqlite3_column_int64(user.get(), 10);
+  if (::sqlite3_column_type(user.get(), 11) != SQLITE_NULL) {
+    loaded.last_login_at_seconds = ::sqlite3_column_int64(user.get(), 11);
+  }
+  if (::sqlite3_step(user.get()) != SQLITE_DONE) {
+    return failure();
+  }
+  context.user.emplace(std::move(loaded));
+  return common::Result<AuthenticationContext>::Ok(std::move(context));
+}
+
+common::Result<void> SecurityStore::SetLoginFailureState(
+    Transaction& transaction,
+    std::int64_t user_id,
+    std::int64_t failed_login_count,
+    std::optional<std::int64_t> lock_until_seconds) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "UPDATE users SET failed_login_count = ?1, lock_until_seconds = ?2 "
+      "WHERE id = ?3;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, failed_login_count) != SQLITE_OK ||
+      (lock_until_seconds.has_value()
+           ? ::sqlite3_bind_int64(statement, 2, *lock_until_seconds)
+           : ::sqlite3_bind_null(statement, 2)) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 3, user_id) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_changes(impl_->database.get()) != 1) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::SetLoginSuccessState(
+    Transaction& transaction,
+    std::int64_t user_id,
+    std::int64_t now_seconds) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "UPDATE users SET failed_login_count = 0, lock_until_seconds = NULL, "
+      "last_login_at_seconds = ?1 WHERE id = ?2;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 2, user_id) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_changes(impl_->database.get()) != 1) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::InsertAuditEvent(
+    Transaction& transaction,
+    std::int64_t now_seconds,
+    std::string_view event_type,
+    std::string_view outcome,
+    std::optional<std::int64_t> actor_user_id,
+    std::string_view normalized_peer_ip,
+    std::string_view detail_code) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "INSERT INTO audit_events "
+      "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
+      "peer_ip, detail_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 2, event_type.data(),
+                          static_cast<int>(event_type.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 3, outcome.data(),
+                          static_cast<int>(outcome.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      (actor_user_id.has_value()
+           ? ::sqlite3_bind_int64(statement, 4, *actor_user_id)
+           : ::sqlite3_bind_null(statement, 4)) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 5, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 6, detail_code.data(),
+                          static_cast<int>(detail_code.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::CoalesceFirmwareLogOutbox(
+    Transaction& transaction,
+    std::int64_t now_seconds,
+    std::string_view category,
+    std::string_view normalized_peer_ip) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "INSERT INTO firmware_log_outbox "
+      "(category, peer_ip, created_at_seconds) VALUES (?1, ?2, ?3) "
+      "ON CONFLICT(category, peer_ip) DO UPDATE SET "
+      "created_at_seconds = excluded.created_at_seconds, "
+      "dirty = CASE WHEN firmware_log_outbox.lease_token IS NULL "
+      "THEN firmware_log_outbox.dirty ELSE 1 END;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 1, category.data(),
+                          static_cast<int>(category.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 2, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 3, now_seconds) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<bool> SecurityStore::HasClaimableFirmwareLogOutbox(
+    std::int64_t now_seconds) {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "SELECT EXISTS(SELECT 1 FROM firmware_log_outbox "
+      "WHERE lease_token IS NULL OR lease_expires_at_seconds <= ?1);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_ROW) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    (void)transaction.Rollback();
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  const bool claimable = ::sqlite3_column_int(statement, 0) == 1;
+  const bool one_row = ::sqlite3_step(statement) == SQLITE_DONE;
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  const bool valid = one_row && finalized;
+  if (!valid) {
+    (void)transaction.Rollback();
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  return common::Result<bool>::Ok(claimable);
+}
+
+common::Result<std::optional<SecurityStore::FirmwareLogOutboxEntry>>
+SecurityStore::ClaimFirmwareLogOutbox(
+    std::span<const unsigned char> lease_owner,
+    std::span<const unsigned char> lease_token,
+    std::int64_t now_seconds,
+    std::int64_t lease_expires_at_seconds) {
+  const auto failure = [] {
+    return StoreError<std::optional<FirmwareLogOutboxEntry>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (lease_owner.size() != 16U || lease_token.size() != 32U ||
+      now_seconds < 0 || lease_expires_at_seconds < now_seconds) {
+    return failure();
+  }
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return failure();
+  }
+  auto transaction = std::move(started).value();
+  const auto rollback_failure = [&transaction, &failure] {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return failure();
+  };
+
+  sqlite3_stmt* raw_read = nullptr;
+  constexpr const char* kRead =
+      "SELECT id, category, peer_ip FROM firmware_log_outbox "
+      "WHERE lease_token IS NULL OR lease_expires_at_seconds <= ?1 "
+      "ORDER BY created_at_seconds, id LIMIT 1;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kRead, -1, &raw_read,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(raw_read, 1, now_seconds) != SQLITE_OK) {
+    if (raw_read != nullptr) {
+      (void)::sqlite3_finalize(raw_read);
+    }
+    return rollback_failure();
+  }
+  const auto finalize = [](sqlite3_stmt* statement) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+  };
+  std::unique_ptr<sqlite3_stmt, decltype(finalize)> read(raw_read, finalize);
+  const int read_step = ::sqlite3_step(read.get());
+  if (read_step == SQLITE_DONE) {
+    read.reset();
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return rollback_failure();
+    }
+    return common::Result<std::optional<FirmwareLogOutboxEntry>>::Ok(
+        std::nullopt);
+  }
+  if (read_step != SQLITE_ROW) {
+    return rollback_failure();
+  }
+  const auto* category = ::sqlite3_column_text(read.get(), 1);
+  const auto* peer_ip = ::sqlite3_column_text(read.get(), 2);
+  if (category == nullptr || peer_ip == nullptr) {
+    return rollback_failure();
+  }
+  FirmwareLogOutboxEntry entry;
+  entry.id = ::sqlite3_column_int64(read.get(), 0);
+  entry.category = reinterpret_cast<const char*>(category);
+  entry.peer_ip = reinterpret_cast<const char*>(peer_ip);
+  if (::sqlite3_step(read.get()) != SQLITE_DONE) {
+    return rollback_failure();
+  }
+  read.reset();
+
+  sqlite3_stmt* update = nullptr;
+  constexpr const char* kClaim =
+      "UPDATE firmware_log_outbox SET lease_owner = ?1, lease_token = ?2, "
+      "lease_expires_at_seconds = ?3, dirty = 0 WHERE id = ?4 AND "
+      "(lease_token IS NULL OR lease_expires_at_seconds <= ?5);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kClaim, -1, &update,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_blob(update, 1, lease_owner.data(),
+                          static_cast<int>(lease_owner.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_blob(update, 2, lease_token.data(),
+                          static_cast<int>(lease_token.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_int64(update, 3, lease_expires_at_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(update, 4, entry.id) != SQLITE_OK ||
+      ::sqlite3_bind_int64(update, 5, now_seconds) != SQLITE_OK ||
+      ::sqlite3_step(update) != SQLITE_DONE ||
+      ::sqlite3_changes(impl_->database.get()) != 1) {
+    if (update != nullptr) {
+      (void)::sqlite3_finalize(update);
+    }
+    return rollback_failure();
+  }
+  if (::sqlite3_finalize(update) != SQLITE_OK) {
+    return rollback_failure();
+  }
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    return rollback_failure();
+  }
+  return common::Result<std::optional<FirmwareLogOutboxEntry>>::Ok(
+      std::optional<FirmwareLogOutboxEntry>(std::move(entry)));
+}
+
+common::Result<void> SecurityStore::AcknowledgeFirmwareLogOutbox(
+    std::int64_t outbox_id,
+    std::span<const unsigned char> lease_owner,
+    std::span<const unsigned char> lease_token) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  const auto rollback_failure = [&transaction] {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  };
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kDelete =
+      "DELETE FROM firmware_log_outbox WHERE id = ?1 AND lease_owner = ?2 "
+      "AND lease_token = ?3 AND dirty = 0;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kDelete, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, outbox_id) != SQLITE_OK ||
+      ::sqlite3_bind_blob(statement, 2, lease_owner.data(),
+                          static_cast<int>(lease_owner.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_blob(statement, 3, lease_token.data(),
+                          static_cast<int>(lease_token.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return rollback_failure();
+  }
+  const int deleted = ::sqlite3_changes(impl_->database.get());
+  if (::sqlite3_finalize(statement) != SQLITE_OK) {
+    return rollback_failure();
+  }
+  if (deleted == 0) {
+    constexpr const char* kRetainDirty =
+        "UPDATE firmware_log_outbox SET dirty = 0, lease_owner = NULL, "
+        "lease_token = NULL, lease_expires_at_seconds = NULL "
+        "WHERE id = ?1 AND lease_owner = ?2 AND lease_token = ?3 "
+        "AND dirty = 1;";
+    statement = nullptr;
+    if (::sqlite3_prepare_v2(impl_->database.get(), kRetainDirty, -1,
+                             &statement, nullptr) != SQLITE_OK ||
+        ::sqlite3_bind_int64(statement, 1, outbox_id) != SQLITE_OK ||
+        ::sqlite3_bind_blob(statement, 2, lease_owner.data(),
+                            static_cast<int>(lease_owner.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_blob(statement, 3, lease_token.data(),
+                            static_cast<int>(lease_token.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_step(statement) != SQLITE_DONE) {
+      if (statement != nullptr) {
+        (void)::sqlite3_finalize(statement);
+      }
+      return rollback_failure();
+    }
+    if (::sqlite3_finalize(statement) != SQLITE_OK) {
+      return rollback_failure();
+    }
+  }
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    return rollback_failure();
+  }
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> SecurityStore::ReleaseFirmwareLogOutbox(
+    std::int64_t outbox_id,
+    std::span<const unsigned char> lease_owner,
+    std::span<const unsigned char> lease_token) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kRelease =
+      "UPDATE firmware_log_outbox SET lease_owner = NULL, lease_token = NULL, "
+      "lease_expires_at_seconds = NULL WHERE id = ?1 AND lease_owner = ?2 "
+      "AND lease_token = ?3;";
+  const bool prepared =
+      ::sqlite3_prepare_v2(impl_->database.get(), kRelease, -1, &statement,
+                           nullptr) == SQLITE_OK;
+  const bool executed =
+      prepared && ::sqlite3_bind_int64(statement, 1, outbox_id) == SQLITE_OK &&
+      ::sqlite3_bind_blob(statement, 2, lease_owner.data(),
+                          static_cast<int>(lease_owner.size()),
+                          SQLITE_TRANSIENT) == SQLITE_OK &&
+      ::sqlite3_bind_blob(statement, 3, lease_token.data(),
+                          static_cast<int>(lease_token.size()),
+                          SQLITE_TRANSIENT) == SQLITE_OK &&
+      ::sqlite3_step(statement) == SQLITE_DONE;
+  const bool finalized =
+      statement == nullptr || ::sqlite3_finalize(statement) == SQLITE_OK;
+  if (!executed || !finalized) {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> SecurityStore::DeleteExpiredSessions(
+    Transaction& transaction,
+    std::int64_t now_seconds) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  struct ExpiredSession {
+    std::int64_t user_id;
+    std::string peer_ip;
+  };
+  std::vector<ExpiredSession> expired;
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kRead =
+      "SELECT user_id, peer_ip FROM sessions "
+      "WHERE expires_at_seconds <= ?1 ORDER BY id;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kRead, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  int step;
+  while ((step = ::sqlite3_step(statement)) == SQLITE_ROW) {
+    const auto* peer = ::sqlite3_column_text(statement, 1);
+    if (peer == nullptr) {
+      (void)::sqlite3_finalize(statement);
+      return StoreError("E_AUTHENTICATION_STORE",
+                        "authentication transaction failed");
+    }
+    expired.push_back({::sqlite3_column_int64(statement, 0),
+                       reinterpret_cast<const char*>(peer)});
+  }
+  if (step != SQLITE_DONE || ::sqlite3_finalize(statement) != SQLITE_OK) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+
+  sqlite3_stmt* remove = nullptr;
+  constexpr const char* kDelete =
+      "DELETE FROM sessions WHERE expires_at_seconds <= ?1;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kDelete, -1, &remove,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(remove, 1, now_seconds) != SQLITE_OK ||
+      ::sqlite3_step(remove) != SQLITE_DONE) {
+    if (remove != nullptr) {
+      (void)::sqlite3_finalize(remove);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  if (::sqlite3_finalize(remove) != SQLITE_OK) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  for (const auto& session : expired) {
+    auto audit = InsertAuditEvent(
+        transaction, now_seconds, "session_expired", "success",
+        session.user_id, session.peer_ip, "idle_timeout");
+    if (!audit.ok()) {
+      return audit;
+    }
+  }
+  return common::Result<void>::Ok();
+}
+
+common::Result<std::optional<SecurityStore::StoredSession>>
+SecurityStore::ReadAdministratorSession(Transaction& transaction) const {
+  const auto failure = [] {
+    return StoreError<std::optional<StoredSession>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return failure();
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
+      "users.display_username, sessions.role, sessions.created_at_seconds, "
+      "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
+      "sessions.peer_ip FROM sessions JOIN users ON users.id = "
+      "sessions.user_id WHERE sessions.role = 'administrator';";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK) {
+    return failure();
+  }
+  const int step = ::sqlite3_step(statement);
+  if (step == SQLITE_DONE) {
+    (void)::sqlite3_finalize(statement);
+    return common::Result<std::optional<StoredSession>>::Ok(std::nullopt);
+  }
+  if (step != SQLITE_ROW) {
+    (void)::sqlite3_finalize(statement);
+    return failure();
+  }
+  const auto* token_hash = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(statement, 1));
+  const int token_hash_size = ::sqlite3_column_bytes(statement, 1);
+  const auto* username = ::sqlite3_column_text(statement, 3);
+  const auto* role = ::sqlite3_column_text(statement, 4);
+  const auto* peer = ::sqlite3_column_text(statement, 8);
+  if (token_hash == nullptr || token_hash_size < 0 || username == nullptr ||
+      role == nullptr || peer == nullptr) {
+    (void)::sqlite3_finalize(statement);
+    return failure();
+  }
+  StoredSession session;
+  session.id = ::sqlite3_column_int64(statement, 0);
+  session.token_hash.assign(token_hash,
+                            static_cast<std::size_t>(token_hash_size));
+  session.user_id = ::sqlite3_column_int64(statement, 2);
+  session.username = reinterpret_cast<const char*>(username);
+  session.role = reinterpret_cast<const char*>(role);
+  session.created_at_seconds = ::sqlite3_column_int64(statement, 5);
+  session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
+  session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
+  session.peer_ip = reinterpret_cast<const char*>(peer);
+  if (::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_finalize(statement) != SQLITE_OK) {
+    return failure();
+  }
+  return common::Result<std::optional<StoredSession>>::Ok(
+      std::optional<StoredSession>(std::move(session)));
+}
+
+common::Result<std::optional<SecurityStore::StoredSession>>
+SecurityStore::ReadSessionByTokenHash(
+    Transaction& transaction,
+    std::span<const unsigned char> token_hash) const {
+  const auto failure = [] {
+    return StoreError<std::optional<StoredSession>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return failure();
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
+      "users.display_username, sessions.role, sessions.created_at_seconds, "
+      "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
+      "sessions.peer_ip FROM sessions JOIN users ON users.id = "
+      "sessions.user_id WHERE sessions.token_hash = ?1;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_blob(statement, 1, token_hash.data(),
+                          static_cast<int>(token_hash.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return failure();
+  }
+  const int step = ::sqlite3_step(statement);
+  if (step == SQLITE_DONE) {
+    (void)::sqlite3_finalize(statement);
+    return common::Result<std::optional<StoredSession>>::Ok(std::nullopt);
+  }
+  if (step != SQLITE_ROW) {
+    (void)::sqlite3_finalize(statement);
+    return failure();
+  }
+  const auto* stored_hash = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(statement, 1));
+  const int stored_hash_size = ::sqlite3_column_bytes(statement, 1);
+  const auto* username = ::sqlite3_column_text(statement, 3);
+  const auto* role = ::sqlite3_column_text(statement, 4);
+  const auto* peer = ::sqlite3_column_text(statement, 8);
+  if (stored_hash == nullptr || stored_hash_size < 0 || username == nullptr ||
+      role == nullptr || peer == nullptr) {
+    (void)::sqlite3_finalize(statement);
+    return failure();
+  }
+  StoredSession session;
+  session.id = ::sqlite3_column_int64(statement, 0);
+  session.token_hash.assign(stored_hash,
+                            static_cast<std::size_t>(stored_hash_size));
+  session.user_id = ::sqlite3_column_int64(statement, 2);
+  session.username = reinterpret_cast<const char*>(username);
+  session.role = reinterpret_cast<const char*>(role);
+  session.created_at_seconds = ::sqlite3_column_int64(statement, 5);
+  session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
+  session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
+  session.peer_ip = reinterpret_cast<const char*>(peer);
+  if (::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_finalize(statement) != SQLITE_OK) {
+    return failure();
+  }
+  return common::Result<std::optional<StoredSession>>::Ok(
+      std::optional<StoredSession>(std::move(session)));
+}
+
+common::Result<bool> SecurityStore::SessionTokenHashExists(
+    Transaction& transaction,
+    std::span<const unsigned char> token_hash) const {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "SELECT EXISTS(SELECT 1 FROM sessions WHERE token_hash = ?1);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_blob(statement, 1, token_hash.data(),
+                          static_cast<int>(token_hash.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_ROW) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  const bool exists = ::sqlite3_column_int(statement, 0) == 1;
+  if (::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_finalize(statement) != SQLITE_OK) {
+    return StoreError<bool>("E_AUTHENTICATION_STORE",
+                            "authentication transaction failed");
+  }
+  return common::Result<bool>::Ok(exists);
+}
+
+common::Result<void> SecurityStore::InsertSession(
+    Transaction& transaction,
+    std::span<const unsigned char> token_hash,
+    std::int64_t user_id,
+    std::string_view role,
+    std::int64_t now_seconds,
+    std::int64_t expires_at_seconds,
+    std::string_view normalized_peer_ip) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "INSERT INTO sessions "
+      "(token_hash, user_id, role, created_at_seconds, "
+      "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+      "VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6);";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_blob(statement, 1, token_hash.data(),
+                          static_cast<int>(token_hash.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 2, user_id) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 3, role.data(),
+                          static_cast<int>(role.size()), SQLITE_TRANSIENT) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 4, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 5, expires_at_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 6, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::RefreshSession(
+    Transaction& transaction,
+    std::int64_t session_id,
+    std::int64_t now_seconds,
+    std::int64_t expires_at_seconds) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "UPDATE sessions SET last_activity_at_seconds = ?1, "
+      "expires_at_seconds = ?2 WHERE id = ?3;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 2, expires_at_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 3, session_id) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_changes(impl_->database.get()) != 1) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::DeleteSession(Transaction& transaction,
+                                                   std::int64_t session_id) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql = "DELETE FROM sessions WHERE id = ?1;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, session_id) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_changes(impl_->database.get()) != 1) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return finalized
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
 }
 
 common::Result<void> SecurityStore::InstallBootstrapRtspCredential(

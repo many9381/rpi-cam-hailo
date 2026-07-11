@@ -719,6 +719,7 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
                 "ORDER BY name;"),
             std::vector<std::string>({"audit_events", "device_state",
+                                      "firmware_log_outbox",
                                       "management_ips", "schema_version",
                                       "sessions", "users"}));
   EXPECT_EQ(QueryTextRows(
@@ -778,10 +779,21 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
                 "detail_code:TEXT:1:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('firmware_log_outbox') ORDER BY cid;"),
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "category:TEXT:1:0", "peer_ip:TEXT:1:0",
+                "created_at_seconds:INTEGER:1:0", "dirty:INTEGER:1:0",
+                "lease_owner:BLOB:0:0", "lease_token:BLOB:0:0",
+                "lease_expires_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
                 "SELECT name FROM sqlite_schema WHERE type = 'index' "
                 "AND name NOT LIKE 'sqlite_%' ORDER BY name;"),
             std::vector<std::string>({
                 "audit_events_timestamp_index",
+                "firmware_log_outbox_category_peer_unique",
+                "firmware_log_outbox_lease_expiry_index",
                 "management_ips_normalized_ip_unique",
                 "sessions_expiry_index",
                 "sessions_single_administrator_unique",
@@ -801,10 +813,10 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
             1);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT version FROM schema_version;"),
-            1);
+            2);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            1);
+            2);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA foreign_keys;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA secure_delete;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA busy_timeout;"), 1000);
@@ -1049,6 +1061,27 @@ CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
 CREATE UNIQUE INDEX sessions_single_administrator_unique
   ON sessions(role) WHERE role = 'administrator';
 CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);
+)sql");
+}
+
+TEST(SecurityStoreTest, RejectsMalformedFirmwareLogOutboxLeaseDefinition) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+ALTER TABLE firmware_log_outbox RENAME TO firmware_log_outbox_old;
+CREATE TABLE firmware_log_outbox (
+  id INTEGER PRIMARY KEY,
+  category TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+  lease_owner BLOB,
+  lease_token BLOB,
+  lease_expires_at_seconds INTEGER
+);
+DROP TABLE firmware_log_outbox_old;
+CREATE UNIQUE INDEX firmware_log_outbox_category_peer_unique
+  ON firmware_log_outbox(category, peer_ip);
+CREATE INDEX firmware_log_outbox_lease_expiry_index
+  ON firmware_log_outbox(lease_expires_at_seconds);
 )sql");
 }
 
