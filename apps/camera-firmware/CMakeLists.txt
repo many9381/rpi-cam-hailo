@@ -4,10 +4,12 @@ add_executable(camera-firmware
 
 target_link_libraries(camera-firmware
     PRIVATE
+        camera_firmware_boot
         camera_firmware_config
         camera_firmware_media
         camera_firmware_ai
         camera_firmware_rtsp
+        camera_firmware_runtime
         camera_firmware_service
 )
 
@@ -16,4 +18,7 @@ target_compile_definitions(camera-firmware
         CF_SECURE_SRTP_PLUGIN_DIR="$<TARGET_FILE_DIR:gstcfsecuresrtp>"
 )
 
-add_dependencies(camera-firmware gstcfsecuresrtp)
+add_dependencies(camera-firmware
+    camera_firmware_web
+    gstcfsecuresrtp
+)

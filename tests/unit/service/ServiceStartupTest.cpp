@@ -78,7 +78,7 @@ TEST(ServiceStartupSignalTest, CleanupJoinsCompletedServiceThread) {
   EXPECT_FALSE(service_thread.joinable());
 }
 
-TEST(ServiceStartupSignalTest, CleanupTimesOutWithoutUnboundedJoin) {
+TEST(ServiceStartupSignalTest, CleanupTimeoutLeavesThreadForSafeJoin) {
   auto completion = std::make_shared<std::promise<void>>();
   auto completion_future = completion->get_future().share();
   auto release = std::make_shared<std::promise<void>>();
@@ -97,12 +97,15 @@ TEST(ServiceStartupSignalTest, CleanupTimesOutWithoutUnboundedJoin) {
       [&stop_requested] { stop_requested = true; });
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
-  release->set_value();
   ASSERT_FALSE(stopped.ok());
+  EXPECT_TRUE(service_thread.joinable());
+  release->set_value();
+  if (service_thread.joinable()) {
+    service_thread.join();
+  }
   EXPECT_EQ(stopped.error().code, "E_SERVICE_THREAD_STOP_TIMEOUT");
   EXPECT_NE(stopped.error().message.find("service thread stop timed out"),
             std::string::npos);
   EXPECT_TRUE(stop_requested);
-  EXPECT_FALSE(service_thread.joinable());
   EXPECT_LT(elapsed, std::chrono::milliseconds(500));
 }

@@ -23,10 +23,13 @@ http:
   enabled: true
   bind_ip: 0.0.0.0
   port: 8443
-  web_root: web
+  web_root: web/dist
   public_base_url: http://127.0.0.1:8443
   tls:
     enabled: false
+
+security:
+  enabled: false
 
 ai:
   enabled: true

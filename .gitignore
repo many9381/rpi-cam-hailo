@@ -7,4 +7,16 @@
 /vendor/models/*.tflite
 /vendor/models/*.bin
 /hailort.log
-/config/*.credentials
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+/web/playwright-report/
+/web/test-results/
+*.credentials
+security.db
+security.db-shm
+security.db-wal
+**/device-tls/certificate.pem
+**/device-tls/private-key.pem
+**/.device-tls.tmp-*/certificate.pem
+**/.device-tls.tmp-*/private-key.pem

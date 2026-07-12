@@ -4,24 +4,25 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "camera_firmware/ai/AiFramePump.hpp"
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
-#include "camera_firmware/ai/AiRuntimeController.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
-#include "camera_firmware/ai/DetectionEventStore.hpp"
+#include "camera_firmware/boot/FirmwareBootCoordinator.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
+#include "camera_firmware/runtime/FirmwareRuntime.hpp"
+#include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/ServiceApp.hpp"
 
 namespace {
@@ -191,38 +192,8 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(plugin.error());
   }
 
-  camera_firmware::media::SnapshotTap snapshot_tap;
-  camera_firmware::ai::AiFrameTap ai_frame_tap;
-  camera_firmware::ai::DetectionBus detection_bus;
-  camera_firmware::ai::DetectionEventStore detection_event_store(
-      detection_bus);
-  camera_firmware::ai::AiRuntime ai_runtime(&detection_bus);
-  camera_firmware::ai::AiFramePump ai_frame_pump(ai_frame_tap, ai_runtime);
-  camera_firmware::media::EncodedRing encoded_ring(128);
-  camera_firmware::media::CameraPipeline camera_pipeline(
-      snapshot_tap, ai_frame_tap, encoded_ring);
-  camera_firmware::ai::AiRuntimeController ai_controller(
-      cfg.value(), ai_runtime, ai_frame_pump);
-  camera_firmware::rtsp::SecureRtspServer rtsp_server;
+  camera_firmware::runtime::FirmwareRuntime runtime(cfg.value());
   camera_firmware::service::ServiceApp service;
-
-  auto rtsp = rtsp_server.Start(cfg.value().secure_rtsp, encoded_ring);
-  if (!rtsp.ok()) {
-    return PrintError(rtsp.error());
-  }
-
-  auto ai_started = ai_controller.Restart();
-  if (!ai_started.ok()) {
-    rtsp_server.Stop();
-    return PrintError(ai_started.error());
-  }
-
-  auto camera = camera_pipeline.Start(cfg.value());
-  if (!camera.ok()) {
-    ai_controller.Stop();
-    rtsp_server.Stop();
-    return PrintError(camera.error());
-  }
 
   camera_firmware::service::ServiceInitArgs service_args;
   service_args.app_config = &cfg.value();
@@ -230,64 +201,77 @@ int RunFirmware(const std::string& config_path) {
   service_args.port = cfg.value().http.port;
   service_args.document_root = cfg.value().http.web_root;
   service_args.public_base_url = cfg.value().http.public_base_url;
-  service_args.camera_status_provider = [&camera_pipeline] {
-    return ToServiceStatus(camera_pipeline.Status());
+  service_args.camera_status_provider = [&runtime] {
+    return ToServiceStatus(runtime.CameraStatuses());
   };
   service_args.ai_enabled = cfg.value().ai.enabled;
-  service_args.ai_status_provider = [&ai_runtime, &cfg] {
-    return ToServiceAiStatus(ai_runtime.Status(),
+  service_args.ai_status_provider = [&runtime, &cfg] {
+    return ToServiceAiStatus(runtime.AiStatus(),
                              cfg.value().ai.models,
-                             ai_runtime.RunnerStatuses());
+                             runtime.AiRunnerStatuses());
   };
-  service_args.ai_restart_callback = [&ai_controller] {
-    return ai_controller.Restart();
+  service_args.ai_restart_callback = [&runtime] {
+    return runtime.RestartAi();
   };
-  service_args.secure_stream_diagnostics_provider = [&rtsp_server] {
+  service_args.secure_stream_diagnostics_provider = [&runtime] {
     camera_firmware::service::SecureStreamDiagnostics diagnostics;
     diagnostics.per_media_key_zeroize_count =
-        static_cast<std::uint64_t>(
-            rtsp_server.PerMediaKeyZeroizeCount());
+        runtime.PerMediaKeyZeroizeCount();
     return diagnostics;
   };
-  service_args.detection_snapshot_provider =
-      detection_event_store.SnapshotProvider();
+  service_args.detection_snapshot_provider = [&runtime] {
+    return runtime.DetectionSnapshot();
+  };
   service_args.detection_event_subscriber =
-      [&detection_bus](camera_firmware::ai::DetectionBus::Handler handler) {
-        return detection_bus.Subscribe(std::move(handler));
+      [&runtime](camera_firmware::ai::DetectionBus::Handler handler) {
+        return runtime.SubscribeDetections(std::move(handler));
       };
   service_args.snapshot_callback =
-      [&snapshot_tap,
-       configured_camera_id = cfg.value().camera.id](const std::string& camera_id) {
-        if (camera_id != configured_camera_id) {
-          return std::optional<std::vector<std::uint8_t>>{};
-        }
-        return camera_firmware::media::BuildLatestSnapshotJpeg(snapshot_tap,
-                                                              camera_id);
+      [&runtime](const std::string& camera_id) {
+        return runtime.Snapshot(camera_id);
       };
-  if (cfg.value().http.enabled) {
-    auto service_started = service.Init(service_args);
-    if (!service_started.ok()) {
-      ai_controller.BeginShutdown();
-      service.Stop();
-      ai_controller.Stop();
-      camera_pipeline.Stop();
-      rtsp_server.Stop();
-      return PrintError(service_started.error());
+
+  std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
+  if (cfg.value().security.enabled) {
+    auto opened = camera_firmware::security::SecurityStore::Open(
+        {cfg.value().security.state_directory});
+    if (!opened.ok()) {
+      return PrintError(opened.error());
     }
+    security_store =
+        std::shared_ptr<camera_firmware::security::SecurityStore>(
+            std::move(opened).value());
+    service_args.security_store = security_store;
+  }
+
+  camera_firmware::boot::FirmwareBootDependencies boot_dependencies;
+  if (security_store) {
+    boot_dependencies.read_device_state = [security_store] {
+      return security_store->State();
+    };
+  }
+  boot_dependencies.start_runtime = [&runtime] { return runtime.Start(); };
+  boot_dependencies.stop_runtime = [&runtime] { runtime.Stop(); };
+  boot_dependencies.start_service =
+      [&service, &service_args](
+          camera_firmware::boot::RuntimeStartCallback start_runtime) {
+        service_args.runtime_start_callback = std::move(start_runtime);
+        return service.Init(service_args);
+      };
+  boot_dependencies.stop_service = [&service] { service.Stop(); };
+
+  camera_firmware::boot::FirmwareBootCoordinator boot_coordinator(
+      {cfg.value().security.enabled, cfg.value().http.enabled},
+      std::move(boot_dependencies));
+  auto boot_started = boot_coordinator.Start();
+  if (!boot_started.ok()) {
+    return PrintError(boot_started.error());
   }
 
   Logger::instance().log(Logger::Level::kInfo, "camera firmware running");
   WaitForShutdown();
 
-  if (cfg.value().http.enabled) {
-    ai_controller.BeginShutdown();
-    service.Stop();
-  } else {
-    ai_controller.BeginShutdown();
-  }
-  ai_controller.Stop();
-  camera_pipeline.Stop();
-  rtsp_server.Stop();
+  boot_coordinator.Stop();
   return EXIT_SUCCESS;
 }
 

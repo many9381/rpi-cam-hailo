@@ -1,24 +1,4 @@
 find_package(GTest REQUIRED)
-find_program(NODE_EXECUTABLE node)
-set(CF_NODE_TESTS_ENABLED OFF)
-set(CF_NODE_MIN_VERSION 18.0.0)
-if(NODE_EXECUTABLE)
-    execute_process(
-        COMMAND ${NODE_EXECUTABLE} --version
-        OUTPUT_VARIABLE CF_NODE_VERSION_OUTPUT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    string(REGEX REPLACE "^v" "" CF_NODE_VERSION "${CF_NODE_VERSION_OUTPUT}")
-    if(CF_NODE_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$" AND
-            CF_NODE_VERSION VERSION_GREATER_EQUAL "${CF_NODE_MIN_VERSION}")
-        set(CF_NODE_TESTS_ENABLED ON)
-    else()
-        message(STATUS
-            "Skipping WebAppTest: Node.js ${CF_NODE_VERSION_OUTPUT} is older than ${CF_NODE_MIN_VERSION}"
-        )
-    endif()
-endif()
 pkg_check_modules(GSTREAMER_CHECK REQUIRED IMPORTED_TARGET gstreamer-check-1.0)
 
 add_executable(camera_firmware_common_tests
@@ -49,6 +29,43 @@ target_link_libraries(camera_firmware_config_tests
 gtest_discover_tests(camera_firmware_config_tests
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
+
+add_executable(camera_firmware_security_tests
+    unit/security/AuthServiceTest.cpp
+    unit/security/BootstrapServiceTest.cpp
+    unit/security/DeviceTlsManagerTest.cpp
+    unit/security/PasswordHasherTest.cpp
+    unit/security/PasswordPolicyTest.cpp
+    unit/security/SecurityStoreTest.cpp
+)
+
+target_link_libraries(camera_firmware_security_tests
+    PRIVATE
+        camera_firmware_security
+        camera_firmware_common
+        camera_firmware_rtsp
+        GTest::gtest_main
+)
+
+target_link_options(camera_firmware_security_tests
+    PRIVATE
+        -Wl,--wrap=lstat
+        -Wl,--wrap=fstat
+        -Wl,--wrap=close
+        -Wl,--wrap=fsync
+        -Wl,--wrap=camera_firmware_tls_rename_noreplace
+        -Wl,--wrap=sqlite3_open_v2
+        -Wl,--wrap=sqlite3_busy_timeout
+        -Wl,--wrap=sqlite3_close_v2
+        -Wl,--wrap=sqlite3_exec
+)
+
+target_compile_definitions(camera_firmware_security_tests
+    PRIVATE
+        CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+gtest_discover_tests(camera_firmware_security_tests)
 
 add_executable(camera_firmware_media_tests
     unit/media/EncodedRingTest.cpp
@@ -115,6 +132,30 @@ endif()
 
 gtest_discover_tests(camera_firmware_ai_tests)
 
+add_executable(camera_firmware_runtime_tests
+    unit/runtime/FirmwareRuntimeTest.cpp
+)
+
+target_link_libraries(camera_firmware_runtime_tests
+    PRIVATE
+        camera_firmware_runtime
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_runtime_tests)
+
+add_executable(camera_firmware_boot_tests
+    unit/boot/FirmwareBootCoordinatorTest.cpp
+)
+
+target_link_libraries(camera_firmware_boot_tests
+    PRIVATE
+        camera_firmware_boot
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_boot_tests)
+
 add_executable(camera_firmware_ai_hardware_smoke
     integration/AiHardwareSmokeTest.cpp
 )
@@ -137,6 +178,7 @@ set_tests_properties(${camera_firmware_ai_hardware_smoke_tests}
 )
 
 add_executable(camera_firmware_service_tests
+    unit/service/SecurityRequestGateTest.cpp
     unit/service/ServiceResponseTest.cpp
     unit/service/ServiceStartupTest.cpp
 )
@@ -148,6 +190,61 @@ target_link_libraries(camera_firmware_service_tests
 )
 
 gtest_discover_tests(camera_firmware_service_tests)
+
+add_executable(camera_firmware_https_auth_integration
+    integration/HttpsAuthIntegrationTest.cpp
+)
+
+add_dependencies(camera_firmware_https_auth_integration
+    camera_firmware_web
+)
+
+target_compile_definitions(camera_firmware_https_auth_integration
+    PRIVATE
+        CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(camera_firmware_https_auth_integration
+    PRIVATE
+        camera_firmware_service
+        GTest::gtest_main
+        OpenSSL::SSL
+)
+
+gtest_discover_tests(camera_firmware_https_auth_integration
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    PROPERTIES
+        TIMEOUT 90
+)
+
+if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
+    find_program(CF_TEST_GIT_EXECUTABLE NAMES git REQUIRED)
+    add_test(
+        NAME DrogonSourceIdentityConfigureTest
+        COMMAND ${CMAKE_COMMAND}
+            -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -DCF_DROGON_SOURCE_DIR=${CAMERA_FIRMWARE_DROGON_SOURCE_DIR}
+            -DCF_GIT_EXECUTABLE=${CF_TEST_GIT_EXECUTABLE}
+            -DCF_TEST_ROOT=${PROJECT_BINARY_DIR}/drogon-source-identity-test
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DrogonSourceIdentityTest.cmake
+    )
+    set_tests_properties(DrogonSourceIdentityConfigureTest
+        PROPERTIES
+            TIMEOUT 120
+    )
+endif()
+
+add_test(
+    NAME BuildWebIntegrityTest
+    COMMAND ${CMAKE_COMMAND}
+        -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DCF_TEST_ROOT=${PROJECT_BINARY_DIR}/build-web-integrity-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildWebTest.cmake
+)
+set_tests_properties(BuildWebIntegrityTest
+    PROPERTIES
+        TIMEOUT 120
+)
 
 add_executable(gst_secure_srtp_tests
     unit/rtsp/CfSecureSrtpEncTest.cpp
@@ -194,11 +291,3 @@ gtest_discover_tests(camera_firmware_secure_rtsp_config_smoke
     PROPERTIES
         ENVIRONMENT "GST_PLUGIN_PATH=${PROJECT_BINARY_DIR}/plugins/gst-secure-srtp"
 )
-
-if(CF_NODE_TESTS_ENABLED)
-    add_test(
-        NAME WebAppTest
-        COMMAND ${NODE_EXECUTABLE} --test tests/web/app_test.js
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    )
-endif()
