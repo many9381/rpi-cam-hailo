@@ -8,6 +8,7 @@ target_link_libraries(camera-firmware
         camera_firmware_media
         camera_firmware_ai
         camera_firmware_rtsp
+        camera_firmware_runtime
         camera_firmware_service
 )
 

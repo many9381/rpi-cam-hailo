@@ -152,6 +152,18 @@ endif()
 
 gtest_discover_tests(camera_firmware_ai_tests)
 
+add_executable(camera_firmware_runtime_tests
+    unit/runtime/FirmwareRuntimeTest.cpp
+)
+
+target_link_libraries(camera_firmware_runtime_tests
+    PRIVATE
+        camera_firmware_runtime
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_runtime_tests)
+
 add_executable(camera_firmware_ai_hardware_smoke
     integration/AiHardwareSmokeTest.cpp
 )
