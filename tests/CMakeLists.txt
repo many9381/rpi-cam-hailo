@@ -164,6 +164,18 @@ target_link_libraries(camera_firmware_runtime_tests
 
 gtest_discover_tests(camera_firmware_runtime_tests)
 
+add_executable(camera_firmware_boot_tests
+    unit/boot/FirmwareBootCoordinatorTest.cpp
+)
+
+target_link_libraries(camera_firmware_boot_tests
+    PRIVATE
+        camera_firmware_boot
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_boot_tests)
+
 add_executable(camera_firmware_ai_hardware_smoke
     integration/AiHardwareSmokeTest.cpp
 )

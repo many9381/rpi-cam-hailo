@@ -4,6 +4,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -13,6 +14,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
+#include "camera_firmware/boot/FirmwareBootCoordinator.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
@@ -20,6 +22,7 @@
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
+#include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/ServiceApp.hpp"
 
 namespace {
@@ -192,11 +195,6 @@ int RunFirmware(const std::string& config_path) {
   camera_firmware::runtime::FirmwareRuntime runtime(cfg.value());
   camera_firmware::service::ServiceApp service;
 
-  auto runtime_started = runtime.Start();
-  if (!runtime_started.ok()) {
-    return PrintError(runtime_started.error());
-  }
-
   camera_firmware::service::ServiceInitArgs service_args;
   service_args.app_config = &cfg.value();
   service_args.bind_address = cfg.value().http.bind_ip;
@@ -232,22 +230,48 @@ int RunFirmware(const std::string& config_path) {
       [&runtime](const std::string& camera_id) {
         return runtime.Snapshot(camera_id);
       };
-  if (cfg.value().http.enabled) {
-    auto service_started = service.Init(service_args);
-    if (!service_started.ok()) {
-      service.Stop();
-      runtime.Stop();
-      return PrintError(service_started.error());
+
+  std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
+  if (cfg.value().security.enabled) {
+    auto opened = camera_firmware::security::SecurityStore::Open(
+        {cfg.value().security.state_directory});
+    if (!opened.ok()) {
+      return PrintError(opened.error());
     }
+    security_store =
+        std::shared_ptr<camera_firmware::security::SecurityStore>(
+            std::move(opened).value());
+    service_args.security_store = security_store;
+  }
+
+  camera_firmware::boot::FirmwareBootDependencies boot_dependencies;
+  if (security_store) {
+    boot_dependencies.read_device_state = [security_store] {
+      return security_store->State();
+    };
+  }
+  boot_dependencies.start_runtime = [&runtime] { return runtime.Start(); };
+  boot_dependencies.stop_runtime = [&runtime] { runtime.Stop(); };
+  boot_dependencies.start_service =
+      [&service, &service_args](
+          camera_firmware::boot::RuntimeStartCallback start_runtime) {
+        service_args.runtime_start_callback = std::move(start_runtime);
+        return service.Init(service_args);
+      };
+  boot_dependencies.stop_service = [&service] { service.Stop(); };
+
+  camera_firmware::boot::FirmwareBootCoordinator boot_coordinator(
+      {cfg.value().security.enabled, cfg.value().http.enabled},
+      std::move(boot_dependencies));
+  auto boot_started = boot_coordinator.Start();
+  if (!boot_started.ok()) {
+    return PrintError(boot_started.error());
   }
 
   Logger::instance().log(Logger::Level::kInfo, "camera firmware running");
   WaitForShutdown();
 
-  if (cfg.value().http.enabled) {
-    service.Stop();
-  }
-  runtime.Stop();
+  boot_coordinator.Stop();
   return EXIT_SUCCESS;
 }
 

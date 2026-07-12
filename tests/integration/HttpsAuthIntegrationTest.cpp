@@ -323,6 +323,11 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
     args.app_config = &config;
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
+    std::atomic<int> runtime_start_calls{0};
+    args.runtime_start_callback = [&] {
+      runtime_start_calls.fetch_add(1);
+      return camera_firmware::common::Result<void>::Ok();
+    };
     camera_firmware::service::ServiceApp service;
     auto started = service.Init(args);
     if (!started.ok()) {
@@ -339,7 +344,11 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
     auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
                       setup_body, origin, {}, true);
     if (setup.result != drogon::ReqResult::Ok || !setup.response ||
-        setup.response->statusCode() != drogon::k200OK) {
+        setup.response->statusCode() != drogon::k200OK ||
+        setup.response->getJsonObject() == nullptr ||
+        (*setup.response->getJsonObject())["required"].asBool() ||
+        (*setup.response->getJsonObject())["runtime"].asString() != "running" ||
+        runtime_start_calls.load() != 1) {
       _exit(4);
     }
     auto login = Send(

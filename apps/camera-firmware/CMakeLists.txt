@@ -4,6 +4,7 @@ add_executable(camera-firmware
 
 target_link_libraries(camera-firmware
     PRIVATE
+        camera_firmware_boot
         camera_firmware_config
         camera_firmware_media
         camera_firmware_ai
