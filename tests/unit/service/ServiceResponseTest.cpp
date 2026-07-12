@@ -758,6 +758,27 @@ TEST(ServiceResponseTest, TlsInitRejectsSecurityWithoutTlsInsteadOfDowngrade) {
   EXPECT_EQ(initialized.error().code, "E_HTTP_TLS_REQUIRED");
 }
 
+TEST(ServiceResponseTest,
+     InitRejectsDefaultSecurityStateWithoutRuntimeStartCallback) {
+  TemporaryTlsDirectory state;
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = state.path().string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = 0;
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  camera_firmware::service::ServiceApp service;
+
+  const auto initialized = service.Init(args);
+
+  ASSERT_FALSE(initialized.ok());
+  EXPECT_EQ(initialized.error().code, "E_SERVICE_CONFIG");
+}
+
 TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesTimeoutUntilSafeJoin) {
   TemporaryTlsDirectory state;
   camera_firmware::config::HttpTlsConfig tls;

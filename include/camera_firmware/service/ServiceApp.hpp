@@ -106,7 +106,7 @@ struct ServiceInitArgs {
   const config::AppConfig* app_config{nullptr};
   std::string bind_address{"0.0.0.0"};
   std::uint16_t port{8080};
-  std::string document_root{"web"};
+  std::string document_root{"web/dist"};
   std::string public_base_url{"http://127.0.0.1:8080"};
   std::string health_status{"ok"};
   bool ai_enabled{false};

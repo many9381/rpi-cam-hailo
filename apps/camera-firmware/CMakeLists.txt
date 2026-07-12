@@ -18,4 +18,7 @@ target_compile_definitions(camera-firmware
         CF_SECURE_SRTP_PLUGIN_DIR="$<TARGET_FILE_DIR:gstcfsecuresrtp>"
 )
 
-add_dependencies(camera-firmware gstcfsecuresrtp)
+add_dependencies(camera-firmware
+    camera_firmware_web
+    gstcfsecuresrtp
+)

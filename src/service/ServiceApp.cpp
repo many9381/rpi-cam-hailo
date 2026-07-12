@@ -32,6 +32,7 @@ struct ServiceState {
   ServiceInitArgs args;
   std::shared_ptr<BoundedWorker> security_worker;
   security::DeviceState device_state{security::DeviceState::kDefault};
+  std::optional<std::string> runtime_pending_peer;
   bool shutting_down{false};
 };
 
@@ -70,6 +71,7 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
   }
   return method == drogon::Post &&
          (path == "/api/v1/setup/initialize" ||
+          path == "/api/v1/setup/runtime" ||
           path == "/api/v1/auth/login" ||
           path == "/api/v1/auth/logout" ||
           path == "/api/v1/ai/restart");
@@ -390,9 +392,26 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
                 {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
             return;
           }
-          context.state = state.value();
+          std::optional<std::string> runtime_pending_peer;
+          security::DeviceState process_state;
+          {
+            std::scoped_lock lock(StateMutex());
+            runtime_pending_peer = GlobalState().runtime_pending_peer;
+            process_state = GlobalState().device_state;
+          }
+          context.state = runtime_pending_peer.has_value()
+                              ? security::DeviceState::kDefault
+                              : process_state;
           const bool setup_initialize =
               context.path == "/api/v1/setup/initialize";
+          const bool setup_runtime =
+              context.path == "/api/v1/setup/runtime";
+          if ((setup_initialize || setup_runtime) &&
+              runtime_pending_peer.has_value() &&
+              context.normalized_peer_ip != *runtime_pending_peer) {
+            completion->Deny({"E_ACCESS_DENIED", "request denied"});
+            return;
+          }
           const bool login = context.path == "/api/v1/auth/login" &&
                              context.method == "POST";
           if (context.state == security::DeviceState::kOperational &&
@@ -570,7 +589,8 @@ void RegisterHandlers() {
         response->addHeader("X-Frame-Options", "DENY");
         response->addHeader(
             "Content-Security-Policy",
-            "default-src 'self'; object-src 'none'; base-uri 'none'; "
+            "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "base-uri 'none'; "
             "frame-ancestors 'none'");
       });
 
@@ -597,10 +617,12 @@ void RegisterHandlers() {
       "/api/v1/setup/status",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         security::DeviceState state;
+        bool runtime_pending = false;
         bool security_enabled = false;
         {
           std::scoped_lock lock(StateMutex());
           state = GlobalState().device_state;
+          runtime_pending = GlobalState().runtime_pending_peer.has_value();
           security_enabled = GlobalState().args.app_config != nullptr &&
                              GlobalState().args.app_config->security.enabled;
         }
@@ -610,7 +632,8 @@ void RegisterHandlers() {
           return;
         }
         Json::Value body(Json::objectValue);
-        const bool required = state == security::DeviceState::kDefault;
+        const bool required = runtime_pending ||
+                              state == security::DeviceState::kDefault;
         body["required"] = required;
         if (required) {
           auto peer = NormalizePeerIp(request->peerAddr().toIp());
@@ -620,6 +643,8 @@ void RegisterHandlers() {
           }
           body["tls"] = "ready";
           body["peer_ip"] = std::move(peer).value();
+          body["phase"] = runtime_pending ? "runtime_pending"
+                                           : "administrator";
         }
         callback(JsonResponse(std::move(body)));
       },
@@ -667,6 +692,21 @@ void RegisterHandlers() {
                       bootstrap_request.confirmed_peer_ip =
                           parsed_request->confirmed_peer_ip;
                       bootstrap_request.actual_peer_ip = actual_peer;
+                      bool transition_allowed = false;
+                      {
+                        std::scoped_lock lock(StateMutex());
+                        const auto& state = GlobalState();
+                        transition_allowed =
+                            !state.runtime_pending_peer.has_value() &&
+                            state.device_state == security::DeviceState::kDefault;
+                      }
+                      if (!transition_allowed) {
+                        QueueResponse(
+                            event_loop, std::move(callback),
+                            SecurityErrorResponse(
+                                {"E_ACCESS_DENIED", "request denied"}));
+                        return;
+                      }
                       auto initialized =
                           bootstrap->Initialize(std::move(bootstrap_request));
                       if (!initialized.ok()) {
@@ -677,22 +717,126 @@ void RegisterHandlers() {
                       }
                       {
                         std::scoped_lock lock(StateMutex());
+                        GlobalState().runtime_pending_peer = actual_peer;
                         GlobalState().device_state =
-                            security::DeviceState::kOperational;
+                            security::DeviceState::kDefault;
                       }
-                      std::string runtime_state = "deferred";
-                      if (runtime_start) {
-                        auto runtime = runtime_start();
-                        if (!runtime.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
-                                        SecurityUnavailableResponse());
-                          return;
+                      if (!runtime_start) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
+                      }
+                      auto runtime = runtime_start();
+                      if (!runtime.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
+                      }
+                      bool transition_completed = false;
+                      {
+                        std::scoped_lock lock(StateMutex());
+                        if (GlobalState().runtime_pending_peer.has_value() &&
+                            *GlobalState().runtime_pending_peer == actual_peer) {
+                          GlobalState().device_state =
+                              security::DeviceState::kOperational;
+                          GlobalState().runtime_pending_peer.reset();
+                          transition_completed = true;
                         }
-                        runtime_state = "running";
+                      }
+                      if (!transition_completed) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
                       }
                       Json::Value response(Json::objectValue);
                       response["required"] = false;
-                      response["runtime"] = runtime_state;
+                      response["runtime"] = "running";
+                      QueueResponse(event_loop, std::move(callback),
+                                    JsonResponse(std::move(response)));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    SecurityUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/setup/runtime",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        auto peer = NormalizePeerIp(request->peerAddr().toIp());
+        const std::string actual_peer = peer.ok() ? peer.value() : "";
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, actual_peer](
+                std::optional<security::Principal>, HttpCallback callback) {
+              auto validated = ValidateEmptyJsonObject(
+                  request->getBody(), request->getHeader("content-type"));
+              if (!validated.ok()) {
+                callback(SecurityErrorResponse(validated.error()));
+                return;
+              }
+              std::shared_ptr<BoundedWorker> worker;
+              RuntimeStartCallback runtime_start;
+              {
+                std::scoped_lock lock(StateMutex());
+                worker = GlobalState().security_worker;
+                runtime_start = GlobalState().args.runtime_start_callback;
+              }
+              if (!worker || !runtime_start || actual_peer.empty()) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto submitted = worker->Submit(
+                  [actual_peer, runtime_start, callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      bool transition_allowed = false;
+                      {
+                        std::scoped_lock lock(StateMutex());
+                        const auto& state = GlobalState();
+                        transition_allowed =
+                            state.runtime_pending_peer.has_value() &&
+                            *state.runtime_pending_peer == actual_peer &&
+                            state.device_state == security::DeviceState::kDefault;
+                      }
+                      if (!transition_allowed) {
+                        QueueResponse(
+                            event_loop, std::move(callback),
+                            SecurityErrorResponse(
+                                {"E_ACCESS_DENIED", "request denied"}));
+                        return;
+                      }
+                      auto runtime = runtime_start();
+                      if (!runtime.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
+                      }
+                      bool transition_completed = false;
+                      {
+                        std::scoped_lock lock(StateMutex());
+                        auto& state = GlobalState();
+                        if (state.runtime_pending_peer.has_value() &&
+                            *state.runtime_pending_peer == actual_peer) {
+                          state.device_state =
+                              security::DeviceState::kOperational;
+                          state.runtime_pending_peer.reset();
+                          transition_completed = true;
+                        }
+                      }
+                      if (!transition_completed) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
+                      }
+                      Json::Value response(Json::objectValue);
+                      response["required"] = false;
+                      response["runtime"] = "running";
                       QueueResponse(event_loop, std::move(callback),
                                     JsonResponse(std::move(response)));
                     } catch (...) {
@@ -1397,6 +1541,12 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         return common::Result<void>::Err(state.error());
       }
       initial_device_state = state.value();
+      if (initial_device_state == security::DeviceState::kDefault &&
+          !effective_args.runtime_start_callback) {
+        return common::Result<void>::Err(
+            {"E_SERVICE_CONFIG",
+             "default security state requires runtime_start_callback"});
+      }
       if (!effective_args.bootstrap_service) {
         effective_args.bootstrap_service =
             std::make_shared<security::BootstrapService>(
@@ -1426,6 +1576,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       GlobalState().args = effective_args;
       GlobalState().security_worker = security_worker;
       GlobalState().device_state = initial_device_state;
+      GlobalState().runtime_pending_peer.reset();
       GlobalState().shutting_down = false;
       security_worker_ = security_worker;
       {
@@ -1591,6 +1742,7 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
     GlobalState().args = {};
     GlobalState().security_worker.reset();
     GlobalState().device_state = security::DeviceState::kDefault;
+    GlobalState().runtime_pending_peer.reset();
   }
   security_worker_.reset();
   tls_material_.reset();

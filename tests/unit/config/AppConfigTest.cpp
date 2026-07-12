@@ -145,6 +145,20 @@ secure_rtsp:
             "/var/lib/camera-firmware/security");
 }
 
+TEST(AppConfigTest, DefaultsOmittedWebRootToProductionArtifacts) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  enabled: true
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().http.web_root, "web/dist");
+}
+
 TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
   ExpectConfigError(SecurityConfigWithTls(false), "E_SECURITY_TLS");
   ExpectConfigError(SecurityConfigWithRtspAuth(false), "E_SECURITY_RTSP_AUTH");
@@ -180,7 +194,7 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_FALSE(cfg.value().http.tls.enabled);
   EXPECT_EQ(cfg.value().http.port, 8443u);
   EXPECT_EQ(cfg.value().http.public_base_url, "http://127.0.0.1:8443");
-  EXPECT_EQ(cfg.value().http.web_root, "web");
+  EXPECT_EQ(cfg.value().http.web_root, "web/dist");
   EXPECT_FALSE(cfg.value().security.enabled);
   EXPECT_FALSE(cfg.value().ai.enabled);
   EXPECT_TRUE(cfg.value().ai.models.empty());

@@ -433,7 +433,10 @@ common::Result<void> AuthorizeSecurityRequest(
   }
 
   if (context.state == security::DeviceState::kDefault) {
-    if (context.path != "/api/v1/setup/initialize" || method != "POST") {
+    const bool setup_command =
+        context.path == "/api/v1/setup/initialize" ||
+        context.path == "/api/v1/setup/runtime";
+    if (!setup_command || method != "POST") {
       return GateError("E_ACCESS_DENIED", "request denied");
     }
     if (!SameOrigin(context.origin, context.expected_origin)) {
@@ -445,7 +448,8 @@ common::Result<void> AuthorizeSecurityRequest(
     return common::Result<void>::Ok();
   }
 
-  if (context.path == "/api/v1/setup/initialize") {
+  if (context.path == "/api/v1/setup/initialize" ||
+      context.path == "/api/v1/setup/runtime") {
     return GateError("E_ACCESS_DENIED", "request denied");
   }
   const bool login =
@@ -593,6 +597,30 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
     return InvalidRequest<ParsedSetupRequest>();
   }
   return common::Result<ParsedSetupRequest>::Ok(std::move(parsed));
+}
+
+common::Result<void> ValidateEmptyJsonObject(
+    std::string_view body,
+    std::string_view content_type) {
+  if (body.size() > kMaximumSecurityBodyBytes) {
+    return InvalidRequest<void>("E_REQUEST_TOO_LARGE");
+  }
+  if (!IsJsonContentType(content_type)) {
+    return InvalidRequest<void>();
+  }
+  std::string compact;
+  compact.reserve(body.size());
+  for (const unsigned char byte : body) {
+    const bool json_whitespace = byte == ' ' || byte == '\t' ||
+                                 byte == '\r' || byte == '\n';
+    if (!json_whitespace) {
+      compact.push_back(static_cast<char>(byte));
+    }
+  }
+  if (compact != "{}") {
+    return InvalidRequest<void>();
+  }
+  return common::Result<void>::Ok();
 }
 
 }  // namespace camera_firmware::service

@@ -7,6 +7,11 @@
 /vendor/models/*.tflite
 /vendor/models/*.bin
 /hailort.log
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+/web/playwright-report/
+/web/test-results/
 *.credentials
 security.db
 security.db-shm

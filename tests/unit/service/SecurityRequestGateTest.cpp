@@ -29,6 +29,7 @@ using camera_firmware::service::ParseSessionCookie;
 using camera_firmware::service::ParseSessionCookieHeaders;
 using camera_firmware::service::ParseSetupJson;
 using camera_firmware::service::SecurityRequestContext;
+using camera_firmware::service::ValidateEmptyJsonObject;
 
 constexpr std::string_view kOrigin = "https://camera.example";
 
@@ -76,14 +77,20 @@ TEST(SecurityRequestGateTest, DefaultStateAllowsOnlyExactSetupSurface) {
   initialize.has_management_header = true;
   EXPECT_TRUE(AuthorizeSecurityRequest(initialize).ok());
 
+  auto runtime = Request("/api/v1/setup/runtime", "post");
+  runtime.origin = std::string(kOrigin);
+  runtime.has_management_header = true;
+  EXPECT_TRUE(AuthorizeSecurityRequest(runtime).ok());
+
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/")).ok());
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/index.html")).ok());
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/app.js")).ok());
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/styles.css")).ok());
 
-  for (const std::string path : {"/api/v1/health", "/api/v1/stream",
-                                 "/api/v1/setup/status/extra", "/index.html/",
-                                 "/app.js.map"}) {
+  for (const std::string path : {
+           "/api/v1/health", "/api/v1/stream",
+           "/api/v1/setup/status/extra", "/index.html/", "/app.js.map",
+           "/assets/app.js", "/dashboard", "/%2e%2e/etc/passwd"}) {
     auto result = AuthorizeSecurityRequest(Request(path));
     ASSERT_FALSE(result.ok()) << path;
     EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
@@ -113,10 +120,13 @@ TEST(SecurityRequestGateTest, SetupInitializationRequiresOriginThenHeader) {
 }
 
 TEST(SecurityRequestGateTest, OperationalSetupIsLockedBeforeOtherChecks) {
-  auto context = Operational("/api/v1/setup/initialize", "POST");
-  auto result = AuthorizeSecurityRequest(context);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, "E_ACCESS_DENIED");
+  for (const std::string path : {"/api/v1/setup/initialize",
+                                 "/api/v1/setup/runtime"}) {
+    auto context = Operational(path, "POST");
+    auto result = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(result.ok()) << path;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
+  }
 }
 
 TEST(SecurityRequestGateTest, OperationalStatusAndStaticAssetsRemainPublic) {
@@ -358,6 +368,28 @@ TEST(SecurityRequestGateTest, SetupJsonRequiresExactPeerFieldAndBounds) {
       "application/json");
   ASSERT_FALSE(oversized_ip.ok());
   EXPECT_EQ(oversized_ip.error().code, "E_INVALID_REQUEST");
+}
+
+TEST(SecurityRequestGateTest, RuntimeRetryRequiresAnExactEmptyJsonObject) {
+  EXPECT_TRUE(ValidateEmptyJsonObject(" { \n } ", "application/json").ok());
+
+  for (const std::string body : {"", "null", "[]", "{\"peer_ip\":\"x\"}"}) {
+    auto parsed = ValidateEmptyJsonObject(body, "application/json");
+    ASSERT_FALSE(parsed.ok()) << body;
+    EXPECT_EQ(parsed.error().code, "E_INVALID_REQUEST") << body;
+  }
+  auto wrong_type = ValidateEmptyJsonObject("{}", "text/plain");
+  ASSERT_FALSE(wrong_type.ok());
+  EXPECT_EQ(wrong_type.error().code, "E_INVALID_REQUEST");
+  auto oversized = ValidateEmptyJsonObject(std::string(4097U, ' '),
+                                           "application/json");
+  ASSERT_FALSE(oversized.ok());
+  EXPECT_EQ(oversized.error().code, "E_REQUEST_TOO_LARGE");
+  for (const std::string body : {"{\v}", "{\f}"}) {
+    auto non_json_whitespace = ValidateEmptyJsonObject(body, "application/json");
+    ASSERT_FALSE(non_json_whitespace.ok()) << body;
+    EXPECT_EQ(non_json_whitespace.error().code, "E_INVALID_REQUEST") << body;
+  }
 }
 
 TEST(BoundedWorkerTest, SubmitDoesNotBlockCallingThread) {

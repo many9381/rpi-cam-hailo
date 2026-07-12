@@ -101,7 +101,7 @@ struct HttpConfig {
   bool enabled{true};
   std::string bind_ip{"0.0.0.0"};
   std::uint16_t port{8080};
-  std::string web_root{"web"};
+  std::string web_root{"web/dist"};
   std::string public_base_url{"http://127.0.0.1:8080"};
   HttpTlsConfig tls;
 };

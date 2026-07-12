@@ -19,6 +19,7 @@ add_subdirectory(src/rtsp)
 add_subdirectory(src/runtime)
 add_subdirectory(src/service)
 add_subdirectory(plugins/gst-secure-srtp)
+add_subdirectory(web)
 add_subdirectory(apps/camera-firmware)
 add_subdirectory(apps/rtsp-digest-credential)
 

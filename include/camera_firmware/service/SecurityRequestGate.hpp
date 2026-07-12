@@ -59,5 +59,8 @@ struct ParsedSetupRequest {
 [[nodiscard]] common::Result<ParsedSetupRequest> ParseSetupJson(
     common::SecureBytes body,
     std::string_view content_type);
+[[nodiscard]] common::Result<void> ValidateEmptyJsonObject(
+    std::string_view body,
+    std::string_view content_type);
 
 }  // namespace camera_firmware::service

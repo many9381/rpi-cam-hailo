@@ -101,9 +101,23 @@ struct HttpResult {
   drogon::HttpResponsePtr response;
 };
 
-drogon::HttpClientPtr NewClient(std::uint16_t port) {
-  return drogon::HttpClient::newHttpClient("127.0.0.1", port, true, nullptr,
-                                           false, false);
+drogon::HttpClientPtr NewClient(std::uint16_t port,
+                                std::string source_ip = {}) {
+  auto client = drogon::HttpClient::newHttpClient(
+      "127.0.0.1", port, true, nullptr, false, false);
+  if (!source_ip.empty()) {
+    client->setSockOptCallback([source_ip = std::move(source_ip)](int fd) {
+      sockaddr_in source{};
+      source.sin_family = AF_INET;
+      source.sin_port = 0;
+      if (::inet_pton(AF_INET, source_ip.c_str(), &source.sin_addr) != 1 ||
+          ::bind(fd, reinterpret_cast<const sockaddr*>(&source),
+                 sizeof(source)) != 0) {
+        throw std::runtime_error("unable to bind integration client source");
+      }
+    });
+  }
+  return client;
 }
 
 HttpResult Send(const drogon::HttpClientPtr& client,
@@ -149,7 +163,8 @@ void ExpectSecurityHeaders(const drogon::HttpResponsePtr& response) {
   EXPECT_EQ(response->getHeader("Referrer-Policy"), "no-referrer");
   EXPECT_EQ(response->getHeader("X-Frame-Options"), "DENY");
   EXPECT_EQ(response->getHeader("Content-Security-Policy"),
-            "default-src 'self'; object-src 'none'; base-uri 'none'; "
+            "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "base-uri 'none'; "
             "frame-ancestors 'none'");
 }
 
@@ -290,7 +305,8 @@ void ExpectRawSecurityHeaders(const RawHttpsResponse& response) {
   EXPECT_EQ(response.Header("Referrer-Policy"), "no-referrer");
   EXPECT_EQ(response.Header("X-Frame-Options"), "DENY");
   EXPECT_EQ(response.Header("Content-Security-Policy"),
-            "default-src 'self'; object-src 'none'; base-uri 'none'; "
+            "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "base-uri 'none'; "
             "frame-ancestors 'none'");
 }
 
@@ -310,7 +326,7 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
     config.http.bind_ip = "127.0.0.1";
     config.http.port = port;
     config.http.public_base_url = origin;
-    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web";
+    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
     config.http.tls.enabled = true;
     config.http.tls.allow_development_self_signed_tls = true;
     config.secure_rtsp.client_auth.enabled = true;
@@ -370,6 +386,48 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
+TEST(HttpsAuthIntegrationTest, DefaultWebRootServesProductionArtifacts) {
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    TemporaryDirectory directory;
+    const std::uint16_t port = ReserveLoopbackPort();
+    camera_firmware::config::AppConfig config;
+    config.security.enabled = false;
+    config.security.state_directory = directory.path().string();
+    config.http.enabled = true;
+    config.http.bind_ip = "127.0.0.1";
+    config.http.port = port;
+    config.http.tls.enabled = true;
+    config.http.tls.allow_development_self_signed_tls = true;
+
+    camera_firmware::service::ServiceInitArgs args;
+    args.app_config = &config;
+    camera_firmware::service::ServiceApp service;
+    auto started = service.Init(args);
+    if (!started.ok()) {
+      _exit(2);
+    }
+
+    auto client = NewClient(port);
+    for (const std::string path : {"/", "/app.js", "/styles.css"}) {
+      const auto response = Send(client, drogon::Get, path);
+      if (response.result != drogon::ReqResult::Ok || !response.response ||
+          response.response->statusCode() != drogon::k200OK) {
+        _exit(3);
+      }
+    }
+    service.Stop();
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
 TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
@@ -386,7 +444,7 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
     config.http.bind_ip = "127.0.0.1";
     config.http.port = port;
     config.http.public_base_url = origin;
-    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web";
+    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
     config.http.tls.enabled = true;
     config.http.tls.allow_development_self_signed_tls = true;
     config.secure_rtsp.client_auth.enabled = true;
@@ -412,6 +470,9 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
               .count());
       return std::vector<camera_firmware::service::CameraStatus>{
           {"imx708-main", "running", true}};
+    };
+    args.runtime_start_callback = [] {
+      return camera_firmware::common::Result<void>::Ok();
     };
     auto started = service.Init(args);
     if (!started.ok()) {
@@ -476,7 +537,7 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   config.http.bind_ip = "127.0.0.1";
   config.http.port = port;
   config.http.public_base_url = origin;
-  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web";
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
   config.http.tls.enabled = true;
   config.http.tls.allow_development_self_signed_tls = true;
   config.secure_rtsp.client_auth.enabled = true;
@@ -494,6 +555,7 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   std::atomic<int> stream_diagnostics_calls{0};
   std::atomic<int> restart_calls{0};
   std::atomic<int> runtime_start_calls{0};
+  std::atomic<bool> runtime_start_should_fail{true};
   std::atomic<bool> complete_sse_then_throw{false};
   std::atomic<bool> flood_mode{false};
   std::atomic<bool> flood_started_once{false};
@@ -605,8 +667,11 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   };
   args.runtime_start_callback = [&] {
     runtime_start_calls.fetch_add(1);
-    return camera_firmware::common::Result<void>::Err(
-        {"E_RUNTIME_START", "runtime failure detail"});
+    if (runtime_start_should_fail.load()) {
+      return camera_firmware::common::Result<void>::Err(
+          {"E_RUNTIME_START", "runtime failure detail"});
+    }
+    return camera_firmware::common::Result<void>::Ok();
   };
   args.security_store = store;
   args.bootstrap_service = bootstrap;
@@ -617,23 +682,27 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   ASSERT_TRUE(started.ok()) << started.error().message;
   auto client = NewClient(port);
 
-  auto static_root = Send(client, drogon::Get, "/");
-  ExpectStatus(static_root, drogon::k200OK);
-  ExpectSecurityHeaders(static_root.response);
-  ExpectStatus(Send(client, drogon::Get, "/app.js"), drogon::k200OK);
-  auto missing_static = Send(client, drogon::Get, "/app.js.map");
-  ExpectStatus(missing_static, drogon::k404NotFound);
-  ExpectSecurityHeaders(missing_static.response);
-  ExpectStatus(Send(client, drogon::Get, "/api/v1/setup/status/extra"),
-               drogon::k404NotFound);
-  ExpectStatus(Send(client, drogon::Get, "/etc/passwd"),
-               drogon::k404NotFound);
+  for (const std::string path : {"/", "/index.html", "/app.js",
+                                 "/styles.css"}) {
+    auto response = Send(client, drogon::Get, path);
+    ExpectStatus(response, drogon::k200OK);
+    ExpectSecurityHeaders(response.response);
+  }
+  for (const std::string path : {"/app.js.map", "/assets/app.js",
+                                 "/dashboard", "/index.html/",
+                                 "/%2e%2e/etc/passwd"}) {
+    auto response = Send(client, drogon::Get, path);
+    ExpectStatus(response, drogon::k404NotFound);
+    ExpectSecurityHeaders(response.response);
+  }
 
   auto setup_status = Send(client, drogon::Get, "/api/v1/setup/status");
   ExpectStatus(setup_status, drogon::k200OK);
   ExpectSecurityHeaders(setup_status.response);
   ASSERT_NE(setup_status.response->getJsonObject(), nullptr);
   EXPECT_TRUE((*setup_status.response->getJsonObject())["required"].asBool());
+  EXPECT_EQ((*setup_status.response->getJsonObject())["phase"].asString(),
+            "administrator");
   EXPECT_EQ((*setup_status.response->getJsonObject())["peer_ip"].asString(),
             "127.0.0.1");
 
@@ -677,6 +746,37 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
             std::string_view::npos);
   EXPECT_EQ(runtime_start_calls.load(), 1);
 
+  auto pending_status =
+      Send(client, drogon::Get, "/api/v1/setup/status");
+  ExpectStatus(pending_status, drogon::k200OK);
+  ASSERT_NE(pending_status.response->getJsonObject(), nullptr);
+  EXPECT_TRUE((*pending_status.response->getJsonObject())["required"].asBool());
+  EXPECT_EQ((*pending_status.response->getJsonObject())["phase"].asString(),
+            "runtime_pending");
+  EXPECT_EQ((*pending_status.response->getJsonObject())["peer_ip"].asString(),
+            "127.0.0.1");
+
+  auto different_peer = NewClient(port, "127.0.0.2");
+  auto rejected_peer = Send(different_peer, drogon::Post,
+                            "/api/v1/setup/runtime", "{}",
+                            origin, {}, true);
+  ExpectStatus(rejected_peer, drogon::k403Forbidden);
+  EXPECT_EQ(rejected_peer.response->getBody().find("127.0.0.1"),
+            std::string_view::npos);
+  EXPECT_EQ(rejected_peer.response->getBody().find("127.0.0.2"),
+            std::string_view::npos);
+  EXPECT_EQ(runtime_start_calls.load(), 1);
+
+  runtime_start_should_fail.store(false);
+  auto retry = Send(client, drogon::Post, "/api/v1/setup/runtime",
+                    "{}", origin, {}, true);
+  ExpectStatus(retry, drogon::k200OK);
+  ASSERT_NE(retry.response->getJsonObject(), nullptr);
+  EXPECT_FALSE((*retry.response->getJsonObject())["required"].asBool());
+  EXPECT_EQ((*retry.response->getJsonObject())["runtime"].asString(),
+            "running");
+  EXPECT_EQ(runtime_start_calls.load(), 2);
+
   auto operational_status =
       Send(client, drogon::Get, "/api/v1/setup/status");
   ExpectStatus(operational_status, drogon::k200OK);
@@ -685,12 +785,14 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
       (*operational_status.response->getJsonObject())["required"].asBool());
   EXPECT_FALSE(
       operational_status.response->getJsonObject()->isMember("peer_ip"));
+  EXPECT_FALSE(
+      operational_status.response->getJsonObject()->isMember("phase"));
 
   auto repeated_setup = Send(client, drogon::Post,
                              "/api/v1/setup/initialize", setup_body, origin,
                              {}, true);
   ExpectStatus(repeated_setup, drogon::k403Forbidden);
-  EXPECT_EQ(runtime_start_calls.load(), 1);
+  EXPECT_EQ(runtime_start_calls.load(), 2);
 
   auto unauthenticated = Send(client, drogon::Get, "/api/v1/cameras");
   ExpectStatus(unauthenticated, drogon::k401Unauthorized);
