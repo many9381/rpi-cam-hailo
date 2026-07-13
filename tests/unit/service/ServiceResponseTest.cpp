@@ -1002,3 +1002,84 @@ TEST(ServiceResponseTest, PreviewStreamResponseWritesBytesAndSignalsRelease) {
   EXPECT_EQ(response->streamCallback()(nullptr, 0U), 0U);
   EXPECT_TRUE(state->released);
 }
+
+TEST(ServiceResponseTest, LiveUnavailableUsesOnlyPublicErrorContract) {
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Err(
+            {"E_LIVE_STALE", "private fragment timing detail"});
+      },
+      "imx708-main");
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_LIVE_UNAVAILABLE");
+  EXPECT_EQ((*json)["message"].asString(), "live preview is unavailable");
+}
+
+TEST(ServiceResponseTest, LiveCapacityUsesOnlyPublicErrorContract) {
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Err(
+            {"E_LIVE_CAPACITY", "private reader detail"});
+      },
+      "imx708-main");
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_LIVE_CAPACITY");
+  EXPECT_EQ((*json)["message"].asString(),
+            "live preview reader capacity is full");
+}
+
+TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
+  struct StreamState {
+    std::string bytes{"fragmented-mp4-bytes"};
+    bool released{false};
+  };
+  auto state = std::make_shared<StreamState>();
+
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [state](const std::string& camera_id) {
+        if (camera_id != "imx708-main") {
+          return camera_firmware::common::Result<
+              camera_firmware::service::LiveMp4StreamCallback>::Err(
+              {"E_LIVE_NOT_FOUND", "camera not found"});
+        }
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [state](char* output, std::size_t capacity) {
+              if (output == nullptr) {
+                state->released = true;
+                return std::size_t{0};
+              }
+              const auto count = std::min(capacity, state->bytes.size());
+              std::copy_n(state->bytes.data(), count, output);
+              return count;
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      },
+      "imx708-main");
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  EXPECT_EQ(response->contentTypeString(), "video/mp4");
+  EXPECT_EQ(response->getHeader("Content-Encoding"), "identity");
+  ASSERT_TRUE(response->streamCallback());
+
+  std::array<char, 32> output{};
+  const auto written =
+      response->streamCallback()(output.data(), output.size());
+  EXPECT_EQ(std::string_view(output.data(), written), "fragmented-mp4-bytes");
+  EXPECT_FALSE(state->released);
+
+  EXPECT_EQ(response->streamCallback()(nullptr, 0U), 0U);
+  EXPECT_TRUE(state->released);
+}

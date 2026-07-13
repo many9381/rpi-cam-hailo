@@ -60,8 +60,8 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::array<std::string_view, 2> suffixes = {
-        "/snapshot.jpg", "/preview.mjpeg"};
+    constexpr std::array<std::string_view, 3> suffixes = {
+        "/snapshot.jpg", "/preview.mjpeg", "/live.mp4"};
     for (const auto suffix : suffixes) {
       if (path.starts_with(prefix) && path.ends_with(suffix) &&
           path.size() > prefix.size() + suffix.size()) {
@@ -162,6 +162,18 @@ Json::Value BuildPreviewErrorJson(std::string_view code) {
   } else {
     json["code"] = "E_PREVIEW_UNAVAILABLE";
     json["message"] = "MJPEG preview is unavailable";
+  }
+  return json;
+}
+
+Json::Value BuildLiveErrorJson(std::string_view code) {
+  Json::Value json(Json::objectValue);
+  if (code == "E_LIVE_CAPACITY") {
+    json["code"] = "E_LIVE_CAPACITY";
+    json["message"] = "live preview reader capacity is full";
+  } else {
+    json["code"] = "E_LIVE_UNAVAILABLE";
+    json["message"] = "live preview is unavailable";
   }
   return json;
 }
@@ -617,6 +629,7 @@ void RegisterHandlers() {
         response->addHeader(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "media-src 'self' blob:; "
             "base-uri 'none'; "
             "frame-ancestors 'none'");
       });
@@ -1104,6 +1117,25 @@ void RegisterHandlers() {
               }
               callback(BuildMjpegPreviewResponse(preview_stream_callback,
                                                  camera_id));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/cameras/{1}/live.mp4",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& camera_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [camera_id](std::optional<security::Principal>,
+                        HttpCallback callback) {
+              LiveMp4OpenCallback live_stream_callback;
+              {
+                std::scoped_lock lock(StateMutex());
+                live_stream_callback =
+                    GlobalState().args.live_stream_callback;
+              }
+              callback(BuildLiveMp4Response(live_stream_callback, camera_id));
             });
       },
       {Get});
@@ -1643,6 +1675,40 @@ drogon::HttpResponsePtr BuildMjpegPreviewResponse(
   auto response = drogon::HttpResponse::newStreamResponse(
       stream, "", drogon::CT_CUSTOM,
       "multipart/x-mixed-replace; boundary=cf-frame");
+  response->setStatusCode(drogon::k200OK);
+  response->addHeader("Content-Encoding", "identity");
+  return response;
+}
+
+drogon::HttpResponsePtr BuildLiveMp4Response(
+    const LiveMp4OpenCallback& live_stream_callback,
+    const std::string& camera_id) {
+  if (!live_stream_callback) {
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  common::Result<LiveMp4StreamCallback> opened =
+      common::Result<LiveMp4StreamCallback>::Err(
+          {"E_LIVE_UNAVAILABLE", "live preview is unavailable"});
+  try {
+    opened = live_stream_callback(camera_id);
+  } catch (...) {
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+  if (!opened.ok()) {
+    return JsonResponse(BuildLiveErrorJson(opened.error().code),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  auto stream = std::move(opened).value();
+  if (!stream) {
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+  auto response = drogon::HttpResponse::newStreamResponse(
+      stream, "", drogon::CT_CUSTOM, "video/mp4");
   response->setStatusCode(drogon::k200OK);
   response->addHeader("Content-Encoding", "identity");
   return response;

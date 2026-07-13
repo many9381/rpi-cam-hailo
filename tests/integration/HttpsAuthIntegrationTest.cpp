@@ -174,6 +174,7 @@ void ExpectSecurityHeaders(const drogon::HttpResponsePtr& response) {
   EXPECT_EQ(response->getHeader("X-Frame-Options"), "DENY");
   EXPECT_EQ(response->getHeader("Content-Security-Policy"),
             "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "media-src 'self' blob:; "
             "base-uri 'none'; "
             "frame-ancestors 'none'");
 }
@@ -579,6 +580,7 @@ void ExpectRawSecurityHeaders(const RawHttpsResponse& response) {
   EXPECT_EQ(response.Header("X-Frame-Options"), "DENY");
   EXPECT_EQ(response.Header("Content-Security-Policy"),
             "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "media-src 'self' blob:; "
             "base-uri 'none'; "
             "frame-ancestors 'none'");
 }
@@ -1349,6 +1351,130 @@ TEST(HttpsAuthIntegrationTest,
   if (child == 0) {
     (void)::alarm(20U);
     RunAuthenticatedMjpegScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunAuthenticatedLiveMp4Scenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  const std::string fmp4_payload{"ftyp-moov-moof-mdat"};
+  std::atomic<unsigned int> provider_calls{0U};
+  std::atomic<unsigned int> release_calls{0U};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.live_stream_callback = [&](const std::string& camera_id) {
+    ++provider_calls;
+    if (camera_id != "imx708-main") {
+      return camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamCallback>::Err(
+          {"E_LIVE_NOT_FOUND", "private camera detail"});
+    }
+    auto offset = std::make_shared<std::size_t>(0U);
+    camera_firmware::service::LiveMp4StreamCallback stream =
+        [offset, &fmp4_payload, &release_calls](char* output,
+                                               std::size_t capacity) {
+          if (output == nullptr) {
+            ++release_calls;
+            return std::size_t{0};
+          }
+          if (*offset >= fmp4_payload.size()) {
+            return std::size_t{0};
+          }
+          const auto count =
+              std::min(capacity, fmp4_payload.size() - *offset);
+          std::copy_n(fmp4_payload.data() + *offset, count, output);
+          *offset += count;
+          return count;
+        };
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamCallback>::Ok(
+        std::move(stream));
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  auto denied = Send(client, drogon::Get,
+                     "/api/v1/cameras/imx708-main/live.mp4");
+  ExpectStatus(denied, drogon::k403Forbidden);
+  EXPECT_EQ(provider_calls.load(), 0U);
+
+  const std::string setup_body =
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
+  auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
+                    setup_body, origin, {}, true);
+  ExpectStatus(setup, drogon::k200OK);
+  auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {},
+      true);
+  ExpectStatus(login, drogon::k200OK);
+  const auto& session_cookie = login.response->getCookie("camera_session");
+  ASSERT_FALSE(session_cookie.value().empty());
+  const std::string cookie = "camera_session=" + session_cookie.value();
+
+  auto live = Send(client, drogon::Get,
+                   "/api/v1/cameras/imx708-main/live.mp4", {}, {}, cookie);
+  ExpectStatus(live, drogon::k200OK);
+  ExpectSecurityHeaders(live.response);
+  EXPECT_EQ(live.response->contentTypeString(), "video/mp4");
+  EXPECT_EQ(live.response->getHeader("Content-Encoding"), "identity");
+  EXPECT_EQ(live.response->body(), fmp4_payload);
+  EXPECT_EQ(provider_calls.load(), 1U);
+
+  auto unknown = Send(client, drogon::Get,
+                      "/api/v1/cameras/unknown/live.mp4", {}, {}, cookie);
+  ExpectStatus(unknown, drogon::k503ServiceUnavailable);
+  const auto unknown_json = unknown.response->jsonObject();
+  ASSERT_NE(unknown_json, nullptr);
+  EXPECT_EQ((*unknown_json)["code"].asString(), "E_LIVE_UNAVAILABLE");
+  EXPECT_EQ((*unknown_json)["message"].asString(),
+            "live preview is unavailable");
+  EXPECT_EQ(provider_calls.load(), 2U);
+
+  service.Stop();
+  EXPECT_GE(release_calls.load(), 1U);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AuthenticatedLiveMp4UsesSessionAndStreamsBytes) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunAuthenticatedLiveMp4Scenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
 
