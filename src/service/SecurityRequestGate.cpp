@@ -92,6 +92,7 @@ bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
   }
   return method == "POST" &&
          (path == "/api/v1/ai/restart" ||
+          path == "/api/v1/runtime/restart" ||
           path == "/api/v1/auth/logout");
 }
 

@@ -64,16 +64,6 @@ common::Result<void> FirmwareBootCoordinator::Start() {
     }
   }
 
-  if (should_start_runtime) {
-    auto runtime = StartRuntimeDependency();
-    if (!runtime.ok()) {
-      FinishFailedStart(false);
-      return runtime;
-    }
-    std::scoped_lock lock(mutex_);
-    runtime_started_ = true;
-  }
-
   if (config_.service_enabled) {
     {
       std::scoped_lock lock(mutex_);
@@ -111,6 +101,20 @@ common::Result<void> FirmwareBootCoordinator::Start() {
     }
     std::scoped_lock lock(mutex_);
     service_started_ = true;
+  }
+
+  if (should_start_runtime) {
+    if (config_.service_enabled) {
+      (void)StartRuntimeAfterBootstrap();
+    } else {
+      auto runtime = StartRuntimeDependency();
+      if (!runtime.ok()) {
+        FinishFailedStart(false);
+        return runtime;
+      }
+      std::scoped_lock lock(mutex_);
+      runtime_started_ = true;
+    }
   }
 
   {

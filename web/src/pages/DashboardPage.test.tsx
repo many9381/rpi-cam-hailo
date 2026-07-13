@@ -169,4 +169,27 @@ describe('DashboardPage', () => {
       screen.getByRole('button', { name: 'Restart AI runtime' }),
     ).toBeEnabled());
   });
+
+  it('restarts a failed camera runtime and refreshes operational data', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.postJson).mockImplementation(async (_path, _body, parser) =>
+      parser({ runtime: 'running' }));
+    const refresh = vi.fn(async () => undefined);
+    const failedController: OperationalController = {
+      ...controller,
+      refresh,
+      data: {
+        ...controller.data!,
+        cameras: [{ id: 'cam-a', state: 'error', snapshot_available: false }],
+      },
+    };
+    render(<DashboardPage client={client} controller={failedController} />);
+
+    await user.click(screen.getByRole('button', { name: 'Restart camera runtime' }));
+
+    expect(client.postJson).toHaveBeenCalledWith(
+      '/api/v1/runtime/restart', {}, expect.any(Function),
+    );
+    expect(refresh).toHaveBeenCalledOnce();
+  });
 });

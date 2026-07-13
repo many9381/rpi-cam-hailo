@@ -134,6 +134,8 @@ Json::Value BuildAiStatusJson(bool requested);
 drogon::HttpResponsePtr BuildAiRestartResponse(
     const AiControlCallback& restart_callback,
     const AiStatusProvider& ai_status_provider = {});
+drogon::HttpResponsePtr BuildRuntimeRestartResponse(
+    const RuntimeStartCallback& restart_callback);
 Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event);
 Json::Value BuildDetectionSnapshotJson(
     const std::vector<ai::DetectionEvent>& events);

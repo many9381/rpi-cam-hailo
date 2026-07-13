@@ -473,7 +473,8 @@ input:focus-visible {
   letter-spacing: 0;
 }
 
-.ai-heading-controls {
+.ai-heading-controls,
+.section-heading-controls {
   display: flex;
   align-items: center;
   gap: 10px;

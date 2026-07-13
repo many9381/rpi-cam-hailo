@@ -14,6 +14,7 @@ import type {
   LogoutResult,
   Principal,
   RestartAiResult,
+  RuntimeRestartResult,
   SetupStatus,
   StreamStatus,
 } from './types';
@@ -213,6 +214,13 @@ export function parseRestartAiResult(value: unknown): RestartAiResult {
   } catch {
     return invalid('Invalid AI restart response');
   }
+}
+
+export function parseRuntimeRestartResult(value: unknown): RuntimeRestartResult {
+  if (!isRecord(value) || value.runtime !== 'running') {
+    return invalid('Invalid runtime restart response');
+  }
+  return { runtime: 'running' };
 }
 
 export function parseSetupStatus(value: unknown): SetupStatus {

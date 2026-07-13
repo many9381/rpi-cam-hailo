@@ -1,14 +1,43 @@
+import { RotateCw } from 'lucide-react';
+import { useRef, useState } from 'react';
+
 import type { CameraStatus, HealthStatus } from '../api/types';
+import { IconButton } from './IconButton';
 
 interface StatusPanelProps {
   health: HealthStatus;
   cameras: CameraStatus[];
   selectedCameraId: string;
   onSelectCamera(id: string): void;
+  onRestartRuntime(): Promise<void>;
 }
 
 export function StatusPanel({ health, cameras, selectedCameraId,
-  onSelectCamera }: StatusPanelProps) {
+  onSelectCamera, onRestartRuntime }: StatusPanelProps) {
+  const pendingRef = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(false);
+  const runtimeUnavailable = cameras.some(
+    ({ state }) => state === 'error' || state === 'stopped',
+  );
+
+  const restart = async () => {
+    if (pendingRef.current) {
+      return;
+    }
+    pendingRef.current = true;
+    setPending(true);
+    setError(false);
+    try {
+      await onRestartRuntime();
+    } catch {
+      setError(true);
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  };
+
   return (
     <section className="operational-section" aria-labelledby="system-status-heading">
       <div className="section-heading">
@@ -16,10 +45,23 @@ export function StatusPanel({ health, cameras, selectedCameraId,
           <h2 id="system-status-heading">System and cameras</h2>
           <p>{cameras.length} registered camera{cameras.length === 1 ? '' : 's'}</p>
         </div>
-        <span className={`status-value status-${health.status === 'ok' ? 'good' : 'warn'}`}>
-          {health.status}
-        </span>
+        <div className="section-heading-controls">
+          <span className={`status-value status-${health.status === 'ok' ? 'good' : 'warn'}`}>
+            {health.status}
+          </span>
+          {runtimeUnavailable && (
+            <IconButton label="Restart camera runtime"
+              onClick={() => void restart()} disabled={pending}>
+              <RotateCw size={17} aria-hidden="true" />
+            </IconButton>
+          )}
+        </div>
       </div>
+      {error && (
+        <p className="command-error" role="alert">
+          Camera runtime restart failed. Try again.
+        </p>
+      )}
       <div className="camera-grid">
         {cameras.length === 0 && <p className="empty-row">No cameras registered</p>}
         {cameras.map((camera) => (

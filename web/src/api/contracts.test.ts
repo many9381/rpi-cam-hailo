@@ -8,6 +8,7 @@ import {
   parseLoginResult,
   parseLogoutResult,
   parseRestartAiResult,
+  parseRuntimeRestartResult,
   parsePrincipal,
   parseSetupStatus,
   parseStream,
@@ -126,6 +127,14 @@ describe('operational response parsers', () => {
     expect(parseRestartAiResult({ status: 'restarted', ai })).toEqual({
       status: 'restarted', ai,
     });
+  });
+
+  it('accepts only a running runtime restart response', () => {
+    expect(parseRuntimeRestartResult({ runtime: 'running' })).toEqual({
+      runtime: 'running',
+    });
+    expect(() => parseRuntimeRestartResult({ runtime: 'failed' }))
+      .toThrow('Invalid runtime restart response');
   });
 
   it.each([

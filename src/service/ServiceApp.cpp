@@ -79,6 +79,7 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
           path == "/api/v1/setup/runtime" ||
           path == "/api/v1/auth/login" ||
           path == "/api/v1/auth/logout" ||
+          path == "/api/v1/runtime/restart" ||
           path == "/api/v1/ai/restart");
 }
 
@@ -1115,6 +1116,44 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/runtime/restart",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](std::optional<security::Principal>,
+                      HttpCallback callback) {
+              auto validated = ValidateEmptyJsonObject(
+                  request->getBody(), request->getHeader("content-type"));
+              if (!validated.ok()) {
+                callback(SecurityErrorResponse(validated.error()));
+                return;
+              }
+              RuntimeStartCallback restart;
+              std::shared_ptr<BoundedWorker> worker;
+              {
+                std::scoped_lock lock(StateMutex());
+                restart = GlobalState().args.runtime_start_callback;
+                worker = GlobalState().security_worker;
+              }
+              if (!worker) {
+                callback(BuildRuntimeRestartResponse({}));
+                return;
+              }
+              auto submitted = worker->Submit(
+                  [restart = std::move(restart), callback,
+                   event_loop = app().getLoop()]() mutable {
+                    QueueResponse(
+                        event_loop, std::move(callback),
+                        BuildRuntimeRestartResponse(restart));
+                  });
+              if (!submitted.ok()) {
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
       "/api/v1/ai/restart",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
@@ -1332,6 +1371,28 @@ drogon::HttpResponsePtr BuildAiRestartResponse(
   if (ai_status_provider) {
     body["ai"] = BuildAiStatusJson(ai_status_provider());
   }
+  return JsonResponse(std::move(body));
+}
+
+drogon::HttpResponsePtr BuildRuntimeRestartResponse(
+    const RuntimeStartCallback& restart_callback) {
+  common::Result<void> restarted = common::Result<void>::Err(
+      {"E_RUNTIME_UNAVAILABLE", "camera runtime is unavailable"});
+  try {
+    if (restart_callback) {
+      restarted = restart_callback();
+    }
+  } catch (...) {
+  }
+  if (!restarted.ok()) {
+    Json::Value body(Json::objectValue);
+    body["code"] = "E_RUNTIME_UNAVAILABLE";
+    body["message"] = "camera runtime is unavailable";
+    return JsonResponse(std::move(body), drogon::k503ServiceUnavailable);
+  }
+
+  Json::Value body(Json::objectValue);
+  body["runtime"] = "running";
   return JsonResponse(std::move(body));
 }
 
