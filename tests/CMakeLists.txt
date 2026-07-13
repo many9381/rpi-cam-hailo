@@ -75,7 +75,6 @@ add_executable(camera_firmware_media_tests
     unit/media/FragmentRingTest.cpp
     unit/media/IsoBmffAssemblerTest.cpp
     unit/media/JpegEncoderTest.cpp
-    unit/media/MjpegFrameHubTest.cpp
     unit/media/SnapshotTapTest.cpp
 )
 
@@ -243,11 +242,13 @@ add_executable(camera_firmware_https_auth_integration
 )
 
 add_dependencies(camera_firmware_https_auth_integration
+    camera-firmware
     camera_firmware_web
 )
 
 target_compile_definitions(camera_firmware_https_auth_integration
     PRIVATE
+        CF_CAMERA_FIRMWARE_BIN="$<TARGET_FILE:camera-firmware>"
         CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
 

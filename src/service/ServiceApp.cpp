@@ -60,8 +60,8 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::array<std::string_view, 3> suffixes = {
-        "/snapshot.jpg", "/preview.mjpeg", "/live.mp4"};
+    constexpr std::array<std::string_view, 2> suffixes = {
+        "/snapshot.jpg", "/live.mp4"};
     for (const auto suffix : suffixes) {
       if (path.starts_with(prefix) && path.ends_with(suffix) &&
           path.size() > prefix.size() + suffix.size()) {
@@ -151,18 +151,6 @@ Json::Value BuildSnapshotUnavailableJson() {
   Json::Value json(Json::objectValue);
   json["code"] = "E_NO_SNAPSHOT";
   json["message"] = "snapshot unavailable";
-  return json;
-}
-
-Json::Value BuildPreviewErrorJson(std::string_view code) {
-  Json::Value json(Json::objectValue);
-  if (code == "E_PREVIEW_CAPACITY") {
-    json["code"] = "E_PREVIEW_CAPACITY";
-    json["message"] = "MJPEG preview reader capacity is full";
-  } else {
-    json["code"] = "E_PREVIEW_UNAVAILABLE";
-    json["message"] = "MJPEG preview is unavailable";
-  }
   return json;
 }
 
@@ -1102,26 +1090,6 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
-      "/api/v1/cameras/{1}/preview.mjpeg",
-      [](const HttpRequestPtr& request, DrogonCallback&& callback,
-         const std::string& camera_id) {
-        AuthorizeRequest(
-            request, std::move(callback),
-            [camera_id](std::optional<security::Principal>,
-                        HttpCallback callback) {
-              MjpegPreviewOpenCallback preview_stream_callback;
-              {
-                std::scoped_lock lock(StateMutex());
-                preview_stream_callback =
-                    GlobalState().args.preview_stream_callback;
-              }
-              callback(BuildMjpegPreviewResponse(preview_stream_callback,
-                                                 camera_id));
-            });
-      },
-      {Get});
-
-  app().registerHandler(
       "/api/v1/cameras/{1}/live.mp4",
       [](const HttpRequestPtr& request, DrogonCallback&& callback,
          const std::string& camera_id) {
@@ -1642,41 +1610,6 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeCode(drogon::CT_IMAGE_JPG);
   response->setBody(std::string(snapshot->begin(), snapshot->end()));
-  return response;
-}
-
-drogon::HttpResponsePtr BuildMjpegPreviewResponse(
-    const MjpegPreviewOpenCallback& preview_stream_callback,
-    const std::string& camera_id) {
-  if (!preview_stream_callback) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
-                        drogon::k503ServiceUnavailable);
-  }
-
-  common::Result<MjpegPreviewStreamCallback> opened =
-      common::Result<MjpegPreviewStreamCallback>::Err(
-          {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"});
-  try {
-    opened = preview_stream_callback(camera_id);
-  } catch (...) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
-                        drogon::k503ServiceUnavailable);
-  }
-  if (!opened.ok()) {
-    return JsonResponse(BuildPreviewErrorJson(opened.error().code),
-                        drogon::k503ServiceUnavailable);
-  }
-
-  auto stream = std::move(opened).value();
-  if (!stream) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
-                        drogon::k503ServiceUnavailable);
-  }
-  auto response = drogon::HttpResponse::newStreamResponse(
-      stream, "", drogon::CT_CUSTOM,
-      "multipart/x-mixed-replace; boundary=cf-frame");
-  response->setStatusCode(drogon::k200OK);
-  response->addHeader("Content-Encoding", "identity");
   return response;
 }
 

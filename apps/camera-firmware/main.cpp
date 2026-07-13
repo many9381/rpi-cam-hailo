@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include <drogon/HttpAppFramework.h>
+
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
@@ -82,9 +84,11 @@ class LiveMp4ByteStream {
   std::size_t current_offset_{0U};
 };
 
-void HandleSignal(int) {
+void RequestShutdown() {
   g_stop_requested.store(true);
 }
+
+void HandleSignal(int) { RequestShutdown(); }
 
 int PrintError(const Error& error) {
   std::cerr << error.code << ": " << error.message << '\n';
@@ -94,6 +98,8 @@ int PrintError(const Error& error) {
 void InstallSignalHandlers() {
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
+  drogon::app().setIntSignalHandler(RequestShutdown);
+  drogon::app().setTermSignalHandler(RequestShutdown);
 }
 
 void WaitForShutdown() {
@@ -292,30 +298,6 @@ int RunFirmware(const std::string& config_path) {
   service_args.snapshot_callback =
       [&runtime](const std::string& camera_id) {
         return runtime.Snapshot(camera_id);
-      };
-  service_args.preview_stream_callback =
-      [&runtime](const std::string& camera_id)
-          -> camera_firmware::common::Result<
-              camera_firmware::service::MjpegPreviewStreamCallback> {
-        auto opened = runtime.OpenMjpegPreview(camera_id);
-        if (!opened.ok()) {
-          return camera_firmware::common::Result<
-              camera_firmware::service::MjpegPreviewStreamCallback>::Err(
-              opened.error());
-        }
-        auto reader = std::move(opened).value();
-        camera_firmware::service::MjpegPreviewStreamCallback stream =
-            [reader = std::move(reader)](char* output,
-                                         std::size_t capacity) mutable {
-              if (output == nullptr) {
-                reader.reset();
-                return std::size_t{0};
-              }
-              return reader ? reader->Read(output, capacity) : std::size_t{0};
-            };
-        return camera_firmware::common::Result<
-            camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
-            std::move(stream));
       };
   service_args.live_stream_callback =
       [&runtime, stale_timeout = std::chrono::milliseconds(

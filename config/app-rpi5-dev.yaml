@@ -26,12 +26,7 @@ http:
   port: 8443
   web_root: web/dist
   public_base_url: http://127.0.0.1:8443
-  preview:
-    enabled: true
-    width: 768
-    fps: 8
-    jpeg_quality: 80
-    max_clients: 2
+  snapshot:
     stale_timeout_ms: 2000
   live:
     enabled: true

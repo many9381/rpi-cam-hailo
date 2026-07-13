@@ -159,7 +159,7 @@ secure_rtsp:
   EXPECT_EQ(config.value().http.web_root, "web/dist");
 }
 
-TEST(AppConfigTest, DefaultsOmittedPreviewConfiguration) {
+TEST(AppConfigTest, DefaultsOmittedSnapshotConfiguration) {
   const auto config = LoadInlineConfig(R"(
 http:
   enabled: true
@@ -170,12 +170,7 @@ secure_rtsp:
 )");
 
   ASSERT_TRUE(config.ok()) << config.error().message;
-  EXPECT_TRUE(config.value().http.preview.enabled);
-  EXPECT_EQ(config.value().http.preview.width, 768U);
-  EXPECT_EQ(config.value().http.preview.fps, 8U);
-  EXPECT_EQ(config.value().http.preview.jpeg_quality, 80U);
-  EXPECT_EQ(config.value().http.preview.max_clients, 2U);
-  EXPECT_EQ(config.value().http.preview.stale_timeout_ms, 2000U);
+  EXPECT_EQ(config.value().http.snapshot.stale_timeout_ms, 2000U);
 }
 
 TEST(AppConfigTest, DefaultsOmittedLiveConfiguration) {
@@ -194,6 +189,21 @@ secure_rtsp:
   EXPECT_EQ(config.value().http.live.max_clients, 4U);
   EXPECT_EQ(config.value().http.live.ring_fragments, 8U);
   EXPECT_EQ(config.value().http.live.stale_timeout_ms, 2000U);
+}
+
+TEST(AppConfigTest, LoadsSnapshotStaleTimeoutConfiguration) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  snapshot:
+    stale_timeout_ms: 1750
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().http.snapshot.stale_timeout_ms, 1750U);
 }
 
 TEST(AppConfigTest, LoadsExplicitLiveConfiguration) {
@@ -242,158 +252,40 @@ secure_rtsp:
                     "E_CONFIG_HTTP_LIVE");
 }
 
-TEST(AppConfigTest, LoadsExplicitPreviewConfiguration) {
-  const auto config = LoadInlineConfig(R"(
-http:
-  preview:
-    enabled: true
-    width: 640
-    fps: 10
-    jpeg_quality: 75
-    max_clients: 1
-    stale_timeout_ms: 1500
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)");
-
-  ASSERT_TRUE(config.ok()) << config.error().message;
-  EXPECT_TRUE(config.value().http.preview.enabled);
-  EXPECT_EQ(config.value().http.preview.width, 640U);
-  EXPECT_EQ(config.value().http.preview.fps, 10U);
-  EXPECT_EQ(config.value().http.preview.jpeg_quality, 75U);
-  EXPECT_EQ(config.value().http.preview.max_clients, 1U);
-  EXPECT_EQ(config.value().http.preview.stale_timeout_ms, 1500U);
-}
-
-TEST(AppConfigTest, RejectsPreviewWidthOutsideSupportedRange) {
+TEST(AppConfigTest, RejectsSnapshotTimeoutOutsideSupportedRange) {
   ExpectConfigError(R"(
 http:
-  preview:
-    width: 159
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    width: 1921
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewFpsOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
-    fps: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    fps: 16
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewJpegQualityOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
-    jpeg_quality: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    jpeg_quality: 101
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewClientCountOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
-    max_clients: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    max_clients: 3
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewTimeoutOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
+  snapshot:
     stale_timeout_ms: 499
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_SNAPSHOT");
   ExpectConfigError(R"(
 http:
-  preview:
+  snapshot:
     stale_timeout_ms: 10001
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_SNAPSHOT");
 }
 
-TEST(AppConfigTest, RejectsPreviewTimeoutShorterThanTwoFrameIntervals) {
+TEST(AppConfigTest, RejectsRetiredPreviewConfiguration) {
   ExpectConfigError(R"(
 http:
   preview:
-    fps: 1
-    stale_timeout_ms: 1999
+    stale_timeout_ms: 1500
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_PREVIEW_RETIRED");
 }
 
 TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {

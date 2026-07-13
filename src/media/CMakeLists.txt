@@ -7,7 +7,6 @@ add_library(camera_firmware_media STATIC
     FrameLease.cpp
     IsoBmffAssembler.cpp
     JpegEncoder.cpp
-    MjpegFrameHub.cpp
     SnapshotTap.cpp
 )
 

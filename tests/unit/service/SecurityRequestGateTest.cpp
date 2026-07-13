@@ -215,19 +215,22 @@ TEST(SecurityRequestGateTest, GetMeNeedsSessionButNotCsrf) {
   EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
 }
 
-TEST(SecurityRequestGateTest, PreviewGetRequiresOneWellFormedCameraPathSegment) {
-  auto valid = Operational("/api/v1/cameras/imx708-main/preview.mjpeg");
-  valid.principal = Administrator();
-  EXPECT_TRUE(AuthorizeSecurityRequest(valid).ok());
+TEST(SecurityRequestGateTest, RetiredMjpegPreviewIsNotAnOperationalApi) {
+  auto context = Operational("/api/v1/cameras/imx708-main/preview.mjpeg");
+  context.principal = Administrator();
 
+  const auto result = AuthorizeSecurityRequest(context);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_ACCESS_DENIED");
+}
+
+TEST(SecurityRequestGateTest, LiveGetRequiresOneWellFormedCameraPathSegment) {
   auto live = Operational("/api/v1/cameras/imx708-main/live.mp4");
   live.principal = Administrator();
   EXPECT_TRUE(AuthorizeSecurityRequest(live).ok());
 
   for (const std::string path : {
-           "/api/v1/cameras//preview.mjpeg",
-           "/api/v1/cameras/imx708-main/extra/preview.mjpeg",
-           "/api/v1/cameras/imx708-main/preview.mjpeg/extra",
            "/api/v1/cameras/imx708-main/preview.jpg",
            "/api/v1/cameras//live.mp4",
            "/api/v1/cameras/imx708-main/extra/live.mp4",
@@ -239,13 +242,6 @@ TEST(SecurityRequestGateTest, PreviewGetRequiresOneWellFormedCameraPathSegment) 
     ASSERT_FALSE(result.ok()) << path;
     EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
   }
-
-  auto wrong_method = Operational(
-      "/api/v1/cameras/imx708-main/preview.mjpeg", "POST");
-  wrong_method.principal = Administrator();
-  const auto result = AuthorizeSecurityRequest(wrong_method);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, "E_ACCESS_DENIED");
 
   auto wrong_live_method =
       Operational("/api/v1/cameras/imx708-main/live.mp4", "POST");

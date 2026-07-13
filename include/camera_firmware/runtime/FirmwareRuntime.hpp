@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -14,7 +15,6 @@
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
-#include "camera_firmware/media/MjpegFrameHub.hpp"
 
 namespace camera_firmware::runtime {
 
@@ -33,8 +33,6 @@ struct FirmwareRuntimeDependencies {
   std::function<common::Result<void>()> start_ai;
   std::function<common::Result<void>()> start_camera;
   std::function<common::Result<void>()> start_live;
-  std::function<common::Result<void>()> start_preview;
-  std::function<void()> stop_preview;
   std::function<void()> stop_live;
   std::function<void()> stop_camera;
   std::function<void()> stop_ai;
@@ -47,9 +45,6 @@ struct FirmwareRuntimeDependencies {
   std::function<common::Result<void>()> restart_ai;
   std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)>
       snapshot;
-  std::function<common::Result<std::shared_ptr<media::MjpegStreamReader>>(
-      std::string_view)>
-      open_mjpeg_preview;
   std::function<common::Result<media::FragmentRing::Reader>(std::string_view)>
       open_live_stream;
   std::function<std::vector<ai::DetectionEvent>()> detection_snapshot;
@@ -80,8 +75,6 @@ class FirmwareRuntime {
   [[nodiscard]] common::Result<void> RestartAi();
   [[nodiscard]] std::optional<std::vector<std::uint8_t>> Snapshot(
       std::string_view camera_id) const;
-  [[nodiscard]] common::Result<std::shared_ptr<media::MjpegStreamReader>>
-  OpenMjpegPreview(std::string_view camera_id);
   [[nodiscard]] media::FragmentedMp4HubStatus LiveStatus() const;
   [[nodiscard]] common::Result<media::FragmentRing::Reader> OpenLiveStream(
       std::string_view camera_id);
@@ -95,6 +88,8 @@ class FirmwareRuntime {
 
   [[nodiscard]] static FirmwareRuntimeDependencies BuildProductionDependencies(
       const config::AppConfig& config);
+  [[nodiscard]] static std::chrono::milliseconds SnapshotMaximumAge(
+      const config::AppConfig& config) noexcept;
   [[nodiscard]] bool DependenciesComplete() const noexcept;
   [[nodiscard]] bool LifecycleDependenciesComplete() const noexcept;
   void UnwindStartedComponents() noexcept;
@@ -108,7 +103,6 @@ class FirmwareRuntime {
   bool ai_started_{false};
   bool camera_started_{false};
   bool live_started_{false};
-  bool preview_started_{false};
 };
 
 }  // namespace camera_firmware::runtime

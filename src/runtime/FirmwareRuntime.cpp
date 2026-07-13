@@ -12,7 +12,6 @@
 #include "camera_firmware/ai/DetectionEventStore.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
-#include "camera_firmware/media/MjpegFrameHub.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
@@ -27,10 +26,6 @@ common::Result<void> MissingDependency(std::string_view name) {
 common::Result<void> RuntimeException() {
   return common::Result<void>::Err(
       {"E_RUNTIME_START", "firmware runtime component failed"});
-}
-
-common::Error PreviewUnavailable() {
-  return {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"};
 }
 
 common::Error LiveUnavailable() {
@@ -74,7 +69,6 @@ struct ProductionRuntimeGraph {
         ai_frame_pump(ai_frame_tap, ai_runtime),
         camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring),
         fragmented_mp4_hub(encoded_ring),
-        mjpeg_frame_hub(snapshot_tap, config.http.preview),
         ai_controller(config, ai_runtime, ai_frame_pump) {}
 
   config::AppConfig config;
@@ -87,7 +81,6 @@ struct ProductionRuntimeGraph {
   media::EncodedRing encoded_ring{128U};
   media::CameraPipeline camera_pipeline;
   media::FragmentedMp4Hub fragmented_mp4_hub;
-  media::MjpegFrameHub mjpeg_frame_hub;
   ai::AiRuntimeController ai_controller;
   rtsp::SecureRtspServer rtsp_server;
 };
@@ -147,14 +140,6 @@ common::Result<void> FirmwareRuntime::Start() {
       return live;
     }
     live_started_ = true;
-
-    auto preview = dependencies_.start_preview();
-    if (!preview.ok()) {
-      UnwindStartedComponents();
-      state_ = FirmwareRuntimeState::kFailed;
-      return preview;
-    }
-    preview_started_ = true;
     state_ = FirmwareRuntimeState::kRunning;
     return common::Result<void>::Ok();
   } catch (...) {
@@ -263,21 +248,6 @@ std::optional<std::vector<std::uint8_t>> FirmwareRuntime::Snapshot(
   }
 }
 
-common::Result<std::shared_ptr<media::MjpegStreamReader>>
-FirmwareRuntime::OpenMjpegPreview(std::string_view camera_id) {
-  std::lock_guard lock(mutex_);
-  if (!RunningLocked() || !dependencies_.open_mjpeg_preview) {
-    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
-        PreviewUnavailable());
-  }
-  try {
-    return dependencies_.open_mjpeg_preview(camera_id);
-  } catch (...) {
-    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
-        PreviewUnavailable());
-  }
-}
-
 media::FragmentedMp4HubStatus FirmwareRuntime::LiveStatus() const {
   std::lock_guard lock(mutex_);
   if (!RunningLocked() || !dependencies_.live_status) {
@@ -345,15 +315,6 @@ std::uint64_t FirmwareRuntime::PerMediaKeyZeroizeCount() const noexcept {
 }
 
 void FirmwareRuntime::UnwindStartedComponents() noexcept {
-  if (preview_started_) {
-    try {
-      if (dependencies_.stop_preview) {
-        dependencies_.stop_preview();
-      }
-    } catch (...) {
-    }
-    preview_started_ = false;
-  }
   if (live_started_) {
     try {
       if (dependencies_.stop_live) {
@@ -396,6 +357,11 @@ bool FirmwareRuntime::RunningLocked() const noexcept {
   return state_ == FirmwareRuntimeState::kRunning;
 }
 
+std::chrono::milliseconds FirmwareRuntime::SnapshotMaximumAge(
+    const config::AppConfig& config) noexcept {
+  return std::chrono::milliseconds(config.http.snapshot.stale_timeout_ms);
+}
+
 FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     const config::AppConfig& config) {
   auto graph = std::make_shared<ProductionRuntimeGraph>(config);
@@ -414,17 +380,12 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     }
     return graph->fragmented_mp4_hub.Start(BuildLiveHubConfig(graph->config));
   };
-  dependencies.start_preview = [graph] {
-    return graph->mjpeg_frame_hub.Start();
-  };
-  dependencies.stop_preview = [graph] { graph->mjpeg_frame_hub.Stop(); };
   dependencies.stop_live = [graph] { graph->fragmented_mp4_hub.Stop(); };
   dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
   dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
   dependencies.stop_rtsp = [graph] { graph->rtsp_server.Stop(); };
   dependencies.camera_statuses = [graph] {
-    return graph->camera_pipeline.Status(std::chrono::milliseconds(
-        graph->config.http.preview.stale_timeout_ms));
+    return graph->camera_pipeline.Status(SnapshotMaximumAge(graph->config));
   };
   dependencies.live_status = [graph] {
     return graph->fragmented_mp4_hub.Status();
@@ -441,12 +402,7 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
       return std::optional<std::vector<std::uint8_t>>{};
     }
     return media::BuildLatestSnapshotJpeg(
-        graph->snapshot_tap, camera_id,
-        std::chrono::milliseconds(
-            graph->config.http.preview.stale_timeout_ms));
-  };
-  dependencies.open_mjpeg_preview = [graph](std::string_view camera_id) {
-    return graph->mjpeg_frame_hub.Open(camera_id);
+        graph->snapshot_tap, camera_id, SnapshotMaximumAge(graph->config));
   };
   dependencies.open_live_stream = [graph](std::string_view camera_id) {
     if (camera_id != graph->config.camera.id) {
@@ -472,14 +428,12 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
 bool FirmwareRuntime::DependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
          dependencies_.start_camera && dependencies_.start_live &&
-         dependencies_.start_preview && dependencies_.stop_preview &&
          dependencies_.stop_live && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp &&
          dependencies_.camera_statuses && dependencies_.live_status &&
          dependencies_.ai_status &&
          dependencies_.ai_runner_statuses && dependencies_.restart_ai &&
-         dependencies_.snapshot && dependencies_.open_mjpeg_preview &&
-         dependencies_.open_live_stream &&
+         dependencies_.snapshot && dependencies_.open_live_stream &&
          dependencies_.detection_snapshot &&
          dependencies_.subscribe_detections &&
          dependencies_.per_media_key_zeroize_count;
@@ -488,7 +442,6 @@ bool FirmwareRuntime::DependenciesComplete() const noexcept {
 bool FirmwareRuntime::LifecycleDependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
          dependencies_.start_camera && dependencies_.start_live &&
-         dependencies_.start_preview && dependencies_.stop_preview &&
          dependencies_.stop_live && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp;
 }
