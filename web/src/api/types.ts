@@ -75,6 +75,10 @@ export interface RestartAiResult {
   ai?: AiStatus;
 }
 
+export interface RuntimeRestartResult {
+  runtime: 'running';
+}
+
 export interface CameraInventory {
   cameras: CameraStatus[];
   ai: AiStatus;

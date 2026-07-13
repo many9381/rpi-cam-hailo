@@ -32,6 +32,22 @@ common::Error PreviewUnavailable() {
   return {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"};
 }
 
+std::string CameraStateForRuntime(FirmwareRuntimeState state) {
+  switch (state) {
+    case FirmwareRuntimeState::kStopped:
+      return "stopped";
+    case FirmwareRuntimeState::kStarting:
+      return "starting";
+    case FirmwareRuntimeState::kRunning:
+      return "running";
+    case FirmwareRuntimeState::kFailed:
+      return "error";
+    case FirmwareRuntimeState::kStopping:
+      return "stopping";
+  }
+  return "error";
+}
+
 struct ProductionRuntimeGraph {
   explicit ProductionRuntimeGraph(const config::AppConfig& configured)
       : config(configured),
@@ -137,13 +153,16 @@ FirmwareRuntimeState FirmwareRuntime::State() const noexcept {
 
 std::vector<media::CameraPipelineStatus> FirmwareRuntime::CameraStatuses() const {
   std::lock_guard lock(mutex_);
-  if (!RunningLocked() || !dependencies_.camera_statuses) {
-    return {};
+  if (!RunningLocked()) {
+    return {{config_.camera.id, CameraStateForRuntime(state_), false}};
+  }
+  if (!dependencies_.camera_statuses) {
+    return {{config_.camera.id, "error", false}};
   }
   try {
     return dependencies_.camera_statuses();
   } catch (...) {
-    return {};
+    return {{config_.camera.id, "error", false}};
   }
 }
 

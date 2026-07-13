@@ -194,6 +194,7 @@ struct CameraPipeline::Impl {
     }
 
     if (configured_camera.source.camera_index >= cameras.size()) {
+      cameras.clear();
       manager->stop();
       manager.reset();
       SetStoppedState("no-camera");
@@ -202,6 +203,7 @@ struct CameraPipeline::Impl {
     }
 
     camera = cameras[configured_camera.source.camera_index];
+    cameras.clear();
     if (camera->acquire() != 0) {
       camera.reset();
       manager->stop();

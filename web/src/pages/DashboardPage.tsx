@@ -1,7 +1,7 @@
 import { RefreshCw } from 'lucide-react';
 import { useCallback, useEffect } from 'react';
 
-import { parseRestartAiResult } from '../api/contracts';
+import { parseRestartAiResult, parseRuntimeRestartResult } from '../api/contracts';
 import { AiPanel } from '../components/AiPanel';
 import { CameraPreview } from '../components/CameraPreview';
 import { StatusPanel } from '../components/StatusPanel';
@@ -69,6 +69,15 @@ export function DashboardPage({
     await controller.refresh();
   }, [client, controller]);
 
+  const restartRuntime = useCallback(async () => {
+    await client.postJson(
+      '/api/v1/runtime/restart',
+      {},
+      parseRuntimeRestartResult,
+    );
+    await controller.refresh();
+  }, [client, controller]);
+
   if (controller.data === null) {
     return (
       <section className="dashboard-page dashboard-state">
@@ -111,7 +120,8 @@ export function DashboardPage({
       {showStatus && (
         <StatusPanel health={data.health} cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
-          onSelectCamera={controller.selectCamera} />
+          onSelectCamera={controller.selectCamera}
+          onRestartRuntime={restartRuntime} />
       )}
       {showStream && <StreamPanel stream={data.stream} />}
       {showAi && (

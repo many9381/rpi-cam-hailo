@@ -189,6 +189,22 @@ TEST(SecurityRequestGateTest, ProtectedRequestOrderingIsIpSessionCsrfRole) {
   EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
 }
 
+TEST(SecurityRequestGateTest, RuntimeRestartUsesOperationalAdminCsrfPolicy) {
+  auto context = ValidManagementPost("/api/v1/runtime/restart");
+  EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
+
+  context.has_management_header = false;
+  auto missing_header = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(missing_header.ok());
+  EXPECT_EQ(missing_header.error().code, "E_REQUEST_HEADER");
+
+  context.has_management_header = true;
+  context.principal->role = UserRole::kViewer;
+  auto wrong_role = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(wrong_role.ok());
+  EXPECT_EQ(wrong_role.error().code, "E_AUTHORIZATION_REQUIRED");
+}
+
 TEST(SecurityRequestGateTest, GetMeNeedsSessionButNotCsrf) {
   auto context = Operational("/api/v1/auth/me");
   auto missing = AuthorizeSecurityRequest(context);

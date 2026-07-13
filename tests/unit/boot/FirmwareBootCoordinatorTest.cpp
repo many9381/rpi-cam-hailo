@@ -86,7 +86,7 @@ TEST(FirmwareBootCoordinatorTest, DefaultStateStartsOnlyService) {
                                       "runtime.start"}));
 }
 
-TEST(FirmwareBootCoordinatorTest, OperationalStateStartsRuntimeBeforeService) {
+TEST(FirmwareBootCoordinatorTest, OperationalStateStartsServiceBeforeRuntime) {
   Calls calls;
   FirmwareBootCoordinator coordinator(
       {true, true},
@@ -95,8 +95,8 @@ TEST(FirmwareBootCoordinatorTest, OperationalStateStartsRuntimeBeforeService) {
   ASSERT_TRUE(coordinator.Start().ok());
 
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "runtime.start",
-                                      "service.start"}));
+            (std::vector<std::string>{"state", "service.start",
+                                      "runtime.start"}));
   EXPECT_EQ(calls.runtime_starts, 1U);
   EXPECT_EQ(calls.service_starts, 1U);
 }
@@ -110,7 +110,7 @@ TEST(FirmwareBootCoordinatorTest, SecurityDisabledSkipsStateRead) {
 
   EXPECT_EQ(calls.state_reads, 0U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"runtime.start", "service.start"}));
+            (std::vector<std::string>{"service.start", "runtime.start"}));
 }
 
 TEST(FirmwareBootCoordinatorTest, StateReadFailurePreventsStartup) {
@@ -132,27 +132,55 @@ TEST(FirmwareBootCoordinatorTest, StateReadFailurePreventsStartup) {
   EXPECT_EQ(calls.ordered, (std::vector<std::string>{"state"}));
 }
 
-TEST(FirmwareBootCoordinatorTest, RuntimeFailurePreventsServiceStartup) {
+TEST(FirmwareBootCoordinatorTest,
+     OperationalRuntimeFailureKeepsServiceRunningAndCanRetry) {
   Calls calls;
   auto dependencies = SuccessfulDependencies(
       calls, security::DeviceState::kOperational);
   dependencies.start_runtime = [&] {
     ++calls.runtime_starts;
     calls.Record("runtime.start");
-    return common::Result<void>::Err(
-        {"E_RUNTIME_START", "injected runtime failure"});
+    if (calls.runtime_starts == 1U) {
+      return common::Result<void>::Err(
+          {"E_RUNTIME_START", "injected runtime failure"});
+    }
+    return common::Result<void>::Ok();
   };
   FirmwareBootCoordinator coordinator({true, true}, std::move(dependencies));
 
   auto started = coordinator.Start();
 
+  ASSERT_TRUE(started.ok());
+  EXPECT_EQ(coordinator.State(), FirmwareBootState::kRunning);
+  EXPECT_EQ(calls.service_starts, 1U);
+  EXPECT_EQ(calls.runtime_starts, 1U);
+  EXPECT_EQ(calls.runtime_stops, 0U);
+  ASSERT_TRUE(calls.runtime_start_callback);
+  EXPECT_TRUE(calls.runtime_start_callback().ok());
+  EXPECT_EQ(calls.runtime_starts, 2U);
+}
+
+TEST(FirmwareBootCoordinatorTest, HeadlessRuntimeFailureRemainsFatal) {
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  dependencies.start_runtime = [&] {
+    ++calls.runtime_starts;
+    calls.Record("runtime.start");
+    return common::Result<void>::Err(
+        {"E_RUNTIME_START", "injected runtime failure"});
+  };
+  FirmwareBootCoordinator coordinator({false, false}, std::move(dependencies));
+
+  auto started = coordinator.Start();
+
   ASSERT_FALSE(started.ok());
   EXPECT_EQ(started.error().code, "E_RUNTIME_START");
+  EXPECT_EQ(coordinator.State(), FirmwareBootState::kStopped);
   EXPECT_EQ(calls.service_starts, 0U);
   EXPECT_EQ(calls.runtime_stops, 0U);
 }
 
-TEST(FirmwareBootCoordinatorTest, ServiceFailureUnwindsStartedRuntime) {
+TEST(FirmwareBootCoordinatorTest, ServiceFailureDoesNotStartRuntime) {
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.start_service = [&](RuntimeStartCallback) {
@@ -168,9 +196,10 @@ TEST(FirmwareBootCoordinatorTest, ServiceFailureUnwindsStartedRuntime) {
   ASSERT_FALSE(started.ok());
   EXPECT_EQ(started.error().code, "E_SERVICE_START");
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"runtime.start", "service.start",
-                                      "service.quiesce", "runtime.stop",
+            (std::vector<std::string>{"service.start", "service.quiesce",
                                       "service.stop"}));
+  EXPECT_EQ(calls.runtime_starts, 0U);
+  EXPECT_EQ(calls.runtime_stops, 0U);
 }
 
 TEST(FirmwareBootCoordinatorTest, DefaultServiceFailureLeavesRuntimeUntouched) {
@@ -284,7 +313,7 @@ TEST(FirmwareBootCoordinatorTest, StartAndStopAreIdempotentAndOrdered) {
   EXPECT_EQ(calls.service_stops, 1U);
   EXPECT_EQ(calls.runtime_stops, 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"runtime.start", "service.start",
+            (std::vector<std::string>{"service.start", "runtime.start",
                                       "service.quiesce", "runtime.stop",
                                       "service.stop"}));
 }
@@ -354,7 +383,7 @@ TEST(FirmwareBootCoordinatorTest,
   stopped.wait();
 
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"runtime.start", "service.start",
+            (std::vector<std::string>{"service.start", "runtime.start",
                                       "service.quiesce", "runtime.stop",
                                       "service.stop"}));
 }

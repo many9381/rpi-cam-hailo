@@ -1641,6 +1641,8 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
                drogon::k401Unauthorized);
   ExpectStatus(Send(client, drogon::Post, "/api/v1/ai/restart"),
                drogon::k401Unauthorized);
+  ExpectStatus(Send(client, drogon::Post, "/api/v1/runtime/restart"),
+               drogon::k401Unauthorized);
   EXPECT_EQ(camera_provider_calls.load(), 0);
   EXPECT_EQ(ai_status_calls.load(), 0);
   EXPECT_EQ(snapshot_calls.load(), 0);
@@ -1765,6 +1767,33 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
                             origin, cookie, true);
   ExpectStatus(valid_restart, drogon::k200OK);
   EXPECT_EQ(restart_calls.load(), 1);
+
+  auto no_csrf_runtime_restart = Send(
+      client, drogon::Post, "/api/v1/runtime/restart", "{}", {}, cookie);
+  ExpectStatus(no_csrf_runtime_restart, drogon::k403Forbidden);
+  EXPECT_EQ(runtime_start_calls.load(), 2);
+
+  runtime_start_should_fail.store(true);
+  auto failed_runtime_restart = Send(
+      client, drogon::Post, "/api/v1/runtime/restart", "{}", origin,
+      cookie, true);
+  ExpectStatus(failed_runtime_restart, drogon::k503ServiceUnavailable);
+  EXPECT_EQ(failed_runtime_restart.response->getBody().find(
+                "runtime failure detail"),
+            std::string_view::npos);
+  EXPECT_EQ(runtime_start_calls.load(), 3);
+  ExpectStatus(Send(client, drogon::Get, "/api/v1/health", {}, {}, cookie),
+               drogon::k200OK);
+
+  runtime_start_should_fail.store(false);
+  auto recovered_runtime = Send(
+      client, drogon::Post, "/api/v1/runtime/restart", "{}", origin,
+      cookie, true);
+  ExpectStatus(recovered_runtime, drogon::k200OK);
+  ASSERT_NE(recovered_runtime.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*recovered_runtime.response->getJsonObject())["runtime"].asString(),
+            "running");
+  EXPECT_EQ(runtime_start_calls.load(), 4);
 
   auto forwarded = drogon::HttpRequest::newHttpRequest();
   forwarded->setMethod(drogon::Get);

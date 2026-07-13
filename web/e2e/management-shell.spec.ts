@@ -81,11 +81,13 @@ interface ApiMockOptions {
   setupRequired?: boolean;
   setupPhase?: 'administrator' | 'runtime_pending';
   authenticated?: boolean;
+  runtimeFailed?: boolean;
 }
 
 interface ApiMockControls {
   initializeRequests: Request[];
   runtimeRequests: Request[];
+  runtimeRestartRequests: Request[];
   previewRequests: Request[];
   unhandledPaths: string[];
   emitDetection(): void;
@@ -98,12 +100,14 @@ async function installApiMocks(
   let setupRequired = options.setupRequired ?? false;
   const setupPhase = options.setupPhase ?? 'administrator';
   let authenticated = options.authenticated ?? true;
+  let runtimeFailed = options.runtimeFailed ?? false;
   let emitDetection!: () => void;
   const detectionGate = new Promise<void>((resolve) => {
     emitDetection = resolve;
   });
   const initializeRequests: Request[] = [];
   const runtimeRequests: Request[] = [];
+  const runtimeRestartRequests: Request[] = [];
   const previewRequests: Request[] = [];
   const unhandledPaths: string[] = [];
 
@@ -136,6 +140,15 @@ async function installApiMocks(
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({ required: false, runtime: 'running' }),
+      });
+      return;
+    }
+    if (path === '/api/v1/runtime/restart' && request.method() === 'POST') {
+      runtimeRestartRequests.push(request);
+      runtimeFailed = false;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ runtime: 'running' }),
       });
       return;
     }
@@ -184,6 +197,24 @@ async function installApiMocks(
       });
       return;
     }
+    if (request.method() === 'GET' && path === '/api/v1/cameras') {
+      const inventory = operationalPayloads[path] as {
+        cameras: Array<Record<string, unknown>>;
+        ai: unknown;
+      };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...inventory,
+          cameras: inventory.cameras.map((camera) => ({
+            ...camera,
+            state: runtimeFailed ? 'error' : camera.state,
+            snapshot_available: runtimeFailed ? false : camera.snapshot_available,
+          })),
+        }),
+      });
+      return;
+    }
     if (request.method() === 'GET' && path in operationalPayloads) {
       await route.fulfill({
         contentType: 'application/json',
@@ -200,7 +231,8 @@ async function installApiMocks(
     });
   });
 
-  return { initializeRequests, runtimeRequests, previewRequests, unhandledPaths, emitDetection };
+  return { initializeRequests, runtimeRequests, runtimeRestartRequests,
+    previewRequests, unhandledPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -406,6 +438,24 @@ test('authenticated desktop dashboard renders media, overlay, and stable layout'
     path: testInfo.outputPath('desktop-dashboard.png'),
     fullPage: true,
   });
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('authenticated dashboard explicitly recovers a failed camera runtime', async ({ page }) => {
+  const api = await installApiMocks(page, { runtimeFailed: true });
+
+  await page.goto('/#/dashboard');
+  await expect(page.getByText('error', { exact: true })).toBeVisible();
+  const restart = page.getByRole('button', { name: 'Restart camera runtime' });
+  await expect(restart).toBeVisible();
+  await restart.click();
+
+  await expect.poll(() => api.runtimeRestartRequests.length).toBe(1);
+  expect(api.runtimeRestartRequests[0].postDataJSON()).toEqual({});
+  expect(api.runtimeRestartRequests[0].headers()['x-camera-request'])
+    .toBe('management');
+  await expect(page.getByText('streaming', { exact: true })).toBeVisible();
+  await expect(restart).toBeHidden();
   expect(api.unhandledPaths).toEqual([]);
 });
 

@@ -174,6 +174,7 @@ TEST(FirmwareRuntimeTest,
 
 TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) {
   config::AppConfig config;
+  config.camera.id = "configured-camera";
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.start_camera = [&] {
@@ -196,11 +197,17 @@ TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) 
             (std::vector<std::string>{"rtsp.start", "ai.start",
                                       "camera.start", "ai.stop",
                                       "rtsp.stop"}));
+  const auto statuses = runtime.CameraStatuses();
+  ASSERT_EQ(statuses.size(), 1U);
+  EXPECT_EQ(statuses.front().id, "configured-camera");
+  EXPECT_EQ(statuses.front().state, "error");
+  EXPECT_FALSE(statuses.front().snapshot_available);
 }
 
 TEST(FirmwareRuntimeTest,
      StoppedRuntimeRejectsPreviewAndReturnsSafeProviderValues) {
   config::AppConfig config;
+  config.camera.id = "configured-camera";
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.camera_statuses = [&] {
@@ -217,7 +224,11 @@ TEST(FirmwareRuntimeTest,
   };
   FirmwareRuntime runtime(config, std::move(dependencies));
 
-  EXPECT_TRUE(runtime.CameraStatuses().empty());
+  const auto statuses = runtime.CameraStatuses();
+  ASSERT_EQ(statuses.size(), 1U);
+  EXPECT_EQ(statuses.front().id, "configured-camera");
+  EXPECT_EQ(statuses.front().state, "stopped");
+  EXPECT_FALSE(statuses.front().snapshot_available);
   EXPECT_EQ(runtime.AiStatus().state, "stopped");
   EXPECT_TRUE(runtime.AiRunnerStatuses().empty());
   EXPECT_FALSE(runtime.RestartAi().ok());
