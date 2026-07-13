@@ -38,7 +38,9 @@ const detections = { events: [
       keypoints: [{ name: 'nose', x: 0.3, y: 0.25, confidence: 0.9 }] }] },
 ] };
 
-const renderPanel = (onRestart = vi.fn(async () => undefined)) => render(
+const renderPanel = (
+  onRestart: () => Promise<void> = vi.fn(async () => undefined),
+) => render(
   <AiPanel ai={base} detections={detections} streamStatus="live"
     onRestart={onRestart} />,
 );

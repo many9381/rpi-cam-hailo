@@ -32,10 +32,9 @@ export default defineConfig({
       output: {
         entryFileNames: 'app.js',
         chunkFileNames: 'app.js',
-        inlineDynamicImports: true,
+        codeSplitting: false,
         assetFileNames: (asset) =>
           asset.name?.endsWith('.css') ? 'styles.css' : '[name][extname]',
-        manualChunks: undefined,
       },
     },
   },

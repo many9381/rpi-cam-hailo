@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/NodeVersion.cmake")
+
 find_program(NODE_EXECUTABLE NAMES node REQUIRED)
 execute_process(
     COMMAND "${NODE_EXECUTABLE}" --version
@@ -13,10 +15,11 @@ if(NOT CF_NODE_VERSION_RESULT EQUAL 0)
     )
 endif()
 string(REGEX REPLACE "^v" "" CF_NODE_VERSION "${CF_NODE_VERSION_OUTPUT}")
-if(NOT CF_NODE_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$" OR
-        CF_NODE_VERSION VERSION_LESS "20.0.0")
+cf_node_version_is_supported("${CF_NODE_VERSION}" CF_NODE_SUPPORTED)
+if(NOT CF_NODE_SUPPORTED)
     message(FATAL_ERROR
-        "Node.js 20 or newer is required; found ${CF_NODE_VERSION_OUTPUT}"
+        "Node.js ^20.19.0 or >=22.12.0 is required; "
+        "found ${CF_NODE_VERSION_OUTPUT}"
     )
 endif()
 
