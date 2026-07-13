@@ -40,18 +40,30 @@ export function RuntimeRecoveryPage({
   };
 
   return (
-    <main>
-      <h1>Start camera runtime</h1>
-      <div>
-        <label htmlFor="runtime-peer-ip">Management peer address</label>
-        <input id="runtime-peer-ip" value={peerIp} readOnly />
-      </div>
-      {failed && (
-        <p role="alert">Camera runtime could not be started. Try again.</p>
-      )}
-      <button type="button" disabled={submitting} onClick={() => void start()}>
-        {submitting ? 'Starting runtime...' : 'Start runtime'}
-      </button>
+    <main className="auth-surface">
+      <section className="auth-panel" aria-labelledby="runtime-recovery-heading">
+        <div className="brand-mark" aria-hidden="true">CF</div>
+        <h1 id="runtime-recovery-heading">Start camera runtime</h1>
+        <div className="auth-form">
+          <div className="field">
+            <label htmlFor="runtime-peer-ip">Management peer address</label>
+            <input id="runtime-peer-ip" value={peerIp} readOnly />
+          </div>
+          {failed && (
+            <p className="form-error" role="alert">
+              Camera runtime could not be started. Try again.
+            </p>
+          )}
+          <button
+            className="primary-button"
+            type="button"
+            disabled={submitting}
+            onClick={() => void start()}
+          >
+            {submitting ? 'Starting runtime...' : 'Start runtime'}
+          </button>
+        </div>
+      </section>
     </main>
   );
 }

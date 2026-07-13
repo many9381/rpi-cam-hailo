@@ -25,6 +25,13 @@ describe('SetupPage', () => {
       <SetupPage client={client} peerIp="2001:0db8:0000::0010" onInitialized={vi.fn()} />,
     );
 
+    const panel = screen.getByRole('region', { name: 'Create administrator' });
+    expect(panel).toHaveClass('auth-panel');
+    expect(panel.closest('main')).toHaveClass('auth-surface');
+    expect(panel.querySelector('.brand-mark')).toHaveTextContent('CF');
+    expect(panel.querySelectorAll('.field')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: /initialize camera/i }))
+      .toHaveClass('primary-button');
     expect(screen.getByLabelText(/management peer address/i)).toHaveValue('2001:0db8:0000::0010');
     expect(screen.getByLabelText(/management peer address/i)).toHaveAttribute('readonly');
     await user.type(screen.getByLabelText(/^username$/i), 'operator.one');
@@ -51,6 +58,9 @@ describe('SetupPage', () => {
 
     expect(screen.getByText('Username must be 5 to 32 characters.')).toBeVisible();
     expect(screen.getByText('Passwords do not match.')).toBeVisible();
+    expect(screen.getByText('Username must be 5 to 32 characters.'))
+      .toHaveClass('form-error');
+    expect(screen.getByText('Passwords do not match.')).toHaveClass('form-error');
     expect(client.postJson).not.toHaveBeenCalled();
   });
 
@@ -86,6 +96,7 @@ describe('SetupPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Camera initialization failed. Check the credentials and try again.',
     );
+    expect(screen.getByRole('alert')).toHaveClass('form-error');
     expect(screen.getByLabelText(/^password$/i)).toHaveValue('');
     expect(screen.getByLabelText(/confirm password/i)).toHaveValue('');
     expect(screen.queryByText(/reserved identity detail/i)).not.toBeInTheDocument();

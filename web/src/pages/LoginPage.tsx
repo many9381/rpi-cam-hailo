@@ -31,7 +31,7 @@ export function LoginPage({ login }: LoginPageProps) {
       <section className="auth-panel" aria-labelledby="login-heading">
         <div className="brand-mark" aria-hidden="true">CF</div>
         <h1 id="login-heading">Administrator login</h1>
-        <form onSubmit={submit} noValidate>
+        <form className="auth-form" onSubmit={submit} noValidate>
           <div className="field">
             <label htmlFor="login-username">Username</label>
             <input

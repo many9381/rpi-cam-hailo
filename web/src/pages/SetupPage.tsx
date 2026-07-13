@@ -62,65 +62,74 @@ export function SetupPage({
   };
 
   return (
-    <main>
-      <h1>Create administrator</h1>
-      <form onSubmit={submit} noValidate>
-        <div>
-          <label htmlFor="setup-peer-ip">Management peer address</label>
-          <input id="setup-peer-ip" value={peerIp} readOnly />
-        </div>
-        <div>
-          <label htmlFor="setup-username">Username</label>
-          <input
-            id="setup-username"
-            name="username"
-            autoComplete="username"
-            value={username}
-            aria-describedby={errors.username ? 'setup-username-error' : undefined}
-            aria-invalid={errors.username ? true : undefined}
-            onChange={(event) => setUsername(event.target.value)}
-          />
-          {errors.username && <p id="setup-username-error">{errors.username}</p>}
-        </div>
-        <div>
-          <label htmlFor="setup-password">Password</label>
-          <input
-            id="setup-password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            minLength={9}
-            maxLength={128}
-            value={password}
-            aria-describedby={errors.password ? 'setup-password-error' : undefined}
-            aria-invalid={errors.password ? true : undefined}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-          {errors.password && <p id="setup-password-error">{errors.password}</p>}
-        </div>
-        <div>
-          <label htmlFor="setup-confirmation">Confirm password</label>
-          <input
-            id="setup-confirmation"
-            name="confirmation"
-            type="password"
-            autoComplete="new-password"
-            minLength={9}
-            maxLength={128}
-            value={confirmation}
-            aria-describedby={errors.confirmation ? 'setup-confirmation-error' : undefined}
-            aria-invalid={errors.confirmation ? true : undefined}
-            onChange={(event) => setConfirmation(event.target.value)}
-          />
-          {errors.confirmation && (
-            <p id="setup-confirmation-error">{errors.confirmation}</p>
-          )}
-        </div>
-        {failure && <p role="alert">{failure}</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Initializing camera...' : 'Initialize camera'}
-        </button>
-      </form>
+    <main className="auth-surface">
+      <section className="auth-panel" aria-labelledby="setup-heading">
+        <div className="brand-mark" aria-hidden="true">CF</div>
+        <h1 id="setup-heading">Create administrator</h1>
+        <form className="auth-form" onSubmit={submit} noValidate>
+          <div className="field">
+            <label htmlFor="setup-peer-ip">Management peer address</label>
+            <input id="setup-peer-ip" value={peerIp} readOnly />
+          </div>
+          <div className="field">
+            <label htmlFor="setup-username">Username</label>
+            <input
+              id="setup-username"
+              name="username"
+              autoComplete="username"
+              value={username}
+              aria-describedby={errors.username ? 'setup-username-error' : undefined}
+              aria-invalid={errors.username ? true : undefined}
+              onChange={(event) => setUsername(event.target.value)}
+            />
+            {errors.username && (
+              <p className="form-error" id="setup-username-error">{errors.username}</p>
+            )}
+          </div>
+          <div className="field">
+            <label htmlFor="setup-password">Password</label>
+            <input
+              id="setup-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              minLength={9}
+              maxLength={128}
+              value={password}
+              aria-describedby={errors.password ? 'setup-password-error' : undefined}
+              aria-invalid={errors.password ? true : undefined}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            {errors.password && (
+              <p className="form-error" id="setup-password-error">{errors.password}</p>
+            )}
+          </div>
+          <div className="field">
+            <label htmlFor="setup-confirmation">Confirm password</label>
+            <input
+              id="setup-confirmation"
+              name="confirmation"
+              type="password"
+              autoComplete="new-password"
+              minLength={9}
+              maxLength={128}
+              value={confirmation}
+              aria-describedby={errors.confirmation ? 'setup-confirmation-error' : undefined}
+              aria-invalid={errors.confirmation ? true : undefined}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+            {errors.confirmation && (
+              <p className="form-error" id="setup-confirmation-error">
+                {errors.confirmation}
+              </p>
+            )}
+          </div>
+          {failure && <p className="form-error" role="alert">{failure}</p>}
+          <button className="primary-button" type="submit" disabled={submitting}>
+            {submitting ? 'Initializing camera...' : 'Initialize camera'}
+          </button>
+        </form>
+      </section>
     </main>
   );
 }

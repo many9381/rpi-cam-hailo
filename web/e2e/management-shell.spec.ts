@@ -79,11 +79,13 @@ const detectionSnapshot = {
 
 interface ApiMockOptions {
   setupRequired?: boolean;
+  setupPhase?: 'administrator' | 'runtime_pending';
   authenticated?: boolean;
 }
 
 interface ApiMockControls {
   initializeRequests: Request[];
+  runtimeRequests: Request[];
   unhandledPaths: string[];
   emitDetection(): void;
 }
@@ -93,12 +95,14 @@ async function installApiMocks(
   options: ApiMockOptions = {},
 ): Promise<ApiMockControls> {
   let setupRequired = options.setupRequired ?? false;
+  const setupPhase = options.setupPhase ?? 'administrator';
   let authenticated = options.authenticated ?? true;
   let emitDetection!: () => void;
   const detectionGate = new Promise<void>((resolve) => {
     emitDetection = resolve;
   });
   const initializeRequests: Request[] = [];
+  const runtimeRequests: Request[] = [];
   const unhandledPaths: string[] = [];
 
   await page.route('**/api/v1/**', async (route) => {
@@ -109,7 +113,7 @@ async function installApiMocks(
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(setupRequired
-          ? { required: true, phase: 'administrator',
+          ? { required: true, phase: setupPhase,
             tls: 'ready', peer_ip: '192.0.2.44' }
           : { required: false }),
       });
@@ -117,6 +121,15 @@ async function installApiMocks(
     }
     if (path === '/api/v1/setup/initialize' && request.method() === 'POST') {
       initializeRequests.push(request);
+      setupRequired = false;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ required: false, runtime: 'running' }),
+      });
+      return;
+    }
+    if (path === '/api/v1/setup/runtime' && request.method() === 'POST') {
+      runtimeRequests.push(request);
       setupRequired = false;
       await route.fulfill({
         contentType: 'application/json',
@@ -184,7 +197,7 @@ async function installApiMocks(
     });
   });
 
-  return { initializeRequests, unhandledPaths, emitDetection };
+  return { initializeRequests, runtimeRequests, unhandledPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -227,12 +240,31 @@ test('first boot creates an administrator then shows login', async ({ page }) =>
   });
 
   await page.goto('/#/setup');
+  const panel = page.getByRole('region', { name: 'Create administrator' });
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveClass(/auth-panel/);
+  await expect(panel.locator('xpath=..')).toHaveClass(/auth-surface/);
+  await expect(panel.locator('.brand-mark')).toHaveText('CF');
+  await expect(panel.locator('.field')).toHaveCount(4);
+  await expect(page.getByRole('button', { name: 'Initialize camera' }))
+    .toHaveClass(/primary-button/);
+  const desktopPanel = await panel.boundingBox();
+  expect(desktopPanel).not.toBeNull();
+  expect(desktopPanel!.width).toBeLessThanOrEqual(390);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  const mobilePanel = await panel.boundingBox();
+  expect(mobilePanel).not.toBeNull();
+  expect(mobilePanel!.width).toBeLessThanOrEqual(350);
   await page.getByLabel('Username').fill('operator.one');
   await page.getByLabel('Password', { exact: true }).fill('Short!9A');
   await page.getByLabel('Confirm password').fill('Short!9A');
   await page.getByRole('button', { name: 'Initialize camera' }).click();
 
-  await expect(page.getByText('Password must be 9 to 128 characters.')).toBeVisible();
+  const passwordError = page.getByText('Password must be 9 to 128 characters.');
+  await expect(passwordError).toBeVisible();
+  await expect(passwordError).toHaveClass(/form-error/);
   expect(api.initializeRequests).toHaveLength(0);
   await page.getByLabel('Password', { exact: true }).fill('NorthStar!9');
   await page.getByLabel('Confirm password').fill('NorthStar!9');
@@ -247,6 +279,50 @@ test('first boot creates an administrator then shows login', async ({ page }) =>
   });
   expect(api.initializeRequests[0].headers()['content-type']).toBe('application/json');
   expect(api.initializeRequests[0].headers()['x-camera-request']).toBe('management');
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('runtime recovery only starts from its explicit button and remains bounded', async ({ page }) => {
+  const api = await installApiMocks(page, {
+    setupRequired: true,
+    setupPhase: 'runtime_pending',
+    authenticated: false,
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/#/setup');
+
+  const panel = page.getByRole('region', { name: 'Start camera runtime' });
+  await expect(panel).toBeVisible();
+  const peerInput = page.getByLabel('Management peer address');
+  const startButton = page.getByRole('button', { name: 'Start runtime' });
+  await expect(panel.locator('form')).toHaveCount(0);
+  await expect(panel.locator('.auth-form')).toHaveCount(1);
+  await expect(startButton).toHaveAttribute('type', 'button');
+  await expectNoHorizontalOverflow(page);
+  const desktopPanel = await panel.boundingBox();
+  expect(desktopPanel).not.toBeNull();
+  expect(desktopPanel!.x).toBeGreaterThanOrEqual(0);
+  expect(desktopPanel!.x + desktopPanel!.width).toBeLessThanOrEqual(1440);
+  expect(desktopPanel!.y).toBeGreaterThanOrEqual(0);
+  expect(desktopPanel!.y + desktopPanel!.height).toBeLessThanOrEqual(1000);
+  expect(desktopPanel!.width).toBeLessThanOrEqual(390);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  const mobilePanel = await panel.boundingBox();
+  expect(mobilePanel).not.toBeNull();
+  expect(mobilePanel!.x).toBeGreaterThanOrEqual(0);
+  expect(mobilePanel!.x + mobilePanel!.width).toBeLessThanOrEqual(390);
+  expect(mobilePanel!.y).toBeGreaterThanOrEqual(0);
+  expect(mobilePanel!.y + mobilePanel!.height).toBeLessThanOrEqual(844);
+  expect(mobilePanel!.width).toBeLessThanOrEqual(350);
+  await peerInput.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(100);
+  expect(api.runtimeRequests).toHaveLength(0);
+  await startButton.click();
+  await expect.poll(() => api.runtimeRequests.length).toBe(1);
   expect(api.unhandledPaths).toEqual([]);
 });
 
