@@ -97,27 +97,23 @@ input:focus-visible {
   letter-spacing: 0;
 }
 
-.auth-panel form,
-#root > main > form {
+.auth-form {
   display: grid;
   gap: 18px;
 }
 
-.field,
-#root > main > form > div {
+.auth-form .field {
   display: grid;
   gap: 7px;
 }
 
-.field label,
-#root > main > form label {
+.auth-form .field label {
   color: #34434b;
   font-size: 13px;
   font-weight: 650;
 }
 
-.field input,
-#root > main > form input {
+.auth-form .field input {
   width: 100%;
   min-height: 42px;
   padding: 8px 11px;
@@ -127,13 +123,11 @@ input:focus-visible {
   color: #17212b;
 }
 
-.field input:hover,
-#root > main > form input:hover {
+.auth-form .field input:hover {
   border-color: #6f7f77;
 }
 
-.form-error,
-#root > main > form [role="alert"] {
+.auth-form .form-error {
   margin: 0;
   color: #a63535;
   font-size: 13px;

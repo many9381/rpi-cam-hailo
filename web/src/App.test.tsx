@@ -221,12 +221,25 @@ describe('App bootstrap gate', () => {
 
     render(<App client={client} />);
 
-    expect(await screen.findByRole('heading', { name: 'Start camera runtime' }))
-      .toBeVisible();
+    await screen.findByRole('heading', { name: 'Start camera runtime' });
+    const panel = screen.getByRole('region', { name: 'Start camera runtime' });
+    expect(panel).toHaveClass('auth-panel');
+    expect(panel.closest('main')).toHaveClass('auth-surface');
+    expect(panel.querySelector('.brand-mark')).toHaveTextContent('CF');
+    expect(panel.querySelectorAll('.field')).toHaveLength(1);
     expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/management peer address/i))
-      .toHaveValue('192.0.2.10');
-    await user.click(screen.getByRole('button', { name: 'Start runtime' }));
+    const peerInput = screen.getByLabelText(/management peer address/i);
+    const startButton = screen.getByRole('button', { name: 'Start runtime' });
+    expect(peerInput).toHaveValue('192.0.2.10');
+    expect(panel.querySelector('form')).toBeNull();
+    expect(panel.querySelector('.auth-form')).toBeInTheDocument();
+    expect(startButton)
+      .toHaveClass('primary-button');
+    expect(startButton).toHaveAttribute('type', 'button');
+    await user.click(peerInput);
+    await user.keyboard('{Enter}');
+    expect(client.postJson).not.toHaveBeenCalled();
+    await user.click(startButton);
 
     expect(client.postJson).toHaveBeenCalledWith(
       '/api/v1/setup/runtime',
@@ -235,6 +248,41 @@ describe('App bootstrap gate', () => {
     );
     expect(await screen.findByRole('heading', { name: 'Administrator login' }))
       .toBeVisible();
+  });
+
+  it('styles generic runtime recovery feedback without exposing the request failure', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.getJson)
+      .mockResolvedValueOnce({ required: true, phase: 'runtime_pending',
+        tls: 'ready', peer_ip: '192.0.2.10' })
+      .mockResolvedValueOnce({ required: true, phase: 'runtime_pending',
+        tls: 'ready', peer_ip: '192.0.2.10' });
+    vi.mocked(client.postJson).mockRejectedValue(new Error('runtime detail'));
+
+    render(<App client={client} />);
+    await user.click(await screen.findByRole('button', { name: 'Start runtime' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Camera runtime could not be started. Try again.',
+    );
+    expect(screen.getByRole('alert')).toHaveClass('form-error');
+    expect(screen.queryByText(/runtime detail/i)).not.toBeInTheDocument();
+  });
+
+  it('disables the runtime recovery start action while startup is pending', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.getJson).mockResolvedValue({ required: true, phase: 'runtime_pending',
+      tls: 'ready', peer_ip: '192.0.2.10' });
+    vi.mocked(client.postJson).mockImplementation(() => new Promise<never>(() => {}));
+
+    render(<App client={client} />);
+    const button = await screen.findByRole('button', { name: 'Start runtime' });
+    await user.click(button);
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent('Starting runtime...');
   });
 
   it('switches from administrator setup to runtime recovery after a transition failure', async () => {
