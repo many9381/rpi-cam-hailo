@@ -7,14 +7,15 @@ camera:
     backend: libcamera
     camera_index: 0
   video:
-    width: 1536
-    height: 864
-    fps: 30
+    width: 1920
+    height: 1080
+    fps: 50
     format: nv12
   encoder:
     backend: x264
-    bitrate_kbps: 3000
-    gop: 30
+    bitrate_kbps: 6000
+    gop: 25
+    preset: ultrafast
   ai:
     enabled: true
     model_ids: [objects]

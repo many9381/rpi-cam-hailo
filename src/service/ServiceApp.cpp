@@ -130,11 +130,20 @@ std::string BuildRtspUrl(std::string_view public_base_url,
          std::to_string(secure_rtsp.port) + secure_rtsp.mount;
 }
 
-Json::Value BuildCameraJson(const CameraStatus& camera) {
+Json::Value BuildCameraStatusJsonValue(const CameraStatus& camera) {
   Json::Value json(Json::objectValue);
   json["id"] = camera.id;
   json["state"] = camera.state;
   json["snapshot_available"] = camera.snapshot_available;
+  json["width"] = camera.width;
+  json["height"] = camera.height;
+  json["configured_fps"] = camera.configured_fps;
+  json["capture_fps"] = camera.capture_fps;
+  json["encoded_fps"] = camera.encoded_fps;
+  json["captured_frames"] = Json::UInt64(camera.captured_frames);
+  json["encoded_frames"] = Json::UInt64(camera.encoded_frames);
+  json["capture_error_count"] = Json::UInt64(camera.capture_error_count);
+  json["encode_error_count"] = Json::UInt64(camera.encode_error_count);
   return json;
 }
 
@@ -1049,7 +1058,7 @@ void RegisterHandlers() {
               }
               if (provider) {
                 for (const auto& camera : provider()) {
-                  cameras.append(BuildCameraJson(camera));
+                  cameras.append(BuildCameraStatusJsonValue(camera));
                 }
               }
               body["cameras"] = std::move(cameras);
@@ -1290,6 +1299,10 @@ Json::Value BuildHealthJson(const std::string& status) {
   Json::Value json(Json::objectValue);
   json["status"] = status;
   return json;
+}
+
+Json::Value BuildCameraStatusJson(const CameraStatus& camera) {
+  return BuildCameraStatusJsonValue(camera);
 }
 
 Json::Value BuildAiStatusJson(const AiServiceStatus& status) {

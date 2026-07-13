@@ -85,6 +85,38 @@ TEST(ServiceResponseTest, HealthJsonContainsStatus) {
   EXPECT_EQ(json["status"].asString(), "ok");
 }
 
+TEST(ServiceResponseTest, CameraStatusJsonIncludesCaptureDiagnostics) {
+  camera_firmware::service::CameraStatus status;
+  status.id = "imx708-main";
+  status.state = "running";
+  status.snapshot_available = true;
+  status.width = 1920U;
+  status.height = 1080U;
+  status.configured_fps = 50U;
+  status.capture_fps = 49.8;
+  status.encoded_fps = 49.7;
+  status.captured_frames = 1000U;
+  status.encoded_frames = 998U;
+  status.capture_error_count = 2U;
+  status.encode_error_count = 1U;
+
+  const auto json =
+      camera_firmware::service::BuildCameraStatusJson(status);
+
+  EXPECT_EQ(json["id"].asString(), "imx708-main");
+  EXPECT_EQ(json["state"].asString(), "running");
+  EXPECT_TRUE(json["snapshot_available"].asBool());
+  EXPECT_EQ(json["width"].asUInt(), 1920U);
+  EXPECT_EQ(json["height"].asUInt(), 1080U);
+  EXPECT_EQ(json["configured_fps"].asUInt(), 50U);
+  EXPECT_DOUBLE_EQ(json["capture_fps"].asDouble(), 49.8);
+  EXPECT_DOUBLE_EQ(json["encoded_fps"].asDouble(), 49.7);
+  EXPECT_EQ(json["captured_frames"].asUInt64(), 1000U);
+  EXPECT_EQ(json["encoded_frames"].asUInt64(), 998U);
+  EXPECT_EQ(json["capture_error_count"].asUInt64(), 2U);
+  EXPECT_EQ(json["encode_error_count"].asUInt64(), 1U);
+}
+
 TEST(ServiceResponseTest, StreamJsonUsesConfiguredPublicHost) {
   camera_firmware::config::SecureRtspConfig secure_rtsp;
   secure_rtsp.control_tls = true;

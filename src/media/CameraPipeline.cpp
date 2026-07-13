@@ -2,6 +2,8 @@
 
 #include <libcamera/camera.h>
 #include <libcamera/camera_manager.h>
+#include <libcamera/control_ids.h>
+#include <libcamera/controls.h>
 #include <libcamera/formats.h>
 #include <libcamera/framebuffer_allocator.h>
 #include <libcamera/request.h>
@@ -22,6 +24,7 @@
 
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/media/CameraTiming.hpp"
 
 namespace camera_firmware::media {
 namespace {
@@ -146,9 +149,11 @@ struct CameraPipeline::Impl {
           {"E_CAMERA_CONFIG", "only camera.encoder.backend=x264 is supported"});
     }
     if (config.camera.encoder.bitrate_kbps == 0U ||
-        config.camera.encoder.gop == 0U) {
+        config.camera.encoder.gop == 0U ||
+        config.camera.encoder.preset.empty()) {
       return Result<void>::Err(
-          {"E_CAMERA_CONFIG", "camera encoder bitrate and gop must be non-zero"});
+          {"E_CAMERA_CONFIG",
+           "camera encoder bitrate, gop, and preset must be configured"});
     }
     if (config.secure_rtsp.mount.empty() || config.secure_rtsp.mount[0] != '/') {
       return Result<void>::Err(
@@ -172,6 +177,14 @@ struct CameraPipeline::Impl {
       }
       configured_camera = config.camera;
       camera_id = config.camera.id;
+      output_width = config.camera.video.width;
+      output_height = config.camera.video.height;
+      capture_rate.Reset();
+      encoded_rate.Reset();
+      captured_frames = 0U;
+      encoded_frames = 0U;
+      capture_error_count = 0U;
+      encode_error_count = 0U;
       state = "starting";
     }
 
@@ -256,8 +269,18 @@ struct CameraPipeline::Impl {
       requeue_context->running = true;
     }
 
+    const auto frame_duration_limits =
+        FixedFrameDurationLimits(configured_camera.video.fps);
+    if (!frame_duration_limits.ok()) {
+      Stop();
+      return Result<void>::Err(frame_duration_limits.error());
+    }
+    libcamera::ControlList controls(camera->controls());
+    controls.set(libcamera::controls::FrameDurationLimits,
+                 frame_duration_limits.value());
+
     camera->requestCompleted.connect(this, &Impl::OnRequestComplete);
-    if (camera->start() != 0) {
+    if (camera->start(&controls) != 0) {
       Stop();
       return Result<void>::Err(
           {"E_CAMERA_START", "failed to start libcamera capture"});
@@ -353,14 +376,30 @@ struct CameraPipeline::Impl {
 
   std::vector<CameraPipelineStatus> Status() const {
     std::scoped_lock lock(mutex);
-    return {{camera_id, state, snapshot_tap.Latest().has_value()}};
+    return {BuildStatus(snapshot_tap.Latest().has_value())};
   }
 
   std::vector<CameraPipelineStatus> Status(
       std::chrono::milliseconds maximum_snapshot_age) const {
     std::scoped_lock lock(mutex);
-    return {{camera_id, state,
-             snapshot_tap.HasFreshFrame(maximum_snapshot_age)}};
+    return {BuildStatus(snapshot_tap.HasFreshFrame(maximum_snapshot_age))};
+  }
+
+  CameraPipelineStatus BuildStatus(bool snapshot_available) const {
+    CameraPipelineStatus status;
+    status.id = camera_id;
+    status.state = state;
+    status.snapshot_available = snapshot_available;
+    status.width = output_width;
+    status.height = output_height;
+    status.configured_fps = configured_camera.video.fps;
+    status.capture_fps = capture_rate.FramesPerSecond();
+    status.encoded_fps = encoded_rate.FramesPerSecond();
+    status.captured_frames = captured_frames;
+    status.encoded_frames = encoded_frames;
+    status.capture_error_count = capture_error_count;
+    status.encode_error_count = encode_error_count;
+    return status;
   }
 
   Result<void> ConfigureCamera() {
@@ -397,6 +436,11 @@ struct CameraPipeline::Impl {
         stream_config.size.height == 0U) {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "libcamera returned an invalid stream geometry"});
+    }
+    {
+      std::scoped_lock lock(mutex);
+      output_width = stream_config.size.width;
+      output_height = stream_config.size.height;
     }
     return Result<void>::Ok();
   }
@@ -446,7 +490,9 @@ struct CameraPipeline::Impl {
 
   Result<void> ConfigureEncoder() {
     x264_param_t params{};
-    if (x264_param_default_preset(&params, "veryfast", "zerolatency") < 0) {
+    const auto policy = ResolveX264RuntimePolicy(configured_camera.encoder);
+    if (x264_param_default_preset(&params, policy.preset.c_str(),
+                                  "zerolatency") < 0) {
       return Result<void>::Err(
           {"E_H264_ENCODER", "failed to initialize x264 preset"});
     }
@@ -457,7 +503,7 @@ struct CameraPipeline::Impl {
     params.i_fps_den = 1;
     params.i_timebase_num = 1;
     params.i_timebase_den = static_cast<int>(configured_camera.video.fps);
-    params.i_threads = 1;
+    params.i_threads = policy.threads;
     params.i_keyint_max = static_cast<int>(configured_camera.encoder.gop);
     params.i_keyint_min = static_cast<int>(configured_camera.encoder.gop);
     params.i_bframe = 0;
@@ -509,17 +555,25 @@ struct CameraPipeline::Impl {
 
     libcamera::FrameBuffer* buffer = request->findBuffer(stream);
     if (buffer == nullptr) {
+      ++capture_error_count;
       RequeueRequest(requeue_context, request);
       return;
     }
     if (buffer->metadata().status != libcamera::FrameMetadata::FrameSuccess &&
         buffer->metadata().status != libcamera::FrameMetadata::FrameStartup) {
+      ++capture_error_count;
       RequeueRequest(requeue_context, request);
       return;
     }
 
+    const auto frame_timestamp =
+        std::chrono::nanoseconds(buffer->metadata().timestamp);
+    ++captured_frames;
+    capture_rate.Record(frame_timestamp);
+
     auto frame = BuildFrameHandle(*buffer);
     if (!frame.ok()) {
+      ++capture_error_count;
       Logger::instance().log(Logger::Level::kError, frame.error().message);
       RequeueRequest(requeue_context, request);
       return;
@@ -527,9 +581,14 @@ struct CameraPipeline::Impl {
 
     auto encoded = EncodeBuffer(*buffer, frame.value());
     if (encoded.ok() && !encoded.value().bytes.empty()) {
+      ++encoded_frames;
+      encoded_rate.Record(frame_timestamp);
       encoded_ring.Publish(std::move(encoded).value());
     } else if (!encoded.ok()) {
+      ++encode_error_count;
       Logger::instance().log(Logger::Level::kError, encoded.error().message);
+    } else {
+      ++encode_error_count;
     }
 
     std::weak_ptr<RequeueContext> weak_context = requeue_context;
@@ -670,8 +729,16 @@ struct CameraPipeline::Impl {
   std::shared_ptr<RequeueContext> requeue_context;
   X264Encoder encoder;
   config::CameraConfig configured_camera;
+  FrameRateEstimator capture_rate;
+  FrameRateEstimator encoded_rate;
   std::uint64_t next_pts{0};
+  std::uint64_t captured_frames{0U};
+  std::uint64_t encoded_frames{0U};
+  std::uint64_t capture_error_count{0U};
+  std::uint64_t encode_error_count{0U};
   SnapshotTap::SourceEpoch source_epoch{0U};
+  unsigned int output_width{configured_camera.video.width};
+  unsigned int output_height{configured_camera.video.height};
   std::string camera_id{"imx708-main"};
   std::string state{"stopped"};
   bool running{false};

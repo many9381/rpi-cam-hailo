@@ -37,6 +37,15 @@ struct CameraStatus {
   std::string id;
   std::string state{"unknown"};
   bool snapshot_available{false};
+  unsigned int width{0U};
+  unsigned int height{0U};
+  unsigned int configured_fps{0U};
+  double capture_fps{0.0};
+  double encoded_fps{0.0};
+  std::uint64_t captured_frames{0U};
+  std::uint64_t encoded_frames{0U};
+  std::uint64_t capture_error_count{0U};
+  std::uint64_t encode_error_count{0U};
 };
 
 using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
@@ -129,6 +138,7 @@ struct ServiceInitArgs {
 };
 
 Json::Value BuildHealthJson(const std::string& status);
+Json::Value BuildCameraStatusJson(const CameraStatus& camera);
 Json::Value BuildAiStatusJson(const AiServiceStatus& status);
 Json::Value BuildAiStatusJson(bool requested);
 drogon::HttpResponsePtr BuildAiRestartResponse(

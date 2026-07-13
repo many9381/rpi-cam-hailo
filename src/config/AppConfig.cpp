@@ -304,6 +304,7 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         AssignIfPresent(encoder, "bitrate_kbps",
                         config.camera.encoder.bitrate_kbps);
         AssignIfPresent(encoder, "gop", config.camera.encoder.gop);
+        AssignIfPresent(encoder, "preset", config.camera.encoder.preset);
       }
       const YAML::Node camera_ai = camera["ai"];
       if (camera_ai) {

@@ -129,7 +129,20 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
   std::vector<camera_firmware::service::CameraStatus> result;
   result.reserve(statuses.size());
   for (const auto& status : statuses) {
-    result.push_back({status.id, status.state, status.snapshot_available});
+    camera_firmware::service::CameraStatus service_status;
+    service_status.id = status.id;
+    service_status.state = status.state;
+    service_status.snapshot_available = status.snapshot_available;
+    service_status.width = status.width;
+    service_status.height = status.height;
+    service_status.configured_fps = status.configured_fps;
+    service_status.capture_fps = status.capture_fps;
+    service_status.encoded_fps = status.encoded_fps;
+    service_status.captured_frames = status.captured_frames;
+    service_status.encoded_frames = status.encoded_frames;
+    service_status.capture_error_count = status.capture_error_count;
+    service_status.encode_error_count = status.encode_error_count;
+    result.push_back(std::move(service_status));
   }
   return result;
 }

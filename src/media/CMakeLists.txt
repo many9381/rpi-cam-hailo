@@ -1,5 +1,6 @@
 add_library(camera_firmware_media STATIC
     CameraPipeline.cpp
+    CameraTiming.cpp
     EncodedRing.cpp
     FrameLease.cpp
     JpegEncoder.cpp

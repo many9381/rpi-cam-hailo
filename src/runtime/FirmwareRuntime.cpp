@@ -153,16 +153,25 @@ FirmwareRuntimeState FirmwareRuntime::State() const noexcept {
 
 std::vector<media::CameraPipelineStatus> FirmwareRuntime::CameraStatuses() const {
   std::lock_guard lock(mutex_);
+  const auto fallback_status = [this](std::string state) {
+    media::CameraPipelineStatus status;
+    status.id = config_.camera.id;
+    status.state = std::move(state);
+    status.width = config_.camera.video.width;
+    status.height = config_.camera.video.height;
+    status.configured_fps = config_.camera.video.fps;
+    return std::vector<media::CameraPipelineStatus>{std::move(status)};
+  };
   if (!RunningLocked()) {
-    return {{config_.camera.id, CameraStateForRuntime(state_), false}};
+    return fallback_status(CameraStateForRuntime(state_));
   }
   if (!dependencies_.camera_statuses) {
-    return {{config_.camera.id, "error", false}};
+    return fallback_status("error");
   }
   try {
     return dependencies_.camera_statuses();
   } catch (...) {
-    return {{config_.camera.id, "error", false}};
+    return fallback_status("error");
   }
 }
 

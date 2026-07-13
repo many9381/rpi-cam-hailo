@@ -208,6 +208,9 @@ TEST(FirmwareRuntimeTest,
      StoppedRuntimeRejectsPreviewAndReturnsSafeProviderValues) {
   config::AppConfig config;
   config.camera.id = "configured-camera";
+  config.camera.video.width = 1280U;
+  config.camera.video.height = 720U;
+  config.camera.video.fps = 50U;
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.camera_statuses = [&] {
@@ -229,6 +232,15 @@ TEST(FirmwareRuntimeTest,
   EXPECT_EQ(statuses.front().id, "configured-camera");
   EXPECT_EQ(statuses.front().state, "stopped");
   EXPECT_FALSE(statuses.front().snapshot_available);
+  EXPECT_EQ(statuses.front().width, 1280U);
+  EXPECT_EQ(statuses.front().height, 720U);
+  EXPECT_EQ(statuses.front().configured_fps, 50U);
+  EXPECT_DOUBLE_EQ(statuses.front().capture_fps, 0.0);
+  EXPECT_DOUBLE_EQ(statuses.front().encoded_fps, 0.0);
+  EXPECT_EQ(statuses.front().captured_frames, 0U);
+  EXPECT_EQ(statuses.front().encoded_frames, 0U);
+  EXPECT_EQ(statuses.front().capture_error_count, 0U);
+  EXPECT_EQ(statuses.front().encode_error_count, 0U);
   EXPECT_EQ(runtime.AiStatus().state, "stopped");
   EXPECT_TRUE(runtime.AiRunnerStatuses().empty());
   EXPECT_FALSE(runtime.RestartAi().ok());

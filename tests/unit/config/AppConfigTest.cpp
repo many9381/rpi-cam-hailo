@@ -356,13 +356,14 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
   EXPECT_EQ(cfg.value().camera.source.backend, "libcamera");
-  EXPECT_EQ(cfg.value().camera.video.width, 1536u);
-  EXPECT_EQ(cfg.value().camera.video.height, 864u);
-  EXPECT_EQ(cfg.value().camera.video.fps, 30u);
+  EXPECT_EQ(cfg.value().camera.video.width, 1920u);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080u);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50u);
   EXPECT_EQ(cfg.value().camera.video.format, "nv12");
   EXPECT_EQ(cfg.value().camera.encoder.backend, "x264");
-  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 3000u);
-  EXPECT_EQ(cfg.value().camera.encoder.gop, 30u);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000u);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25u);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().http.enabled);
   EXPECT_FALSE(cfg.value().http.tls.enabled);
   EXPECT_EQ(cfg.value().http.port, 8443u);
@@ -373,6 +374,21 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_TRUE(cfg.value().ai.models.empty());
   EXPECT_FALSE(cfg.value().camera.ai.enabled);
   EXPECT_TRUE(cfg.value().camera.ai.model_ids.empty());
+}
+
+TEST(AppConfigTest, LoadsExplicitCameraEncoderPreset) {
+  const auto config = LoadInlineConfig(R"(
+camera:
+  encoder:
+    preset: medium
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().camera.encoder.preset, "medium");
 }
 
 TEST(AppConfigTest, RtspClientAuthDefaultsToDisabledSha256Policy) {
@@ -638,6 +654,12 @@ TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   ASSERT_TRUE(cfg.ok()) << cfg.error().message;
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_EQ(cfg.value().camera.video.width, 1920U);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080U);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50U);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 1u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");
@@ -672,6 +694,12 @@ TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
   ASSERT_TRUE(cfg.ok()) << cfg.error().message;
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_EQ(cfg.value().camera.video.width, 1920U);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080U);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50U);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");

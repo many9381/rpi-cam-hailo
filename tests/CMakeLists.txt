@@ -68,6 +68,8 @@ target_compile_definitions(camera_firmware_security_tests
 gtest_discover_tests(camera_firmware_security_tests)
 
 add_executable(camera_firmware_media_tests
+    unit/media/CameraPipelineConfigTest.cpp
+    unit/media/CameraTimingTest.cpp
     unit/media/EncodedRingTest.cpp
     unit/media/FrameLeaseTest.cpp
     unit/media/JpegEncoderTest.cpp
@@ -78,6 +80,7 @@ add_executable(camera_firmware_media_tests
 target_link_libraries(camera_firmware_media_tests
     PRIVATE
         camera_firmware_media
+        camera_firmware_ai
         GTest::gtest_main
 )
 
@@ -182,6 +185,26 @@ gtest_add_tests(TARGET camera_firmware_ai_hardware_smoke
 set_tests_properties(${camera_firmware_ai_hardware_smoke_tests}
     PROPERTIES
         TIMEOUT 30
+)
+
+add_executable(camera_firmware_camera_hardware_smoke
+    integration/CameraPipelineHardwareSmokeTest.cpp
+)
+
+target_link_libraries(camera_firmware_camera_hardware_smoke
+    PRIVATE
+        camera_firmware_media
+        camera_firmware_ai
+        GTest::gtest_main
+)
+
+gtest_add_tests(TARGET camera_firmware_camera_hardware_smoke
+    TEST_LIST camera_firmware_camera_hardware_smoke_tests
+)
+
+set_tests_properties(${camera_firmware_camera_hardware_smoke_tests}
+    PROPERTIES
+        TIMEOUT 20
 )
 
 add_executable(camera_firmware_service_tests

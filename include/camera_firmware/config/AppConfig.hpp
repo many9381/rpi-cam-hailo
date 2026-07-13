@@ -48,16 +48,17 @@ struct CameraSourceConfig {
 };
 
 struct CameraVideoConfig {
-  unsigned int width{1536};
-  unsigned int height{864};
-  unsigned int fps{30};
+  unsigned int width{1920};
+  unsigned int height{1080};
+  unsigned int fps{50};
   std::string format{"nv12"};
 };
 
 struct CameraEncoderConfig {
   std::string backend{"x264"};
-  unsigned int bitrate_kbps{3000};
-  unsigned int gop{30};
+  unsigned int bitrate_kbps{6000};
+  unsigned int gop{25};
+  std::string preset{"ultrafast"};
 };
 
 struct AiModelInputConfig {
