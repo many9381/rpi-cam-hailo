@@ -107,6 +107,14 @@ struct HttpPreviewConfig {
   unsigned int stale_timeout_ms{2000};
 };
 
+struct HttpLiveConfig {
+  bool enabled{true};
+  unsigned int fragment_duration_ms{500U};
+  unsigned int max_clients{4U};
+  unsigned int ring_fragments{8U};
+  unsigned int stale_timeout_ms{2000U};
+};
+
 struct HttpConfig {
   bool enabled{true};
   std::string bind_ip{"0.0.0.0"};
@@ -115,6 +123,7 @@ struct HttpConfig {
   std::string public_base_url{"http://127.0.0.1:8080"};
   HttpTlsConfig tls;
   HttpPreviewConfig preview;
+  HttpLiveConfig live;
 };
 
 struct AiConfig {
@@ -145,6 +154,7 @@ common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
 common::Result<void> ValidateHttpPreviewSemantics(
     const HttpPreviewConfig& config);
+common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config);
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config);
 
 }  // namespace camera_firmware::config

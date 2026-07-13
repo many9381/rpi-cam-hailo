@@ -178,6 +178,70 @@ secure_rtsp:
   EXPECT_EQ(config.value().http.preview.stale_timeout_ms, 2000U);
 }
 
+TEST(AppConfigTest, DefaultsOmittedLiveConfiguration) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  enabled: true
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_TRUE(config.value().http.live.enabled);
+  EXPECT_EQ(config.value().http.live.fragment_duration_ms, 500U);
+  EXPECT_EQ(config.value().http.live.max_clients, 4U);
+  EXPECT_EQ(config.value().http.live.ring_fragments, 8U);
+  EXPECT_EQ(config.value().http.live.stale_timeout_ms, 2000U);
+}
+
+TEST(AppConfigTest, LoadsExplicitLiveConfiguration) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  live:
+    enabled: true
+    fragment_duration_ms: 250
+    max_clients: 6
+    ring_fragments: 12
+    stale_timeout_ms: 1500
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().http.live.fragment_duration_ms, 250U);
+  EXPECT_EQ(config.value().http.live.max_clients, 6U);
+  EXPECT_EQ(config.value().http.live.ring_fragments, 12U);
+  EXPECT_EQ(config.value().http.live.stale_timeout_ms, 1500U);
+}
+
+TEST(AppConfigTest, RejectsInvalidLiveConfiguration) {
+  ExpectConfigError(R"(
+http:
+  live:
+    fragment_duration_ms: 0
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)",
+                    "E_CONFIG_HTTP_LIVE");
+  ExpectConfigError(R"(
+http:
+  live:
+    fragment_duration_ms: 1000
+    stale_timeout_ms: 1500
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)",
+                    "E_CONFIG_HTTP_LIVE");
+}
+
 TEST(AppConfigTest, LoadsExplicitPreviewConfiguration) {
   const auto config = LoadInlineConfig(R"(
 http:

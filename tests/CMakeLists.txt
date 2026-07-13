@@ -72,6 +72,8 @@ add_executable(camera_firmware_media_tests
     unit/media/CameraTimingTest.cpp
     unit/media/EncodedRingTest.cpp
     unit/media/FrameLeaseTest.cpp
+    unit/media/FragmentRingTest.cpp
+    unit/media/IsoBmffAssemblerTest.cpp
     unit/media/JpegEncoderTest.cpp
     unit/media/MjpegFrameHubTest.cpp
     unit/media/SnapshotTapTest.cpp
@@ -205,6 +207,21 @@ gtest_add_tests(TARGET camera_firmware_camera_hardware_smoke
 set_tests_properties(${camera_firmware_camera_hardware_smoke_tests}
     PROPERTIES
         TIMEOUT 20
+)
+
+add_executable(camera_firmware_fragmented_mp4_tests
+    integration/FragmentedMp4HubTest.cpp
+)
+
+target_link_libraries(camera_firmware_fragmented_mp4_tests
+    PRIVATE
+        camera_firmware_media
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_fragmented_mp4_tests
+    PROPERTIES
+        TIMEOUT 15
 )
 
 add_executable(camera_firmware_service_tests

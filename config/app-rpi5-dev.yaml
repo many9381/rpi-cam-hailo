@@ -33,6 +33,12 @@ http:
     jpeg_quality: 80
     max_clients: 2
     stale_timeout_ms: 2000
+  live:
+    enabled: true
+    fragment_duration_ms: 500
+    max_clients: 4
+    ring_fragments: 8
+    stale_timeout_ms: 2000
   tls:
     enabled: false
 

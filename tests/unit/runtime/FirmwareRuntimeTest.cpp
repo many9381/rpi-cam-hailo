@@ -64,11 +64,14 @@ struct Calls {
   std::atomic<unsigned int> rtsp_starts{0U};
   std::atomic<unsigned int> ai_starts{0U};
   std::atomic<unsigned int> camera_starts{0U};
+  std::atomic<unsigned int> live_starts{0U};
   std::atomic<unsigned int> preview_starts{0U};
   std::atomic<unsigned int> rtsp_stops{0U};
   std::atomic<unsigned int> ai_stops{0U};
   std::atomic<unsigned int> camera_stops{0U};
+  std::atomic<unsigned int> live_stops{0U};
   std::atomic<unsigned int> preview_stops{0U};
+  std::atomic<unsigned int> live_opens{0U};
   std::atomic<unsigned int> preview_opens{0U};
   std::atomic<unsigned int> provider_calls{0U};
 };
@@ -90,6 +93,11 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
     calls.Record("camera.start");
     return common::Result<void>::Ok();
   };
+  dependencies.start_live = [&] {
+    calls.live_starts.fetch_add(1U);
+    calls.Record("live.start");
+    return common::Result<void>::Ok();
+  };
   dependencies.start_preview = [&] {
     calls.preview_starts.fetch_add(1U);
     calls.Record("preview.start");
@@ -98,6 +106,10 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
   dependencies.stop_preview = [&] {
     calls.preview_stops.fetch_add(1U);
     calls.Record("preview.stop");
+  };
+  dependencies.stop_live = [&] {
+    calls.live_stops.fetch_add(1U);
+    calls.Record("live.stop");
   };
   dependencies.stop_camera = [&] {
     calls.camera_stops.fetch_add(1U);
@@ -116,6 +128,16 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
     return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
         {"E_PREVIEW_CAPACITY", "MJPEG preview reader capacity is full"});
   };
+  dependencies.open_live_stream = [&](std::string_view) {
+    calls.live_opens.fetch_add(1U);
+    return common::Result<media::FragmentRing::Reader>::Err(
+        {"E_LIVE_UNAVAILABLE", "live stream is unavailable"});
+  };
+  dependencies.live_status = [] {
+    media::FragmentedMp4HubStatus status;
+    status.state = "running";
+    return status;
+  };
   return dependencies;
 }
 
@@ -130,6 +152,7 @@ TEST(FirmwareRuntimeTest, StartsAndStopsEachComponentExactlyOnce) {
   EXPECT_EQ(calls.rtsp_starts.load(), 1U);
   EXPECT_EQ(calls.ai_starts.load(), 1U);
   EXPECT_EQ(calls.camera_starts.load(), 1U);
+  EXPECT_EQ(calls.live_starts.load(), 1U);
   EXPECT_EQ(calls.preview_starts.load(), 1U);
 
   runtime.Stop();
@@ -138,12 +161,14 @@ TEST(FirmwareRuntimeTest, StartsAndStopsEachComponentExactlyOnce) {
   EXPECT_EQ(runtime.State(), FirmwareRuntimeState::kStopped);
   EXPECT_EQ(calls.camera_stops.load(), 1U);
   EXPECT_EQ(calls.preview_stops.load(), 1U);
+  EXPECT_EQ(calls.live_stops.load(), 1U);
   EXPECT_EQ(calls.ai_stops.load(), 1U);
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
             (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "preview.start",
-                                      "preview.stop", "camera.stop", "ai.stop",
+                                      "camera.start", "live.start",
+                                      "preview.start", "preview.stop",
+                                      "live.stop", "camera.stop", "ai.stop",
                                       "rtsp.stop"}));
 }
 
@@ -165,10 +190,36 @@ TEST(FirmwareRuntimeTest,
   ASSERT_FALSE(started.ok());
   EXPECT_EQ(started.error().code, "E_PREVIEW_UNAVAILABLE");
   EXPECT_EQ(calls.preview_stops.load(), 0U);
+  EXPECT_EQ(calls.live_stops.load(), 1U);
   EXPECT_EQ(calls.camera_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
             (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "preview.start",
+                                      "camera.start", "live.start",
+                                      "preview.start", "live.stop",
+                                      "camera.stop", "ai.stop", "rtsp.stop"}));
+}
+
+TEST(FirmwareRuntimeTest, LiveStartFailureUnwindsCameraAndEarlierComponents) {
+  config::AppConfig config;
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  dependencies.start_live = [&] {
+    calls.live_starts.fetch_add(1U);
+    calls.Record("live.start");
+    return common::Result<void>::Err(
+        {"E_LIVE_UNAVAILABLE", "live stream is unavailable"});
+  };
+  FirmwareRuntime runtime(config, std::move(dependencies));
+
+  const auto started = runtime.Start();
+
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_LIVE_UNAVAILABLE");
+  EXPECT_EQ(calls.live_stops.load(), 0U);
+  EXPECT_EQ(calls.camera_stops.load(), 1U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"rtsp.start", "ai.start",
+                                      "camera.start", "live.start",
                                       "camera.stop", "ai.stop", "rtsp.stop"}));
 }
 
@@ -245,6 +296,9 @@ TEST(FirmwareRuntimeTest,
   EXPECT_TRUE(runtime.AiRunnerStatuses().empty());
   EXPECT_FALSE(runtime.RestartAi().ok());
   EXPECT_FALSE(runtime.Snapshot("camera").has_value());
+  const auto live = runtime.OpenLiveStream("camera");
+  ASSERT_FALSE(live.ok());
+  EXPECT_EQ(live.error().code, "E_LIVE_UNAVAILABLE");
   const auto preview = runtime.OpenMjpegPreview("camera");
   ASSERT_FALSE(preview.ok());
   EXPECT_EQ(preview.error().code, "E_PREVIEW_UNAVAILABLE");
@@ -254,6 +308,7 @@ TEST(FirmwareRuntimeTest,
   EXPECT_EQ(runtime.PerMediaKeyZeroizeCount(), 0U);
   EXPECT_EQ(calls.provider_calls.load(), 0U);
   EXPECT_EQ(calls.preview_opens.load(), 0U);
+  EXPECT_EQ(calls.live_opens.load(), 0U);
 }
 
 TEST(FirmwareRuntimeTest, RunningPreviewOpenDelegatesToOwnedDependency) {
@@ -267,6 +322,21 @@ TEST(FirmwareRuntimeTest, RunningPreviewOpenDelegatesToOwnedDependency) {
   ASSERT_FALSE(preview.ok());
   EXPECT_EQ(preview.error().code, "E_PREVIEW_CAPACITY");
   EXPECT_EQ(calls.preview_opens.load(), 1U);
+}
+
+TEST(FirmwareRuntimeTest, RunningLiveProvidersDelegateToOwnedDependencies) {
+  config::AppConfig config;
+  Calls calls;
+  FirmwareRuntime runtime(config, SuccessfulDependencies(calls));
+  ASSERT_TRUE(runtime.Start().ok());
+
+  const auto status = runtime.LiveStatus();
+  const auto opened = runtime.OpenLiveStream("imx708-main");
+
+  EXPECT_EQ(status.state, "running");
+  ASSERT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error().code, "E_LIVE_UNAVAILABLE");
+  EXPECT_EQ(calls.live_opens.load(), 1U);
 }
 
 TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
@@ -332,6 +402,7 @@ TEST(FirmwareRuntimeTest, ConcurrentStartsAreSerializedAndIdempotent) {
   EXPECT_EQ(calls.rtsp_starts.load(), 1U);
   EXPECT_EQ(calls.ai_starts.load(), 1U);
   EXPECT_EQ(calls.camera_starts.load(), 1U);
+  EXPECT_EQ(calls.live_starts.load(), 1U);
   EXPECT_EQ(calls.preview_starts.load(), 1U);
   runtime.Stop();
 }
@@ -350,8 +421,10 @@ TEST(FirmwareRuntimeTest, CanStartAgainAfterStop) {
   EXPECT_EQ(calls.rtsp_starts.load(), 2U);
   EXPECT_EQ(calls.ai_starts.load(), 2U);
   EXPECT_EQ(calls.camera_starts.load(), 2U);
+  EXPECT_EQ(calls.live_starts.load(), 2U);
   EXPECT_EQ(calls.preview_starts.load(), 2U);
   EXPECT_EQ(calls.preview_stops.load(), 2U);
+  EXPECT_EQ(calls.live_stops.load(), 2U);
   EXPECT_EQ(calls.camera_stops.load(), 2U);
   EXPECT_EQ(calls.ai_stops.load(), 2U);
   EXPECT_EQ(calls.rtsp_stops.load(), 2U);
@@ -382,8 +455,9 @@ TEST(FirmwareRuntimeTest, StopContinuesUnwindWhenCallbacksThrow) {
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
             (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "preview.start",
-                                      "preview.stop", "camera.stop", "ai.stop",
+                                      "camera.start", "live.start",
+                                      "preview.start", "preview.stop",
+                                      "live.stop", "camera.stop", "ai.stop",
                                       "rtsp.stop"}));
 }
 

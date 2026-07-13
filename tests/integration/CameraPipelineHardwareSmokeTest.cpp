@@ -1,12 +1,16 @@
 #include "camera_firmware/media/CameraPipeline.hpp"
+#include "camera_firmware/media/FragmentedMp4Hub.hpp"
 
 #include "camera_firmware/ai/AiFrameTap.hpp"
 
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -76,4 +80,84 @@ TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
   EXPECT_TRUE(accepted) << StatusMessage(status);
   EXPECT_EQ(status.capture_error_count, 0U) << StatusMessage(status);
   EXPECT_EQ(status.encode_error_count, 0U) << StatusMessage(status);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Packages1080p50AsFragmentedMp4) {
+  if (!CameraHardwareSmokeEnabled()) {
+    GTEST_SKIP()
+        << "set CF_RUN_CAMERA_HARDWARE_SMOKE=1 to require camera hardware";
+  }
+
+  camera_firmware::config::AppConfig config;
+  camera_firmware::media::SnapshotTap snapshot_tap;
+  camera_firmware::ai::AiFrameTap ai_frame_tap;
+  camera_firmware::media::EncodedRing encoded_ring(256U);
+  camera_firmware::media::CameraPipeline pipeline(snapshot_tap, ai_frame_tap,
+                                                  encoded_ring);
+  camera_firmware::media::FragmentedMp4Hub hub(encoded_ring);
+
+  const auto camera_started = pipeline.Start(config);
+  ASSERT_TRUE(camera_started.ok()) << camera_started.error().code << ": "
+                                   << camera_started.error().message;
+  camera_firmware::media::FragmentedMp4HubConfig live_config;
+  live_config.width = config.camera.video.width;
+  live_config.height = config.camera.video.height;
+  live_config.fps = config.camera.video.fps;
+  live_config.fragment_duration_ms = 500U;
+  live_config.ring_limits =
+      {.max_fragments = 8U, .max_bytes = 32U * 1024U * 1024U,
+       .max_readers = 1U};
+  const auto hub_started = hub.Start(live_config);
+  ASSERT_TRUE(hub_started.ok()) << hub_started.error().code << ": "
+                                << hub_started.error().message;
+
+  std::optional<camera_firmware::media::FragmentRing::Reader> reader;
+  for (int attempt = 0; attempt < 100 && !reader.has_value(); ++attempt) {
+    auto opened = hub.OpenReader();
+    if (opened.ok()) {
+      reader.emplace(std::move(opened).value());
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  ASSERT_TRUE(reader.has_value()) << hub.Status().last_error_code << ": "
+                                  << hub.Status().last_error_message;
+
+  std::vector<std::uint8_t> stream_bytes;
+  unsigned int media_fragments = 0U;
+  for (int attempt = 0; attempt < 20 && media_fragments < 4U; ++attempt) {
+    const auto chunk = reader->WaitNext(std::chrono::milliseconds(750));
+    ASSERT_TRUE(chunk.ok()) << chunk.error().message;
+    if (!chunk.value().has_value()) {
+      continue;
+    }
+    ASSERT_TRUE(chunk.value()->bytes);
+    stream_bytes.insert(stream_bytes.end(), chunk.value()->bytes->begin(),
+                        chunk.value()->bytes->end());
+    if (chunk.value()->kind ==
+        camera_firmware::media::FragmentedMp4ChunkKind::kMediaFragment) {
+      ++media_fragments;
+    }
+  }
+
+  const auto hub_status = hub.Status();
+  const auto camera_status = pipeline.Status().front();
+  hub.Stop();
+  pipeline.Stop();
+
+  ASSERT_EQ(media_fragments, 4U) << hub_status.last_error_code << ": "
+                                 << hub_status.last_error_message;
+  EXPECT_TRUE(hub_status.last_error_code.empty())
+      << hub_status.last_error_message;
+  EXPECT_GE(camera_status.capture_fps, 45.0) << StatusMessage(camera_status);
+  EXPECT_GE(camera_status.encoded_fps, 45.0) << StatusMessage(camera_status);
+
+  const char* output_path = std::getenv("CF_FMP4_SMOKE_OUTPUT");
+  if (output_path != nullptr && output_path[0] != '\0') {
+    std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output) << "failed to open fMP4 smoke output";
+    output.write(reinterpret_cast<const char*>(stream_bytes.data()),
+                 static_cast<std::streamsize>(stream_bytes.size()));
+    ASSERT_TRUE(output) << "failed to write fMP4 smoke output";
+  }
 }

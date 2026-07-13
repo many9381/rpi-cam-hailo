@@ -2,7 +2,10 @@ add_library(camera_firmware_media STATIC
     CameraPipeline.cpp
     CameraTiming.cpp
     EncodedRing.cpp
+    FragmentRing.cpp
+    FragmentedMp4Hub.cpp
     FrameLease.cpp
+    IsoBmffAssembler.cpp
     JpegEncoder.cpp
     MjpegFrameHub.cpp
     SnapshotTap.cpp
@@ -18,6 +21,7 @@ target_link_libraries(camera_firmware_media
         camera_firmware_common
         camera_firmware_config
         JPEG::JPEG
+        PkgConfig::GSTREAMER_APP
         PkgConfig::LIBCAMERA
         PkgConfig::X264
 )

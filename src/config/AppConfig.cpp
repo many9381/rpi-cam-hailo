@@ -242,6 +242,20 @@ common::Result<void> ValidateHttpPreviewSemantics(
   return common::Result<void>::Ok();
 }
 
+common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
+  if (config.fragment_duration_ms < 100U ||
+      config.fragment_duration_ms > 5000U || config.max_clients < 1U ||
+      config.max_clients > 16U || config.ring_fragments < 2U ||
+      config.ring_fragments > 64U || config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U ||
+      static_cast<std::uint64_t>(config.stale_timeout_ms) <
+          static_cast<std::uint64_t>(config.fragment_duration_ms) * 2U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_HTTP_LIVE", "http.live configuration is invalid"});
+  }
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
   if (!config.security.enabled) {
     return common::Result<void>::Ok();
@@ -329,6 +343,17 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         AssignIfPresent(preview, "max_clients", config.http.preview.max_clients);
         AssignIfPresent(preview, "stale_timeout_ms",
                         config.http.preview.stale_timeout_ms);
+      }
+      const YAML::Node live = http["live"];
+      if (live) {
+        AssignIfPresent(live, "enabled", config.http.live.enabled);
+        AssignIfPresent(live, "fragment_duration_ms",
+                        config.http.live.fragment_duration_ms);
+        AssignIfPresent(live, "max_clients", config.http.live.max_clients);
+        AssignIfPresent(live, "ring_fragments",
+                        config.http.live.ring_fragments);
+        AssignIfPresent(live, "stale_timeout_ms",
+                        config.http.live.stale_timeout_ms);
       }
       const YAML::Node tls = http["tls"];
       if (tls) {
@@ -441,6 +466,10 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         ValidateHttpPreviewSemantics(config.http.preview);
     if (!http_preview_semantics.ok()) {
       return common::Result<AppConfig>::Err(http_preview_semantics.error());
+    }
+    auto http_live_semantics = ValidateHttpLiveSemantics(config.http.live);
+    if (!http_live_semantics.ok()) {
+      return common::Result<AppConfig>::Err(http_live_semantics.error());
     }
     if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
       const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();
