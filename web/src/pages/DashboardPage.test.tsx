@@ -8,6 +8,15 @@ import { DashboardPage } from './DashboardPage';
 
 let client: CameraApiClient;
 
+vi.mock('../hooks/useLivePreview', () => ({
+  useLivePreview: () => ({
+    state: 'connecting',
+    generation: 1,
+    videoRef: { current: null },
+    reconnect: vi.fn(),
+  }),
+}));
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   readonly listeners = new Map<string, EventListener>();
@@ -85,7 +94,7 @@ describe('DashboardPage', () => {
     },
   );
 
-  it('composes the authenticated MJPEG preview with operational data', async () => {
+  it('composes the authenticated live preview with operational data', async () => {
     const user = userEvent.setup();
     const refresh = vi.fn(async () => undefined);
     render(<DashboardPage client={client} controller={{ ...controller, refresh }} />);
@@ -93,10 +102,10 @@ describe('DashboardPage', () => {
     expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
     expect(screen.getByText('Connecting preview...')).toBeVisible();
     expect(screen.getByRole('combobox', { name: /camera/i })).toHaveValue('cam-a');
-    expect(screen.getByRole('img', { name: /cam-a camera preview/i })).toHaveAttribute(
-      'src', '/api/v1/cameras/cam-a/preview.mjpeg?generation=1',
-    );
-    expect(screen.queryByRole('video')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('cam-a camera preview'))
+      .toBeInstanceOf(HTMLVideoElement);
+    expect(screen.queryByRole('img', { name: /cam-a camera preview/i }))
+      .not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /refresh operational data/i }));
     expect(refresh).toHaveBeenCalledOnce();
   });
