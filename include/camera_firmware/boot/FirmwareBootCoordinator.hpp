@@ -28,6 +28,7 @@ struct FirmwareBootDependencies {
   std::function<common::Result<void>()> start_runtime;
   std::function<void()> stop_runtime;
   std::function<common::Result<void>(RuntimeStartCallback)> start_service;
+  std::function<void()> quiesce_service;
   std::function<void()> stop_service;
 };
 
@@ -51,6 +52,7 @@ class FirmwareBootCoordinator {
   [[nodiscard]] common::Result<void> ValidateDependencies() const;
   [[nodiscard]] common::Result<void> StartRuntimeDependency();
   void StopRuntimeDependency() noexcept;
+  void QuiesceServiceDependency() noexcept;
   void StopServiceDependency() noexcept;
   void FinishFailedStart(bool unwind_runtime) noexcept;
 

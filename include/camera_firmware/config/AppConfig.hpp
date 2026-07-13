@@ -97,6 +97,15 @@ struct HttpTlsConfig {
   std::string private_key_path;
 };
 
+struct HttpPreviewConfig {
+  bool enabled{true};
+  unsigned int width{768};
+  unsigned int fps{8};
+  unsigned int jpeg_quality{80};
+  unsigned int max_clients{2};
+  unsigned int stale_timeout_ms{2000};
+};
+
 struct HttpConfig {
   bool enabled{true};
   std::string bind_ip{"0.0.0.0"};
@@ -104,6 +113,7 @@ struct HttpConfig {
   std::string web_root{"web/dist"};
   std::string public_base_url{"http://127.0.0.1:8080"};
   HttpTlsConfig tls;
+  HttpPreviewConfig preview;
 };
 
 struct AiConfig {
@@ -132,6 +142,8 @@ common::Result<void> ValidateAiConfigSemantics(
     const CameraConfig& camera_config);
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
+common::Result<void> ValidateHttpPreviewSemantics(
+    const HttpPreviewConfig& config);
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config);
 
 }  // namespace camera_firmware::config

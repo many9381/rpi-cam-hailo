@@ -564,13 +564,16 @@ input:focus-visible {
   background: #11191c;
 }
 
-.camera-stage img {
+.camera-preview-image {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  visibility: hidden;
   object-fit: contain;
 }
+
+.camera-preview-image.is-loaded { visibility: visible; }
 
 .detection-overlay {
   position: absolute;

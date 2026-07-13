@@ -60,12 +60,17 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::string_view suffix = "/snapshot.jpg";
-    if (path.starts_with(prefix) && path.ends_with(suffix) &&
-        path.size() > prefix.size() + suffix.size()) {
-      const auto camera_id =
-          path.substr(prefix.size(), path.size() - prefix.size() - suffix.size());
-      return camera_id.find('/') == std::string_view::npos;
+    constexpr std::array<std::string_view, 2> suffixes = {
+        "/snapshot.jpg", "/preview.mjpeg"};
+    for (const auto suffix : suffixes) {
+      if (path.starts_with(prefix) && path.ends_with(suffix) &&
+          path.size() > prefix.size() + suffix.size()) {
+        const auto camera_id = path.substr(
+            prefix.size(), path.size() - prefix.size() - suffix.size());
+        if (camera_id.find('/') == std::string_view::npos) {
+          return true;
+        }
+      }
     }
     return false;
   }
@@ -136,6 +141,18 @@ Json::Value BuildSnapshotUnavailableJson() {
   Json::Value json(Json::objectValue);
   json["code"] = "E_NO_SNAPSHOT";
   json["message"] = "snapshot unavailable";
+  return json;
+}
+
+Json::Value BuildPreviewErrorJson(std::string_view code) {
+  Json::Value json(Json::objectValue);
+  if (code == "E_PREVIEW_CAPACITY") {
+    json["code"] = "E_PREVIEW_CAPACITY";
+    json["message"] = "MJPEG preview reader capacity is full";
+  } else {
+    json["code"] = "E_PREVIEW_UNAVAILABLE";
+    json["message"] = "MJPEG preview is unavailable";
+  }
   return json;
 }
 
@@ -1062,6 +1079,26 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/cameras/{1}/preview.mjpeg",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& camera_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [camera_id](std::optional<security::Principal>,
+                        HttpCallback callback) {
+              MjpegPreviewOpenCallback preview_stream_callback;
+              {
+                std::scoped_lock lock(StateMutex());
+                preview_stream_callback =
+                    GlobalState().args.preview_stream_callback;
+              }
+              callback(BuildMjpegPreviewResponse(preview_stream_callback,
+                                                 camera_id));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
       "/api/v1/ai/detections",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
@@ -1502,6 +1539,41 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
   return response;
 }
 
+drogon::HttpResponsePtr BuildMjpegPreviewResponse(
+    const MjpegPreviewOpenCallback& preview_stream_callback,
+    const std::string& camera_id) {
+  if (!preview_stream_callback) {
+    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  common::Result<MjpegPreviewStreamCallback> opened =
+      common::Result<MjpegPreviewStreamCallback>::Err(
+          {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"});
+  try {
+    opened = preview_stream_callback(camera_id);
+  } catch (...) {
+    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+  if (!opened.ok()) {
+    return JsonResponse(BuildPreviewErrorJson(opened.error().code),
+                        drogon::k503ServiceUnavailable);
+  }
+
+  auto stream = std::move(opened).value();
+  if (!stream) {
+    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+  auto response = drogon::HttpResponse::newStreamResponse(
+      stream, "", drogon::CT_CUSTOM,
+      "multipart/x-mixed-replace; boundary=cf-frame");
+  response->setStatusCode(drogon::k200OK);
+  response->addHeader("Content-Encoding", "identity");
+  return response;
+}
+
 ServiceApp::~ServiceApp() {
   Stop();
 }
@@ -1598,7 +1670,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
           listener.bind_address = args.app_config->http.bind_ip;
           listener.port = args.app_config->http.port;
         }
-        drogon::app().setThreadNum(1);
+        drogon::app().setThreadNum(4);
         drogon::app().disableSession();
         drogon::app().setClientMaxBodySize(kMaximumSecurityBodyBytes);
         drogon::app().setClientMaxMemoryBodySize(kMaximumSecurityBodyBytes);
@@ -1770,6 +1842,24 @@ void ServiceApp::JoinShutdownCoordinator() noexcept {
   shutdown_condition_.notify_all();
 }
 
+void ServiceApp::BeginShutdown() noexcept {
+  std::shared_ptr<BoundedWorker> security_worker;
+  {
+    std::scoped_lock lock(StateMutex());
+    GlobalState().shutting_down = true;
+    security_worker = GlobalState().security_worker;
+  }
+  if (security_worker) {
+    try {
+      security_worker->Stop();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to quiesce service security worker");
+    }
+  }
+}
+
 void ServiceApp::Stop() {
   auto* current_loop = trantor::EventLoop::getEventLoopOfCurrentThread();
   bool on_service_loop = false;
@@ -1780,10 +1870,7 @@ void ServiceApp::Stop() {
       on_service_loop = current_loop == drogon::app().getIOLoop(index);
     }
   }
-  {
-    std::scoped_lock lock(StateMutex());
-    GlobalState().shutting_down = true;
-  }
+  BeginShutdown();
 
   bool coordinator_started = false;
   {

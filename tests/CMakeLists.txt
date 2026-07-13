@@ -70,6 +70,8 @@ gtest_discover_tests(camera_firmware_security_tests)
 add_executable(camera_firmware_media_tests
     unit/media/EncodedRingTest.cpp
     unit/media/FrameLeaseTest.cpp
+    unit/media/JpegEncoderTest.cpp
+    unit/media/MjpegFrameHubTest.cpp
     unit/media/SnapshotTapTest.cpp
 )
 
@@ -77,6 +79,11 @@ target_link_libraries(camera_firmware_media_tests
     PRIVATE
         camera_firmware_media
         GTest::gtest_main
+)
+
+target_link_options(camera_firmware_media_tests
+    PRIVATE
+        -Wl,--wrap=ioctl
 )
 
 gtest_discover_tests(camera_firmware_media_tests)
@@ -206,6 +213,7 @@ target_compile_definitions(camera_firmware_https_auth_integration
 
 target_link_libraries(camera_firmware_https_auth_integration
     PRIVATE
+        camera_firmware_boot
         camera_firmware_service
         GTest::gtest_main
         OpenSSL::SSL

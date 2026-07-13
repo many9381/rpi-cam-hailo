@@ -86,6 +86,7 @@ interface ApiMockOptions {
 interface ApiMockControls {
   initializeRequests: Request[];
   runtimeRequests: Request[];
+  previewRequests: Request[];
   unhandledPaths: string[];
   emitDetection(): void;
 }
@@ -103,6 +104,7 @@ async function installApiMocks(
   });
   const initializeRequests: Request[] = [];
   const runtimeRequests: Request[] = [];
+  const previewRequests: Request[] = [];
   const unhandledPaths: string[] = [];
 
   await page.route('**/api/v1/**', async (route) => {
@@ -164,7 +166,8 @@ async function installApiMocks(
       });
       return;
     }
-    if (path === '/api/v1/cameras/imx708/snapshot.jpg' && request.method() === 'GET') {
+    if (path === '/api/v1/cameras/imx708/preview.mjpeg' && request.method() === 'GET') {
+      previewRequests.push(request);
       await route.fulfill({
         contentType: 'image/jpeg',
         body: Buffer.from(JPEG_BASE64, 'base64'),
@@ -197,7 +200,7 @@ async function installApiMocks(
     });
   });
 
-  return { initializeRequests, runtimeRequests, unhandledPaths, emitDetection };
+  return { initializeRequests, runtimeRequests, previewRequests, unhandledPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -349,13 +352,19 @@ test('authenticated desktop dashboard renders media, overlay, and stable layout'
     await expect(page.getByText(value, { exact: true })).toBeVisible();
   }
 
-  const image = page.getByRole('img', { name: 'imx708 snapshot' });
+  const image = page.getByRole('img', { name: 'imx708 camera preview' });
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => ({
     complete: element.complete,
     width: element.naturalWidth,
     height: element.naturalHeight,
   }))).toEqual({ complete: true, width: 320, height: 180 });
+  expect(api.previewRequests).toHaveLength(1);
+  expect(new URL(api.previewRequests[0].url()).pathname)
+    .toBe('/api/v1/cameras/imx708/preview.mjpeg');
+  expect(new URL(api.previewRequests[0].url()).search).toBe('?generation=1');
+  const reconnect = page.getByRole('button', { name: 'Reconnect preview' });
+  await expect(reconnect).toBeVisible();
 
   const canvas = page.locator('canvas.detection-overlay');
   await expect(canvas).toBeVisible();
@@ -366,9 +375,19 @@ test('authenticated desktop dashboard renders media, overlay, and stable layout'
   api.emitDetection();
   await expect.poll(() => canvasChecksum(canvas)).toBeGreaterThan(beforeDetection);
 
+  await page.getByRole('link', { name: 'Cameras' }).click();
+  await expect(page.getByRole('heading', { name: 'Cameras', exact: true })).toBeVisible();
+  await expect(image).toBeVisible();
+  await page.getByRole('link', { name: 'Dashboard' }).click();
+  await expect(page.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+  await expect(image).toBeVisible();
+  await expect(reconnect).toBeVisible();
+
   await expectNoHorizontalOverflow(page);
   const header = page.locator('.topbar');
   const sidebar = page.locator('.sidebar');
+  const previewHeading = page.getByRole('heading', { name: 'Camera preview' }).locator('..');
+  const cameraSelect = page.getByRole('combobox', { name: 'Camera' });
   const preview = page.getByRole('heading', { name: 'Camera preview' }).locator('..').locator('..');
   const ai = page.getByRole('heading', { name: 'Hailo AI runtime' }).locator('..').locator('..');
   await expectNoOverlap(header, sidebar);
@@ -377,6 +396,11 @@ test('authenticated desktop dashboard renders media, overlay, and stable layout'
   await expectNoOverlap(sidebar, preview);
   await expectNoOverlap(sidebar, ai);
   await expectNoOverlap(preview, ai);
+  await expectNoOverlap(header, reconnect);
+  await expectNoOverlap(sidebar, reconnect);
+  await expectNoOverlap(previewHeading, cameraSelect);
+  await expectNoOverlap(previewHeading, reconnect);
+  await expectNoOverlap(cameraSelect, reconnect);
 
   await page.screenshot({
     path: testInfo.outputPath('desktop-dashboard.png'),
@@ -435,6 +459,10 @@ test('mobile dashboard drawer is modal, keyboard dismissible, and unclipped', as
   await expect(page.getByRole('heading', { name: 'AI inference' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Hailo AI runtime' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'System and cameras' })).toBeHidden();
+  await expect(page.getByRole('img', { name: 'imx708 camera preview' })).toBeVisible();
+  const reconnect = page.getByRole('button', { name: 'Reconnect preview' });
+  await expect(reconnect).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 
   const header = page.locator('.topbar');
   const preview = page.getByRole('heading', { name: 'Camera preview' }).locator('..').locator('..');
@@ -442,5 +470,6 @@ test('mobile dashboard drawer is modal, keyboard dismissible, and unclipped', as
   await expectNoOverlap(header, preview);
   await expectNoOverlap(header, ai);
   await expectNoOverlap(preview, ai);
+  await expectNoOverlap(header, reconnect);
   expect(api.unhandledPaths).toEqual([]);
 });

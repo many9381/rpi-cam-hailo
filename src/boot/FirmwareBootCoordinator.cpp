@@ -93,15 +93,20 @@ common::Result<void> FirmwareBootCoordinator::Start() {
         std::scoped_lock lock(mutex_);
         accept_runtime_transition_ = false;
       }
-      StopServiceDependency();
+      QuiesceServiceDependency();
       bool unwind_runtime = false;
       {
         std::unique_lock lock(mutex_);
         condition_.wait(lock,
                         [this] { return !runtime_start_in_progress_; });
         unwind_runtime = runtime_started_;
+        runtime_started_ = false;
       }
-      FinishFailedStart(unwind_runtime);
+      if (unwind_runtime) {
+        StopRuntimeDependency();
+      }
+      StopServiceDependency();
+      FinishFailedStart(false);
       return service;
     }
     std::scoped_lock lock(mutex_);
@@ -118,6 +123,7 @@ common::Result<void> FirmwareBootCoordinator::Start() {
 
 void FirmwareBootCoordinator::Stop() noexcept {
   bool stop_service = false;
+  bool stop_runtime = false;
   {
     std::unique_lock lock(mutex_);
     condition_.wait(lock, [this] {
@@ -133,28 +139,26 @@ void FirmwareBootCoordinator::Stop() noexcept {
       return;
     }
     state_ = FirmwareBootState::kStopping;
-    stop_service = service_started_;
-  }
-
-  if (stop_service) {
-    StopServiceDependency();
-  }
-
-  bool stop_runtime = false;
-  {
-    std::unique_lock lock(mutex_);
-    service_started_ = false;
     accept_runtime_transition_ = false;
+    stop_service = service_started_;
     condition_.wait(lock, [this] { return !runtime_start_in_progress_; });
     stop_runtime = runtime_started_;
     runtime_started_ = false;
   }
+
+  if (stop_service) {
+    QuiesceServiceDependency();
+  }
   if (stop_runtime) {
     StopRuntimeDependency();
+  }
+  if (stop_service) {
+    StopServiceDependency();
   }
 
   {
     std::scoped_lock lock(mutex_);
+    service_started_ = false;
     state_ = FirmwareBootState::kStopped;
   }
   condition_.notify_all();
@@ -202,7 +206,8 @@ common::Result<void> FirmwareBootCoordinator::ValidateDependencies() const {
                      "security state dependency is missing");
   }
   if (config_.service_enabled &&
-      (!dependencies_.start_service || !dependencies_.stop_service)) {
+      (!dependencies_.start_service || !dependencies_.quiesce_service ||
+       !dependencies_.stop_service)) {
     return BootError("E_BOOT_DEPENDENCY",
                      "service lifecycle dependency is missing");
   }
@@ -221,6 +226,13 @@ common::Result<void> FirmwareBootCoordinator::StartRuntimeDependency() {
 void FirmwareBootCoordinator::StopRuntimeDependency() noexcept {
   try {
     dependencies_.stop_runtime();
+  } catch (...) {
+  }
+}
+
+void FirmwareBootCoordinator::QuiesceServiceDependency() noexcept {
+  try {
+    dependencies_.quiesce_service();
   } catch (...) {
   }
 }

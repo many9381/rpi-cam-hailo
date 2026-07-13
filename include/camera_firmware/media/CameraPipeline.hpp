@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,6 +40,8 @@ class CameraPipeline {
   void Stop();
 
   [[nodiscard]] std::vector<CameraPipelineStatus> Status() const;
+  [[nodiscard]] std::vector<CameraPipelineStatus> Status(
+      std::chrono::milliseconds maximum_snapshot_age) const;
 
  private:
   struct Impl;

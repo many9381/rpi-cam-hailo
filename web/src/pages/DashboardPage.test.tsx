@@ -85,19 +85,17 @@ describe('DashboardPage', () => {
     },
   );
 
-  it('composes the authenticated camera preview with operational data', async () => {
+  it('composes the authenticated MJPEG preview with operational data', async () => {
     const user = userEvent.setup();
     const refresh = vi.fn(async () => undefined);
     render(<DashboardPage client={client} controller={{ ...controller, refresh }} />);
 
     expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
-    expect(screen.getByText('Loading snapshot...')).toBeVisible();
+    expect(screen.getByText('Connecting preview...')).toBeVisible();
     expect(screen.getByRole('combobox', { name: /camera/i })).toHaveValue('cam-a');
-    expect(client.getBlob).toHaveBeenCalledWith(
-      '/api/v1/cameras/cam-a/snapshot.jpg',
-      expect.any(AbortSignal),
+    expect(screen.getByRole('img', { name: /cam-a camera preview/i })).toHaveAttribute(
+      'src', '/api/v1/cameras/cam-a/preview.mjpeg?generation=1',
     );
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.queryByRole('video')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /refresh operational data/i }));
     expect(refresh).toHaveBeenCalledOnce();

@@ -25,7 +25,7 @@ const viewHeadings: Record<OperationalView, { title: string; subtitle: string }>
   },
   cameras: {
     title: 'Cameras',
-    subtitle: 'Live snapshots and camera inventory',
+    subtitle: 'Live preview and camera inventory',
   },
   ai: {
     title: 'AI inference',
@@ -104,7 +104,7 @@ export function DashboardPage({
         <p className="stale-notice" role="status">Showing the last available status.</p>
       )}
       {showPreview && (
-        <CameraPreview client={client} cameras={data.cameras}
+        <CameraPreview cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
           onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot} />
       )}

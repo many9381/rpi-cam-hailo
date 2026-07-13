@@ -2,6 +2,8 @@ add_library(camera_firmware_media STATIC
     CameraPipeline.cpp
     EncodedRing.cpp
     FrameLease.cpp
+    JpegEncoder.cpp
+    MjpegFrameHub.cpp
     SnapshotTap.cpp
 )
 

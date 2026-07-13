@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <csignal>
 #include <cstdlib>
@@ -230,6 +231,30 @@ int RunFirmware(const std::string& config_path) {
       [&runtime](const std::string& camera_id) {
         return runtime.Snapshot(camera_id);
       };
+  service_args.preview_stream_callback =
+      [&runtime](const std::string& camera_id)
+          -> camera_firmware::common::Result<
+              camera_firmware::service::MjpegPreviewStreamCallback> {
+        auto opened = runtime.OpenMjpegPreview(camera_id);
+        if (!opened.ok()) {
+          return camera_firmware::common::Result<
+              camera_firmware::service::MjpegPreviewStreamCallback>::Err(
+              opened.error());
+        }
+        auto reader = std::move(opened).value();
+        camera_firmware::service::MjpegPreviewStreamCallback stream =
+            [reader = std::move(reader)](char* output,
+                                         std::size_t capacity) mutable {
+              if (output == nullptr) {
+                reader.reset();
+                return std::size_t{0};
+              }
+              return reader ? reader->Read(output, capacity) : std::size_t{0};
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
+            std::move(stream));
+      };
 
   std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
   if (cfg.value().security.enabled) {
@@ -258,6 +283,9 @@ int RunFirmware(const std::string& config_path) {
         service_args.runtime_start_callback = std::move(start_runtime);
         return service.Init(service_args);
       };
+  boot_dependencies.quiesce_service = [&service] {
+    service.BeginShutdown();
+  };
   boot_dependencies.stop_service = [&service] { service.Stop(); };
 
   camera_firmware::boot::FirmwareBootCoordinator boot_coordinator(
