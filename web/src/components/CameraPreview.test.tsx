@@ -1,15 +1,19 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { CameraApiClient, DetectionSnapshot } from '../api/types';
-import type { SnapshotController } from '../hooks/useSnapshot';
+import type { DetectionSnapshot } from '../api/types';
+import type { MjpegPreviewController } from '../hooks/useMjpegPreview';
 import { CameraPreview } from './CameraPreview';
 
-let snapshotController: SnapshotController;
+let previewController: MjpegPreviewController;
+let previewCameraId = '';
 
-vi.mock('../hooks/useSnapshot', () => ({
-  useSnapshot: () => snapshotController,
+vi.mock('../hooks/useMjpegPreview', () => ({
+  useMjpegPreview: (cameraId: string) => {
+    previewCameraId = cameraId;
+    return previewController;
+  },
 }));
 
 vi.mock('./DetectionOverlay', () => ({
@@ -22,111 +26,150 @@ vi.mock('./DetectionOverlay', () => ({
   ),
 }));
 
-const client: CameraApiClient = {
-  getJson: vi.fn(), postJson: vi.fn(), getBlob: vi.fn(),
-  setUnauthorizedHandler: vi.fn(),
-};
 const detections: DetectionSnapshot = { events: [] };
 const cameras = [
   { id: 'cam-a', state: 'streaming', snapshot_available: true },
   { id: 'cam-b', state: 'starting', snapshot_available: false },
 ];
 
+const controller = (overrides: Partial<MjpegPreviewController> = {}): MjpegPreviewController => ({
+  state: 'connecting',
+  streamUrl: '/api/v1/cameras/cam-a/preview.mjpeg?generation=1',
+  onLoad: vi.fn(() => true),
+  onError: vi.fn(() => true),
+  reconnect: vi.fn(),
+  ...overrides,
+});
+
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
 });
 
 describe('CameraPreview', () => {
-  it('renders a stable loading stage, camera selector, and manual refresh', async () => {
+  it('renders the stable connecting stage, selector, and reconnect control', async () => {
     const user = userEvent.setup();
-    const refresh = vi.fn(async () => undefined);
-    snapshotController = { state: 'loading', objectUrl: null, refresh };
+    previewController = controller();
     const selectCamera = vi.fn();
-
-    const { container } = render(<CameraPreview client={client} cameras={cameras}
+    const { container } = render(<CameraPreview cameras={cameras}
       selectedCameraId="cam-a" onSelectCamera={selectCamera} snapshot={detections} />);
 
-    expect(screen.getByText('Loading snapshot...')).toBeVisible();
+    expect(screen.getByText('Connecting preview...')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('Connecting preview...');
     expect(container.querySelector('.camera-stage')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /cam-a camera preview/i }))
+      .toHaveClass('camera-preview-image');
     await user.selectOptions(screen.getByRole('combobox', { name: /camera/i }), 'cam-b');
     expect(selectCamera).toHaveBeenCalledWith('cam-b');
-    await user.click(screen.getByRole('button', { name: /refresh snapshot/i }));
-    expect(refresh).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: 'Reconnect preview' }));
+    expect(previewController.reconnect).toHaveBeenCalledOnce();
   });
 
-  it('aligns the overlay to the contained image rectangle for a square JPEG', () => {
-    snapshotController = { state: 'ready', objectUrl: 'blob:square', refresh: vi.fn() };
-    render(<CameraPreview client={client} cameras={cameras}
-      selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
-    const image = screen.getByRole('img', { name: /cam-a snapshot/i });
-    Object.defineProperties(image, {
-      naturalWidth: { configurable: true, value: 800 },
-      naturalHeight: { configurable: true, value: 800 },
+  it('starts MJPEG preview when snapshot compatibility is unavailable', () => {
+    previewController = controller({
+      streamUrl: '/api/v1/cameras/cam-b/preview.mjpeg?generation=1',
     });
+    render(<CameraPreview cameras={cameras}
+      selectedCameraId="cam-b" onSelectCamera={() => undefined} snapshot={detections} />);
 
-    fireEvent.load(image);
-
-    expect(screen.getByTestId('detection-overlay')).toHaveAttribute('data-image-width', '800');
-    expect(screen.getByTestId('detection-overlay')).toHaveAttribute('data-image-height', '800');
-    expect(screen.getByTestId('detection-overlay')).not.toHaveAttribute('style');
+    expect(previewCameraId).toBe('cam-b');
+    expect(screen.getByRole('img', { name: /cam-b camera preview/i })).toHaveAttribute(
+      'src', '/api/v1/cameras/cam-b/preview.mjpeg?generation=1',
+    );
+    expect(screen.getByRole('button', { name: 'Reconnect preview' })).toBeEnabled();
   });
 
-  it('keys intrinsic dimensions to each replacement object URL', () => {
-    snapshotController = { state: 'ready', objectUrl: 'blob:square', refresh: vi.fn() };
-    const view = render(<CameraPreview client={client} cameras={cameras}
+  it('keeps the image hidden until load and updates overlay dimensions per generation', () => {
+    previewController = controller();
+    const view = render(<CameraPreview cameras={cameras}
       selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
     const preview = within(view.container);
-    const square = preview.getByRole('img', { name: /cam-a snapshot/i });
-    Object.defineProperties(square, {
+    const firstImage = preview.getByRole('img', { name: /camera preview/i });
+    expect(firstImage).not.toHaveClass('is-loaded');
+    Object.defineProperties(firstImage, {
       naturalWidth: { configurable: true, value: 800 },
       naturalHeight: { configurable: true, value: 800 },
     });
-    fireEvent.load(square);
+    fireEvent.load(firstImage);
+    expect(firstImage).toHaveClass('is-loaded');
     expect(preview.getByTestId('detection-overlay')).toHaveAttribute('data-image-width', '800');
     expect(preview.getByTestId('detection-overlay')).toHaveAttribute('data-image-height', '800');
 
-    snapshotController = { state: 'ready', objectUrl: 'blob:wide', refresh: vi.fn() };
-    view.rerender(<CameraPreview client={client} cameras={cameras}
+    previewController = controller({
+      state: 'reconnecting',
+      streamUrl: '/api/v1/cameras/cam-a/preview.mjpeg?generation=2',
+    });
+    view.rerender(<CameraPreview cameras={cameras}
       selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
     expect(preview.queryByTestId('detection-overlay')).not.toBeInTheDocument();
+    const secondImage = preview.getByRole('img', { name: /camera preview/i });
+    expect(secondImage).not.toHaveClass('is-loaded');
+  });
 
-    const wide = preview.getByRole('img', { name: /cam-a snapshot/i });
-    expect(wide).not.toBe(square);
-    Object.defineProperties(wide, {
+  it('ignores stale events from a detached image before changing current display state', () => {
+    const staleLoad = vi.fn(() => false);
+    const staleError = vi.fn(() => false);
+    previewController = controller({ onLoad: staleLoad, onError: staleError });
+    const view = render(<CameraPreview cameras={cameras}
+      selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
+    const oldImage = screen.getByRole('img', {
+      name: /camera preview/i,
+    }) as HTMLImageElement;
+    Object.defineProperties(oldImage, {
+      naturalWidth: { configurable: true, value: 800 },
+      naturalHeight: { configurable: true, value: 800 },
+    });
+    const propsKey = Object.keys(oldImage).find((key) => key.startsWith('__reactProps$'));
+    expect(propsKey).toBeDefined();
+    const staleHandlers = (oldImage as unknown as Record<string, {
+      onLoad(event: { currentTarget: HTMLImageElement }): void;
+      onError(): void;
+    }>)[propsKey!];
+
+    previewController = controller({
+      state: 'reconnecting',
+      streamUrl: '/api/v1/cameras/cam-a/preview.mjpeg?generation=2',
+      onLoad: vi.fn(() => true),
+      onError: vi.fn(() => true),
+    });
+    view.rerender(<CameraPreview cameras={cameras}
+      selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
+    const currentImage = screen.getByRole('img', {
+      name: /camera preview/i,
+    }) as HTMLImageElement;
+    Object.defineProperties(currentImage, {
       naturalWidth: { configurable: true, value: 1600 },
       naturalHeight: { configurable: true, value: 900 },
     });
-    fireEvent.load(wide);
-    expect(preview.getByTestId('detection-overlay')).toHaveAttribute('data-image-width', '1600');
-    expect(preview.getByTestId('detection-overlay')).toHaveAttribute('data-image-height', '900');
+    fireEvent.load(currentImage);
+
+    act(() => {
+      staleHandlers.onLoad({ currentTarget: oldImage });
+      staleHandlers.onError();
+    });
+
+    expect(staleLoad).toHaveBeenCalledOnce();
+    expect(staleError).toHaveBeenCalledOnce();
+    expect(currentImage).toHaveClass('is-loaded');
+    expect(screen.getByTestId('detection-overlay')).toHaveAttribute('data-image-width', '1600');
+    expect(screen.getByTestId('detection-overlay')).toHaveAttribute('data-image-height', '900');
   });
 
-  it('hides a JPEG that fails to decode and keeps manual refresh available', async () => {
-    const user = userEvent.setup();
-    const refresh = vi.fn(async () => undefined);
-    snapshotController = { state: 'ready', objectUrl: 'blob:invalid-jpeg', refresh };
-    const view = render(<CameraPreview client={client} cameras={cameras}
+  it('removes the image while reconnecting and reports only the concise state', () => {
+    previewController = controller({ state: 'reconnecting', streamUrl: '' });
+    const { container } = render(<CameraPreview cameras={cameras}
       selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
-    const preview = within(view.container);
 
-    fireEvent.error(preview.getByRole('img', { name: /cam-a snapshot/i }));
-
-    expect(preview.queryByRole('img', { name: /cam-a snapshot/i })).not.toBeInTheDocument();
-    expect(preview.queryByTestId('detection-overlay')).not.toBeInTheDocument();
-    expect(preview.getByText('Snapshot unavailable')).toBeVisible();
-    await user.click(preview.getByRole('button', { name: /refresh snapshot/i }));
-    expect(refresh).toHaveBeenCalledOnce();
+    expect(within(container).queryByRole('img', { name: /camera preview/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Preview reconnecting...')).toBeVisible();
+    expect(screen.queryByText(/snapshot unavailable/i)).not.toBeInTheDocument();
   });
 
-  it('shows explicit unavailable surfaces for failed and unavailable cameras', () => {
-    snapshotController = { state: 'unavailable', objectUrl: null, refresh: vi.fn() };
-    const view = render(<CameraPreview client={client} cameras={cameras}
-      selectedCameraId="cam-a" onSelectCamera={() => undefined} snapshot={detections} />);
-    expect(screen.getByText('Snapshot unavailable')).toBeVisible();
+  it('announces a concise no-camera state without a blank stage', () => {
+    previewController = controller({ state: 'unavailable', streamUrl: '' });
+    render(<CameraPreview cameras={[]}
+      selectedCameraId="" onSelectCamera={() => undefined} snapshot={detections} />);
 
-    view.rerender(<CameraPreview client={client} cameras={cameras}
-      selectedCameraId="cam-b" onSelectCamera={() => undefined} snapshot={detections} />);
-    expect(screen.getByText('Snapshot unavailable for this camera')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('No camera selected.');
+    expect(screen.getByRole('button', { name: 'Reconnect preview' })).toBeDisabled();
   });
 });

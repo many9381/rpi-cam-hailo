@@ -1,15 +1,24 @@
 #include "camera_firmware/service/ServiceApp.hpp"
+#include "camera_firmware/boot/FirmwareBootCoordinator.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,6 +32,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <drogon/HttpAppFramework.h>
 #include <drogon/HttpClient.h>
 #include <drogon/HttpRequest.h>
 #include <gtest/gtest.h>
@@ -169,8 +179,17 @@ void ExpectSecurityHeaders(const drogon::HttpResponsePtr& response) {
 }
 
 struct RawHttpsResponse {
+  enum class ReadEnd {
+    kEof,
+    kByteLimit,
+    kComplete,
+    kTimeout,
+    kTlsError,
+  };
+
   int status{-1};
   std::string bytes;
+  ReadEnd read_end{ReadEnd::kTlsError};
 
   [[nodiscard]] std::string Header(std::string_view name) const {
     std::string prefix(name);
@@ -209,71 +228,133 @@ struct RawHttpsResponse {
   }
 };
 
-RawHttpsResponse RawHttpsExchange(std::uint16_t port,
-                                  std::string_view request) {
-  const int socket_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-  if (socket_fd < 0) {
-    return {};
-  }
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (::connect(socket_fd, reinterpret_cast<sockaddr*>(&address),
-                sizeof(address)) != 0) {
-    (void)::close(socket_fd);
-    return {};
-  }
-
-  SSL_CTX* context = ::SSL_CTX_new(::TLS_client_method());
-  SSL* ssl = context == nullptr ? nullptr : ::SSL_new(context);
-  if (ssl == nullptr) {
-    if (context != nullptr) {
-      ::SSL_CTX_free(context);
+class ScopedSocket {
+ public:
+  explicit ScopedSocket(int fd) noexcept : fd_(fd) {}
+  ~ScopedSocket() {
+    if (fd_ >= 0) {
+      (void)::close(fd_);
     }
-    (void)::close(socket_fd);
-    return {};
-  }
-  ::SSL_CTX_set_verify(context, SSL_VERIFY_NONE, nullptr);
-  ::SSL_set_fd(ssl, socket_fd);
-  if (::SSL_connect(ssl) != 1) {
-    ::SSL_free(ssl);
-    ::SSL_CTX_free(context);
-    (void)::close(socket_fd);
-    return {};
   }
 
-  std::size_t written = 0U;
-  while (written < request.size()) {
-    const int count = ::SSL_write(
-        ssl, request.data() + written,
-        static_cast<int>(request.size() - written));
-    if (count <= 0) {
-      break;
+  ScopedSocket(const ScopedSocket&) = delete;
+  ScopedSocket& operator=(const ScopedSocket&) = delete;
+
+  [[nodiscard]] int get() const noexcept { return fd_; }
+
+ private:
+  int fd_{-1};
+};
+
+struct ChunkedBodyParseResult {
+  std::string decoded;
+  std::optional<std::size_t> complete_encoded_size;
+  bool valid{true};
+};
+
+ChunkedBodyParseResult ParseAvailableChunkedBody(std::string_view encoded) {
+  ChunkedBodyParseResult result;
+  std::size_t offset = 0U;
+  while (offset < encoded.size()) {
+    const std::size_t size_end = encoded.find("\r\n", offset);
+    if (size_end == std::string_view::npos) {
+      return result;
     }
-    written += static_cast<std::size_t>(count);
-  }
-
-  RawHttpsResponse response;
-  std::array<char, 2048> buffer{};
-  for (;;) {
-    const int count =
-        ::SSL_read(ssl, buffer.data(), static_cast<int>(buffer.size()));
-    if (count <= 0) {
-      break;
+    std::string_view size_text = encoded.substr(offset, size_end - offset);
+    const std::size_t extension = size_text.find(';');
+    if (extension != std::string_view::npos) {
+      size_text = size_text.substr(0U, extension);
     }
-    response.bytes.append(buffer.data(), static_cast<std::size_t>(count));
-  }
-  (void)::SSL_shutdown(ssl);
-  ::SSL_free(ssl);
-  ::SSL_CTX_free(context);
-  (void)::close(socket_fd);
+    std::size_t chunk_size = 0U;
+    const auto parsed = std::from_chars(size_text.data(),
+                                        size_text.data() + size_text.size(),
+                                        chunk_size, 16);
+    if (size_text.empty() || parsed.ec != std::errc{} ||
+        parsed.ptr != size_text.data() + size_text.size()) {
+      result.valid = false;
+      return result;
+    }
 
+    const std::size_t data_begin = size_end + 2U;
+    if (chunk_size == 0U) {
+      std::size_t trailer_begin = data_begin;
+      for (;;) {
+        const std::size_t trailer_end = encoded.find("\r\n", trailer_begin);
+        if (trailer_end == std::string_view::npos) {
+          return result;
+        }
+        if (trailer_end == trailer_begin) {
+          result.complete_encoded_size = trailer_end + 2U;
+          return result;
+        }
+        trailer_begin = trailer_end + 2U;
+      }
+    }
+    if (data_begin > encoded.size() ||
+        chunk_size > encoded.size() - data_begin) {
+      return result;
+    }
+    const std::size_t data_end = data_begin + chunk_size;
+    if (encoded.size() - data_end < 2U) {
+      return result;
+    }
+    if (encoded.substr(data_end, 2U) != "\r\n") {
+      result.valid = false;
+      return result;
+    }
+    result.decoded.append(encoded.substr(data_begin, chunk_size));
+    offset = data_end + 2U;
+  }
+  return result;
+}
+
+std::optional<std::size_t> CompleteRawResponseSize(
+    const RawHttpsResponse& response) {
+  const std::size_t header_end = response.bytes.find("\r\n\r\n");
+  if (header_end == std::string::npos) {
+    return std::nullopt;
+  }
+  const std::size_t body_begin = header_end + 4U;
+  std::string transfer_encoding = response.Header("Transfer-Encoding");
+  std::transform(transfer_encoding.begin(), transfer_encoding.end(),
+                 transfer_encoding.begin(), [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  if (transfer_encoding == "chunked") {
+    const std::string_view encoded(response.bytes.data() + body_begin,
+                                   response.bytes.size() - body_begin);
+    const auto parsed = ParseAvailableChunkedBody(encoded);
+    if (!parsed.valid || !parsed.complete_encoded_size.has_value()) {
+      return std::nullopt;
+    }
+    return body_begin + *parsed.complete_encoded_size;
+  }
+
+  const std::string content_length = response.Header("Content-Length");
+  if (content_length.empty()) {
+    return std::nullopt;
+  }
+  std::size_t body_size = 0U;
+  const auto parsed = std::from_chars(
+      content_length.data(), content_length.data() + content_length.size(),
+      body_size);
+  if (parsed.ec != std::errc{} ||
+      parsed.ptr != content_length.data() + content_length.size() ||
+      body_size > std::numeric_limits<std::size_t>::max() - body_begin) {
+    return std::nullopt;
+  }
+  const std::size_t complete_size = body_begin + body_size;
+  return response.bytes.size() >= complete_size
+             ? std::optional<std::size_t>(complete_size)
+             : std::nullopt;
+}
+
+void ParseRawStatus(RawHttpsResponse& response) {
   const std::size_t first_space = response.bytes.find(' ');
   if (!response.bytes.starts_with("HTTP/") ||
       first_space == std::string::npos ||
       first_space + 4U > response.bytes.size()) {
-    return response;
+    return;
   }
   try {
     response.status =
@@ -281,20 +362,212 @@ RawHttpsResponse RawHttpsExchange(std::uint16_t port,
   } catch (...) {
     response.status = -1;
   }
-  return response;
+}
+
+class RawHttpsConnection {
+ public:
+  explicit RawHttpsConnection(
+      std::uint16_t port,
+      std::chrono::milliseconds receive_timeout = std::chrono::seconds(15))
+      : socket_fd_(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)),
+        context_(::SSL_CTX_new(::TLS_client_method()), &::SSL_CTX_free),
+        ssl_(context_ ? ::SSL_new(context_.get()) : nullptr, &::SSL_free) {
+    if (socket_fd_.get() < 0 || !ssl_ ||
+        !SetReceiveTimeout(receive_timeout)) {
+      return;
+    }
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(socket_fd_.get(), reinterpret_cast<sockaddr*>(&address),
+                  sizeof(address)) != 0) {
+      return;
+    }
+    ::SSL_CTX_set_verify(context_.get(), SSL_VERIFY_NONE, nullptr);
+    ::SSL_set_fd(ssl_.get(), socket_fd_.get());
+    connected_ = ::SSL_connect(ssl_.get()) == 1;
+  }
+
+  ~RawHttpsConnection() {
+    if (connected_) {
+      (void)::SSL_shutdown(ssl_.get());
+    }
+  }
+
+  RawHttpsConnection(const RawHttpsConnection&) = delete;
+  RawHttpsConnection& operator=(const RawHttpsConnection&) = delete;
+
+  [[nodiscard]] bool connected() const noexcept { return connected_; }
+
+  RawHttpsResponse Exchange(
+      std::string_view request,
+      std::size_t receive_byte_limit =
+          std::numeric_limits<std::size_t>::max(),
+      std::chrono::milliseconds receive_timeout = std::chrono::seconds(15),
+      bool stop_at_complete_response = false) {
+    RawHttpsResponse response;
+    if (!connected_) {
+      return response;
+    }
+    if (!SetReceiveTimeout(receive_timeout)) {
+      connected_ = false;
+      return response;
+    }
+
+    std::size_t written = 0U;
+    while (written < request.size()) {
+      const std::size_t write_size =
+          std::min<std::size_t>(request.size() - written,
+                                std::numeric_limits<int>::max());
+      const int count = ::SSL_write(ssl_.get(), request.data() + written,
+                                    static_cast<int>(write_size));
+      if (count <= 0) {
+        connected_ = false;
+        return response;
+      }
+      written += static_cast<std::size_t>(count);
+    }
+
+    std::array<char, 2048> buffer{};
+    for (;;) {
+      if (stop_at_complete_response) {
+        const auto complete_size = CompleteRawResponseSize(response);
+        if (complete_size.has_value()) {
+          if (*complete_size < response.bytes.size()) {
+            response.bytes.resize(*complete_size);
+            connected_ = false;
+          }
+          response.read_end = RawHttpsResponse::ReadEnd::kComplete;
+          break;
+        }
+      }
+      if (response.bytes.size() >= receive_byte_limit) {
+        if (response.bytes.size() > receive_byte_limit) {
+          response.bytes.resize(receive_byte_limit);
+        }
+        response.read_end = RawHttpsResponse::ReadEnd::kByteLimit;
+        connected_ = false;
+        break;
+      }
+      const std::size_t remaining =
+          receive_byte_limit - response.bytes.size();
+      const auto read_capacity = static_cast<int>(
+          std::min<std::size_t>(buffer.size(), remaining));
+      const int count =
+          ::SSL_read(ssl_.get(), buffer.data(), read_capacity);
+      if (count > 0) {
+        response.bytes.append(buffer.data(), static_cast<std::size_t>(count));
+        continue;
+      }
+
+      const int socket_error = errno;
+      const int ssl_error = ::SSL_get_error(ssl_.get(), count);
+      if (ssl_error == SSL_ERROR_ZERO_RETURN ||
+          (ssl_error == SSL_ERROR_SYSCALL && count == 0 &&
+           socket_error == 0)) {
+        response.read_end = RawHttpsResponse::ReadEnd::kEof;
+        connected_ = false;
+      } else if (ssl_error == SSL_ERROR_WANT_READ ||
+                 ssl_error == SSL_ERROR_WANT_WRITE ||
+                 (ssl_error == SSL_ERROR_SYSCALL &&
+                  (socket_error == EAGAIN || socket_error == EWOULDBLOCK ||
+                   socket_error == ETIMEDOUT))) {
+        response.read_end = RawHttpsResponse::ReadEnd::kTimeout;
+        connected_ = false;
+      } else {
+        response.read_end = RawHttpsResponse::ReadEnd::kTlsError;
+        connected_ = false;
+      }
+      break;
+    }
+    ParseRawStatus(response);
+    return response;
+  }
+
+  RawHttpsResponse Get(
+      std::string_view path,
+      const std::vector<std::string>& cookie_fields,
+      std::size_t receive_byte_limit =
+          std::numeric_limits<std::size_t>::max(),
+      std::chrono::milliseconds receive_timeout = std::chrono::seconds(15),
+      bool stop_at_complete_response = true) {
+    std::string request = "GET " + std::string(path) +
+                          " HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+    for (const auto& field : cookie_fields) {
+      request += "Cookie: " + field + "\r\n";
+    }
+    request += "Connection: keep-alive\r\n\r\n";
+    return Exchange(request, receive_byte_limit, receive_timeout,
+                    stop_at_complete_response);
+  }
+
+ private:
+  bool SetReceiveTimeout(std::chrono::milliseconds receive_timeout) {
+    const auto timeout_milliseconds =
+        std::max<std::int64_t>(1, receive_timeout.count());
+    const timeval socket_timeout{
+        .tv_sec = static_cast<time_t>(timeout_milliseconds / 1000),
+        .tv_usec = static_cast<suseconds_t>(
+            (timeout_milliseconds % 1000) * 1000)};
+    return socket_fd_.get() >= 0 &&
+           ::setsockopt(socket_fd_.get(), SOL_SOCKET, SO_RCVTIMEO,
+                        &socket_timeout, sizeof(socket_timeout)) == 0;
+  }
+
+  ScopedSocket socket_fd_;
+  std::unique_ptr<SSL_CTX, decltype(&::SSL_CTX_free)> context_;
+  std::unique_ptr<SSL, decltype(&::SSL_free)> ssl_;
+  bool connected_{false};
+};
+
+RawHttpsResponse RawHttpsExchange(std::uint16_t port,
+                                  std::string_view request,
+                                  std::size_t receive_byte_limit =
+                                      std::numeric_limits<std::size_t>::max(),
+                                  std::chrono::milliseconds receive_timeout =
+                                      std::chrono::seconds(15)) {
+  RawHttpsConnection connection(port, receive_timeout);
+  return connection.Exchange(request, receive_byte_limit, receive_timeout);
+}
+
+std::optional<std::string> DecodeAvailableRawBody(
+    const RawHttpsResponse& response) {
+  const std::size_t header_end = response.bytes.find("\r\n\r\n");
+  if (header_end == std::string::npos) {
+    return std::nullopt;
+  }
+  const std::string_view encoded(response.bytes.data() + header_end + 4U,
+                                 response.bytes.size() - header_end - 4U);
+  std::string transfer_encoding = response.Header("Transfer-Encoding");
+  std::transform(transfer_encoding.begin(), transfer_encoding.end(),
+                 transfer_encoding.begin(), [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  if (transfer_encoding != "chunked") {
+    return std::string(encoded);
+  }
+  auto parsed = ParseAvailableChunkedBody(encoded);
+  if (!parsed.valid) {
+    return std::nullopt;
+  }
+  return std::move(parsed.decoded);
 }
 
 RawHttpsResponse RawHttpsGet(
     std::uint16_t port,
     std::string_view path,
-    const std::vector<std::string>& cookie_fields) {
+    const std::vector<std::string>& cookie_fields,
+    std::size_t receive_byte_limit =
+        std::numeric_limits<std::size_t>::max(),
+    std::chrono::milliseconds receive_timeout = std::chrono::seconds(15)) {
   std::string request = "GET " + std::string(path) +
                         " HTTP/1.1\r\nHost: 127.0.0.1\r\n";
   for (const auto& field : cookie_fields) {
     request += "Cookie: " + field + "\r\n";
   }
   request += "Connection: close\r\n\r\n";
-  return RawHttpsExchange(port, request);
+  return RawHttpsExchange(port, request, receive_byte_limit, receive_timeout);
 }
 
 void ExpectRawSecurityHeaders(const RawHttpsResponse& response) {
@@ -310,12 +583,308 @@ void ExpectRawSecurityHeaders(const RawHttpsResponse& response) {
             "frame-ancestors 'none'");
 }
 
+class DeterministicMjpegProvider {
+ public:
+  static constexpr std::size_t kMaximumReaders = 2U;
+
+  explicit DeterministicMjpegProvider(std::string jpeg_payload)
+      : state_(std::make_shared<State>(std::move(jpeg_payload))) {}
+
+  camera_firmware::common::Result<
+      camera_firmware::service::MjpegPreviewStreamCallback>
+  Open(const std::string& camera_id) {
+    if (camera_id.starts_with("loop-probe-")) {
+      state_->probe_opens.fetch_add(1U, std::memory_order_relaxed);
+      auto reader = std::make_shared<ProbeReader>();
+      auto state = state_;
+      camera_firmware::service::MjpegPreviewStreamCallback stream =
+          [state = std::move(state), camera_id,
+           reader = std::move(reader)](char* output, std::size_t capacity) {
+            if (output == nullptr) {
+              return std::size_t{0};
+            }
+            if (!reader->recorded.exchange(true, std::memory_order_acq_rel)) {
+              std::scoped_lock lock(state->mutex);
+              state->probe_assignments[camera_id] =
+                  std::this_thread::get_id();
+            }
+            std::scoped_lock reader_lock(reader->mutex);
+            if (reader->offset == state->part.size()) {
+              return std::size_t{0};
+            }
+            const std::size_t count =
+                std::min(capacity, state->part.size() - reader->offset);
+            std::copy_n(state->part.data() + reader->offset, count, output);
+            reader->offset += count;
+            return count;
+          };
+      return camera_firmware::common::Result<
+          camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
+          std::move(stream));
+    }
+
+    state_->provider_calls.fetch_add(1U, std::memory_order_relaxed);
+    if (camera_id != "imx708-main") {
+      return camera_firmware::common::Result<
+          camera_firmware::service::MjpegPreviewStreamCallback>::Err(
+          {"E_PREVIEW_UNAVAILABLE", "integration camera unavailable"});
+    }
+    if (!state_->blocking_mode.load(std::memory_order_acquire)) {
+      return camera_firmware::common::Result<
+          camera_firmware::service::MjpegPreviewStreamCallback>::Err(
+          {"E_PREVIEW_UNAVAILABLE", "integration provider not blocking"});
+    }
+
+    std::size_t active =
+        state_->active_readers.load(std::memory_order_acquire);
+    while (active < kMaximumReaders &&
+           !state_->active_readers.compare_exchange_weak(
+               active, active + 1U, std::memory_order_acq_rel,
+               std::memory_order_acquire)) {
+    }
+    if (active >= kMaximumReaders) {
+      return camera_firmware::common::Result<
+          camera_firmware::service::MjpegPreviewStreamCallback>::Err(
+          {"E_PREVIEW_CAPACITY", "integration reader capacity full"});
+    }
+
+    auto reader = std::make_shared<Reader>();
+    reader->deadline = std::chrono::steady_clock::now() +
+                       std::chrono::seconds(12);
+    auto state = state_;
+    camera_firmware::service::MjpegPreviewStreamCallback stream =
+        [state = std::move(state), reader = std::move(reader)](
+            char* output, std::size_t capacity) {
+          if (output == nullptr) {
+            if (!reader->cleaned.exchange(true, std::memory_order_acq_rel)) {
+              state->active_readers.fetch_sub(1U, std::memory_order_acq_rel);
+              state->cleanup_calls.fetch_add(1U, std::memory_order_release);
+              state->changed.notify_all();
+            }
+            return std::size_t{0};
+          }
+          if (reader->cleaned.load(std::memory_order_acquire)) {
+            return std::size_t{0};
+          }
+
+          bool entered_gate = false;
+          {
+            std::scoped_lock reader_lock(reader->mutex);
+            if (reader->offset < state->part.size()) {
+              const std::size_t count =
+                  std::min(capacity, state->part.size() - reader->offset);
+              std::copy_n(state->part.data() + reader->offset, count, output);
+              reader->offset += count;
+              return count;
+            }
+            if (!reader->gate_entered) {
+              reader->gate_entered = true;
+              entered_gate = true;
+            }
+          }
+          if (entered_gate) {
+            {
+              std::scoped_lock lock(state->mutex);
+              state->blocked_threads.push_back(std::this_thread::get_id());
+              state->blocked_callbacks.fetch_add(1U,
+                                                 std::memory_order_release);
+            }
+            state->changed.notify_all();
+          } else {
+            return std::size_t{0};
+          }
+
+          std::unique_lock lock(state->mutex);
+          const bool released = state->changed.wait_until(
+              lock, reader->deadline, [&] { return state->released; });
+          state->blocked_callbacks.fetch_sub(1U, std::memory_order_acq_rel);
+          if (!released) {
+            state->watchdog_timeouts.fetch_add(1U,
+                                               std::memory_order_release);
+          }
+          lock.unlock();
+          state->changed.notify_all();
+          return std::size_t{0};
+        };
+    return camera_firmware::common::Result<
+        camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
+        std::move(stream));
+  }
+
+  [[nodiscard]] const std::string& expected_part() const noexcept {
+    return state_->part;
+  }
+
+  [[nodiscard]] std::size_t provider_calls() const noexcept {
+    return state_->provider_calls.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::size_t probe_opens() const noexcept {
+    return state_->probe_opens.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::size_t active_readers() const noexcept {
+    return state_->active_readers.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::size_t blocked_callbacks() const noexcept {
+    return state_->blocked_callbacks.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::size_t cleanup_calls() const noexcept {
+    return state_->cleanup_calls.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::size_t watchdog_timeouts() const noexcept {
+    return state_->watchdog_timeouts.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] std::vector<std::thread::id> blocked_threads() const {
+    std::scoped_lock lock(state_->mutex);
+    return state_->blocked_threads;
+  }
+
+  [[nodiscard]] std::optional<std::thread::id> ProbeThreadFor(
+      const std::string& camera_id) const {
+    std::scoped_lock lock(state_->mutex);
+    const auto found = state_->probe_assignments.find(camera_id);
+    if (found == state_->probe_assignments.end()) {
+      return std::nullopt;
+    }
+    return found->second;
+  }
+
+  bool WaitForBlocked(std::size_t expected,
+                      std::chrono::steady_clock::time_point deadline) const {
+    std::unique_lock lock(state_->mutex);
+    return state_->changed.wait_until(lock, deadline, [&] {
+      return state_->blocked_callbacks.load(std::memory_order_acquire) ==
+             expected;
+    });
+  }
+
+  bool WaitForCleanup(std::size_t expected,
+                      std::chrono::steady_clock::time_point deadline) const {
+    std::unique_lock lock(state_->mutex);
+    return state_->changed.wait_until(lock, deadline, [&] {
+      return state_->cleanup_calls.load(std::memory_order_acquire) == expected &&
+             state_->active_readers.load(std::memory_order_acquire) == 0U &&
+             state_->blocked_callbacks.load(std::memory_order_acquire) == 0U;
+    });
+  }
+
+  void Release() {
+    {
+      std::scoped_lock lock(state_->mutex);
+      state_->released = true;
+    }
+    state_->changed.notify_all();
+  }
+
+  void EnableBlockingMode() {
+    state_->blocking_mode.store(true, std::memory_order_release);
+  }
+
+ private:
+  struct State {
+    explicit State(std::string jpeg_payload)
+        : part("--cf-frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+               std::to_string(jpeg_payload.size()) + "\r\n\r\n" +
+               std::move(jpeg_payload) + "\r\n") {}
+
+    const std::string part;
+    std::atomic<std::size_t> provider_calls{0U};
+    std::atomic<std::size_t> probe_opens{0U};
+    std::atomic<std::size_t> active_readers{0U};
+    std::atomic<std::size_t> blocked_callbacks{0U};
+    std::atomic<std::size_t> cleanup_calls{0U};
+    std::atomic<std::size_t> watchdog_timeouts{0U};
+    std::atomic<bool> blocking_mode{false};
+    mutable std::mutex mutex;
+    mutable std::condition_variable changed;
+    std::vector<std::thread::id> blocked_threads;
+    std::map<std::string, std::thread::id> probe_assignments;
+    bool released{false};
+  };
+
+  struct ProbeReader {
+    std::mutex mutex;
+    std::size_t offset{0U};
+    std::atomic<bool> recorded{false};
+  };
+
+  struct Reader {
+    std::mutex mutex;
+    std::size_t offset{0U};
+    bool gate_entered{false};
+    std::atomic<bool> cleaned{false};
+    std::chrono::steady_clock::time_point deadline;
+  };
+
+  std::shared_ptr<State> state_;
+};
+
+class PreviewReleaseGuard {
+ public:
+  explicit PreviewReleaseGuard(DeterministicMjpegProvider& provider)
+      : provider_(&provider) {}
+  ~PreviewReleaseGuard() { provider_->Release(); }
+
+  PreviewReleaseGuard(const PreviewReleaseGuard&) = delete;
+  PreviewReleaseGuard& operator=(const PreviewReleaseGuard&) = delete;
+
+ private:
+  DeterministicMjpegProvider* provider_;
+};
+
+void ExpectMjpegResponse(const RawHttpsResponse& response,
+                         std::string_view expected_part) {
+  EXPECT_EQ(response.status, 200);
+  EXPECT_EQ(response.Header("Content-Type"),
+            "multipart/x-mixed-replace; boundary=cf-frame");
+  EXPECT_EQ(response.Header("Content-Encoding"), "identity");
+  ExpectRawSecurityHeaders(response);
+  const auto body = DecodeAvailableRawBody(response);
+  ASSERT_TRUE(body.has_value());
+  EXPECT_EQ(*body, expected_part);
+}
+
+bool RunParentOwnedWatchdogCleanupProbe() {
+  std::filesystem::path path;
+  bool alarm_terminated = false;
+  {
+    TemporaryDirectory directory;
+    path = directory.path();
+    const pid_t child = ::fork();
+    if (child < 0) {
+      return false;
+    }
+    if (child == 0) {
+      (void)std::filesystem::create_directory(path / "child-started");
+      (void)::alarm(1U);
+      (void)::pause();
+      _exit(2);
+    }
+
+    int status = 0;
+    if (::waitpid(child, &status, 0) != child) {
+      return false;
+    }
+    alarm_terminated = WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM;
+  }
+  return alarm_terminated && !std::filesystem::exists(path);
+}
+
+TEST(HttpsAuthIntegrationTest, ParentOwnedWatchdogRemovesDirectoryAfterAlarm) {
+  EXPECT_TRUE(RunParentOwnedWatchdogCleanupProbe());
+}
+
 TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
+  TemporaryDirectory directory;
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
     (void)::alarm(20U);
-    TemporaryDirectory directory;
     const std::uint16_t port = ReserveLoopbackPort();
     const std::string origin =
         "https://127.0.0.1:" + std::to_string(port);
@@ -387,11 +956,11 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
 }
 
 TEST(HttpsAuthIntegrationTest, DefaultWebRootServesProductionArtifacts) {
+  TemporaryDirectory directory;
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
     (void)::alarm(20U);
-    TemporaryDirectory directory;
     const std::uint16_t port = ReserveLoopbackPort();
     camera_firmware::config::AppConfig config;
     config.security.enabled = false;
@@ -429,11 +998,11 @@ TEST(HttpsAuthIntegrationTest, DefaultWebRootServesProductionArtifacts) {
 }
 
 TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
+  TemporaryDirectory directory;
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
     (void)::alarm(20U);
-    TemporaryDirectory directory;
     const std::uint16_t port = ReserveLoopbackPort();
     const std::string origin =
         "https://127.0.0.1:" + std::to_string(port);
@@ -517,6 +1086,270 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
     }
     service.Stop();
     _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunAuthenticatedMjpegScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  const std::string jpeg_payload("\xff\xd8\xff\xd9", 4U);
+  DeterministicMjpegProvider preview_provider(jpeg_payload);
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.preview_stream_callback = [&](const std::string& camera_id) {
+    return preview_provider.Open(camera_id);
+  };
+
+  camera_firmware::service::ServiceApp service;
+  auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  EXPECT_EQ(drogon::app().getThreadNum(), 4U);
+  auto client = NewClient(port);
+
+  auto denied = Send(client, drogon::Get,
+                     "/api/v1/cameras/imx708-main/preview.mjpeg");
+  ExpectStatus(denied, drogon::k403Forbidden);
+  ExpectSecurityHeaders(denied.response);
+  EXPECT_EQ(preview_provider.provider_calls(), 0U);
+
+  const std::string setup_body =
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
+  auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
+                    setup_body, origin, {}, true);
+  ExpectStatus(setup, drogon::k200OK);
+  auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {},
+      true);
+  ExpectStatus(login, drogon::k200OK);
+  const auto& session_cookie = login.response->getCookie("camera_session");
+  ASSERT_FALSE(session_cookie.value().empty());
+  const std::string cookie = "camera_session=" + session_cookie.value();
+
+  struct MappedConnection {
+    std::unique_ptr<RawHttpsConnection> connection;
+    std::thread::id server_thread;
+  };
+  constexpr std::size_t kMaximumCandidates = 16U;
+  constexpr std::size_t kReceiveByteLimit = 4096U;
+  constexpr auto kFiniteReceiveTimeout = std::chrono::seconds(2);
+
+  {
+    constexpr std::size_t kTinyReceiveByteLimit = 64U;
+    const std::string tiny_limit_camera_id = "loop-probe-tiny-limit";
+    const std::string rejected_reuse_camera_id =
+        "loop-probe-rejected-reuse";
+    RawHttpsConnection tiny_limit_connection(port, kFiniteReceiveTimeout);
+    ASSERT_TRUE(tiny_limit_connection.connected());
+    const auto tiny_limit_response = tiny_limit_connection.Get(
+        "/api/v1/cameras/" + tiny_limit_camera_id + "/preview.mjpeg",
+        {cookie}, kTinyReceiveByteLimit, kFiniteReceiveTimeout, true);
+    EXPECT_EQ(tiny_limit_response.bytes.size(), kTinyReceiveByteLimit);
+    EXPECT_EQ(tiny_limit_response.read_end,
+              RawHttpsResponse::ReadEnd::kByteLimit);
+    EXPECT_FALSE(tiny_limit_connection.connected());
+    EXPECT_EQ(preview_provider.probe_opens(), 1U);
+
+    const std::size_t probe_opens_before_reuse =
+        preview_provider.probe_opens();
+    const auto rejected_reuse = tiny_limit_connection.Get(
+        "/api/v1/cameras/" + rejected_reuse_camera_id + "/preview.mjpeg",
+        {cookie}, kReceiveByteLimit, kFiniteReceiveTimeout, true);
+    EXPECT_TRUE(rejected_reuse.bytes.empty());
+    EXPECT_EQ(rejected_reuse.status, -1);
+    EXPECT_EQ(preview_provider.probe_opens(), probe_opens_before_reuse);
+    EXPECT_FALSE(preview_provider.ProbeThreadFor(rejected_reuse_camera_id)
+                     .has_value());
+  }
+
+  std::vector<MappedConnection> mapped_connections;
+  std::set<std::thread::id> mapped_threads;
+  for (std::size_t index = 0U;
+       index < kMaximumCandidates && mapped_connections.size() < 3U;
+       ++index) {
+    auto candidate =
+        std::make_unique<RawHttpsConnection>(port, kFiniteReceiveTimeout);
+    ASSERT_TRUE(candidate->connected());
+    const std::string camera_id = "loop-probe-" + std::to_string(index);
+    const auto probe = candidate->Get(
+        "/api/v1/cameras/" + camera_id + "/preview.mjpeg", {cookie},
+        kReceiveByteLimit, kFiniteReceiveTimeout, true);
+    EXPECT_EQ(probe.read_end, RawHttpsResponse::ReadEnd::kComplete);
+    EXPECT_TRUE(candidate->connected());
+    ExpectMjpegResponse(probe, preview_provider.expected_part());
+    const auto server_thread = preview_provider.ProbeThreadFor(camera_id);
+    ASSERT_TRUE(server_thread.has_value());
+    if (mapped_threads.insert(*server_thread).second) {
+      mapped_connections.push_back(
+          {std::move(candidate), *server_thread});
+    }
+  }
+  ASSERT_EQ(mapped_connections.size(), 3U);
+  EXPECT_EQ(preview_provider.active_readers(), 0U);
+  EXPECT_EQ(preview_provider.cleanup_calls(), 0U);
+  EXPECT_EQ(preview_provider.provider_calls(), 0U);
+  preview_provider.EnableBlockingMode();
+
+  constexpr auto kStreamReceiveTimeout = std::chrono::milliseconds(500);
+  const std::string preview_path =
+      "/api/v1/cameras/imx708-main/preview.mjpeg";
+  std::future<RawHttpsResponse> first_stream;
+  std::future<RawHttpsResponse> second_stream;
+  PreviewReleaseGuard release_on_exit(preview_provider);
+  first_stream = std::async(std::launch::async, [&] {
+    return mapped_connections[0].connection->Get(
+        preview_path, {cookie}, kReceiveByteLimit, kStreamReceiveTimeout,
+        false);
+  });
+  second_stream = std::async(std::launch::async, [&] {
+    return mapped_connections[1].connection->Get(
+        preview_path, {cookie}, kReceiveByteLimit, kStreamReceiveTimeout,
+        false);
+  });
+
+  const auto stream_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  ASSERT_TRUE(preview_provider.WaitForBlocked(2U, stream_deadline));
+  EXPECT_EQ(preview_provider.active_readers(), 2U);
+  EXPECT_EQ(preview_provider.blocked_callbacks(), 2U);
+  EXPECT_EQ(preview_provider.provider_calls(), 2U);
+  const auto blocked_threads = preview_provider.blocked_threads();
+  ASSERT_EQ(blocked_threads.size(), 2U);
+  EXPECT_NE(blocked_threads[0], blocked_threads[1]);
+  EXPECT_NE(std::find(blocked_threads.begin(), blocked_threads.end(),
+                      mapped_connections[0].server_thread),
+            blocked_threads.end());
+  EXPECT_NE(std::find(blocked_threads.begin(), blocked_threads.end(),
+                      mapped_connections[1].server_thread),
+            blocked_threads.end());
+
+  ASSERT_EQ(first_stream.wait_until(stream_deadline),
+            std::future_status::ready);
+  ASSERT_EQ(second_stream.wait_until(stream_deadline),
+            std::future_status::ready);
+  const RawHttpsResponse first_response = first_stream.get();
+  const RawHttpsResponse second_response = second_stream.get();
+  EXPECT_EQ(first_response.read_end, RawHttpsResponse::ReadEnd::kTimeout);
+  EXPECT_EQ(second_response.read_end, RawHttpsResponse::ReadEnd::kTimeout);
+  EXPECT_LT(first_response.bytes.size(), kReceiveByteLimit);
+  EXPECT_LT(second_response.bytes.size(), kReceiveByteLimit);
+  ExpectMjpegResponse(first_response, preview_provider.expected_part());
+  ExpectMjpegResponse(second_response, preview_provider.expected_part());
+
+  auto health = std::async(std::launch::async, [&] {
+    return mapped_connections[2].connection->Get(
+        "/api/v1/health", {cookie}, kReceiveByteLimit,
+        kFiniteReceiveTimeout, true);
+  });
+  const auto health_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const auto health_wait = health.wait_until(health_deadline);
+  if (health_wait != std::future_status::ready) {
+    preview_provider.Release();
+  }
+  ASSERT_EQ(health_wait, std::future_status::ready);
+  const RawHttpsResponse health_response = health.get();
+  EXPECT_EQ(health_response.read_end, RawHttpsResponse::ReadEnd::kComplete);
+  EXPECT_EQ(health_response.status, 200);
+  EXPECT_TRUE(mapped_connections[2].connection->connected());
+  ExpectRawSecurityHeaders(health_response);
+  EXPECT_EQ(preview_provider.blocked_callbacks(), 2U);
+  EXPECT_EQ(preview_provider.watchdog_timeouts(), 0U);
+
+  const auto capacity = mapped_connections[2].connection->Get(
+      preview_path, {cookie}, kReceiveByteLimit, kFiniteReceiveTimeout, true);
+  EXPECT_EQ(capacity.read_end, RawHttpsResponse::ReadEnd::kComplete);
+  EXPECT_EQ(capacity.status, 503);
+  EXPECT_TRUE(mapped_connections[2].connection->connected());
+  ExpectRawSecurityHeaders(capacity);
+  const auto capacity_body = DecodeAvailableRawBody(capacity);
+  ASSERT_TRUE(capacity_body.has_value());
+  Json::CharReaderBuilder json_builder;
+  std::unique_ptr<Json::CharReader> json_reader(json_builder.newCharReader());
+  Json::Value capacity_json;
+  std::string json_errors;
+  ASSERT_TRUE(json_reader->parse(
+      capacity_body->data(), capacity_body->data() + capacity_body->size(),
+      &capacity_json, &json_errors));
+  EXPECT_EQ(capacity_json["code"].asString(), "E_PREVIEW_CAPACITY");
+  EXPECT_EQ(capacity_json["message"].asString(),
+            "MJPEG preview reader capacity is full");
+  EXPECT_EQ(preview_provider.provider_calls(), 3U);
+  EXPECT_EQ(preview_provider.active_readers(), 2U);
+  EXPECT_EQ(preview_provider.blocked_callbacks(), 2U);
+  EXPECT_EQ(preview_provider.watchdog_timeouts(), 0U);
+
+  camera_firmware::boot::FirmwareBootDependencies shutdown_dependencies;
+  shutdown_dependencies.start_runtime = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  shutdown_dependencies.stop_runtime = [&] { preview_provider.Release(); };
+  shutdown_dependencies.start_service = [](
+                                            camera_firmware::boot::RuntimeStartCallback) {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  shutdown_dependencies.quiesce_service = [&] { service.BeginShutdown(); };
+  shutdown_dependencies.stop_service = [&] { service.Stop(); };
+  camera_firmware::boot::FirmwareBootCoordinator shutdown(
+      {false, true}, std::move(shutdown_dependencies));
+  ASSERT_TRUE(shutdown.Start().ok());
+
+  auto stopped = std::async(std::launch::async, [&] { shutdown.Stop(); });
+  const auto stop_status = stopped.wait_for(std::chrono::seconds(3));
+  if (stop_status != std::future_status::ready) {
+    preview_provider.Release();
+  }
+  EXPECT_EQ(stop_status, std::future_status::ready);
+  stopped.wait();
+
+  const auto cleanup_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  ASSERT_TRUE(preview_provider.WaitForCleanup(2U, cleanup_deadline));
+  EXPECT_EQ(preview_provider.cleanup_calls(), 2U);
+  EXPECT_EQ(preview_provider.active_readers(), 0U);
+  EXPECT_EQ(preview_provider.blocked_callbacks(), 0U);
+  EXPECT_EQ(preview_provider.watchdog_timeouts(), 0U);
+  mapped_connections.clear();
+
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AuthenticatedMjpegPreviewStreamsRemainBoundedAndResponsive) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    RunAuthenticatedMjpegScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
 
   int status = 0;

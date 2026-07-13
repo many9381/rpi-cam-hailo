@@ -227,6 +227,21 @@ common::Result<void> ValidateSecureRtspSemantics(
   return common::Result<void>::Ok();
 }
 
+common::Result<void> ValidateHttpPreviewSemantics(
+    const HttpPreviewConfig& config) {
+  if (config.width < 160U || config.width > 1920U || config.fps < 1U ||
+      config.fps > 15U || config.jpeg_quality < 1U ||
+      config.jpeg_quality > 100U || config.max_clients < 1U ||
+      config.max_clients > 2U || config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U ||
+      config.stale_timeout_ms * config.fps < 2000U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_HTTP_PREVIEW", "http.preview configuration is invalid"});
+  }
+
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
   if (!config.security.enabled) {
     return common::Result<void>::Ok();
@@ -304,6 +319,16 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       AssignIfPresent(http, "port", config.http.port);
       AssignIfPresent(http, "web_root", config.http.web_root);
       AssignIfPresent(http, "public_base_url", config.http.public_base_url);
+      const YAML::Node preview = http["preview"];
+      if (preview) {
+        AssignIfPresent(preview, "enabled", config.http.preview.enabled);
+        AssignIfPresent(preview, "width", config.http.preview.width);
+        AssignIfPresent(preview, "fps", config.http.preview.fps);
+        AssignIfPresent(preview, "jpeg_quality", config.http.preview.jpeg_quality);
+        AssignIfPresent(preview, "max_clients", config.http.preview.max_clients);
+        AssignIfPresent(preview, "stale_timeout_ms",
+                        config.http.preview.stale_timeout_ms);
+      }
       const YAML::Node tls = http["tls"];
       if (tls) {
         AssignIfPresent(tls, "enabled", config.http.tls.enabled);
@@ -410,6 +435,11 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         ValidateSecureRtspSemantics(config.secure_rtsp);
     if (!secure_rtsp_semantics.ok()) {
       return common::Result<AppConfig>::Err(secure_rtsp_semantics.error());
+    }
+    auto http_preview_semantics =
+        ValidateHttpPreviewSemantics(config.http.preview);
+    if (!http_preview_semantics.ok()) {
+      return common::Result<AppConfig>::Err(http_preview_semantics.error());
     }
     if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
       const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();

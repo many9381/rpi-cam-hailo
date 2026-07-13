@@ -1,5 +1,6 @@
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
 
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <string>
@@ -10,6 +11,7 @@
 #include "camera_firmware/ai/AiRuntimeController.hpp"
 #include "camera_firmware/ai/DetectionEventStore.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
+#include "camera_firmware/media/MjpegFrameHub.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
@@ -26,6 +28,10 @@ common::Result<void> RuntimeException() {
       {"E_RUNTIME_START", "firmware runtime component failed"});
 }
 
+common::Error PreviewUnavailable() {
+  return {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"};
+}
+
 struct ProductionRuntimeGraph {
   explicit ProductionRuntimeGraph(const config::AppConfig& configured)
       : config(configured),
@@ -33,6 +39,7 @@ struct ProductionRuntimeGraph {
         ai_runtime(&detection_bus),
         ai_frame_pump(ai_frame_tap, ai_runtime),
         camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring),
+        mjpeg_frame_hub(snapshot_tap, config.http.preview),
         ai_controller(config, ai_runtime, ai_frame_pump) {}
 
   config::AppConfig config;
@@ -44,6 +51,7 @@ struct ProductionRuntimeGraph {
   ai::AiFramePump ai_frame_pump;
   media::EncodedRing encoded_ring{128U};
   media::CameraPipeline camera_pipeline;
+  media::MjpegFrameHub mjpeg_frame_hub;
   ai::AiRuntimeController ai_controller;
   rtsp::SecureRtspServer rtsp_server;
 };
@@ -95,6 +103,14 @@ common::Result<void> FirmwareRuntime::Start() {
       return camera;
     }
     camera_started_ = true;
+
+    auto preview = dependencies_.start_preview();
+    if (!preview.ok()) {
+      UnwindStartedComponents();
+      state_ = FirmwareRuntimeState::kFailed;
+      return preview;
+    }
+    preview_started_ = true;
     state_ = FirmwareRuntimeState::kRunning;
     return common::Result<void>::Ok();
   } catch (...) {
@@ -191,6 +207,21 @@ std::optional<std::vector<std::uint8_t>> FirmwareRuntime::Snapshot(
   }
 }
 
+common::Result<std::shared_ptr<media::MjpegStreamReader>>
+FirmwareRuntime::OpenMjpegPreview(std::string_view camera_id) {
+  std::lock_guard lock(mutex_);
+  if (!RunningLocked() || !dependencies_.open_mjpeg_preview) {
+    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
+        PreviewUnavailable());
+  }
+  try {
+    return dependencies_.open_mjpeg_preview(camera_id);
+  } catch (...) {
+    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
+        PreviewUnavailable());
+  }
+}
+
 std::vector<ai::DetectionEvent> FirmwareRuntime::DetectionSnapshot() const {
   std::lock_guard lock(mutex_);
   if (!RunningLocked() || !dependencies_.detection_snapshot) {
@@ -229,6 +260,15 @@ std::uint64_t FirmwareRuntime::PerMediaKeyZeroizeCount() const noexcept {
 }
 
 void FirmwareRuntime::UnwindStartedComponents() noexcept {
+  if (preview_started_) {
+    try {
+      if (dependencies_.stop_preview) {
+        dependencies_.stop_preview();
+      }
+    } catch (...) {
+    }
+    preview_started_ = false;
+  }
   if (camera_started_) {
     try {
       if (dependencies_.stop_camera) {
@@ -274,11 +314,16 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
   dependencies.start_camera = [graph] {
     return graph->camera_pipeline.Start(graph->config);
   };
+  dependencies.start_preview = [graph] {
+    return graph->mjpeg_frame_hub.Start();
+  };
+  dependencies.stop_preview = [graph] { graph->mjpeg_frame_hub.Stop(); };
   dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
   dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
   dependencies.stop_rtsp = [graph] { graph->rtsp_server.Stop(); };
   dependencies.camera_statuses = [graph] {
-    return graph->camera_pipeline.Status();
+    return graph->camera_pipeline.Status(std::chrono::milliseconds(
+        graph->config.http.preview.stale_timeout_ms));
   };
   dependencies.ai_status = [graph] { return graph->ai_runtime.Status(); };
   dependencies.ai_runner_statuses = [graph] {
@@ -291,7 +336,13 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     if (camera_id != graph->config.camera.id) {
       return std::optional<std::vector<std::uint8_t>>{};
     }
-    return media::BuildLatestSnapshotJpeg(graph->snapshot_tap, camera_id);
+    return media::BuildLatestSnapshotJpeg(
+        graph->snapshot_tap, camera_id,
+        std::chrono::milliseconds(
+            graph->config.http.preview.stale_timeout_ms));
+  };
+  dependencies.open_mjpeg_preview = [graph](std::string_view camera_id) {
+    return graph->mjpeg_frame_hub.Open(camera_id);
   };
   dependencies.detection_snapshot = [graph] {
     return graph->detection_event_store.Snapshot();
@@ -309,18 +360,21 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
 
 bool FirmwareRuntime::DependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
-         dependencies_.start_camera && dependencies_.stop_camera &&
+         dependencies_.start_camera && dependencies_.start_preview &&
+         dependencies_.stop_preview && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp &&
          dependencies_.camera_statuses && dependencies_.ai_status &&
          dependencies_.ai_runner_statuses && dependencies_.restart_ai &&
-         dependencies_.snapshot && dependencies_.detection_snapshot &&
+         dependencies_.snapshot && dependencies_.open_mjpeg_preview &&
+         dependencies_.detection_snapshot &&
          dependencies_.subscribe_detections &&
          dependencies_.per_media_key_zeroize_count;
 }
 
 bool FirmwareRuntime::LifecycleDependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
-         dependencies_.start_camera && dependencies_.stop_camera &&
+         dependencies_.start_camera && dependencies_.start_preview &&
+         dependencies_.stop_preview && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp;
 }
 

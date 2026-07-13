@@ -42,6 +42,10 @@ struct CameraStatus {
 using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
     std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
+using MjpegPreviewStreamCallback =
+    std::function<std::size_t(char*, std::size_t)>;
+using MjpegPreviewOpenCallback = std::function<
+    common::Result<MjpegPreviewStreamCallback>(const std::string&)>;
 
 struct AiRunnerServiceStatus {
   std::string camera_id;
@@ -117,6 +121,7 @@ struct ServiceInitArgs {
   DetectionSnapshotProvider detection_snapshot_provider;
   DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
+  MjpegPreviewOpenCallback preview_stream_callback;
   RuntimeStartCallback runtime_start_callback;
   std::shared_ptr<security::SecurityStore> security_store;
   std::shared_ptr<security::BootstrapService> bootstrap_service;
@@ -155,6 +160,9 @@ common::Result<void> ValidateHttpTlsConfigFiles(
 drogon::HttpResponsePtr BuildSnapshotResponse(
     const SnapshotCallback& snapshot_callback,
     const std::string& camera_id);
+drogon::HttpResponsePtr BuildMjpegPreviewResponse(
+    const MjpegPreviewOpenCallback& preview_stream_callback,
+    const std::string& camera_id);
 
 namespace internal {
 
@@ -181,6 +189,7 @@ class ServiceApp {
   ServiceApp& operator=(ServiceApp&&) = delete;
 
   [[nodiscard]] common::Result<void> Init(const ServiceInitArgs& args);
+  void BeginShutdown() noexcept;
   void Stop();
 
  private:

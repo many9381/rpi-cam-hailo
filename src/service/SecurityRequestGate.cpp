@@ -1,6 +1,7 @@
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <memory>
@@ -76,12 +77,17 @@ bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::string_view suffix = "/snapshot.jpg";
-    if (path.starts_with(prefix) && path.ends_with(suffix) &&
-        path.size() > prefix.size() + suffix.size()) {
-      const auto camera_id =
-          path.substr(prefix.size(), path.size() - prefix.size() - suffix.size());
-      return camera_id.find('/') == std::string_view::npos;
+    constexpr std::array<std::string_view, 2> suffixes = {
+        "/snapshot.jpg", "/preview.mjpeg"};
+    for (const auto suffix : suffixes) {
+      if (path.starts_with(prefix) && path.ends_with(suffix) &&
+          path.size() > prefix.size() + suffix.size()) {
+        const auto camera_id = path.substr(
+            prefix.size(), path.size() - prefix.size() - suffix.size());
+        if (camera_id.find('/') == std::string_view::npos) {
+          return true;
+        }
+      }
     }
   }
   return method == "POST" &&

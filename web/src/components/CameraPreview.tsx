@@ -1,13 +1,12 @@
 import { RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 
-import type { CameraApiClient, CameraStatus, DetectionSnapshot } from '../api/types';
-import { useSnapshot } from '../hooks/useSnapshot';
+import type { CameraStatus, DetectionSnapshot } from '../api/types';
+import { useMjpegPreview } from '../hooks/useMjpegPreview';
 import { DetectionOverlay } from './DetectionOverlay';
 import { IconButton } from './IconButton';
 
 interface CameraPreviewProps {
-  client: CameraApiClient;
   cameras: CameraStatus[];
   selectedCameraId: string;
   onSelectCamera(id: string): void;
@@ -17,30 +16,30 @@ interface CameraPreviewProps {
 interface ImageDimensions {
   width: number;
   height: number;
-  objectUrl: string;
+  streamUrl: string;
 }
 
 export function CameraPreview({
-  client,
   cameras,
   selectedCameraId,
   onSelectCamera,
   snapshot,
 }: CameraPreviewProps) {
   const selectedCamera = cameras.find(({ id }) => id === selectedCameraId);
-  const snapshotCameraId = selectedCamera?.snapshot_available === true
-    ? selectedCameraId : '';
-  const resource = useSnapshot(client, snapshotCameraId);
+  const previewCameraId = selectedCamera !== undefined ? selectedCameraId : '';
+  const preview = useMjpegPreview(previewCameraId);
   const [imageSize, setImageSize] = useState<ImageDimensions | null>(null);
-  const [decodeErrorUrl, setDecodeErrorUrl] = useState<string | null>(null);
-
-  const hasReadyResource = resource.state === 'ready' && resource.objectUrl !== null;
-  const objectUrl = hasReadyResource ? resource.objectUrl : null;
-  const hasDecodeError = objectUrl !== null && decodeErrorUrl === objectUrl;
-  const currentImageSize = objectUrl !== null && imageSize?.objectUrl === objectUrl
+  const [loadedUrl, setLoadedUrl] = useState('');
+  const currentImageSize = imageSize?.streamUrl === preview.streamUrl
     ? imageSize : null;
-  const refresh = () => void resource.refresh().catch(() => undefined);
-  const hasSnapshot = objectUrl !== null && !hasDecodeError;
+  const hasStream = preview.streamUrl.length > 0;
+  const stageStatus = preview.state === 'connecting'
+    ? 'Connecting preview...'
+    : preview.state === 'reconnecting'
+      ? 'Preview reconnecting...'
+      : preview.state === 'unavailable'
+        ? selectedCameraId.length > 0 ? 'Preview unavailable.' : 'No camera selected.'
+        : '';
 
   return (
     <section className="operational-section" aria-labelledby="preview-heading">
@@ -57,40 +56,42 @@ export function CameraPreview({
             {cameras.length === 0 && <option value="">No cameras</option>}
             {cameras.map(({ id }) => <option key={id} value={id}>{id}</option>)}
           </select>
-          <IconButton label="Refresh snapshot" onClick={refresh}
-            disabled={snapshotCameraId.length === 0}>
+          <IconButton label="Reconnect preview" onClick={preview.reconnect}
+            disabled={previewCameraId.length === 0}>
             <RefreshCw size={17} aria-hidden="true" />
           </IconButton>
         </div>
       </div>
-      <div className="camera-stage" aria-busy={resource.state === 'loading'}>
-        {hasSnapshot && (
-          <img key={objectUrl} src={objectUrl} alt={`${selectedCameraId} snapshot`}
-            onLoad={(event) => setImageSize({
-              objectUrl,
-              width: event.currentTarget.naturalWidth,
-              height: event.currentTarget.naturalHeight,
-            })}
-            onError={() => setDecodeErrorUrl(objectUrl)} />
+      <div className="camera-stage" aria-busy={preview.state !== 'live' && preview.state !== 'unavailable'}>
+        {hasStream && (
+          <img key={preview.streamUrl} src={preview.streamUrl}
+            className={`camera-preview-image${loadedUrl === preview.streamUrl ? ' is-loaded' : ''}`}
+            alt={`${selectedCameraId} camera preview`}
+            onLoad={(event) => {
+              if (!preview.onLoad(preview.streamUrl)) {
+                return;
+              }
+              setImageSize({
+                streamUrl: preview.streamUrl,
+                width: event.currentTarget.naturalWidth,
+                height: event.currentTarget.naturalHeight,
+              });
+              setLoadedUrl(preview.streamUrl);
+            }}
+            onError={() => {
+              if (!preview.onError(preview.streamUrl)) {
+                return;
+              }
+              setLoadedUrl('');
+              setImageSize(null);
+            }} />
         )}
-        {hasSnapshot && currentImageSize !== null && (
+        {hasStream && currentImageSize !== null && (
             <DetectionOverlay snapshot={snapshot} cameraId={selectedCameraId}
               imageWidth={currentImageSize.width}
               imageHeight={currentImageSize.height} />
           )}
-        {selectedCamera === undefined && (
-          <p className="camera-stage-state">No camera selected</p>
-        )}
-        {selectedCamera !== undefined && !selectedCamera.snapshot_available && (
-          <p className="camera-stage-state">Snapshot unavailable for this camera</p>
-        )}
-        {snapshotCameraId.length > 0 && resource.state === 'loading' && (
-          <p className="camera-stage-state">Loading snapshot...</p>
-        )}
-        {snapshotCameraId.length > 0 &&
-          (resource.state === 'unavailable' || hasDecodeError) && (
-          <p className="camera-stage-state">Snapshot unavailable</p>
-        )}
+        <p className="camera-stage-state" role="status">{stageStatus}</p>
       </div>
     </section>
   );

@@ -241,6 +241,12 @@ struct CameraPipeline::Impl {
       return request_result;
     }
 
+    const auto next_source_epoch = snapshot_tap.BeginSourceRun();
+    {
+      std::scoped_lock lock(mutex);
+      source_epoch = next_source_epoch;
+    }
+
     requeue_context = std::make_shared<RequeueContext>();
     {
       std::scoped_lock context_lock(requeue_context->mutex);
@@ -282,6 +288,7 @@ struct CameraPipeline::Impl {
     std::shared_ptr<libcamera::Camera> camera_to_stop;
     std::unique_ptr<libcamera::CameraManager> manager_to_stop;
     bool should_stop_camera = false;
+    SnapshotTap::SourceEpoch source_epoch_to_end = 0U;
 
     {
       std::scoped_lock lock(mutex);
@@ -292,12 +299,18 @@ struct CameraPipeline::Impl {
       state = "stopping";
       should_stop_camera = camera_started;
       camera_started = false;
+      source_epoch_to_end = source_epoch;
+      source_epoch = 0U;
       camera_to_stop = camera;
       if (requeue_context != nullptr) {
         std::scoped_lock context_lock(requeue_context->mutex);
         requeue_context->running = false;
         requeue_context->camera.reset();
       }
+    }
+
+    if (source_epoch_to_end != 0U) {
+      snapshot_tap.EndSourceRun(source_epoch_to_end);
     }
 
     if (camera_to_stop != nullptr) {
@@ -339,6 +352,13 @@ struct CameraPipeline::Impl {
   std::vector<CameraPipelineStatus> Status() const {
     std::scoped_lock lock(mutex);
     return {{camera_id, state, snapshot_tap.Latest().has_value()}};
+  }
+
+  std::vector<CameraPipelineStatus> Status(
+      std::chrono::milliseconds maximum_snapshot_age) const {
+    std::scoped_lock lock(mutex);
+    return {{camera_id, state,
+             snapshot_tap.HasFreshFrame(maximum_snapshot_age)}};
   }
 
   Result<void> ConfigureCamera() {
@@ -514,7 +534,7 @@ struct CameraPipeline::Impl {
     FrameLease lease(std::move(frame).value(), [weak_context, request] {
       RequeueRequest(weak_context, request);
     });
-    snapshot_tap.Publish(lease.CloneRef());
+    snapshot_tap.Publish(lease.CloneRef(), source_epoch);
     ai_frame_tap.PublishLatest(std::move(lease));
   }
 
@@ -649,6 +669,7 @@ struct CameraPipeline::Impl {
   X264Encoder encoder;
   config::CameraConfig configured_camera;
   std::uint64_t next_pts{0};
+  SnapshotTap::SourceEpoch source_epoch{0U};
   std::string camera_id{"imx708-main"};
   std::string state{"stopped"};
   bool running{false};
@@ -674,6 +695,11 @@ void CameraPipeline::Stop() { impl_->Stop(); }
 
 std::vector<CameraPipelineStatus> CameraPipeline::Status() const {
   return impl_->Status();
+}
+
+std::vector<CameraPipelineStatus> CameraPipeline::Status(
+    std::chrono::milliseconds maximum_snapshot_age) const {
+  return impl_->Status(maximum_snapshot_age);
 }
 
 }  // namespace camera_firmware::media

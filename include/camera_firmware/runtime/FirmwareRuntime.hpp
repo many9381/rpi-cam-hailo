@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
+#include "camera_firmware/media/MjpegFrameHub.hpp"
 
 namespace camera_firmware::runtime {
 
@@ -29,6 +31,8 @@ struct FirmwareRuntimeDependencies {
   std::function<common::Result<void>()> start_rtsp;
   std::function<common::Result<void>()> start_ai;
   std::function<common::Result<void>()> start_camera;
+  std::function<common::Result<void>()> start_preview;
+  std::function<void()> stop_preview;
   std::function<void()> stop_camera;
   std::function<void()> stop_ai;
   std::function<void()> stop_rtsp;
@@ -39,6 +43,9 @@ struct FirmwareRuntimeDependencies {
   std::function<common::Result<void>()> restart_ai;
   std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)>
       snapshot;
+  std::function<common::Result<std::shared_ptr<media::MjpegStreamReader>>(
+      std::string_view)>
+      open_mjpeg_preview;
   std::function<std::vector<ai::DetectionEvent>()> detection_snapshot;
   std::function<ai::DetectionBus::Subscription(ai::DetectionBus::Handler)>
       subscribe_detections;
@@ -67,6 +74,8 @@ class FirmwareRuntime {
   [[nodiscard]] common::Result<void> RestartAi();
   [[nodiscard]] std::optional<std::vector<std::uint8_t>> Snapshot(
       std::string_view camera_id) const;
+  [[nodiscard]] common::Result<std::shared_ptr<media::MjpegStreamReader>>
+  OpenMjpegPreview(std::string_view camera_id);
   [[nodiscard]] std::vector<ai::DetectionEvent> DetectionSnapshot() const;
   [[nodiscard]] ai::DetectionBus::Subscription SubscribeDetections(
       ai::DetectionBus::Handler handler);
@@ -89,6 +98,7 @@ class FirmwareRuntime {
   bool rtsp_started_{false};
   bool ai_started_{false};
   bool camera_started_{false};
+  bool preview_started_{false};
 };
 
 }  // namespace camera_firmware::runtime

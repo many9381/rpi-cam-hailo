@@ -1,6 +1,12 @@
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -10,6 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include "camera_firmware/ai/AiFrameTap.hpp"
+#include "camera_firmware/media/EncodedRing.hpp"
+
 namespace camera_firmware::runtime {
 
 class FirmwareRuntimeTestAccess {
@@ -17,9 +26,32 @@ class FirmwareRuntimeTestAccess {
   static bool DependenciesComplete(const FirmwareRuntime& runtime) {
     return runtime.DependenciesComplete();
   }
+
+  static FirmwareRuntimeDependencies ProductionDependencies(
+      const config::AppConfig& config) {
+    return FirmwareRuntime::BuildProductionDependencies(config);
+  }
 };
 
 namespace {
+
+int CreateNv12Memfd() {
+  int fd = memfd_create("cf-runtime-freshness", MFD_CLOEXEC);
+  if (fd < 0) {
+    return fd;
+  }
+  const std::vector<std::uint8_t> nv12{
+      0x40, 0x80, 0x80, 0xc0,
+      0x80, 0x80,
+  };
+  if (ftruncate(fd, static_cast<off_t>(nv12.size())) != 0 ||
+      write(fd, nv12.data(), nv12.size()) !=
+          static_cast<ssize_t>(nv12.size())) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
 
 struct Calls {
   void Record(std::string call) {
@@ -32,9 +64,12 @@ struct Calls {
   std::atomic<unsigned int> rtsp_starts{0U};
   std::atomic<unsigned int> ai_starts{0U};
   std::atomic<unsigned int> camera_starts{0U};
+  std::atomic<unsigned int> preview_starts{0U};
   std::atomic<unsigned int> rtsp_stops{0U};
   std::atomic<unsigned int> ai_stops{0U};
   std::atomic<unsigned int> camera_stops{0U};
+  std::atomic<unsigned int> preview_stops{0U};
+  std::atomic<unsigned int> preview_opens{0U};
   std::atomic<unsigned int> provider_calls{0U};
 };
 
@@ -55,6 +90,15 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
     calls.Record("camera.start");
     return common::Result<void>::Ok();
   };
+  dependencies.start_preview = [&] {
+    calls.preview_starts.fetch_add(1U);
+    calls.Record("preview.start");
+    return common::Result<void>::Ok();
+  };
+  dependencies.stop_preview = [&] {
+    calls.preview_stops.fetch_add(1U);
+    calls.Record("preview.stop");
+  };
   dependencies.stop_camera = [&] {
     calls.camera_stops.fetch_add(1U);
     calls.Record("camera.stop");
@@ -66,6 +110,11 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
   dependencies.stop_rtsp = [&] {
     calls.rtsp_stops.fetch_add(1U);
     calls.Record("rtsp.stop");
+  };
+  dependencies.open_mjpeg_preview = [&](std::string_view) {
+    calls.preview_opens.fetch_add(1U);
+    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
+        {"E_PREVIEW_CAPACITY", "MJPEG preview reader capacity is full"});
   };
   return dependencies;
 }
@@ -81,18 +130,46 @@ TEST(FirmwareRuntimeTest, StartsAndStopsEachComponentExactlyOnce) {
   EXPECT_EQ(calls.rtsp_starts.load(), 1U);
   EXPECT_EQ(calls.ai_starts.load(), 1U);
   EXPECT_EQ(calls.camera_starts.load(), 1U);
+  EXPECT_EQ(calls.preview_starts.load(), 1U);
 
   runtime.Stop();
   runtime.Stop();
 
   EXPECT_EQ(runtime.State(), FirmwareRuntimeState::kStopped);
   EXPECT_EQ(calls.camera_stops.load(), 1U);
+  EXPECT_EQ(calls.preview_stops.load(), 1U);
   EXPECT_EQ(calls.ai_stops.load(), 1U);
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
             (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "camera.stop",
-                                      "ai.stop", "rtsp.stop"}));
+                                      "camera.start", "preview.start",
+                                      "preview.stop", "camera.stop", "ai.stop",
+                                      "rtsp.stop"}));
+}
+
+TEST(FirmwareRuntimeTest,
+     PreviewStartFailureUnwindsCameraBeforeEarlierComponents) {
+  config::AppConfig config;
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  dependencies.start_preview = [&] {
+    calls.preview_starts.fetch_add(1U);
+    calls.Record("preview.start");
+    return common::Result<void>::Err(
+        {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"});
+  };
+  FirmwareRuntime runtime(config, std::move(dependencies));
+
+  const auto started = runtime.Start();
+
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_PREVIEW_UNAVAILABLE");
+  EXPECT_EQ(calls.preview_stops.load(), 0U);
+  EXPECT_EQ(calls.camera_stops.load(), 1U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"rtsp.start", "ai.start",
+                                      "camera.start", "preview.start",
+                                      "camera.stop", "ai.stop", "rtsp.stop"}));
 }
 
 TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) {
@@ -121,7 +198,8 @@ TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) 
                                       "rtsp.stop"}));
 }
 
-TEST(FirmwareRuntimeTest, StoppedProvidersReturnSafeValuesWithoutCallbacks) {
+TEST(FirmwareRuntimeTest,
+     StoppedRuntimeRejectsPreviewAndReturnsSafeProviderValues) {
   config::AppConfig config;
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
@@ -144,10 +222,28 @@ TEST(FirmwareRuntimeTest, StoppedProvidersReturnSafeValuesWithoutCallbacks) {
   EXPECT_TRUE(runtime.AiRunnerStatuses().empty());
   EXPECT_FALSE(runtime.RestartAi().ok());
   EXPECT_FALSE(runtime.Snapshot("camera").has_value());
+  const auto preview = runtime.OpenMjpegPreview("camera");
+  ASSERT_FALSE(preview.ok());
+  EXPECT_EQ(preview.error().code, "E_PREVIEW_UNAVAILABLE");
   EXPECT_TRUE(runtime.DetectionSnapshot().empty());
-  EXPECT_FALSE(runtime.SubscribeDetections([](const ai::DetectionEvent&) {}).valid());
+  EXPECT_FALSE(
+      runtime.SubscribeDetections([](const ai::DetectionEvent&) {}).valid());
   EXPECT_EQ(runtime.PerMediaKeyZeroizeCount(), 0U);
   EXPECT_EQ(calls.provider_calls.load(), 0U);
+  EXPECT_EQ(calls.preview_opens.load(), 0U);
+}
+
+TEST(FirmwareRuntimeTest, RunningPreviewOpenDelegatesToOwnedDependency) {
+  config::AppConfig config;
+  Calls calls;
+  FirmwareRuntime runtime(config, SuccessfulDependencies(calls));
+  ASSERT_TRUE(runtime.Start().ok());
+
+  const auto preview = runtime.OpenMjpegPreview("imx708-main");
+
+  ASSERT_FALSE(preview.ok());
+  EXPECT_EQ(preview.error().code, "E_PREVIEW_CAPACITY");
+  EXPECT_EQ(calls.preview_opens.load(), 1U);
 }
 
 TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
@@ -213,6 +309,7 @@ TEST(FirmwareRuntimeTest, ConcurrentStartsAreSerializedAndIdempotent) {
   EXPECT_EQ(calls.rtsp_starts.load(), 1U);
   EXPECT_EQ(calls.ai_starts.load(), 1U);
   EXPECT_EQ(calls.camera_starts.load(), 1U);
+  EXPECT_EQ(calls.preview_starts.load(), 1U);
   runtime.Stop();
 }
 
@@ -230,6 +327,8 @@ TEST(FirmwareRuntimeTest, CanStartAgainAfterStop) {
   EXPECT_EQ(calls.rtsp_starts.load(), 2U);
   EXPECT_EQ(calls.ai_starts.load(), 2U);
   EXPECT_EQ(calls.camera_starts.load(), 2U);
+  EXPECT_EQ(calls.preview_starts.load(), 2U);
+  EXPECT_EQ(calls.preview_stops.load(), 2U);
   EXPECT_EQ(calls.camera_stops.load(), 2U);
   EXPECT_EQ(calls.ai_stops.load(), 2U);
   EXPECT_EQ(calls.rtsp_stops.load(), 2U);
@@ -260,8 +359,9 @@ TEST(FirmwareRuntimeTest, StopContinuesUnwindWhenCallbacksThrow) {
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
             (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "camera.stop",
-                                      "ai.stop", "rtsp.stop"}));
+                                      "camera.start", "preview.start",
+                                      "preview.stop", "camera.stop", "ai.stop",
+                                      "rtsp.stop"}));
 }
 
 TEST(FirmwareRuntimeTest, ProductionConstructorOwnsCompleteComponentGraph) {
@@ -271,6 +371,76 @@ TEST(FirmwareRuntimeTest, ProductionConstructorOwnsCompleteComponentGraph) {
 
   EXPECT_TRUE(FirmwareRuntimeTestAccess::DependenciesComplete(runtime));
   EXPECT_EQ(runtime.State(), FirmwareRuntimeState::kStopped);
+}
+
+TEST(FirmwareRuntimeTest,
+     ProductionPreviewAdmissionRejectsConfiguredAndUnknownCameraWithoutJpeg) {
+  config::AppConfig config;
+  config.camera.id = "configured-camera";
+  auto dependencies =
+      FirmwareRuntimeTestAccess::ProductionDependencies(config);
+
+  ASSERT_TRUE(dependencies.start_preview().ok());
+
+  auto configured = dependencies.open_mjpeg_preview(config.camera.id);
+  auto unknown = dependencies.open_mjpeg_preview("unknown-camera");
+
+  EXPECT_FALSE(configured.ok());
+  EXPECT_EQ(configured.error().code, "E_PREVIEW_UNAVAILABLE");
+  EXPECT_FALSE(unknown.ok());
+  EXPECT_EQ(unknown.error().code, "E_PREVIEW_UNAVAILABLE");
+  dependencies.stop_preview();
+}
+
+TEST(FirmwareRuntimeTest,
+     CameraStatusAndSnapshotShareConfiguredPreviewFreshnessLimit) {
+  config::AppConfig config;
+  config.http.preview.stale_timeout_ms = 1375U;
+  const auto maximum_age =
+      std::chrono::milliseconds(config.http.preview.stale_timeout_ms);
+
+  auto now = std::chrono::steady_clock::time_point{};
+  media::SnapshotTap snapshot_tap([&now] { return now; });
+  ai::AiFrameTap ai_frame_tap;
+  media::EncodedRing encoded_ring(1U);
+  media::CameraPipeline pipeline(snapshot_tap, ai_frame_tap, encoded_ring);
+  int fd = CreateNv12Memfd();
+  ASSERT_GE(fd, 0);
+  media::FrameHandle handle;
+  handle.camera_id = config.camera.id;
+  handle.format = "NV12";
+  handle.width = 2U;
+  handle.height = 2U;
+  handle.plane_count = 2U;
+  handle.planes[0] =
+      {.dmabuf_fd = fd, .offset = 0U, .length = 4U, .stride = 2U};
+  handle.planes[1] =
+      {.dmabuf_fd = fd, .offset = 4U, .length = 2U, .stride = 2U};
+  snapshot_tap.Publish(media::FrameLease(std::move(handle), [fd] {
+    (void)close(fd);
+  }));
+
+  ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
+  EXPECT_TRUE(pipeline.Status(maximum_age).front().snapshot_available);
+  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(
+                  snapshot_tap, config.camera.id, maximum_age)
+                  .has_value());
+
+  now += maximum_age;
+
+  ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
+  EXPECT_TRUE(pipeline.Status(maximum_age).front().snapshot_available);
+  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(
+                  snapshot_tap, config.camera.id, maximum_age)
+                  .has_value());
+
+  now += std::chrono::milliseconds(1);
+
+  ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
+  EXPECT_FALSE(pipeline.Status(maximum_age).front().snapshot_available);
+  EXPECT_FALSE(media::BuildLatestSnapshotJpeg(
+                   snapshot_tap, config.camera.id, maximum_age)
+                   .has_value());
 }
 
 TEST(FirmwareRuntimeTest, MissingStopDependencyFailsBeforeStartingComponents) {
