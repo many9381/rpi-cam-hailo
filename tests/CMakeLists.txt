@@ -246,6 +246,13 @@ set_tests_properties(BuildWebIntegrityTest
         TIMEOUT 120
 )
 
+add_test(
+    NAME WebNodeVersionTest
+    COMMAND ${CMAKE_COMMAND}
+        -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NodeVersionTest.cmake
+)
+
 add_executable(gst_secure_srtp_tests
     unit/rtsp/CfSecureSrtpEncTest.cpp
 )
