@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
+
+const chromiumExecutable = process.env.CF_PLAYWRIGHT_CHROMIUM ??
+  ['/usr/bin/chromium', '/usr/bin/chromium-browser'].find(existsSync);
 
 export default defineConfig({
   testDir: './e2e',
@@ -23,6 +27,11 @@ export default defineConfig({
   },
   projects: [{
     name: 'chromium',
-    use: { ...devices['Desktop Chrome'] },
+    use: {
+      ...devices['Desktop Chrome'],
+      launchOptions: chromiumExecutable === undefined
+        ? undefined
+        : { executablePath: chromiumExecutable },
+    },
   }],
 });

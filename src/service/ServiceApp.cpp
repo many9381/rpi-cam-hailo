@@ -61,7 +61,7 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
     constexpr std::array<std::string_view, 2> suffixes = {
-        "/snapshot.jpg", "/preview.mjpeg"};
+        "/snapshot.jpg", "/live.mp4"};
     for (const auto suffix : suffixes) {
       if (path.starts_with(prefix) && path.ends_with(suffix) &&
           path.size() > prefix.size() + suffix.size()) {
@@ -130,11 +130,20 @@ std::string BuildRtspUrl(std::string_view public_base_url,
          std::to_string(secure_rtsp.port) + secure_rtsp.mount;
 }
 
-Json::Value BuildCameraJson(const CameraStatus& camera) {
+Json::Value BuildCameraStatusJsonValue(const CameraStatus& camera) {
   Json::Value json(Json::objectValue);
   json["id"] = camera.id;
   json["state"] = camera.state;
   json["snapshot_available"] = camera.snapshot_available;
+  json["width"] = camera.width;
+  json["height"] = camera.height;
+  json["configured_fps"] = camera.configured_fps;
+  json["capture_fps"] = camera.capture_fps;
+  json["encoded_fps"] = camera.encoded_fps;
+  json["captured_frames"] = Json::UInt64(camera.captured_frames);
+  json["encoded_frames"] = Json::UInt64(camera.encoded_frames);
+  json["capture_error_count"] = Json::UInt64(camera.capture_error_count);
+  json["encode_error_count"] = Json::UInt64(camera.encode_error_count);
   return json;
 }
 
@@ -145,14 +154,14 @@ Json::Value BuildSnapshotUnavailableJson() {
   return json;
 }
 
-Json::Value BuildPreviewErrorJson(std::string_view code) {
+Json::Value BuildLiveErrorJson(std::string_view code) {
   Json::Value json(Json::objectValue);
-  if (code == "E_PREVIEW_CAPACITY") {
-    json["code"] = "E_PREVIEW_CAPACITY";
-    json["message"] = "MJPEG preview reader capacity is full";
+  if (code == "E_LIVE_CAPACITY") {
+    json["code"] = "E_LIVE_CAPACITY";
+    json["message"] = "live preview reader capacity is full";
   } else {
-    json["code"] = "E_PREVIEW_UNAVAILABLE";
-    json["message"] = "MJPEG preview is unavailable";
+    json["code"] = "E_LIVE_UNAVAILABLE";
+    json["message"] = "live preview is unavailable";
   }
   return json;
 }
@@ -608,6 +617,7 @@ void RegisterHandlers() {
         response->addHeader(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' blob:; object-src 'none'; "
+            "media-src 'self' blob:; "
             "base-uri 'none'; "
             "frame-ancestors 'none'");
       });
@@ -1049,7 +1059,7 @@ void RegisterHandlers() {
               }
               if (provider) {
                 for (const auto& camera : provider()) {
-                  cameras.append(BuildCameraJson(camera));
+                  cameras.append(BuildCameraStatusJsonValue(camera));
                 }
               }
               body["cameras"] = std::move(cameras);
@@ -1080,21 +1090,20 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
-      "/api/v1/cameras/{1}/preview.mjpeg",
+      "/api/v1/cameras/{1}/live.mp4",
       [](const HttpRequestPtr& request, DrogonCallback&& callback,
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
             [camera_id](std::optional<security::Principal>,
                         HttpCallback callback) {
-              MjpegPreviewOpenCallback preview_stream_callback;
+              LiveMp4OpenCallback live_stream_callback;
               {
                 std::scoped_lock lock(StateMutex());
-                preview_stream_callback =
-                    GlobalState().args.preview_stream_callback;
+                live_stream_callback =
+                    GlobalState().args.live_stream_callback;
               }
-              callback(BuildMjpegPreviewResponse(preview_stream_callback,
-                                                 camera_id));
+              callback(BuildLiveMp4Response(live_stream_callback, camera_id));
             });
       },
       {Get});
@@ -1290,6 +1299,10 @@ Json::Value BuildHealthJson(const std::string& status) {
   Json::Value json(Json::objectValue);
   json["status"] = status;
   return json;
+}
+
+Json::Value BuildCameraStatusJson(const CameraStatus& camera) {
+  return BuildCameraStatusJsonValue(camera);
 }
 
 Json::Value BuildAiStatusJson(const AiServiceStatus& status) {
@@ -1600,36 +1613,35 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
   return response;
 }
 
-drogon::HttpResponsePtr BuildMjpegPreviewResponse(
-    const MjpegPreviewOpenCallback& preview_stream_callback,
+drogon::HttpResponsePtr BuildLiveMp4Response(
+    const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id) {
-  if (!preview_stream_callback) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+  if (!live_stream_callback) {
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
 
-  common::Result<MjpegPreviewStreamCallback> opened =
-      common::Result<MjpegPreviewStreamCallback>::Err(
-          {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"});
+  common::Result<LiveMp4StreamCallback> opened =
+      common::Result<LiveMp4StreamCallback>::Err(
+          {"E_LIVE_UNAVAILABLE", "live preview is unavailable"});
   try {
-    opened = preview_stream_callback(camera_id);
+    opened = live_stream_callback(camera_id);
   } catch (...) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
   if (!opened.ok()) {
-    return JsonResponse(BuildPreviewErrorJson(opened.error().code),
+    return JsonResponse(BuildLiveErrorJson(opened.error().code),
                         drogon::k503ServiceUnavailable);
   }
 
   auto stream = std::move(opened).value();
   if (!stream) {
-    return JsonResponse(BuildPreviewErrorJson("E_PREVIEW_UNAVAILABLE"),
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
   auto response = drogon::HttpResponse::newStreamResponse(
-      stream, "", drogon::CT_CUSTOM,
-      "multipart/x-mixed-replace; boundary=cf-frame");
+      stream, "", drogon::CT_CUSTOM, "video/mp4");
   response->setStatusCode(drogon::k200OK);
   response->addHeader("Content-Encoding", "identity");
   return response;

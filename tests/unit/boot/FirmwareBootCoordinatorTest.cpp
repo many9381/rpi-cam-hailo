@@ -353,20 +353,20 @@ TEST(FirmwareBootCoordinatorTest, StopProhibitsRuntimeTransitionBeforeQuiesce) {
 }
 
 TEST(FirmwareBootCoordinatorTest,
-     RuntimeStopWakesBlockedPreviewBeforeServiceJoin) {
+     RuntimeStopWakesBlockedLiveStreamBeforeServiceJoin) {
   Calls calls;
   auto dependencies = SuccessfulDependencies(calls);
-  std::promise<void> release_preview;
-  auto preview_released = release_preview.get_future().share();
+  std::promise<void> release_stream;
+  auto stream_released = release_stream.get_future().share();
   dependencies.stop_runtime = [&] {
     ++calls.runtime_stops;
     calls.Record("runtime.stop");
-    release_preview.set_value();
+    release_stream.set_value();
   };
   dependencies.stop_service = [&] {
     ++calls.service_stops;
     calls.Record("service.stop");
-    preview_released.wait();
+    stream_released.wait();
   };
   FirmwareBootCoordinator coordinator({false, true}, std::move(dependencies));
   ASSERT_TRUE(coordinator.Start().ok());
@@ -375,7 +375,7 @@ TEST(FirmwareBootCoordinatorTest,
   const auto status = stopped.wait_for(std::chrono::milliseconds(250));
   if (status != std::future_status::ready) {
     try {
-      release_preview.set_value();
+      release_stream.set_value();
     } catch (...) {
     }
   }

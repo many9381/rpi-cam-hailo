@@ -4,7 +4,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 const productionCsp = "default-src 'self'; img-src 'self' blob:; " +
-  "object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+  "object-src 'none'; media-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'";
 
 export default defineConfig({
   plugins: [react()],

@@ -37,15 +37,23 @@ struct CameraStatus {
   std::string id;
   std::string state{"unknown"};
   bool snapshot_available{false};
+  unsigned int width{0U};
+  unsigned int height{0U};
+  unsigned int configured_fps{0U};
+  double capture_fps{0.0};
+  double encoded_fps{0.0};
+  std::uint64_t captured_frames{0U};
+  std::uint64_t encoded_frames{0U};
+  std::uint64_t capture_error_count{0U};
+  std::uint64_t encode_error_count{0U};
 };
 
 using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
     std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
-using MjpegPreviewStreamCallback =
-    std::function<std::size_t(char*, std::size_t)>;
-using MjpegPreviewOpenCallback = std::function<
-    common::Result<MjpegPreviewStreamCallback>(const std::string&)>;
+using LiveMp4StreamCallback = std::function<std::size_t(char*, std::size_t)>;
+using LiveMp4OpenCallback = std::function<
+    common::Result<LiveMp4StreamCallback>(const std::string&)>;
 
 struct AiRunnerServiceStatus {
   std::string camera_id;
@@ -121,7 +129,7 @@ struct ServiceInitArgs {
   DetectionSnapshotProvider detection_snapshot_provider;
   DetectionEventSubscriber detection_event_subscriber;
   SnapshotCallback snapshot_callback;
-  MjpegPreviewOpenCallback preview_stream_callback;
+  LiveMp4OpenCallback live_stream_callback;
   RuntimeStartCallback runtime_start_callback;
   std::shared_ptr<security::SecurityStore> security_store;
   std::shared_ptr<security::BootstrapService> bootstrap_service;
@@ -129,6 +137,7 @@ struct ServiceInitArgs {
 };
 
 Json::Value BuildHealthJson(const std::string& status);
+Json::Value BuildCameraStatusJson(const CameraStatus& camera);
 Json::Value BuildAiStatusJson(const AiServiceStatus& status);
 Json::Value BuildAiStatusJson(bool requested);
 drogon::HttpResponsePtr BuildAiRestartResponse(
@@ -162,8 +171,8 @@ common::Result<void> ValidateHttpTlsConfigFiles(
 drogon::HttpResponsePtr BuildSnapshotResponse(
     const SnapshotCallback& snapshot_callback,
     const std::string& camera_id);
-drogon::HttpResponsePtr BuildMjpegPreviewResponse(
-    const MjpegPreviewOpenCallback& preview_stream_callback,
+drogon::HttpResponsePtr BuildLiveMp4Response(
+    const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id);
 
 namespace internal {

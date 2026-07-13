@@ -1,8 +1,8 @@
 import { RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { CameraStatus, DetectionSnapshot } from '../api/types';
-import { useMjpegPreview } from '../hooks/useMjpegPreview';
+import { useLivePreview } from '../hooks/useLivePreview';
 import { DetectionOverlay } from './DetectionOverlay';
 import { IconButton } from './IconButton';
 
@@ -16,7 +16,7 @@ interface CameraPreviewProps {
 interface ImageDimensions {
   width: number;
   height: number;
-  streamUrl: string;
+  generation: number;
 }
 
 export function CameraPreview({
@@ -27,12 +27,11 @@ export function CameraPreview({
 }: CameraPreviewProps) {
   const selectedCamera = cameras.find(({ id }) => id === selectedCameraId);
   const previewCameraId = selectedCamera !== undefined ? selectedCameraId : '';
-  const preview = useMjpegPreview(previewCameraId);
+  const preview = useLivePreview(previewCameraId);
   const [imageSize, setImageSize] = useState<ImageDimensions | null>(null);
-  const [loadedUrl, setLoadedUrl] = useState('');
-  const currentImageSize = imageSize?.streamUrl === preview.streamUrl
+  const currentImageSize = imageSize?.generation === preview.generation
     ? imageSize : null;
-  const hasStream = preview.streamUrl.length > 0;
+  useEffect(() => setImageSize(null), [preview.generation]);
   const stageStatus = preview.state === 'connecting'
     ? 'Connecting preview...'
     : preview.state === 'reconnecting'
@@ -63,30 +62,23 @@ export function CameraPreview({
         </div>
       </div>
       <div className="camera-stage" aria-busy={preview.state !== 'live' && preview.state !== 'unavailable'}>
-        {hasStream && (
-          <img key={preview.streamUrl} src={preview.streamUrl}
-            className={`camera-preview-image${loadedUrl === preview.streamUrl ? ' is-loaded' : ''}`}
-            alt={`${selectedCameraId} camera preview`}
-            onLoad={(event) => {
-              if (!preview.onLoad(preview.streamUrl)) {
+        {previewCameraId.length > 0 && (
+          <video ref={preview.videoRef} autoPlay muted playsInline
+            className={`camera-preview-video${preview.state === 'live' ? ' is-live' : ''}`}
+            aria-label={`${selectedCameraId} camera preview`}
+            onLoadedMetadata={(event) => {
+              if (event.currentTarget.videoWidth === 0 ||
+                  event.currentTarget.videoHeight === 0) {
                 return;
               }
               setImageSize({
-                streamUrl: preview.streamUrl,
-                width: event.currentTarget.naturalWidth,
-                height: event.currentTarget.naturalHeight,
+                generation: preview.generation,
+                width: event.currentTarget.videoWidth,
+                height: event.currentTarget.videoHeight,
               });
-              setLoadedUrl(preview.streamUrl);
-            }}
-            onError={() => {
-              if (!preview.onError(preview.streamUrl)) {
-                return;
-              }
-              setLoadedUrl('');
-              setImageSize(null);
             }} />
         )}
-        {hasStream && currentImageSize !== null && (
+        {preview.state === 'live' && currentImageSize !== null && (
             <DetectionOverlay snapshot={snapshot} cameraId={selectedCameraId}
               imageWidth={currentImageSize.width}
               imageHeight={currentImageSize.height} />

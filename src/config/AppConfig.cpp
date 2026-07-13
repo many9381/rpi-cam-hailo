@@ -227,18 +227,28 @@ common::Result<void> ValidateSecureRtspSemantics(
   return common::Result<void>::Ok();
 }
 
-common::Result<void> ValidateHttpPreviewSemantics(
-    const HttpPreviewConfig& config) {
-  if (config.width < 160U || config.width > 1920U || config.fps < 1U ||
-      config.fps > 15U || config.jpeg_quality < 1U ||
-      config.jpeg_quality > 100U || config.max_clients < 1U ||
-      config.max_clients > 2U || config.stale_timeout_ms < 500U ||
-      config.stale_timeout_ms > 10000U ||
-      config.stale_timeout_ms * config.fps < 2000U) {
+common::Result<void> ValidateHttpSnapshotSemantics(
+    const HttpSnapshotConfig& config) {
+  if (config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U) {
     return common::Result<void>::Err(
-        {"E_CONFIG_HTTP_PREVIEW", "http.preview configuration is invalid"});
+        {"E_CONFIG_HTTP_SNAPSHOT", "http.snapshot configuration is invalid"});
   }
 
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
+  if (config.fragment_duration_ms < 100U ||
+      config.fragment_duration_ms > 5000U || config.max_clients < 1U ||
+      config.max_clients > 16U || config.ring_fragments < 2U ||
+      config.ring_fragments > 64U || config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U ||
+      static_cast<std::uint64_t>(config.stale_timeout_ms) <
+          static_cast<std::uint64_t>(config.fragment_duration_ms) * 2U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_HTTP_LIVE", "http.live configuration is invalid"});
+  }
   return common::Result<void>::Ok();
 }
 
@@ -304,6 +314,7 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         AssignIfPresent(encoder, "bitrate_kbps",
                         config.camera.encoder.bitrate_kbps);
         AssignIfPresent(encoder, "gop", config.camera.encoder.gop);
+        AssignIfPresent(encoder, "preset", config.camera.encoder.preset);
       }
       const YAML::Node camera_ai = camera["ai"];
       if (camera_ai) {
@@ -314,20 +325,31 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
 
     const YAML::Node http = root["http"];
     if (http) {
+      if (http["preview"].IsDefined()) {
+        return common::Result<AppConfig>::Err(
+            {"E_CONFIG_HTTP_PREVIEW_RETIRED",
+             "http.preview is retired; use http.snapshot and http.live"});
+      }
       AssignIfPresent(http, "enabled", config.http.enabled);
       AssignIfPresent(http, "bind_ip", config.http.bind_ip);
       AssignIfPresent(http, "port", config.http.port);
       AssignIfPresent(http, "web_root", config.http.web_root);
       AssignIfPresent(http, "public_base_url", config.http.public_base_url);
-      const YAML::Node preview = http["preview"];
-      if (preview) {
-        AssignIfPresent(preview, "enabled", config.http.preview.enabled);
-        AssignIfPresent(preview, "width", config.http.preview.width);
-        AssignIfPresent(preview, "fps", config.http.preview.fps);
-        AssignIfPresent(preview, "jpeg_quality", config.http.preview.jpeg_quality);
-        AssignIfPresent(preview, "max_clients", config.http.preview.max_clients);
-        AssignIfPresent(preview, "stale_timeout_ms",
-                        config.http.preview.stale_timeout_ms);
+      const YAML::Node snapshot = http["snapshot"];
+      if (snapshot) {
+        AssignIfPresent(snapshot, "stale_timeout_ms",
+                        config.http.snapshot.stale_timeout_ms);
+      }
+      const YAML::Node live = http["live"];
+      if (live) {
+        AssignIfPresent(live, "enabled", config.http.live.enabled);
+        AssignIfPresent(live, "fragment_duration_ms",
+                        config.http.live.fragment_duration_ms);
+        AssignIfPresent(live, "max_clients", config.http.live.max_clients);
+        AssignIfPresent(live, "ring_fragments",
+                        config.http.live.ring_fragments);
+        AssignIfPresent(live, "stale_timeout_ms",
+                        config.http.live.stale_timeout_ms);
       }
       const YAML::Node tls = http["tls"];
       if (tls) {
@@ -436,10 +458,14 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     if (!secure_rtsp_semantics.ok()) {
       return common::Result<AppConfig>::Err(secure_rtsp_semantics.error());
     }
-    auto http_preview_semantics =
-        ValidateHttpPreviewSemantics(config.http.preview);
-    if (!http_preview_semantics.ok()) {
-      return common::Result<AppConfig>::Err(http_preview_semantics.error());
+    auto http_snapshot_semantics =
+        ValidateHttpSnapshotSemantics(config.http.snapshot);
+    if (!http_snapshot_semantics.ok()) {
+      return common::Result<AppConfig>::Err(http_snapshot_semantics.error());
+    }
+    auto http_live_semantics = ValidateHttpLiveSemantics(config.http.live);
+    if (!http_live_semantics.ok()) {
+      return common::Result<AppConfig>::Err(http_live_semantics.error());
     }
     if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
       const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();

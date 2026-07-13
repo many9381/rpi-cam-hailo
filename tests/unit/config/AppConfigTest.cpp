@@ -159,7 +159,7 @@ secure_rtsp:
   EXPECT_EQ(config.value().http.web_root, "web/dist");
 }
 
-TEST(AppConfigTest, DefaultsOmittedPreviewConfiguration) {
+TEST(AppConfigTest, DefaultsOmittedSnapshotConfiguration) {
   const auto config = LoadInlineConfig(R"(
 http:
   enabled: true
@@ -170,23 +170,50 @@ secure_rtsp:
 )");
 
   ASSERT_TRUE(config.ok()) << config.error().message;
-  EXPECT_TRUE(config.value().http.preview.enabled);
-  EXPECT_EQ(config.value().http.preview.width, 768U);
-  EXPECT_EQ(config.value().http.preview.fps, 8U);
-  EXPECT_EQ(config.value().http.preview.jpeg_quality, 80U);
-  EXPECT_EQ(config.value().http.preview.max_clients, 2U);
-  EXPECT_EQ(config.value().http.preview.stale_timeout_ms, 2000U);
+  EXPECT_EQ(config.value().http.snapshot.stale_timeout_ms, 2000U);
 }
 
-TEST(AppConfigTest, LoadsExplicitPreviewConfiguration) {
+TEST(AppConfigTest, DefaultsOmittedLiveConfiguration) {
   const auto config = LoadInlineConfig(R"(
 http:
-  preview:
+  enabled: true
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_TRUE(config.value().http.live.enabled);
+  EXPECT_EQ(config.value().http.live.fragment_duration_ms, 500U);
+  EXPECT_EQ(config.value().http.live.max_clients, 4U);
+  EXPECT_EQ(config.value().http.live.ring_fragments, 8U);
+  EXPECT_EQ(config.value().http.live.stale_timeout_ms, 2000U);
+}
+
+TEST(AppConfigTest, LoadsSnapshotStaleTimeoutConfiguration) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  snapshot:
+    stale_timeout_ms: 1750
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().http.snapshot.stale_timeout_ms, 1750U);
+}
+
+TEST(AppConfigTest, LoadsExplicitLiveConfiguration) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  live:
     enabled: true
-    width: 640
-    fps: 10
-    jpeg_quality: 75
-    max_clients: 1
+    fragment_duration_ms: 250
+    max_clients: 6
+    ring_fragments: 12
     stale_timeout_ms: 1500
 security:
   enabled: false
@@ -195,141 +222,70 @@ secure_rtsp:
 )");
 
   ASSERT_TRUE(config.ok()) << config.error().message;
-  EXPECT_TRUE(config.value().http.preview.enabled);
-  EXPECT_EQ(config.value().http.preview.width, 640U);
-  EXPECT_EQ(config.value().http.preview.fps, 10U);
-  EXPECT_EQ(config.value().http.preview.jpeg_quality, 75U);
-  EXPECT_EQ(config.value().http.preview.max_clients, 1U);
-  EXPECT_EQ(config.value().http.preview.stale_timeout_ms, 1500U);
+  EXPECT_EQ(config.value().http.live.fragment_duration_ms, 250U);
+  EXPECT_EQ(config.value().http.live.max_clients, 6U);
+  EXPECT_EQ(config.value().http.live.ring_fragments, 12U);
+  EXPECT_EQ(config.value().http.live.stale_timeout_ms, 1500U);
 }
 
-TEST(AppConfigTest, RejectsPreviewWidthOutsideSupportedRange) {
+TEST(AppConfigTest, RejectsInvalidLiveConfiguration) {
   ExpectConfigError(R"(
 http:
-  preview:
-    width: 159
+  live:
+    fragment_duration_ms: 0
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_LIVE");
   ExpectConfigError(R"(
 http:
-  preview:
-    width: 1921
+  live:
+    fragment_duration_ms: 1000
+    stale_timeout_ms: 1500
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_LIVE");
 }
 
-TEST(AppConfigTest, RejectsPreviewFpsOutsideSupportedRange) {
+TEST(AppConfigTest, RejectsSnapshotTimeoutOutsideSupportedRange) {
   ExpectConfigError(R"(
 http:
-  preview:
-    fps: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    fps: 16
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewJpegQualityOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
-    jpeg_quality: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    jpeg_quality: 101
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewClientCountOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
-    max_clients: 0
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-  ExpectConfigError(R"(
-http:
-  preview:
-    max_clients: 3
-security:
-  enabled: false
-secure_rtsp:
-  enabled: false
-)",
-                    "E_CONFIG_HTTP_PREVIEW");
-}
-
-TEST(AppConfigTest, RejectsPreviewTimeoutOutsideSupportedRange) {
-  ExpectConfigError(R"(
-http:
-  preview:
+  snapshot:
     stale_timeout_ms: 499
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_SNAPSHOT");
   ExpectConfigError(R"(
 http:
-  preview:
+  snapshot:
     stale_timeout_ms: 10001
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_SNAPSHOT");
 }
 
-TEST(AppConfigTest, RejectsPreviewTimeoutShorterThanTwoFrameIntervals) {
+TEST(AppConfigTest, RejectsRetiredPreviewConfiguration) {
   ExpectConfigError(R"(
 http:
   preview:
-    fps: 1
-    stale_timeout_ms: 1999
+    stale_timeout_ms: 1500
 security:
   enabled: false
 secure_rtsp:
   enabled: false
 )",
-                    "E_CONFIG_HTTP_PREVIEW");
+                    "E_CONFIG_HTTP_PREVIEW_RETIRED");
 }
 
 TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
@@ -356,13 +312,14 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
   EXPECT_EQ(cfg.value().camera.source.backend, "libcamera");
-  EXPECT_EQ(cfg.value().camera.video.width, 1536u);
-  EXPECT_EQ(cfg.value().camera.video.height, 864u);
-  EXPECT_EQ(cfg.value().camera.video.fps, 30u);
+  EXPECT_EQ(cfg.value().camera.video.width, 1920u);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080u);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50u);
   EXPECT_EQ(cfg.value().camera.video.format, "nv12");
   EXPECT_EQ(cfg.value().camera.encoder.backend, "x264");
-  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 3000u);
-  EXPECT_EQ(cfg.value().camera.encoder.gop, 30u);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000u);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25u);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().http.enabled);
   EXPECT_FALSE(cfg.value().http.tls.enabled);
   EXPECT_EQ(cfg.value().http.port, 8443u);
@@ -373,6 +330,21 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_TRUE(cfg.value().ai.models.empty());
   EXPECT_FALSE(cfg.value().camera.ai.enabled);
   EXPECT_TRUE(cfg.value().camera.ai.model_ids.empty());
+}
+
+TEST(AppConfigTest, LoadsExplicitCameraEncoderPreset) {
+  const auto config = LoadInlineConfig(R"(
+camera:
+  encoder:
+    preset: medium
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().camera.encoder.preset, "medium");
 }
 
 TEST(AppConfigTest, RtspClientAuthDefaultsToDisabledSha256Policy) {
@@ -638,6 +610,12 @@ TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   ASSERT_TRUE(cfg.ok()) << cfg.error().message;
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_EQ(cfg.value().camera.video.width, 1920U);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080U);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50U);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 1u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");
@@ -672,6 +650,12 @@ TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
   ASSERT_TRUE(cfg.ok()) << cfg.error().message;
   EXPECT_EQ(cfg.value().platform.target, "rpi5");
   EXPECT_EQ(cfg.value().camera.id, "imx708-main");
+  EXPECT_EQ(cfg.value().camera.video.width, 1920U);
+  EXPECT_EQ(cfg.value().camera.video.height, 1080U);
+  EXPECT_EQ(cfg.value().camera.video.fps, 50U);
+  EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");

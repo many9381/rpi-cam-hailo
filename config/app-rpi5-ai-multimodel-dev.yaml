@@ -7,14 +7,15 @@ camera:
     backend: libcamera
     camera_index: 0
   video:
-    width: 1536
-    height: 864
-    fps: 30
+    width: 1920
+    height: 1080
+    fps: 50
     format: nv12
   encoder:
     backend: x264
-    bitrate_kbps: 3000
-    gop: 30
+    bitrate_kbps: 6000
+    gop: 25
+    preset: ultrafast
   ai:
     enabled: true
     model_ids: [objects, pose]
@@ -25,6 +26,12 @@ http:
   port: 8443
   web_root: web/dist
   public_base_url: http://127.0.0.1:8443
+  live:
+    enabled: true
+    fragment_duration_ms: 500
+    max_clients: 4
+    ring_fragments: 8
+    stale_timeout_ms: 2000
   tls:
     enabled: false
 

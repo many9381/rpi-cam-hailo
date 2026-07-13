@@ -11,7 +11,7 @@
 #include "camera_firmware/ai/AiRuntimeController.hpp"
 #include "camera_firmware/ai/DetectionEventStore.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
-#include "camera_firmware/media/MjpegFrameHub.hpp"
+#include "camera_firmware/media/FragmentedMp4Hub.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
@@ -28,8 +28,21 @@ common::Result<void> RuntimeException() {
       {"E_RUNTIME_START", "firmware runtime component failed"});
 }
 
-common::Error PreviewUnavailable() {
-  return {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"};
+common::Error LiveUnavailable() {
+  return {"E_LIVE_UNAVAILABLE", "live stream is unavailable"};
+}
+
+media::FragmentedMp4HubConfig BuildLiveHubConfig(
+    const config::AppConfig& config) {
+  media::FragmentedMp4HubConfig live;
+  live.width = config.camera.video.width;
+  live.height = config.camera.video.height;
+  live.fps = config.camera.video.fps;
+  live.fragment_duration_ms = config.http.live.fragment_duration_ms;
+  live.stale_timeout_ms = config.http.live.stale_timeout_ms;
+  live.ring_limits.max_fragments = config.http.live.ring_fragments;
+  live.ring_limits.max_readers = config.http.live.max_clients;
+  return live;
 }
 
 std::string CameraStateForRuntime(FirmwareRuntimeState state) {
@@ -55,7 +68,7 @@ struct ProductionRuntimeGraph {
         ai_runtime(&detection_bus),
         ai_frame_pump(ai_frame_tap, ai_runtime),
         camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring),
-        mjpeg_frame_hub(snapshot_tap, config.http.preview),
+        fragmented_mp4_hub(encoded_ring),
         ai_controller(config, ai_runtime, ai_frame_pump) {}
 
   config::AppConfig config;
@@ -67,7 +80,7 @@ struct ProductionRuntimeGraph {
   ai::AiFramePump ai_frame_pump;
   media::EncodedRing encoded_ring{128U};
   media::CameraPipeline camera_pipeline;
-  media::MjpegFrameHub mjpeg_frame_hub;
+  media::FragmentedMp4Hub fragmented_mp4_hub;
   ai::AiRuntimeController ai_controller;
   rtsp::SecureRtspServer rtsp_server;
 };
@@ -120,13 +133,13 @@ common::Result<void> FirmwareRuntime::Start() {
     }
     camera_started_ = true;
 
-    auto preview = dependencies_.start_preview();
-    if (!preview.ok()) {
+    auto live = dependencies_.start_live();
+    if (!live.ok()) {
       UnwindStartedComponents();
       state_ = FirmwareRuntimeState::kFailed;
-      return preview;
+      return live;
     }
-    preview_started_ = true;
+    live_started_ = true;
     state_ = FirmwareRuntimeState::kRunning;
     return common::Result<void>::Ok();
   } catch (...) {
@@ -153,16 +166,25 @@ FirmwareRuntimeState FirmwareRuntime::State() const noexcept {
 
 std::vector<media::CameraPipelineStatus> FirmwareRuntime::CameraStatuses() const {
   std::lock_guard lock(mutex_);
+  const auto fallback_status = [this](std::string state) {
+    media::CameraPipelineStatus status;
+    status.id = config_.camera.id;
+    status.state = std::move(state);
+    status.width = config_.camera.video.width;
+    status.height = config_.camera.video.height;
+    status.configured_fps = config_.camera.video.fps;
+    return std::vector<media::CameraPipelineStatus>{std::move(status)};
+  };
   if (!RunningLocked()) {
-    return {{config_.camera.id, CameraStateForRuntime(state_), false}};
+    return fallback_status(CameraStateForRuntime(state_));
   }
   if (!dependencies_.camera_statuses) {
-    return {{config_.camera.id, "error", false}};
+    return fallback_status("error");
   }
   try {
     return dependencies_.camera_statuses();
   } catch (...) {
-    return {{config_.camera.id, "error", false}};
+    return fallback_status("error");
   }
 }
 
@@ -226,18 +248,32 @@ std::optional<std::vector<std::uint8_t>> FirmwareRuntime::Snapshot(
   }
 }
 
-common::Result<std::shared_ptr<media::MjpegStreamReader>>
-FirmwareRuntime::OpenMjpegPreview(std::string_view camera_id) {
+media::FragmentedMp4HubStatus FirmwareRuntime::LiveStatus() const {
   std::lock_guard lock(mutex_);
-  if (!RunningLocked() || !dependencies_.open_mjpeg_preview) {
-    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
-        PreviewUnavailable());
+  if (!RunningLocked() || !dependencies_.live_status) {
+    return {};
   }
   try {
-    return dependencies_.open_mjpeg_preview(camera_id);
+    return dependencies_.live_status();
   } catch (...) {
-    return common::Result<std::shared_ptr<media::MjpegStreamReader>>::Err(
-        PreviewUnavailable());
+    media::FragmentedMp4HubStatus status;
+    status.state = "error";
+    status.last_error_code = "E_LIVE_UNAVAILABLE";
+    status.last_error_message = "live stream is unavailable";
+    return status;
+  }
+}
+
+common::Result<media::FragmentRing::Reader> FirmwareRuntime::OpenLiveStream(
+    std::string_view camera_id) {
+  std::lock_guard lock(mutex_);
+  if (!RunningLocked() || !dependencies_.open_live_stream) {
+    return common::Result<media::FragmentRing::Reader>::Err(LiveUnavailable());
+  }
+  try {
+    return dependencies_.open_live_stream(camera_id);
+  } catch (...) {
+    return common::Result<media::FragmentRing::Reader>::Err(LiveUnavailable());
   }
 }
 
@@ -279,14 +315,14 @@ std::uint64_t FirmwareRuntime::PerMediaKeyZeroizeCount() const noexcept {
 }
 
 void FirmwareRuntime::UnwindStartedComponents() noexcept {
-  if (preview_started_) {
+  if (live_started_) {
     try {
-      if (dependencies_.stop_preview) {
-        dependencies_.stop_preview();
+      if (dependencies_.stop_live) {
+        dependencies_.stop_live();
       }
     } catch (...) {
     }
-    preview_started_ = false;
+    live_started_ = false;
   }
   if (camera_started_) {
     try {
@@ -321,6 +357,11 @@ bool FirmwareRuntime::RunningLocked() const noexcept {
   return state_ == FirmwareRuntimeState::kRunning;
 }
 
+std::chrono::milliseconds FirmwareRuntime::SnapshotMaximumAge(
+    const config::AppConfig& config) noexcept {
+  return std::chrono::milliseconds(config.http.snapshot.stale_timeout_ms);
+}
+
 FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     const config::AppConfig& config) {
   auto graph = std::make_shared<ProductionRuntimeGraph>(config);
@@ -333,16 +374,21 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
   dependencies.start_camera = [graph] {
     return graph->camera_pipeline.Start(graph->config);
   };
-  dependencies.start_preview = [graph] {
-    return graph->mjpeg_frame_hub.Start();
+  dependencies.start_live = [graph] {
+    if (!graph->config.http.live.enabled) {
+      return common::Result<void>::Ok();
+    }
+    return graph->fragmented_mp4_hub.Start(BuildLiveHubConfig(graph->config));
   };
-  dependencies.stop_preview = [graph] { graph->mjpeg_frame_hub.Stop(); };
+  dependencies.stop_live = [graph] { graph->fragmented_mp4_hub.Stop(); };
   dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
   dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
   dependencies.stop_rtsp = [graph] { graph->rtsp_server.Stop(); };
   dependencies.camera_statuses = [graph] {
-    return graph->camera_pipeline.Status(std::chrono::milliseconds(
-        graph->config.http.preview.stale_timeout_ms));
+    return graph->camera_pipeline.Status(SnapshotMaximumAge(graph->config));
+  };
+  dependencies.live_status = [graph] {
+    return graph->fragmented_mp4_hub.Status();
   };
   dependencies.ai_status = [graph] { return graph->ai_runtime.Status(); };
   dependencies.ai_runner_statuses = [graph] {
@@ -356,12 +402,14 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
       return std::optional<std::vector<std::uint8_t>>{};
     }
     return media::BuildLatestSnapshotJpeg(
-        graph->snapshot_tap, camera_id,
-        std::chrono::milliseconds(
-            graph->config.http.preview.stale_timeout_ms));
+        graph->snapshot_tap, camera_id, SnapshotMaximumAge(graph->config));
   };
-  dependencies.open_mjpeg_preview = [graph](std::string_view camera_id) {
-    return graph->mjpeg_frame_hub.Open(camera_id);
+  dependencies.open_live_stream = [graph](std::string_view camera_id) {
+    if (camera_id != graph->config.camera.id) {
+      return common::Result<media::FragmentRing::Reader>::Err(
+          {"E_LIVE_NOT_FOUND", "camera not found"});
+    }
+    return graph->fragmented_mp4_hub.OpenReader();
   };
   dependencies.detection_snapshot = [graph] {
     return graph->detection_event_store.Snapshot();
@@ -379,12 +427,13 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
 
 bool FirmwareRuntime::DependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
-         dependencies_.start_camera && dependencies_.start_preview &&
-         dependencies_.stop_preview && dependencies_.stop_camera &&
+         dependencies_.start_camera && dependencies_.start_live &&
+         dependencies_.stop_live && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp &&
-         dependencies_.camera_statuses && dependencies_.ai_status &&
+         dependencies_.camera_statuses && dependencies_.live_status &&
+         dependencies_.ai_status &&
          dependencies_.ai_runner_statuses && dependencies_.restart_ai &&
-         dependencies_.snapshot && dependencies_.open_mjpeg_preview &&
+         dependencies_.snapshot && dependencies_.open_live_stream &&
          dependencies_.detection_snapshot &&
          dependencies_.subscribe_detections &&
          dependencies_.per_media_key_zeroize_count;
@@ -392,8 +441,8 @@ bool FirmwareRuntime::DependenciesComplete() const noexcept {
 
 bool FirmwareRuntime::LifecycleDependenciesComplete() const noexcept {
   return dependencies_.start_rtsp && dependencies_.start_ai &&
-         dependencies_.start_camera && dependencies_.start_preview &&
-         dependencies_.stop_preview && dependencies_.stop_camera &&
+         dependencies_.start_camera && dependencies_.start_live &&
+         dependencies_.stop_live && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp;
 }
 

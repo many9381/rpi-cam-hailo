@@ -85,6 +85,38 @@ TEST(ServiceResponseTest, HealthJsonContainsStatus) {
   EXPECT_EQ(json["status"].asString(), "ok");
 }
 
+TEST(ServiceResponseTest, CameraStatusJsonIncludesCaptureDiagnostics) {
+  camera_firmware::service::CameraStatus status;
+  status.id = "imx708-main";
+  status.state = "running";
+  status.snapshot_available = true;
+  status.width = 1920U;
+  status.height = 1080U;
+  status.configured_fps = 50U;
+  status.capture_fps = 49.8;
+  status.encoded_fps = 49.7;
+  status.captured_frames = 1000U;
+  status.encoded_frames = 998U;
+  status.capture_error_count = 2U;
+  status.encode_error_count = 1U;
+
+  const auto json =
+      camera_firmware::service::BuildCameraStatusJson(status);
+
+  EXPECT_EQ(json["id"].asString(), "imx708-main");
+  EXPECT_EQ(json["state"].asString(), "running");
+  EXPECT_TRUE(json["snapshot_available"].asBool());
+  EXPECT_EQ(json["width"].asUInt(), 1920U);
+  EXPECT_EQ(json["height"].asUInt(), 1080U);
+  EXPECT_EQ(json["configured_fps"].asUInt(), 50U);
+  EXPECT_DOUBLE_EQ(json["capture_fps"].asDouble(), 49.8);
+  EXPECT_DOUBLE_EQ(json["encoded_fps"].asDouble(), 49.7);
+  EXPECT_EQ(json["captured_frames"].asUInt64(), 1000U);
+  EXPECT_EQ(json["encoded_frames"].asUInt64(), 998U);
+  EXPECT_EQ(json["capture_error_count"].asUInt64(), 2U);
+  EXPECT_EQ(json["encode_error_count"].asUInt64(), 1U);
+}
+
 TEST(ServiceResponseTest, StreamJsonUsesConfiguredPublicHost) {
   camera_firmware::config::SecureRtspConfig secure_rtsp;
   secure_rtsp.control_tls = true;
@@ -889,12 +921,12 @@ TEST(ServiceResponseTest, SnapshotResponseReturnsUnavailableForUnknownCamera) {
   EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
 }
 
-TEST(ServiceResponseTest, PreviewUnavailableUsesOnlyPublicErrorContract) {
-  auto response = camera_firmware::service::BuildMjpegPreviewResponse(
+TEST(ServiceResponseTest, LiveUnavailableUsesOnlyPublicErrorContract) {
+  auto response = camera_firmware::service::BuildLiveMp4Response(
       [](const std::string&) {
         return camera_firmware::common::Result<
-            camera_firmware::service::MjpegPreviewStreamCallback>::Err(
-            {"E_PREVIEW_UNAVAILABLE", "private runtime detail"});
+            camera_firmware::service::LiveMp4StreamCallback>::Err(
+            {"E_LIVE_STALE", "private fragment timing detail"});
       },
       "imx708-main");
 
@@ -902,16 +934,16 @@ TEST(ServiceResponseTest, PreviewUnavailableUsesOnlyPublicErrorContract) {
   EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
   const auto json = response->jsonObject();
   ASSERT_NE(json, nullptr);
-  EXPECT_EQ((*json)["code"].asString(), "E_PREVIEW_UNAVAILABLE");
-  EXPECT_EQ((*json)["message"].asString(), "MJPEG preview is unavailable");
+  EXPECT_EQ((*json)["code"].asString(), "E_LIVE_UNAVAILABLE");
+  EXPECT_EQ((*json)["message"].asString(), "live preview is unavailable");
 }
 
-TEST(ServiceResponseTest, PreviewCapacityUsesOnlyPublicErrorContract) {
-  auto response = camera_firmware::service::BuildMjpegPreviewResponse(
+TEST(ServiceResponseTest, LiveCapacityUsesOnlyPublicErrorContract) {
+  auto response = camera_firmware::service::BuildLiveMp4Response(
       [](const std::string&) {
         return camera_firmware::common::Result<
-            camera_firmware::service::MjpegPreviewStreamCallback>::Err(
-            {"E_PREVIEW_CAPACITY", "private reader detail"});
+            camera_firmware::service::LiveMp4StreamCallback>::Err(
+            {"E_LIVE_CAPACITY", "private reader detail"});
       },
       "imx708-main");
 
@@ -919,26 +951,26 @@ TEST(ServiceResponseTest, PreviewCapacityUsesOnlyPublicErrorContract) {
   EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
   const auto json = response->jsonObject();
   ASSERT_NE(json, nullptr);
-  EXPECT_EQ((*json)["code"].asString(), "E_PREVIEW_CAPACITY");
+  EXPECT_EQ((*json)["code"].asString(), "E_LIVE_CAPACITY");
   EXPECT_EQ((*json)["message"].asString(),
-            "MJPEG preview reader capacity is full");
+            "live preview reader capacity is full");
 }
 
-TEST(ServiceResponseTest, PreviewStreamResponseWritesBytesAndSignalsRelease) {
+TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   struct StreamState {
-    std::string bytes{"preview-bytes"};
+    std::string bytes{"fragmented-mp4-bytes"};
     bool released{false};
   };
   auto state = std::make_shared<StreamState>();
 
-  auto response = camera_firmware::service::BuildMjpegPreviewResponse(
+  auto response = camera_firmware::service::BuildLiveMp4Response(
       [state](const std::string& camera_id) {
         if (camera_id != "imx708-main") {
           return camera_firmware::common::Result<
-              camera_firmware::service::MjpegPreviewStreamCallback>::Err(
-              {"E_PREVIEW_UNAVAILABLE", "MJPEG preview is unavailable"});
+              camera_firmware::service::LiveMp4StreamCallback>::Err(
+              {"E_LIVE_NOT_FOUND", "camera not found"});
         }
-        camera_firmware::service::MjpegPreviewStreamCallback stream =
+        camera_firmware::service::LiveMp4StreamCallback stream =
             [state](char* output, std::size_t capacity) {
               if (output == nullptr) {
                 state->released = true;
@@ -949,22 +981,21 @@ TEST(ServiceResponseTest, PreviewStreamResponseWritesBytesAndSignalsRelease) {
               return count;
             };
         return camera_firmware::common::Result<
-            camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
             std::move(stream));
       },
       "imx708-main");
 
   ASSERT_NE(response, nullptr);
   EXPECT_EQ(response->statusCode(), drogon::k200OK);
-  EXPECT_EQ(response->contentTypeString(),
-            "multipart/x-mixed-replace; boundary=cf-frame");
+  EXPECT_EQ(response->contentTypeString(), "video/mp4");
   EXPECT_EQ(response->getHeader("Content-Encoding"), "identity");
   ASSERT_TRUE(response->streamCallback());
 
   std::array<char, 32> output{};
   const auto written =
       response->streamCallback()(output.data(), output.size());
-  EXPECT_EQ(std::string_view(output.data(), written), "preview-bytes");
+  EXPECT_EQ(std::string_view(output.data(), written), "fragmented-mp4-bytes");
   EXPECT_FALSE(state->released);
 
   EXPECT_EQ(response->streamCallback()(nullptr, 0U), 0U);

@@ -20,6 +20,15 @@ struct CameraPipelineStatus {
   std::string id{"imx708-main"};
   std::string state{"stopped"};
   bool snapshot_available{false};
+  unsigned int width{0U};
+  unsigned int height{0U};
+  unsigned int configured_fps{0U};
+  double capture_fps{0.0};
+  double encoded_fps{0.0};
+  std::uint64_t captured_frames{0U};
+  std::uint64_t encoded_frames{0U};
+  std::uint64_t capture_error_count{0U};
+  std::uint64_t encode_error_count{0U};
 };
 
 class CameraPipeline {

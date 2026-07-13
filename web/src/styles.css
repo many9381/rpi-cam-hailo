@@ -402,8 +402,8 @@ input:focus-visible {
 }
 
 .status-value {
-  max-width: min(50%, 360px);
-  overflow-wrap: anywhere;
+  max-width: 360px;
+  overflow-wrap: break-word;
   color: #48554e;
   font-size: 13px;
   font-weight: 700;
@@ -565,7 +565,7 @@ input:focus-visible {
   background: #11191c;
 }
 
-.camera-preview-image {
+.camera-preview-video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -574,7 +574,7 @@ input:focus-visible {
   object-fit: contain;
 }
 
-.camera-preview-image.is-loaded { visibility: visible; }
+.camera-preview-video.is-live { visibility: visible; }
 
 .detection-overlay {
   position: absolute;

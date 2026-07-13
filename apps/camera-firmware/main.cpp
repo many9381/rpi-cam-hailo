@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -11,6 +12,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <drogon/HttpAppFramework.h>
 
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
@@ -33,9 +36,59 @@ using camera_firmware::common::Logger;
 
 std::atomic_bool g_stop_requested{false};
 
-void HandleSignal(int) {
+class LiveMp4ByteStream {
+ public:
+  LiveMp4ByteStream(
+      camera_firmware::media::FragmentRing::Reader reader,
+      std::chrono::milliseconds stale_timeout)
+      : reader_(std::move(reader)), stale_timeout_(stale_timeout) {}
+
+  std::size_t Read(char* output, std::size_t capacity) {
+    if (output == nullptr) {
+      Close();
+      return 0U;
+    }
+    if (capacity == 0U || !reader_.valid()) {
+      return 0U;
+    }
+
+    while (!current_bytes_ || current_offset_ >= current_bytes_->size()) {
+      current_bytes_.reset();
+      current_offset_ = 0U;
+      auto next = reader_.WaitNext(stale_timeout_);
+      if (!next.ok() || !next.value().has_value() ||
+          !next.value()->bytes || next.value()->bytes->empty()) {
+        Close();
+        return 0U;
+      }
+      current_bytes_ = std::move(next).value()->bytes;
+    }
+
+    const auto count =
+        std::min(capacity, current_bytes_->size() - current_offset_);
+    std::copy_n(current_bytes_->data() + current_offset_, count, output);
+    current_offset_ += count;
+    return count;
+  }
+
+ private:
+  void Close() noexcept {
+    reader_ = {};
+    current_bytes_.reset();
+    current_offset_ = 0U;
+  }
+
+  camera_firmware::media::FragmentRing::Reader reader_;
+  const std::chrono::milliseconds stale_timeout_;
+  std::shared_ptr<const std::vector<std::uint8_t>> current_bytes_;
+  std::size_t current_offset_{0U};
+};
+
+void RequestShutdown() {
   g_stop_requested.store(true);
 }
+
+void HandleSignal(int) { RequestShutdown(); }
 
 int PrintError(const Error& error) {
   std::cerr << error.code << ": " << error.message << '\n';
@@ -45,6 +98,8 @@ int PrintError(const Error& error) {
 void InstallSignalHandlers() {
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
+  drogon::app().setIntSignalHandler(RequestShutdown);
+  drogon::app().setTermSignalHandler(RequestShutdown);
 }
 
 void WaitForShutdown() {
@@ -129,7 +184,20 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
   std::vector<camera_firmware::service::CameraStatus> result;
   result.reserve(statuses.size());
   for (const auto& status : statuses) {
-    result.push_back({status.id, status.state, status.snapshot_available});
+    camera_firmware::service::CameraStatus service_status;
+    service_status.id = status.id;
+    service_status.state = status.state;
+    service_status.snapshot_available = status.snapshot_available;
+    service_status.width = status.width;
+    service_status.height = status.height;
+    service_status.configured_fps = status.configured_fps;
+    service_status.capture_fps = status.capture_fps;
+    service_status.encoded_fps = status.encoded_fps;
+    service_status.captured_frames = status.captured_frames;
+    service_status.encoded_frames = status.encoded_frames;
+    service_status.capture_error_count = status.capture_error_count;
+    service_status.encode_error_count = status.encode_error_count;
+    result.push_back(std::move(service_status));
   }
   return result;
 }
@@ -231,28 +299,26 @@ int RunFirmware(const std::string& config_path) {
       [&runtime](const std::string& camera_id) {
         return runtime.Snapshot(camera_id);
       };
-  service_args.preview_stream_callback =
-      [&runtime](const std::string& camera_id)
+  service_args.live_stream_callback =
+      [&runtime, stale_timeout = std::chrono::milliseconds(
+                     cfg.value().http.live.stale_timeout_ms)](
+          const std::string& camera_id)
           -> camera_firmware::common::Result<
-              camera_firmware::service::MjpegPreviewStreamCallback> {
-        auto opened = runtime.OpenMjpegPreview(camera_id);
+              camera_firmware::service::LiveMp4StreamCallback> {
+        auto opened = runtime.OpenLiveStream(camera_id);
         if (!opened.ok()) {
           return camera_firmware::common::Result<
-              camera_firmware::service::MjpegPreviewStreamCallback>::Err(
+              camera_firmware::service::LiveMp4StreamCallback>::Err(
               opened.error());
         }
-        auto reader = std::move(opened).value();
-        camera_firmware::service::MjpegPreviewStreamCallback stream =
-            [reader = std::move(reader)](char* output,
-                                         std::size_t capacity) mutable {
-              if (output == nullptr) {
-                reader.reset();
-                return std::size_t{0};
-              }
-              return reader ? reader->Read(output, capacity) : std::size_t{0};
+        auto state = std::make_shared<LiveMp4ByteStream>(
+            std::move(opened).value(), stale_timeout);
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [state = std::move(state)](char* output, std::size_t capacity) {
+              return state->Read(output, capacity);
             };
         return camera_firmware::common::Result<
-            camera_firmware::service::MjpegPreviewStreamCallback>::Ok(
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
             std::move(stream));
       };
 
