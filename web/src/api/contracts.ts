@@ -79,6 +79,9 @@ function parseAiRunner(value: unknown): AiRunnerStatus {
       !isNonnegativeInteger(value.submitted_frames) ||
       !isNonnegativeInteger(value.processed_frames) ||
       !isNonnegativeInteger(value.dropped_frames) ||
+      !isFiniteNumber(value.last_preprocess_ms) || value.last_preprocess_ms < 0 ||
+      !isFiniteNumber(value.last_inference_ms) || value.last_inference_ms < 0 ||
+      !isNonnegativeInteger(value.last_processed_sequence) ||
       !isString(value.last_error_code) || !isString(value.last_error_message)) {
     return invalid('Invalid camera response');
   }
@@ -89,6 +92,9 @@ function parseAiRunner(value: unknown): AiRunnerStatus {
     submitted_frames: value.submitted_frames,
     processed_frames: value.processed_frames,
     dropped_frames: value.dropped_frames,
+    last_preprocess_ms: value.last_preprocess_ms,
+    last_inference_ms: value.last_inference_ms,
+    last_processed_sequence: value.last_processed_sequence,
     last_error_code: value.last_error_code,
     last_error_message: value.last_error_message,
   };
@@ -160,7 +166,8 @@ function parseKeypoint(value: unknown): DetectionKeypoint {
 }
 
 function parseDetection(value: unknown): Detection {
-  if (!isRecord(value) || !isString(value.label) ||
+  if (!isRecord(value) || !isNonnegativeInteger(value.class_id) ||
+      !isString(value.label) ||
       !isFiniteNumber(value.confidence) || !isRecord(value.box) ||
       !isFiniteNumber(value.box.x) || !isFiniteNumber(value.box.y) ||
       !isFiniteNumber(value.box.width) || !isFiniteNumber(value.box.height) ||
@@ -168,6 +175,7 @@ function parseDetection(value: unknown): Detection {
     return invalid('Invalid detection response');
   }
   return {
+    class_id: value.class_id,
     label: value.label,
     confidence: value.confidence,
     box: { x: value.box.x, y: value.box.y,

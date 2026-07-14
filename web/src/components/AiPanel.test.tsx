@@ -19,9 +19,13 @@ const base: AiStatus = {
   runners: [
     { camera_id: 'cam-a', model_id: 'objects', model_kind: 'object_detection',
       submitted_frames: 11, processed_frames: 10, dropped_frames: 1,
+      last_preprocess_ms: 1.2, last_inference_ms: 3.4,
+      last_processed_sequence: 11,
       last_error_code: 'E_AI_POSTPROCESS', last_error_message: 'malformed output' },
     { camera_id: 'cam-a', model_id: 'pose', model_kind: 'pose',
       submitted_frames: 7, processed_frames: 7, dropped_frames: 0,
+      last_preprocess_ms: 0.9, last_inference_ms: 2.8,
+      last_processed_sequence: 7,
       last_error_code: '', last_error_message: '' },
   ],
 };
@@ -29,11 +33,11 @@ const base: AiStatus = {
 const detections = { events: [
   { camera_id: 'cam-a', model_id: 'objects', model_kind: 'object_detection',
     result_state: 'decoded', frame_sequence: 5, frame_timestamp_ns: 50,
-    detections: [{ label: 'car', confidence: 0.88,
+    detections: [{ class_id: 2, label: 'car', confidence: 0.88,
       box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, keypoints: [] }] },
   { camera_id: 'cam-a', model_id: 'pose', model_kind: 'pose',
     result_state: 'decoded', frame_sequence: 5, frame_timestamp_ns: 50,
-    detections: [{ label: 'person', confidence: 0.91,
+    detections: [{ class_id: 0, label: 'person', confidence: 0.91,
       box: { x: 0.2, y: 0.2, width: 0.3, height: 0.5 },
       keypoints: [{ name: 'nose', x: 0.3, y: 0.25, confidence: 0.9 }] }] },
 ] };
@@ -55,6 +59,8 @@ describe('AiPanel', () => {
     expect(aiColumns.getAllByText('object_detection')).toHaveLength(2);
     expect(aiColumns.getAllByText('pose')).toHaveLength(4);
     expect(screen.getByText(/submitted 11/i)).toBeVisible();
+    expect(screen.getByText('Frame 11 / preprocess 1.2 ms / inference 3.4 ms'))
+      .toBeVisible();
     expect(screen.getByText(/E_AI_POSTPROCESS.*malformed output/i)).toBeVisible();
   });
 

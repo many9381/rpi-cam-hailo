@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -355,6 +356,9 @@ TEST(ServiceResponseTest, AiStatusSerializesRunnerStatuses) {
   objects.submitted_frames = 11;
   objects.processed_frames = 10;
   objects.dropped_frames = 1;
+  objects.last_preprocess_ms = 1.2;
+  objects.last_inference_ms = 3.4;
+  objects.last_processed_sequence = 11;
   objects.last_error_code = "E_AI_POSTPROCESS";
   objects.last_error_message = "malformed output";
   status.runners.push_back(objects);
@@ -378,6 +382,9 @@ TEST(ServiceResponseTest, AiStatusSerializesRunnerStatuses) {
   EXPECT_EQ(first["submitted_frames"].asUInt64(), 11U);
   EXPECT_EQ(first["processed_frames"].asUInt64(), 10U);
   EXPECT_EQ(first["dropped_frames"].asUInt64(), 1U);
+  EXPECT_DOUBLE_EQ(first["last_preprocess_ms"].asDouble(), 1.2);
+  EXPECT_DOUBLE_EQ(first["last_inference_ms"].asDouble(), 3.4);
+  EXPECT_EQ(first["last_processed_sequence"].asUInt64(), 11U);
   EXPECT_EQ(first["last_error_code"].asString(), "E_AI_POSTPROCESS");
   EXPECT_EQ(first["last_error_message"].asString(), "malformed output");
 
@@ -389,6 +396,29 @@ TEST(ServiceResponseTest, AiStatusSerializesRunnerStatuses) {
   EXPECT_EQ(second["dropped_frames"].asUInt64(), 0U);
   EXPECT_EQ(second["last_error_code"].asString(), "");
   EXPECT_EQ(second["last_error_message"].asString(), "");
+}
+
+TEST(ServiceResponseTest, AiStatusClampsInvalidRunnerTimingValues) {
+  camera_firmware::service::AiServiceStatus status;
+  camera_firmware::service::AiRunnerServiceStatus runner;
+  runner.last_preprocess_ms = -1.0;
+  runner.last_inference_ms = std::numeric_limits<double>::quiet_NaN();
+  status.runners.push_back(runner);
+
+  auto json = camera_firmware::service::BuildAiStatusJson(status);
+
+  ASSERT_EQ(json["runners"].size(), 1U);
+  EXPECT_DOUBLE_EQ(json["runners"][0]["last_preprocess_ms"].asDouble(), 0.0);
+  EXPECT_DOUBLE_EQ(json["runners"][0]["last_inference_ms"].asDouble(), 0.0);
+
+  status.runners[0].last_preprocess_ms =
+      std::numeric_limits<double>::infinity();
+  status.runners[0].last_inference_ms =
+      -std::numeric_limits<double>::infinity();
+  json = camera_firmware::service::BuildAiStatusJson(status);
+
+  EXPECT_DOUBLE_EQ(json["runners"][0]["last_preprocess_ms"].asDouble(), 0.0);
+  EXPECT_DOUBLE_EQ(json["runners"][0]["last_inference_ms"].asDouble(), 0.0);
 }
 
 TEST(ServiceResponseTest, AiRestartResponseInvokesCallback) {
@@ -506,6 +536,7 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   event.frame_timestamp = std::chrono::nanoseconds{123456789};
 
   camera_firmware::ai::Detection detection;
+  detection.class_id = 2;
   detection.label = "car";
   detection.confidence = 0.88F;
   detection.box.x = 0.15F;
@@ -539,6 +570,7 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   EXPECT_EQ(serialized_event["frame_timestamp_ns"].asInt64(), 123456789);
   ASSERT_EQ(serialized_event["detections"].size(), 1U);
   const auto& serialized_detection = serialized_event["detections"][0];
+  EXPECT_EQ(serialized_detection["class_id"].asInt(), 2);
   EXPECT_EQ(serialized_detection["label"].asString(), "car");
   EXPECT_FLOAT_EQ(serialized_detection["confidence"].asFloat(), 0.88F);
   EXPECT_FLOAT_EQ(serialized_detection["box"]["x"].asFloat(), 0.15F);
@@ -559,6 +591,25 @@ TEST(ServiceResponseTest, DetectionSnapshotJsonSerializesDetectionEvent) {
   EXPECT_FLOAT_EQ(serialized_detection["keypoints"][1]["y"].asFloat(), 0.29F);
   EXPECT_FLOAT_EQ(
       serialized_detection["keypoints"][1]["confidence"].asFloat(), 0.79F);
+}
+
+TEST(ServiceResponseTest, DetectionSnapshotJsonFiltersInvalidClassIds) {
+  camera_firmware::ai::DetectionEvent event;
+  camera_firmware::ai::Detection invalid;
+  invalid.label = "invalid";
+  camera_firmware::ai::Detection valid;
+  valid.class_id = 0;
+  valid.label = "person";
+  event.detections = {invalid, valid};
+
+  const auto json =
+      camera_firmware::service::BuildDetectionSnapshotJson({event});
+
+  ASSERT_EQ(json["events"].size(), 1U);
+  ASSERT_EQ(json["events"][0]["detections"].size(), 1U);
+  EXPECT_EQ(json["events"][0]["detections"][0]["class_id"].asInt(), 0);
+  EXPECT_EQ(json["events"][0]["detections"][0]["label"].asString(),
+            "person");
 }
 
 TEST(ServiceResponseTest, DetectionSnapshotResponseReturnsEmptyWithoutProvider) {
@@ -606,6 +657,7 @@ TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
   event.frame_sequence = 88;
   event.frame_timestamp = std::chrono::nanoseconds{987654321};
   camera_firmware::ai::Detection detection;
+  detection.class_id = 0;
   detection.label = "person";
   detection.confidence = 0.91F;
   camera_firmware::ai::Keypoint keypoint;
@@ -626,6 +678,7 @@ TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
   EXPECT_NE(payload.find("\"frame_sequence\":88"), std::string::npos);
   EXPECT_NE(payload.find("\"frame_timestamp_ns\":987654321"),
             std::string::npos);
+  EXPECT_NE(payload.find("\"class_id\":0"), std::string::npos);
   EXPECT_NE(payload.find("\"keypoints\""), std::string::npos);
   EXPECT_NE(payload.find("\"name\":\"nose\""), std::string::npos);
   EXPECT_TRUE(payload.ends_with("\n\n"));

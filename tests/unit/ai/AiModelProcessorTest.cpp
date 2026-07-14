@@ -106,13 +106,20 @@ std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence,
   constexpr int kValuesPerClass = 1 + (kMaxBoxesPerClass * 5);
 
   std::vector<float> tensor(kClassCount * kValuesPerClass, 0.0F);
-  const std::size_t class_offset = 2U * kValuesPerClass;
-  tensor[class_offset] = 1.0F;
-  tensor[class_offset + 1U] = y_min;
-  tensor[class_offset + 2U] = x_min;
-  tensor[class_offset + 3U] = y_max;
-  tensor[class_offset + 4U] = x_max;
-  tensor[class_offset + 5U] = confidence;
+  std::size_t offset = 0U;
+  for (int class_index = 0; class_index < kClassCount; ++class_index) {
+    if (class_index != 2) {
+      tensor[offset++] = 0.0F;
+      continue;
+    }
+
+    tensor[offset++] = 1.0F;
+    tensor[offset++] = y_min;
+    tensor[offset++] = x_min;
+    tensor[offset++] = y_max;
+    tensor[offset++] = x_max;
+    tensor[offset++] = confidence;
+  }
 
   std::vector<std::uint8_t> bytes(tensor.size() * sizeof(float));
   std::memcpy(bytes.data(), tensor.data(), bytes.size());
@@ -175,7 +182,7 @@ TEST(AiModelProcessorTest, PreprocessBuildsRgb8InputSizedForModel) {
   EXPECT_EQ(input.value().view().size, input.value().bytes.size());
 }
 
-TEST(AiModelProcessorTest, PreprocessMapsNv12PlanesAndConvertsToRgb8) {
+TEST(AiModelProcessorTest, PreprocessMapsNv12PlanesWithBilinearRgbResize) {
   auto model = ProcessorModel("objects", "object_detection");
   model.input.width = 2;
   model.input.height = 2;
@@ -195,7 +202,7 @@ TEST(AiModelProcessorTest, PreprocessMapsNv12PlanesAndConvertsToRgb8) {
 
   ASSERT_TRUE(input.ok()) << input.error().message;
   const std::vector<std::uint8_t> expected = {
-      0, 0, 0, 255, 255, 255,
+      34, 34, 34, 228, 228, 228,
       114, 114, 114, 114, 114, 114,
   };
   EXPECT_EQ(input.value().bytes, expected);
@@ -392,6 +399,7 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedYoloDetections) {
   EXPECT_EQ(events[0].result_state, "decoded");
   EXPECT_EQ(events[0].frame_sequence, 22U);
   ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_EQ(events[0].detections[0].class_id, 2);
   EXPECT_EQ(events[0].detections[0].label, "car");
   EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.91F);
   EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);
@@ -565,6 +573,7 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedPoseKeypoints) {
   EXPECT_EQ(events[0].frame_sequence, 42U);
   EXPECT_EQ(events[0].frame_timestamp, std::chrono::nanoseconds{123456});
   ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_EQ(events[0].detections[0].class_id, 0);
   EXPECT_EQ(events[0].detections[0].label, "person");
   EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.92F);
   EXPECT_FLOAT_EQ(events[0].detections[0].box.x, 0.10F);

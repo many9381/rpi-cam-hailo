@@ -214,6 +214,8 @@ pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 pkg_check_modules(LIBSRTP2 REQUIRED IMPORTED_TARGET libsrtp2>=2.7.0)
 pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
 pkg_check_modules(X264 REQUIRED IMPORTED_TARGET x264)
+pkg_check_modules(LIBSWSCALE REQUIRED IMPORTED_TARGET libswscale)
+pkg_check_modules(LIBAVUTIL REQUIRED IMPORTED_TARGET libavutil)
 
 find_path(HAILORT_INCLUDE_DIR
     NAMES hailo/hailort.h hailo/vdevice.hpp hailo/infer_model.hpp

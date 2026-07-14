@@ -235,6 +235,9 @@ camera_firmware::service::AiServiceStatus ToServiceAiStatus(
     runner_status.submitted_frames = runner.submitted_frames;
     runner_status.processed_frames = runner.processed_frames;
     runner_status.dropped_frames = runner.dropped_frames;
+    runner_status.last_preprocess_ms = runner.last_preprocess_ms;
+    runner_status.last_inference_ms = runner.last_inference_ms;
+    runner_status.last_processed_sequence = runner.last_processed_sequence;
     runner_status.last_error_code = runner.last_error_code;
     runner_status.last_error_message = runner.last_error_message;
     service_status.runners.push_back(std::move(runner_status));
@@ -244,7 +247,7 @@ camera_firmware::service::AiServiceStatus ToServiceAiStatus(
   } else if (!status.enabled) {
     service_status.reason = "disabled by config";
   } else {
-    service_status.reason = "AI runtime skeleton ready";
+    service_status.reason = "AI runtime ready";
   }
   return service_status;
 }

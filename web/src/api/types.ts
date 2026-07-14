@@ -55,6 +55,9 @@ export interface AiRunnerStatus {
   submitted_frames: number;
   processed_frames: number;
   dropped_frames: number;
+  last_preprocess_ms: number;
+  last_inference_ms: number;
+  last_processed_sequence: number;
   last_error_code: string;
   last_error_message: string;
 }
@@ -114,6 +117,7 @@ export interface DetectionKeypoint {
 }
 
 export interface Detection {
+  class_id: number;
   label: string;
   confidence: number;
   box: DetectionBox;

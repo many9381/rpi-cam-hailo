@@ -27,6 +27,7 @@ describe('buildOverlayPrimitives', () => {
   it('clamps normalized boxes and converts them to canvas pixels', () => {
     const result = buildOverlayPrimitives(snapshot([
       event('cam-a', 'objects', [{
+        class_id: 0,
         label: 'person', confidence: 0.875,
         box: { x: -0.1, y: 0.25, width: 1.3, height: 0.9 },
         keypoints: [],
@@ -47,6 +48,7 @@ describe('buildOverlayPrimitives', () => {
     ) => ReturnType<typeof buildOverlayPrimitives>;
     const result = buildForRect(snapshot([
       event('cam-a', 'objects', [{
+        class_id: 0,
         label: 'person', confidence: 0.75,
         box: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 },
         keypoints: [
@@ -68,9 +70,9 @@ describe('buildOverlayPrimitives', () => {
   it('drops zero-area and non-finite boxes', () => {
     const result = buildOverlayPrimitives(snapshot([
       event('cam-a', 'objects', [
-        { label: 'zero', confidence: 1, box: { x: 0.5, y: 0.5, width: 0, height: 1 }, keypoints: [] },
-        { label: 'outside', confidence: 1, box: { x: 2, y: 0, width: 1, height: 1 }, keypoints: [] },
-        { label: 'nan', confidence: 1, box: { x: Number.NaN, y: 0, width: 1, height: 1 }, keypoints: [] },
+        { class_id: 0, label: 'zero', confidence: 1, box: { x: 0.5, y: 0.5, width: 0, height: 1 }, keypoints: [] },
+        { class_id: 0, label: 'outside', confidence: 1, box: { x: 2, y: 0, width: 1, height: 1 }, keypoints: [] },
+        { class_id: 0, label: 'nan', confidence: 1, box: { x: Number.NaN, y: 0, width: 1, height: 1 }, keypoints: [] },
       ]),
     ]), 'cam-a', 1280, 720);
 
@@ -79,7 +81,8 @@ describe('buildOverlayPrimitives', () => {
 
   it('filters by camera while combining results from multiple models', () => {
     const detection = (label: string) => ({
-      label, confidence: 0.5, box: { x: 0, y: 0, width: 0.25, height: 0.25 }, keypoints: [],
+      class_id: 0, label, confidence: 0.5,
+      box: { x: 0, y: 0, width: 0.25, height: 0.25 }, keypoints: [],
     });
     const result = buildOverlayPrimitives(snapshot([
       event('cam-a', 'model-one', [detection('one')]),
@@ -101,6 +104,7 @@ describe('buildOverlayPrimitives', () => {
     ];
     const result = buildOverlayPrimitives(snapshot([
       event('cam-a', 'unknown-pose-model', [{
+        class_id: 0,
         label: 'pose', confidence: 0.9,
         box: { x: 0, y: 0, width: 1, height: 1 }, keypoints,
       }]),

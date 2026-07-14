@@ -6,10 +6,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -122,6 +125,23 @@ std::string RunnerStatusMessage(
   return stream.str();
 }
 
+struct DetectionCallbackState {
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::optional<camera_firmware::ai::DetectionEvent> decoded;
+};
+
+camera_firmware::ai::DetectionBus::Subscription SubscribeDecodedEvents(
+    camera_firmware::ai::DetectionBus& bus,
+    const std::shared_ptr<DetectionCallbackState>& state) {
+  return bus.Subscribe(
+      [state](const camera_firmware::ai::DetectionEvent& event) {
+        std::lock_guard lock(state->mutex);
+        state->decoded = event;
+        state->changed.notify_all();
+      });
+}
+
 }  // namespace
 
 TEST(AiHardwareSmokeHelperTest, RequiresEveryExpectedRunnerToFinish) {
@@ -191,6 +211,24 @@ TEST(AiHardwareSmokeTest, StartsConfiguredHailoRuntimeWhenEnabled) {
 #endif
 }
 
+TEST(AiHardwareSmokeHelperTest, SubscriptionOwnsCallbackState) {
+  camera_firmware::ai::DetectionBus bus;
+  auto state = std::make_shared<DetectionCallbackState>();
+  const std::weak_ptr<DetectionCallbackState> weak_state = state;
+  auto subscription = SubscribeDecodedEvents(bus, state);
+  ASSERT_TRUE(subscription.valid());
+
+  state.reset();
+  ASSERT_FALSE(weak_state.expired());
+
+  bus.Publish(camera_firmware::ai::DetectionEvent{});
+
+  auto retained_state = weak_state.lock();
+  ASSERT_TRUE(retained_state);
+  std::lock_guard lock(retained_state->mutex);
+  EXPECT_TRUE(retained_state->decoded.has_value());
+}
+
 TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
   if (!HailoHardwareSmokeEnabled()) {
     GTEST_SKIP()
@@ -208,9 +246,13 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
       std::filesystem::exists(config.value().ai.models[0].hef_path))
       << "missing Hailo model: " << config.value().ai.models[0].hef_path;
 
-  camera_firmware::ai::DetectionBus detection_bus;
+  auto callback_state = std::make_shared<DetectionCallbackState>();
+  auto detection_bus = std::make_unique<camera_firmware::ai::DetectionBus>();
+  auto subscription = SubscribeDecodedEvents(*detection_bus, callback_state);
+  ASSERT_TRUE(subscription.valid());
+
   auto runtime =
-      std::make_unique<camera_firmware::ai::AiRuntime>(&detection_bus);
+      std::make_unique<camera_firmware::ai::AiRuntime>(detection_bus.get());
   auto started = runtime->Start(config.value());
   ASSERT_TRUE(started.ok()) << started.error().message;
 
@@ -220,12 +262,16 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
       << started_status.last_error_message;
   ASSERT_EQ(started_status.runner_count, 1u);
 
-  auto submitted = runtime->SubmitFrame(SyntheticNv12Frame(1));
+  constexpr std::uint64_t kFrameSequence = 1U;
+  auto submitted = runtime->SubmitFrame(SyntheticNv12Frame(kFrameSequence));
   ASSERT_TRUE(submitted.ok()) << submitted.error().message;
   if (!WaitForProcessedOrDropped(*runtime, 1U)) {
     ADD_FAILURE() << "timed out waiting for Hailo inference callback; "
                   << RunnerStatusMessage(runtime->RunnerStatuses());
+    // Stop can hang while Hailo still owns an in-flight callback. Keep the
+    // runtime and its bus alive only for this fatal timeout path.
     (void)runtime.release();
+    (void)detection_bus.release();
     return;
   }
 
@@ -238,6 +284,34 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
   EXPECT_EQ(runners[0].dropped_frames, 0u)
       << runners[0].last_error_code << ": "
       << runners[0].last_error_message;
+
+  camera_firmware::ai::DetectionEvent decoded_event;
+  {
+    std::unique_lock lock(callback_state->mutex);
+    const bool event_received = callback_state->changed.wait_for(
+        lock, std::chrono::seconds(5), [&] {
+          return callback_state->decoded.has_value();
+        });
+    if (!event_received) {
+      lock.unlock();
+      ADD_FAILURE() << "timed out waiting for decoded DetectionBus event; "
+                    << RunnerStatusMessage(runtime->RunnerStatuses());
+      runtime->Stop();
+      return;
+    }
+    decoded_event = *callback_state->decoded;
+  }
+
+  EXPECT_EQ(decoded_event.camera_id, "imx708-main");
+  EXPECT_EQ(decoded_event.model_id, "objects");
+  EXPECT_EQ(decoded_event.model_kind, "object_detection");
+  EXPECT_EQ(decoded_event.frame_sequence, kFrameSequence);
+  EXPECT_EQ(decoded_event.frame_timestamp,
+            std::chrono::nanoseconds(kFrameSequence));
+  EXPECT_EQ(decoded_event.result_state, "decoded");
+  for (const auto& detection : decoded_event.detections) {
+    EXPECT_GE(detection.class_id, 0);
+  }
 
   runtime->Stop();
 #endif

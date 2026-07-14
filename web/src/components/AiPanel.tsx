@@ -90,6 +90,9 @@ export function AiPanel({ ai, detections, streamStatus, onRestart }: AiPanelProp
                 <div><strong>{runner.model_id}</strong><span>{runner.model_kind}</span></div>
                 <p>{runner.camera_id}</p>
                 <p>Submitted {runner.submitted_frames} / processed {runner.processed_frames} / dropped {runner.dropped_frames}</p>
+                <p>Frame {runner.last_processed_sequence} / preprocess {' '}
+                  {runner.last_preprocess_ms.toFixed(1)} ms / inference {' '}
+                  {runner.last_inference_ms.toFixed(1)} ms</p>
                 <p>{runner.last_error_code
                   ? `${runner.last_error_code}: ${runner.last_error_message || 'unknown'}`
                   : 'Runner healthy'}</p>

@@ -40,6 +40,9 @@ const operationalPayloads: Record<string, unknown> = {
         submitted_frames: 120,
         processed_frames: 119,
         dropped_frames: 1,
+        last_preprocess_ms: 1.2,
+        last_inference_ms: 3.4,
+        last_processed_sequence: 120,
         last_error_code: '',
         last_error_message: '',
       }],
@@ -69,6 +72,7 @@ const detectionSnapshot = {
     frame_sequence: 121,
     frame_timestamp_ns: 121000,
     detections: [{
+      class_id: 0,
       label: 'person',
       confidence: 0.94,
       box: { x: 0.18, y: 0.15, width: 0.34, height: 0.62 },
@@ -406,6 +410,9 @@ test('authenticated desktop dashboard renders media, overlay, and stable layout'
   for (const heading of panelHeadings) {
     await expect(page.getByRole('heading', { name: heading })).toBeVisible();
   }
+  await expect(page.getByText(
+    'Frame 120 / preprocess 1.2 ms / inference 3.4 ms',
+  )).toBeVisible();
   for (const value of ['RTSPS / TLS', 'SRTP', 'RTP/SAVP', 'sdes']) {
     await expect(page.getByText(value, { exact: true })).toBeVisible();
   }

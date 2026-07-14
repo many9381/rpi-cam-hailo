@@ -22,6 +22,7 @@ struct Keypoint {
 };
 
 struct Detection {
+  std::int32_t class_id{-1};
   std::string label;
   float confidence{0.0F};
   DetectionBox box;

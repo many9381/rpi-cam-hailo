@@ -8,6 +8,9 @@
 
 namespace camera_firmware::config {
 
+inline constexpr std::uint64_t kMaximumAiModelInputBytes =
+    16U * 1024U * 1024U;
+
 struct SessionKeyConfig {
   std::string source{"file"};
   std::string path;
