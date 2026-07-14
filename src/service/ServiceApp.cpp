@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <future>
 #include <memory>
@@ -39,6 +40,12 @@ struct ServiceState {
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
 constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
 constexpr std::uint32_t kDetectionSseReconnectMs{1000};
+
+double SafeMilliseconds(double milliseconds) {
+  return std::isfinite(milliseconds) && milliseconds >= 0.0
+             ? milliseconds
+             : 0.0;
+}
 
 ServiceState& GlobalState() {
   static ServiceState state;
@@ -1342,6 +1349,12 @@ Json::Value BuildAiStatusJson(const AiServiceStatus& status) {
         static_cast<Json::UInt64>(runner.processed_frames);
     runner_json["dropped_frames"] =
         static_cast<Json::UInt64>(runner.dropped_frames);
+    runner_json["last_preprocess_ms"] =
+        SafeMilliseconds(runner.last_preprocess_ms);
+    runner_json["last_inference_ms"] =
+        SafeMilliseconds(runner.last_inference_ms);
+    runner_json["last_processed_sequence"] =
+        static_cast<Json::UInt64>(runner.last_processed_sequence);
     runner_json["last_error_code"] = runner.last_error_code;
     runner_json["last_error_message"] = runner.last_error_message;
     runners.append(std::move(runner_json));
@@ -1422,7 +1435,11 @@ Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {
 
   Json::Value detections(Json::arrayValue);
   for (const auto& detection : event.detections) {
+    if (detection.class_id < 0) {
+      continue;
+    }
     Json::Value detection_json(Json::objectValue);
+    detection_json["class_id"] = static_cast<Json::Int>(detection.class_id);
     detection_json["label"] = detection.label;
     detection_json["confidence"] = detection.confidence;
 

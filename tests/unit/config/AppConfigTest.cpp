@@ -807,6 +807,19 @@ TEST(AppConfigTest, RejectsAiModelWithZeroInputDimensions) {
   EXPECT_EQ(validated.error().code, "E_CONFIG_AI_MODEL");
 }
 
+TEST(AppConfigTest, RejectsAiModelInputLargerThanEmbeddedMemoryLimit) {
+  auto ai = MakeValidAiConfig();
+  ai.models[0].input.width = 4096;
+  ai.models[0].input.height = 4096;
+  camera_firmware::config::CameraConfig camera;
+
+  auto validated =
+      camera_firmware::config::ValidateAiConfigSemantics(ai, camera);
+
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_CONFIG_AI_MODEL");
+}
+
 TEST(AppConfigTest, RejectsAiModelWithNonRgb8InputFormat) {
   auto ai = MakeValidAiConfig();
   ai.models[0].input.format = "nv12";

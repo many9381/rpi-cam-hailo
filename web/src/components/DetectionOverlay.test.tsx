@@ -21,6 +21,7 @@ const snapshot: DetectionSnapshot = { events: [{
   camera_id: 'cam-a', model_id: 'detector', model_kind: 'object_detection',
   result_state: 'ready', frame_sequence: 1, frame_timestamp_ns: 2,
   detections: [{
+    class_id: 0,
     label: 'person', confidence: 0.75,
     box: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 },
     keypoints: [

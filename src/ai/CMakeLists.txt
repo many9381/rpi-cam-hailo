@@ -1,6 +1,7 @@
 add_library(camera_firmware_ai STATIC
     AiFramePump.cpp
     AiModelProcessor.cpp
+    Nv12RgbPreprocessor.cpp
     AiModelRunner.cpp
     AiRuntime.cpp
     AiRuntimeController.cpp
@@ -23,6 +24,9 @@ target_include_directories(camera_firmware_ai
 target_link_libraries(camera_firmware_ai
     PUBLIC
         camera_firmware_media
+    PRIVATE
+        PkgConfig::LIBSWSCALE
+        PkgConfig::LIBAVUTIL
 )
 
 if(TARGET HailoRT::HailoRT)

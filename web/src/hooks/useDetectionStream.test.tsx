@@ -35,13 +35,13 @@ const live: DetectionSnapshot = { events: [
   {
     camera_id: 'cam-a', model_id: 'objects', model_kind: 'object_detection',
     result_state: 'decoded', frame_sequence: 11, frame_timestamp_ns: 110,
-    detections: [{ label: 'person', confidence: 0.9,
+    detections: [{ class_id: 0, label: 'person', confidence: 0.9,
       box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 }, keypoints: [] }],
   },
   {
     camera_id: 'cam-a', model_id: 'pose', model_kind: 'pose',
     result_state: 'decoded', frame_sequence: 11, frame_timestamp_ns: 110,
-    detections: [{ label: 'person', confidence: 0.8,
+    detections: [{ class_id: 0, label: 'person', confidence: 0.8,
       box: { x: 0.2, y: 0.1, width: 0.2, height: 0.5 },
       keypoints: [{ name: 'nose', x: 0.3, y: 0.2, confidence: 0.95 }] }],
   },

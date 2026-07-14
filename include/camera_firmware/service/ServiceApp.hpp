@@ -62,6 +62,9 @@ struct AiRunnerServiceStatus {
   std::uint64_t submitted_frames{0};
   std::uint64_t processed_frames{0};
   std::uint64_t dropped_frames{0};
+  double last_preprocess_ms{0.0};
+  double last_inference_ms{0.0};
+  std::uint64_t last_processed_sequence{0};
   std::string last_error_code;
   std::string last_error_message;
 };

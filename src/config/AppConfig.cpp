@@ -128,6 +128,16 @@ common::Result<void> ValidateAiConfigSemantics(
            "ai.models[].input width and height must be positive for model " +
                model.id});
     }
+    constexpr std::uint64_t kRgbChannels = 3U;
+    const auto input_row_bytes =
+        static_cast<std::uint64_t>(model.input.height) * kRgbChannels;
+    if (static_cast<std::uint64_t>(model.input.width) >
+        kMaximumAiModelInputBytes / input_row_bytes) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "ai.models[].input exceeds the RGB8 memory limit for model " +
+               model.id});
+    }
     if (model.input.format != "rgb8") {
       return common::Result<void>::Err(
           {"E_CONFIG_AI_MODEL",

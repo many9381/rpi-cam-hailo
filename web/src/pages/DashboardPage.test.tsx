@@ -129,7 +129,7 @@ describe('DashboardPage', () => {
     const live = { events: [{
       camera_id: 'cam-a', model_id: 'pose', model_kind: 'pose',
       result_state: 'decoded', frame_sequence: 20, frame_timestamp_ns: 200,
-      detections: [{ label: 'person', confidence: 0.92,
+      detections: [{ class_id: 0, label: 'person', confidence: 0.92,
         box: { x: 0.1, y: 0.1, width: 0.3, height: 0.6 },
         keypoints: [{ name: 'nose', x: 0.2, y: 0.2, confidence: 0.9 }] }],
     }] };

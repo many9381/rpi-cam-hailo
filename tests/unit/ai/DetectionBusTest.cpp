@@ -15,7 +15,7 @@ TEST(DetectionBusTest, PublishesToSubscribers) {
   camera_firmware::ai::DetectionEvent event;
   event.camera_id = "imx708-main";
   event.detections.push_back(
-      {"person", 0.9f, {0.1f, 0.2f, 0.3f, 0.4f}});
+      {0, "person", 0.9f, {0.1f, 0.2f, 0.3f, 0.4f}});
 
   bus.Publish(event);
 

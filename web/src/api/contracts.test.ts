@@ -31,6 +31,8 @@ const ai = {
     camera_id: 'imx708-main', model_id: 'objects',
     model_kind: 'object_detection', submitted_frames: 11,
     processed_frames: 10, dropped_frames: 1,
+    last_preprocess_ms: 1.2, last_inference_ms: 3.4,
+    last_processed_sequence: 11,
     last_error_code: '', last_error_message: '',
   }],
 };
@@ -64,6 +66,17 @@ describe('operational response parsers', () => {
       'object_detection', 'pose',
     ]);
     expect(result.ai.models[0]).not.toHaveProperty('hef_path');
+  });
+
+  it('rejects AI runner timings and sequence outside their strict ranges', () => {
+    expect(() => parseCameraInventory({
+      cameras: [],
+      ai: { ...ai, runners: [{ ...ai.runners[0], last_inference_ms: -1 }] },
+    })).toThrow('Invalid camera response');
+    expect(() => parseCameraInventory({
+      cameras: [],
+      ai: { ...ai, runners: [{ ...ai.runners[0], last_processed_sequence: 1.5 }] },
+    })).toThrow('Invalid camera response');
   });
 
   it('preserves an optional safe nonnegative key zeroize count', () => {
@@ -113,11 +126,26 @@ describe('operational response parsers', () => {
       model_kind: 'object_detection', result_state: 'decoded',
       frame_sequence: 12, frame_timestamp_ns: 123456,
       detections: [{
+        class_id: 2,
         label: 'person', confidence: 0.9,
         box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
         keypoints: [],
       }],
-    }] }).events).toHaveLength(1);
+    }] }).events[0].detections[0].class_id).toBe(2);
+  });
+
+  it('rejects detection snapshots with invalid class IDs', () => {
+    expect(() => parseDetectionSnapshot({ events: [{
+      camera_id: 'imx708-main', model_id: 'objects',
+      model_kind: 'object_detection', result_state: 'decoded',
+      frame_sequence: 12, frame_timestamp_ns: 123456,
+      detections: [{
+        class_id: -1,
+        label: 'person', confidence: 0.9,
+        box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+        keypoints: [],
+      }],
+    }] })).toThrow('Invalid detection response');
   });
 
   it('validates restart results with and without replacement AI status', () => {
