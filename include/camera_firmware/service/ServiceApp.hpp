@@ -26,12 +26,20 @@
 #include "camera_firmware/security/DeviceTlsManager.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/BoundedWorker.hpp"
+#include "camera_firmware/settings/RuntimeSettingsService.hpp"
 
 namespace trantor {
 class EventLoop;
 }
 
 namespace camera_firmware::service {
+
+inline constexpr std::size_t kDefaultLiveMp4ResponseByteLimit =
+    16U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumServiceConnections = 32U;
+inline constexpr std::size_t kMaximumServiceConnectionsPerIp =
+    kMaximumServiceConnections;
+static_assert(kMaximumServiceConnectionsPerIp <= kMaximumServiceConnections);
 
 struct CameraStatus {
   std::string id;
@@ -95,6 +103,15 @@ struct AiServiceStatus {
 using AiStatusProvider = std::function<AiServiceStatus()>;
 using AiControlCallback = std::function<common::Result<void>()>;
 using RuntimeStartCallback = std::function<common::Result<void>()>;
+using RuntimeSettingsSnapshotCallback =
+    std::function<settings::RuntimeSettingsSnapshot()>;
+using RuntimeSettingsSaveCallback = std::function<
+    common::Result<settings::RuntimeSettingsSnapshot>(
+        std::uint64_t, settings::RuntimeSettings)>;
+using RuntimeSettingsApplyCallback =
+    std::function<settings::SettingsApplyResult(std::uint64_t)>;
+using RuntimeSettingsDiscardCallback = std::function<
+    common::Result<settings::RuntimeSettingsSnapshot>(std::uint64_t)>;
 
 struct SecureStreamDiagnostics {
   std::uint64_t per_media_key_zeroize_count{0};
@@ -134,6 +151,10 @@ struct ServiceInitArgs {
   SnapshotCallback snapshot_callback;
   LiveMp4OpenCallback live_stream_callback;
   RuntimeStartCallback runtime_start_callback;
+  RuntimeSettingsSnapshotCallback runtime_settings_snapshot_callback;
+  RuntimeSettingsSaveCallback runtime_settings_save_callback;
+  RuntimeSettingsApplyCallback runtime_settings_apply_callback;
+  RuntimeSettingsDiscardCallback runtime_settings_discard_callback;
   std::shared_ptr<security::SecurityStore> security_store;
   std::shared_ptr<security::BootstrapService> bootstrap_service;
   std::shared_ptr<security::AuthService> auth_service;
@@ -176,7 +197,8 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
     const std::string& camera_id);
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id);
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit);
 
 namespace internal {
 
@@ -214,6 +236,7 @@ class ServiceApp {
   bool initialized_{false};
   bool running_{false};
   std::shared_ptr<BoundedWorker> security_worker_;
+  std::shared_ptr<BoundedWorker> runtime_settings_worker_;
   std::optional<security::ResolvedTlsMaterial> tls_material_;
   std::thread server_thread_;
   std::shared_future<void> server_thread_done_;

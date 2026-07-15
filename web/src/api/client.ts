@@ -69,6 +69,27 @@ export class ApiClient implements CameraApiClient {
     return parser(await response.json());
   }
 
+  async putJson<B, T>(
+    path: string,
+    body: B,
+    parser: Parser<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const fetchImpl = this.fetchImpl;
+    const response = await fetchImpl(path, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Camera-Request': 'management',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    await this.requireSuccess(response);
+    return parser(await response.json());
+  }
+
   async getBlob(path: string, signal?: AbortSignal): Promise<Blob> {
     const fetchImpl = this.fetchImpl;
     const response = await fetchImpl(path, {

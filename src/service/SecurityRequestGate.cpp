@@ -66,14 +66,18 @@ bool IsStaticAsset(std::string_view path, std::string_view method) {
           path == "/styles.css");
 }
 
-bool IsStateChanging(std::string_view method) { return method == "POST"; }
+bool IsStateChanging(std::string_view method) {
+  return method == "POST" || method == "PUT" || method == "PATCH" ||
+         method == "DELETE";
+}
 
 bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
   if (method == "GET") {
     if (path == "/api/v1/health" || path == "/api/v1/cameras" ||
         path == "/api/v1/ai/detections" ||
         path == "/api/v1/ai/detections/stream" ||
-        path == "/api/v1/stream" || path == "/api/v1/auth/me") {
+        path == "/api/v1/stream" || path == "/api/v1/auth/me" ||
+        path == "/api/v1/settings/runtime") {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
@@ -90,10 +94,15 @@ bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
       }
     }
   }
+  if (method == "PUT" && path == "/api/v1/settings/runtime") {
+    return true;
+  }
   return method == "POST" &&
          (path == "/api/v1/ai/restart" ||
           path == "/api/v1/runtime/restart" ||
-          path == "/api/v1/auth/logout");
+          path == "/api/v1/auth/logout" ||
+          path == "/api/v1/settings/runtime/apply" ||
+          path == "/api/v1/settings/runtime/discard");
 }
 
 common::Result<std::string> CanonicalOrigin(std::string_view origin,

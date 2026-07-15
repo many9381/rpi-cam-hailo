@@ -26,8 +26,12 @@
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
+#include "camera_firmware/runtime/ManagedFirmwareRuntime.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/ServiceApp.hpp"
+#include "camera_firmware/settings/RuntimeSettings.hpp"
+#include "camera_firmware/settings/RuntimeSettingsService.hpp"
+#include "camera_firmware/settings/RuntimeSettingsStore.hpp"
 
 namespace {
 
@@ -252,6 +256,26 @@ camera_firmware::service::AiServiceStatus ToServiceAiStatus(
   return service_status;
 }
 
+camera_firmware::common::Result<
+    std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>
+CreateProductionRuntime(const camera_firmware::config::AppConfig& config) {
+  try {
+    return camera_firmware::common::Result<
+        std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Ok(
+        std::make_shared<camera_firmware::runtime::FirmwareRuntime>(config));
+  } catch (...) {
+    return camera_firmware::common::Result<
+        std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Err(
+        {"E_RUNTIME_FACTORY", "firmware runtime graph construction failed"});
+  }
+}
+
+camera_firmware::common::Result<void> ValidateRuntimeCandidate(
+    const camera_firmware::config::AppConfig& config) {
+  return camera_firmware::runtime::FirmwareRuntime::ValidateCandidateConfig(
+      config);
+}
+
 int RunFirmware(const std::string& config_path) {
   auto cfg = camera_firmware::config::LoadConfigFile(config_path);
   if (!cfg.ok()) {
@@ -264,56 +288,111 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(plugin.error());
   }
 
-  camera_firmware::runtime::FirmwareRuntime runtime(cfg.value());
+  const auto& base_config = cfg.value();
+  camera_firmware::config::AppConfig initial_config = base_config;
+
+  std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
+  std::unique_ptr<camera_firmware::settings::RuntimeSettingsStore>
+      runtime_settings_store;
+  std::optional<camera_firmware::settings::CameraProfileCatalog>
+      runtime_profiles;
+  if (base_config.security.enabled) {
+    auto opened = camera_firmware::security::SecurityStore::Open(
+        {base_config.security.state_directory});
+    if (!opened.ok()) {
+      return PrintError(opened.error());
+    }
+    security_store =
+        std::shared_ptr<camera_firmware::security::SecurityStore>(
+            std::move(opened).value());
+
+    runtime_profiles.emplace(
+        camera_firmware::settings::CameraProfileCatalog::Rpi5Imx708());
+    auto base_active = camera_firmware::settings::DeriveRuntimeSettings(
+        base_config, *runtime_profiles);
+    if (!base_active.ok()) {
+      return PrintError(base_active.error());
+    }
+    auto settings_opened =
+        camera_firmware::settings::RuntimeSettingsStore::Open(
+            base_config.security.state_directory,
+            std::move(base_active).value(), base_config, *runtime_profiles);
+    if (!settings_opened.ok()) {
+      return PrintError(settings_opened.error());
+    }
+    runtime_settings_store = std::move(settings_opened).value();
+
+    auto effective = camera_firmware::settings::BuildEffectiveConfig(
+        base_config, runtime_settings_store->Snapshot().active,
+        *runtime_profiles);
+    if (!effective.ok()) {
+      return PrintError(effective.error());
+    }
+    initial_config = std::move(effective).value();
+  }
+
+  auto runtime =
+      std::make_unique<camera_firmware::runtime::ManagedFirmwareRuntime>(
+          initial_config, CreateProductionRuntime);
+  std::unique_ptr<camera_firmware::settings::RuntimeSettingsService>
+      runtime_settings;
+  if (runtime_settings_store) {
+    runtime_settings =
+        std::make_unique<camera_firmware::settings::RuntimeSettingsService>(
+            base_config, std::move(*runtime_profiles),
+            *runtime_settings_store, *runtime, ValidateRuntimeCandidate);
+  }
+
   camera_firmware::service::ServiceApp service;
 
   camera_firmware::service::ServiceInitArgs service_args;
-  service_args.app_config = &cfg.value();
-  service_args.bind_address = cfg.value().http.bind_ip;
-  service_args.port = cfg.value().http.port;
-  service_args.document_root = cfg.value().http.web_root;
-  service_args.public_base_url = cfg.value().http.public_base_url;
+  service_args.app_config = &base_config;
+  service_args.bind_address = base_config.http.bind_ip;
+  service_args.port = base_config.http.port;
+  service_args.document_root = base_config.http.web_root;
+  service_args.public_base_url = base_config.http.public_base_url;
   service_args.camera_status_provider = [&runtime] {
-    return ToServiceStatus(runtime.CameraStatuses());
+    return ToServiceStatus(runtime->CameraStatuses());
   };
-  service_args.ai_enabled = cfg.value().ai.enabled;
-  service_args.ai_status_provider = [&runtime, &cfg] {
-    return ToServiceAiStatus(runtime.AiStatus(),
-                             cfg.value().ai.models,
-                             runtime.AiRunnerStatuses());
+  service_args.ai_enabled = initial_config.ai.enabled;
+  service_args.ai_status_provider = [&runtime] {
+    return ToServiceAiStatus(runtime->AiStatus(),
+                             runtime->ActiveConfig().ai.models,
+                             runtime->AiRunnerStatuses());
   };
   service_args.ai_restart_callback = [&runtime] {
-    return runtime.RestartAi();
+    return runtime->RestartAi();
   };
   service_args.secure_stream_diagnostics_provider = [&runtime] {
     camera_firmware::service::SecureStreamDiagnostics diagnostics;
     diagnostics.per_media_key_zeroize_count =
-        runtime.PerMediaKeyZeroizeCount();
+        runtime->PerMediaKeyZeroizeCount();
     return diagnostics;
   };
   service_args.detection_snapshot_provider = [&runtime] {
-    return runtime.DetectionSnapshot();
+    return runtime->DetectionSnapshot();
   };
   service_args.detection_event_subscriber =
       [&runtime](camera_firmware::ai::DetectionBus::Handler handler) {
-        return runtime.SubscribeDetections(std::move(handler));
+        return runtime->SubscribeDetections(std::move(handler));
       };
   service_args.snapshot_callback =
       [&runtime](const std::string& camera_id) {
-        return runtime.Snapshot(camera_id);
+        return runtime->Snapshot(camera_id);
       };
   service_args.live_stream_callback =
-      [&runtime, stale_timeout = std::chrono::milliseconds(
-                     cfg.value().http.live.stale_timeout_ms)](
+      [&runtime](
           const std::string& camera_id)
           -> camera_firmware::common::Result<
               camera_firmware::service::LiveMp4StreamCallback> {
-        auto opened = runtime.OpenLiveStream(camera_id);
+        auto opened = runtime->OpenLiveStream(camera_id);
         if (!opened.ok()) {
           return camera_firmware::common::Result<
               camera_firmware::service::LiveMp4StreamCallback>::Err(
               opened.error());
         }
+        const auto stale_timeout = std::chrono::milliseconds(
+            runtime->ActiveConfig().http.live.stale_timeout_ms);
         auto state = std::make_shared<LiveMp4ByteStream>(
             std::move(opened).value(), stale_timeout);
         camera_firmware::service::LiveMp4StreamCallback stream =
@@ -325,17 +404,28 @@ int RunFirmware(const std::string& config_path) {
             std::move(stream));
       };
 
-  std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
-  if (cfg.value().security.enabled) {
-    auto opened = camera_firmware::security::SecurityStore::Open(
-        {cfg.value().security.state_directory});
-    if (!opened.ok()) {
-      return PrintError(opened.error());
-    }
-    security_store =
-        std::shared_ptr<camera_firmware::security::SecurityStore>(
-            std::move(opened).value());
+  if (security_store) {
     service_args.security_store = security_store;
+  }
+  if (runtime_settings) {
+    service_args.runtime_settings_snapshot_callback = [&runtime_settings] {
+      return runtime_settings->Snapshot();
+    };
+    service_args.runtime_settings_save_callback =
+        [&runtime_settings](
+            std::uint64_t expected_revision,
+            camera_firmware::settings::RuntimeSettings settings) {
+          return runtime_settings->Save(expected_revision,
+                                        std::move(settings));
+        };
+    service_args.runtime_settings_apply_callback =
+        [&runtime_settings](std::uint64_t expected_revision) {
+          return runtime_settings->Apply(expected_revision);
+        };
+    service_args.runtime_settings_discard_callback =
+        [&runtime_settings](std::uint64_t expected_revision) {
+          return runtime_settings->Discard(expected_revision);
+        };
   }
 
   camera_firmware::boot::FirmwareBootDependencies boot_dependencies;
@@ -344,8 +434,8 @@ int RunFirmware(const std::string& config_path) {
       return security_store->State();
     };
   }
-  boot_dependencies.start_runtime = [&runtime] { return runtime.Start(); };
-  boot_dependencies.stop_runtime = [&runtime] { runtime.Stop(); };
+  boot_dependencies.start_runtime = [&runtime] { return runtime->Start(); };
+  boot_dependencies.stop_runtime = [&runtime] { runtime->Stop(); };
   boot_dependencies.start_service =
       [&service, &service_args](
           camera_firmware::boot::RuntimeStartCallback start_runtime) {
@@ -358,7 +448,7 @@ int RunFirmware(const std::string& config_path) {
   boot_dependencies.stop_service = [&service] { service.Stop(); };
 
   camera_firmware::boot::FirmwareBootCoordinator boot_coordinator(
-      {cfg.value().security.enabled, cfg.value().http.enabled},
+      {base_config.security.enabled, base_config.http.enabled},
       std::move(boot_dependencies));
   auto boot_started = boot_coordinator.Start();
   if (!boot_started.ok()) {

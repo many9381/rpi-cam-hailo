@@ -1,5 +1,6 @@
 add_library(camera_firmware_runtime
     FirmwareRuntime.cpp
+    ManagedFirmwareRuntime.cpp
 )
 
 target_include_directories(camera_firmware_runtime

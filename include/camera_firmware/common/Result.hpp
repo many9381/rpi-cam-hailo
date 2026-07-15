@@ -3,6 +3,7 @@
 #include <cassert>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -16,7 +17,9 @@ struct Error {
 template <typename T>
 class Result {
  public:
-  static Result Ok(T value) { return Result(std::move(value)); }
+  static Result Ok(T value) noexcept(std::is_nothrow_move_constructible_v<T>) {
+    return Result(std::move(value));
+  }
 
   static Result Err(Error error) { return Result(std::move(error)); }
 
@@ -45,7 +48,8 @@ class Result {
   }
 
  private:
-  explicit Result(T value) : state_(std::move(value)) {}
+  explicit Result(T value) noexcept(std::is_nothrow_move_constructible_v<T>)
+      : state_(std::move(value)) {}
   explicit Result(Error error) : state_(std::move(error)) {}
 
   std::variant<T, Error> state_;
@@ -54,7 +58,7 @@ class Result {
 template <>
 class Result<void> {
  public:
-  static Result Ok() { return Result(); }
+  static Result Ok() noexcept { return Result(); }
 
   static Result Err(Error error) { return Result(std::move(error)); }
 
@@ -66,7 +70,7 @@ class Result<void> {
   }
 
  private:
-  Result() = default;
+  Result() noexcept = default;
   explicit Result(Error error) : error_(std::move(error)) {}
 
   std::optional<Error> error_;

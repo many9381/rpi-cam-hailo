@@ -19,6 +19,7 @@ import {
 import { useLocation } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
+import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { IconButton } from './IconButton';
 
 interface AppShellProps {
@@ -26,6 +27,7 @@ interface AppShellProps {
   logout(): Promise<void>;
   children: ReactNode;
   onRefresh?: () => void;
+  runtimeSettings?: RuntimeSettingsController;
 }
 
 const navigation = [
@@ -34,6 +36,61 @@ const navigation = [
   { label: 'AI', path: '/ai', icon: ScanSearch },
   { label: 'System', path: '/system', icon: Settings },
 ] as const;
+
+function RuntimeSettingsNotice({
+  controller,
+}: {
+  controller?: RuntimeSettingsController;
+}) {
+  const snapshot = controller?.snapshot;
+  if (snapshot === null || snapshot === undefined) {
+    return null;
+  }
+
+  let role: 'alert' | 'status' = 'status';
+  let message: string | null = null;
+  if (snapshot.last_apply.status === 'failed') {
+    role = 'alert';
+    message = snapshot.last_apply.restored
+      ? 'Apply failed. The previous camera runtime was restored.'
+      : 'Apply failed. Camera runtime recovery is required.';
+  } else if (snapshot.state === 'recovery_required') {
+    message = 'Runtime settings need recovery.';
+  } else if (snapshot.state === 'applying' || controller?.status === 'applying') {
+    message = 'Runtime settings are being applied.';
+  } else if (snapshot.pending !== null) {
+    message = 'Runtime settings are waiting to be applied.';
+  }
+
+  if (message === null) {
+    return null;
+  }
+
+  const pendingCameraChanged = snapshot.pending !== null &&
+    (snapshot.pending.camera.profile_id !== snapshot.active.camera.profile_id ||
+     snapshot.pending.camera.bitrate_kbps !== snapshot.active.camera.bitrate_kbps ||
+     snapshot.pending.camera.gop !== snapshot.active.camera.gop);
+  const pendingModelChanged = snapshot.pending !== null &&
+    snapshot.pending.models.some((model, index) => {
+      const active = snapshot.active.models[index];
+      return active === undefined || model.id !== active.id ||
+        model.enabled !== active.enabled ||
+        model.confidence_threshold !== active.confidence_threshold;
+    });
+  const settingsPath = pendingCameraChanged || !pendingModelChanged
+    ? '/cameras'
+    : '/ai';
+  const linkLabel = settingsPath === '/cameras'
+    ? 'Review camera settings'
+    : 'Review AI settings';
+
+  return (
+    <div className={`settings-shell-notice settings-shell-${role}`} role={role}>
+      <span>{message}</span>
+      <a href={`#${settingsPath}`}>{linkLabel}</a>
+    </div>
+  );
+}
 
 function NavigationLinks({ pathname, onSelect }: {
   pathname: string;
@@ -63,6 +120,7 @@ export function AppShell({
   logout,
   children,
   onRefresh = () => undefined,
+  runtimeSettings,
 }: AppShellProps) {
   const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -187,7 +245,10 @@ export function AppShell({
         </div>
       </header>
 
-      <main className="shell-content">{children}</main>
+      <main className="shell-content">
+        <RuntimeSettingsNotice controller={runtimeSettings} />
+        {children}
+      </main>
 
       {drawerOpen && (
         <div className="drawer-layer">

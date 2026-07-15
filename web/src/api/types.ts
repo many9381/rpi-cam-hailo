@@ -142,6 +142,12 @@ export type Parser<T> = (value: unknown) => T;
 
 export interface CameraApiClient {
   getJson<T>(path: string, parser: Parser<T>, signal?: AbortSignal): Promise<T>;
+  putJson<B, T>(
+    path: string,
+    body: B,
+    parser: Parser<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
   postJson<B, T>(
     path: string,
     body: B,

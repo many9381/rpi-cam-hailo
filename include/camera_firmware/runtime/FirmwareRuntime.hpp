@@ -65,6 +65,8 @@ class FirmwareRuntime {
   FirmwareRuntime(FirmwareRuntime&&) = delete;
   FirmwareRuntime& operator=(FirmwareRuntime&&) = delete;
 
+  [[nodiscard]] static common::Result<void> ValidateCandidateConfig(
+      const config::AppConfig& config);
   [[nodiscard]] common::Result<void> Start();
   void Stop() noexcept;
   [[nodiscard]] FirmwareRuntimeState State() const noexcept;

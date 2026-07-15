@@ -4,13 +4,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HashRouter } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
+import {
+  makeSettings,
+  makeSettingsController,
+  makeSettingsSnapshot,
+} from '../features/settings/testSupport';
+import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { AppShell } from './AppShell';
 
 const principal: Principal = { username: 'operator.one', role: 'administrator' };
 
-const renderShell = (logout = vi.fn()) => render(
+const renderShell = (
+  logout = vi.fn(),
+  runtimeSettings?: RuntimeSettingsController,
+) => render(
   <HashRouter>
-    <AppShell principal={principal} logout={logout}>Dashboard content</AppShell>
+    <AppShell principal={principal} logout={logout}
+      runtimeSettings={runtimeSettings}>Dashboard content</AppShell>
   </HashRouter>,
 );
 
@@ -93,5 +103,62 @@ describe('AppShell', () => {
     expect(screen.queryByTestId('user-disclosure')).not.toBeInTheDocument();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
+  });
+
+  it('shows a compact pending notice linked to the changed settings domain', () => {
+    const cameraPending = makeSettings('imx708-720p50', 5_000);
+    const controller = makeSettingsController({
+      snapshot: makeSettingsSnapshot({ pending: cameraPending }),
+      draft: cameraPending,
+    });
+    const { rerender } = renderShell(vi.fn(), controller);
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Runtime settings are waiting to be applied.',
+    );
+    expect(screen.getByRole('link', { name: 'Review camera settings' }))
+      .toHaveAttribute('href', '#/cameras');
+
+    const aiPending = makeSettings();
+    aiPending.models[0] = { ...aiPending.models[0], confidence_threshold: 0.6 };
+    const aiController = makeSettingsController({
+      snapshot: makeSettingsSnapshot({ pending: aiPending }),
+      draft: aiPending,
+    });
+    rerender(
+      <HashRouter>
+        <AppShell principal={principal} logout={vi.fn()}
+          runtimeSettings={aiController}>Dashboard content</AppShell>
+      </HashRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'Review AI settings' }))
+      .toHaveAttribute('href', '#/ai');
+  });
+
+  it('shows bounded recovery and restored-runtime notices', () => {
+    const recovery = makeSettingsSnapshot({ state: 'recovery_required' });
+    const { rerender } = renderShell(vi.fn(), makeSettingsController({
+      snapshot: recovery, draft: recovery.active,
+    }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Runtime settings need recovery.',
+    );
+
+    const failed = makeSettingsSnapshot({
+      pending: makeSettings('imx708-720p50', 5_000),
+      lastApply: { status: 'failed', code: 'E_SETTINGS_APPLY_FAILED', restored: true },
+    });
+    rerender(
+      <HashRouter>
+        <AppShell principal={principal} logout={vi.fn()}
+          runtimeSettings={makeSettingsController({
+            status: 'error', snapshot: failed, draft: failed.pending,
+          })}>Dashboard content</AppShell>
+      </HashRouter>,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Apply failed. The previous camera runtime was restored.',
+    );
+    expect(screen.queryByText('E_SETTINGS_APPLY_FAILED')).not.toBeInTheDocument();
   });
 });

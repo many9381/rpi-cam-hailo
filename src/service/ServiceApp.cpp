@@ -23,6 +23,7 @@
 #include <trantor/net/EventLoop.h>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
 
@@ -32,11 +33,15 @@ namespace {
 struct ServiceState {
   ServiceInitArgs args;
   std::shared_ptr<BoundedWorker> security_worker;
+  std::shared_ptr<BoundedWorker> runtime_settings_worker;
   security::DeviceState device_state{security::DeviceState::kDefault};
   std::optional<std::string> runtime_pending_peer;
   bool shutting_down{false};
 };
 
+constexpr std::size_t kMaximumTransportBodyBytes = 64U * 1024U;
+static_assert(kMaximumTransportBodyBytes >
+              kMaximumRuntimeSettingsBodyBytes);
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
 constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
 constexpr std::uint32_t kDetectionSseReconnectMs{1000};
@@ -63,7 +68,8 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
         path == "/api/v1/health" || path == "/api/v1/cameras" ||
         path == "/api/v1/ai/detections" ||
         path == "/api/v1/ai/detections/stream" ||
-        path == "/api/v1/stream") {
+        path == "/api/v1/stream" ||
+        path == "/api/v1/settings/runtime") {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
@@ -81,13 +87,18 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
     }
     return false;
   }
+  if (method == drogon::Put && path == "/api/v1/settings/runtime") {
+    return true;
+  }
   return method == drogon::Post &&
          (path == "/api/v1/setup/initialize" ||
           path == "/api/v1/setup/runtime" ||
           path == "/api/v1/auth/login" ||
           path == "/api/v1/auth/logout" ||
           path == "/api/v1/runtime/restart" ||
-          path == "/api/v1/ai/restart");
+          path == "/api/v1/ai/restart" ||
+          path == "/api/v1/settings/runtime/apply" ||
+          path == "/api/v1/settings/runtime/discard");
 }
 
 std::string ExtractPublicHost(std::string_view public_base_url) {
@@ -171,6 +182,35 @@ Json::Value BuildLiveErrorJson(std::string_view code) {
     json["message"] = "live preview is unavailable";
   }
   return json;
+}
+
+void PumpLiveMp4Stream(LiveMp4StreamCallback stream,
+                       trantor::AsyncStreamPtr output,
+                       std::size_t maximum_response_bytes) noexcept {
+  std::array<char, 16U * 1024U> buffer{};
+  std::size_t sent_bytes = 0U;
+  try {
+    while (output && stream && sent_bytes < maximum_response_bytes) {
+      const auto capacity =
+          std::min(buffer.size(), maximum_response_bytes - sent_bytes);
+      const auto size = stream(buffer.data(), capacity);
+      if (size == 0U || size > capacity ||
+          !output->send(buffer.data(), size)) {
+        break;
+      }
+      sent_bytes += size;
+    }
+  } catch (...) {
+  }
+  if (stream) {
+    try {
+      (void)stream(nullptr, 0U);
+    } catch (...) {
+    }
+  }
+  if (output) {
+    output->close();
+  }
 }
 
 Json::Value BuildSecureMediaJson(
@@ -361,6 +401,51 @@ struct SecurityDependencies {
   std::shared_ptr<BoundedWorker> worker;
 };
 
+struct RuntimeSettingsDependencies {
+  bool security_enabled{false};
+  bool shutting_down{false};
+  RuntimeSettingsSnapshotCallback snapshot;
+  RuntimeSettingsSaveCallback save;
+  RuntimeSettingsApplyCallback apply;
+  RuntimeSettingsDiscardCallback discard;
+  std::shared_ptr<BoundedWorker> worker;
+
+  [[nodiscard]] bool Available() const noexcept {
+    return security_enabled && !shutting_down && snapshot && save && apply &&
+           discard && worker;
+  }
+};
+
+bool HasCompleteRuntimeSettingsCallbacks(const ServiceInitArgs& args) {
+  return args.runtime_settings_snapshot_callback &&
+         args.runtime_settings_save_callback &&
+         args.runtime_settings_apply_callback &&
+         args.runtime_settings_discard_callback;
+}
+
+RuntimeSettingsDependencies CopyRuntimeSettingsDependencies() {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return {
+      state.args.app_config != nullptr &&
+          state.args.app_config->security.enabled,
+      state.shutting_down,
+      state.args.runtime_settings_snapshot_callback,
+      state.args.runtime_settings_save_callback,
+      state.args.runtime_settings_apply_callback,
+      state.args.runtime_settings_discard_callback,
+      state.runtime_settings_worker,
+  };
+}
+
+bool RuntimeSettingsBecameUnavailable(
+    const std::shared_ptr<BoundedWorker>& worker) {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return state.shutting_down || !state.runtime_settings_worker ||
+         state.runtime_settings_worker != worker;
+}
+
 SecurityDependencies CopySecurityDependencies() {
   std::scoped_lock lock(StateMutex());
   const auto& state = GlobalState();
@@ -495,6 +580,29 @@ void QueueResponse(trantor::EventLoop* event_loop,
                    drogon::HttpResponsePtr response) {
   (void)event_loop;
   callback.Queue(std::move(response));
+}
+
+drogon::HttpResponsePtr RuntimeSettingsUnavailableResponse() {
+  return BuildRuntimeSettingsErrorResponse(
+      {"E_SETTINGS_UNAVAILABLE", "runtime settings are unavailable"});
+}
+
+drogon::HttpResponsePtr RuntimeSettingsBusyResponse() {
+  return BuildRuntimeSettingsErrorResponse(
+      {"E_SETTINGS_BUSY", "runtime settings are busy"});
+}
+
+void QueueRuntimeSettingsResult(
+    trantor::EventLoop* event_loop,
+    HttpCallback callback,
+    common::Result<settings::RuntimeSettingsSnapshot> result) {
+  if (result.ok()) {
+    QueueResponse(event_loop, std::move(callback),
+                  BuildRuntimeSettingsSnapshotResponse(result.value()));
+    return;
+  }
+  QueueResponse(event_loop, std::move(callback),
+                BuildRuntimeSettingsErrorResponse(result.error()));
 }
 
 std::string EncodeSessionToken(common::SecureBytes& token) {
@@ -1046,6 +1154,149 @@ void RegisterHandlers() {
             });
       },
       {Get});
+
+  app().registerHandler(
+      "/api/v1/settings/runtime",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](std::optional<security::Principal>, HttpCallback callback) {
+              const auto dependencies = CopyRuntimeSettingsDependencies();
+              if (!dependencies.Available()) {
+                callback(RuntimeSettingsUnavailableResponse());
+                return;
+              }
+              try {
+                callback(BuildRuntimeSettingsSnapshotResponse(
+                    dependencies.snapshot()));
+              } catch (...) {
+                callback(RuntimeSettingsUnavailableResponse());
+              }
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/settings/runtime",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](std::optional<security::Principal>,
+                      HttpCallback callback) {
+              const auto dependencies = CopyRuntimeSettingsDependencies();
+              if (!dependencies.Available()) {
+                callback(RuntimeSettingsUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseRuntimeSettingsUpdateJson(
+                  request->getBody(), request->getHeader("content-type"));
+              if (!parsed.ok()) {
+                callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
+                return;
+              }
+              auto submitted = dependencies.worker->Submit(
+                  [save = dependencies.save,
+                   update = std::move(parsed).value(), callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      auto result = save(update.expected_revision,
+                                         std::move(update.settings));
+                      QueueRuntimeSettingsResult(
+                          event_loop, std::move(callback), std::move(result));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    RuntimeSettingsUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
+                             ? RuntimeSettingsUnavailableResponse()
+                             : RuntimeSettingsBusyResponse());
+              }
+            });
+      },
+      {Put});
+
+  app().registerHandler(
+      "/api/v1/settings/runtime/apply",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](std::optional<security::Principal>,
+                      HttpCallback callback) {
+              const auto dependencies = CopyRuntimeSettingsDependencies();
+              if (!dependencies.Available()) {
+                callback(RuntimeSettingsUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseRuntimeSettingsCommandJson(
+                  request->getBody(), request->getHeader("content-type"));
+              if (!parsed.ok()) {
+                callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
+                return;
+              }
+              auto submitted = dependencies.worker->Submit(
+                  [apply = dependencies.apply,
+                   command = std::move(parsed).value(), callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      auto result = apply(command.expected_revision);
+                      QueueResponse(
+                          event_loop, std::move(callback),
+                          BuildRuntimeSettingsApplyResponse(result));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    RuntimeSettingsUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
+                             ? RuntimeSettingsUnavailableResponse()
+                             : RuntimeSettingsBusyResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/settings/runtime/discard",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](std::optional<security::Principal>,
+                      HttpCallback callback) {
+              const auto dependencies = CopyRuntimeSettingsDependencies();
+              if (!dependencies.Available()) {
+                callback(RuntimeSettingsUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseRuntimeSettingsCommandJson(
+                  request->getBody(), request->getHeader("content-type"));
+              if (!parsed.ok()) {
+                callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
+                return;
+              }
+              auto submitted = dependencies.worker->Submit(
+                  [discard = dependencies.discard,
+                   command = std::move(parsed).value(), callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      auto result = discard(command.expected_revision);
+                      QueueRuntimeSettingsResult(
+                          event_loop, std::move(callback), std::move(result));
+                    } catch (...) {
+                      QueueResponse(event_loop, std::move(callback),
+                                    RuntimeSettingsUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
+                             ? RuntimeSettingsUnavailableResponse()
+                             : RuntimeSettingsBusyResponse());
+              }
+            });
+      },
+      {Post});
 
   app().registerHandler(
       "/api/v1/cameras",
@@ -1632,7 +1883,8 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
 
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id) {
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes) {
   if (!live_stream_callback) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
@@ -1657,8 +1909,14 @@ drogon::HttpResponsePtr BuildLiveMp4Response(
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
-  auto response = drogon::HttpResponse::newStreamResponse(
-      stream, "", drogon::CT_CUSTOM, "video/mp4");
+  auto response = drogon::HttpResponse::newAsyncStreamResponse(
+      [stream = std::move(stream), maximum_response_bytes](
+          trantor::AsyncStreamPtr output) {
+        std::thread(PumpLiveMp4Stream, stream, std::move(output),
+                    maximum_response_bytes)
+            .detach();
+      },
+      drogon::CT_CUSTOM, "video/mp4");
   response->setStatusCode(drogon::k200OK);
   response->addHeader("Content-Encoding", "identity");
   return response;
@@ -1688,6 +1946,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
     security::DeviceState initial_device_state =
         security::DeviceState::kDefault;
     std::shared_ptr<BoundedWorker> security_worker;
+    std::shared_ptr<BoundedWorker> runtime_settings_worker;
     if (args.app_config->security.enabled) {
       if (!effective_args.security_store) {
         auto opened = security::SecurityStore::Open(
@@ -1720,6 +1979,9 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
             *effective_args.security_store);
       }
       security_worker = std::make_shared<BoundedWorker>(16U);
+      if (HasCompleteRuntimeSettingsCallbacks(effective_args)) {
+        runtime_settings_worker = std::make_shared<BoundedWorker>(1U);
+      }
     }
 
     std::optional<security::ResolvedTlsMaterial> tls_material;
@@ -1737,10 +1999,12 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       std::scoped_lock lock(StateMutex());
       GlobalState().args = effective_args;
       GlobalState().security_worker = security_worker;
+      GlobalState().runtime_settings_worker = runtime_settings_worker;
       GlobalState().device_state = initial_device_state;
       GlobalState().runtime_pending_peer.reset();
       GlobalState().shutting_down = false;
       security_worker_ = security_worker;
+      runtime_settings_worker_ = runtime_settings_worker;
       {
         std::lock_guard shutdown_lock(shutdown_mutex_);
         if (!shutdown_thread_started_) {
@@ -1762,8 +2026,12 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         }
         drogon::app().setThreadNum(4);
         drogon::app().disableSession();
-        drogon::app().setClientMaxBodySize(kMaximumSecurityBodyBytes);
-        drogon::app().setClientMaxMemoryBodySize(kMaximumSecurityBodyBytes);
+        drogon::app().setMaxConnectionNum(kMaximumServiceConnections);
+        drogon::app().setMaxConnectionNumPerIP(
+            kMaximumServiceConnectionsPerIp);
+        drogon::app().setClientMaxBodySize(kMaximumTransportBodyBytes);
+        drogon::app().setClientMaxMemoryBodySize(
+            kMaximumTransportBodyBytes);
         drogon::app().setDocumentRoot(web_root.string());
         drogon::app().addListener(listener.bind_address,
                                   listener.port,
@@ -1849,10 +2117,15 @@ void ServiceApp::RunShutdownCoordinator() noexcept {
 void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
   try {
     std::shared_ptr<BoundedWorker> security_worker;
+    std::shared_ptr<BoundedWorker> runtime_settings_worker;
     {
       std::scoped_lock lock(StateMutex());
       GlobalState().shutting_down = true;
       security_worker = GlobalState().security_worker;
+      runtime_settings_worker = GlobalState().runtime_settings_worker;
+    }
+    if (runtime_settings_worker) {
+      runtime_settings_worker->Stop();
     }
     if (security_worker) {
       security_worker->Stop();
@@ -1903,10 +2176,12 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
     std::scoped_lock lock(StateMutex());
     GlobalState().args = {};
     GlobalState().security_worker.reset();
+    GlobalState().runtime_settings_worker.reset();
     GlobalState().device_state = security::DeviceState::kDefault;
     GlobalState().runtime_pending_peer.reset();
   }
   security_worker_.reset();
+  runtime_settings_worker_.reset();
   tls_material_.reset();
   server_thread_done_ = {};
 }
@@ -1934,10 +2209,21 @@ void ServiceApp::JoinShutdownCoordinator() noexcept {
 
 void ServiceApp::BeginShutdown() noexcept {
   std::shared_ptr<BoundedWorker> security_worker;
+  std::shared_ptr<BoundedWorker> runtime_settings_worker;
   {
     std::scoped_lock lock(StateMutex());
     GlobalState().shutting_down = true;
     security_worker = GlobalState().security_worker;
+    runtime_settings_worker = GlobalState().runtime_settings_worker;
+  }
+  if (runtime_settings_worker) {
+    try {
+      runtime_settings_worker->Stop();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to quiesce runtime settings worker");
+    }
   }
   if (security_worker) {
     try {

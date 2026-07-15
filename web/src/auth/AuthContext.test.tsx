@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './AuthContext';
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn(),
   setUnauthorizedHandler: vi.fn(),

@@ -129,6 +129,36 @@ FirmwareRuntimeDependencies SuccessfulDependencies(Calls& calls) {
   return dependencies;
 }
 
+config::AppConfig CandidateConfig() {
+  config::AppConfig config;
+  config.secure_rtsp.enabled = false;
+  config.security.enabled = false;
+  config.http.tls.enabled = false;
+  config.ai.enabled = false;
+  config.camera.ai.enabled = false;
+  return config;
+}
+
+TEST(FirmwareRuntimeTest,
+     CandidateValidationRejectsUnsupportedCameraBeforeRuntimeStart) {
+  auto config = CandidateConfig();
+  config.camera.source.backend = "unsupported";
+  ASSERT_TRUE(config::ValidateAppConfigSemantics(config).ok());
+
+  const auto validated = FirmwareRuntime::ValidateCandidateConfig(config);
+
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_CAMERA_CONFIG");
+}
+
+TEST(FirmwareRuntimeTest,
+     CandidateValidationAcceptsSupportedConfigWithoutStartingHardware) {
+  const auto validated =
+      FirmwareRuntime::ValidateCandidateConfig(CandidateConfig());
+
+  EXPECT_TRUE(validated.ok()) << validated.error().message;
+}
+
 TEST(FirmwareRuntimeTest, StartsAndStopsEachComponentExactlyOnce) {
   config::AppConfig config;
   Calls calls;

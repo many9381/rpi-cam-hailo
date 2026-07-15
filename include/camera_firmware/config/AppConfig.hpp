@@ -145,6 +145,7 @@ struct AppConfig {
 };
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);
+common::Result<void> ValidateAppConfigSemantics(const AppConfig& config);
 common::Result<void> ValidateAiConfigSemantics(
     const AiConfig& ai_config,
     const CameraConfig& camera_config);

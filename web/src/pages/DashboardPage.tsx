@@ -7,12 +7,17 @@ import { CameraPreview } from '../components/CameraPreview';
 import { StatusPanel } from '../components/StatusPanel';
 import { StreamPanel } from '../components/StreamPanel';
 import type { CameraApiClient, DetectionSnapshot } from '../api/types';
+import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
+import { CameraSettingsPanel } from '../features/settings/CameraSettingsPanel';
+import { SettingsActionBar } from '../features/settings/SettingsActionBar';
+import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { useDetectionStream } from '../hooks/useDetectionStream';
 import type { OperationalController } from '../hooks/useOperationalData';
 
 interface DashboardPageProps {
   client: CameraApiClient;
   controller: OperationalController;
+  runtimeSettings?: RuntimeSettingsController;
   view?: OperationalView;
 }
 
@@ -40,9 +45,15 @@ const viewHeadings: Record<OperationalView, { title: string; subtitle: string }>
 export function DashboardPage({
   client,
   controller,
+  runtimeSettings,
   view = 'dashboard',
 }: DashboardPageProps) {
-  const refresh = () => void controller.refresh().catch(() => undefined);
+  const refresh = () => {
+    void controller.refresh().catch(() => undefined);
+    if (runtimeSettings !== undefined) {
+      void runtimeSettings.refresh().catch(() => undefined);
+    }
+  };
   const initialDetections: DetectionSnapshot = controller.data?.detections ?? { events: [] };
   const detectionStream = useDetectionStream(
     initialDetections,
@@ -127,6 +138,20 @@ export function DashboardPage({
       {showAi && (
         <AiPanel ai={data.ai} detections={detectionStream.snapshot}
           streamStatus={detectionStream.status} onRestart={restartAi} />
+      )}
+      {view === 'cameras' && runtimeSettings !== undefined && (
+        <>
+          <CameraSettingsPanel controller={runtimeSettings} />
+          <SettingsActionBar controller={runtimeSettings}
+            onApplySettled={() => void controller.refresh().catch(() => undefined)} />
+        </>
+      )}
+      {view === 'ai' && runtimeSettings !== undefined && (
+        <>
+          <AiSettingsPanel controller={runtimeSettings} />
+          <SettingsActionBar controller={runtimeSettings}
+            onApplySettled={() => void controller.refresh().catch(() => undefined)} />
+        </>
       )}
     </div>
   );
