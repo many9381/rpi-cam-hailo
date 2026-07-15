@@ -21,12 +21,41 @@ bool CameraHardwareSmokeEnabled() {
   return value != nullptr && std::string(value) == "1";
 }
 
-bool Meets1080p50Acceptance(
-    const camera_firmware::media::CameraPipelineStatus& status) {
-  return status.state == "running" && status.width == 1920U &&
-         status.height == 1080U && status.configured_fps == 50U &&
-         status.captured_frames >= 100U && status.encoded_frames >= 95U &&
-         status.capture_fps >= 45.0 && status.encoded_fps >= 45.0;
+struct CameraHardwareProfile {
+  const char* id;
+  unsigned int width;
+  unsigned int height;
+  unsigned int fps;
+};
+
+constexpr CameraHardwareProfile k1080p50{
+    "imx708-1080p50", 1920U, 1080U, 50U};
+constexpr CameraHardwareProfile k1080p30{
+    "imx708-1080p30", 1920U, 1080U, 30U};
+constexpr CameraHardwareProfile k720p50{
+    "imx708-720p50", 1280U, 720U, 50U};
+
+void ApplyProfile(camera_firmware::config::AppConfig& config,
+                  const CameraHardwareProfile& profile) {
+  config.camera.video.width = profile.width;
+  config.camera.video.height = profile.height;
+  config.camera.video.fps = profile.fps;
+}
+
+bool MeetsAcceptance(
+    const camera_firmware::media::CameraPipelineStatus& status,
+    const CameraHardwareProfile& profile) {
+  const auto minimum_captured = static_cast<std::uint64_t>(profile.fps) * 2U;
+  const auto minimum_encoded =
+      static_cast<std::uint64_t>(profile.fps) * 19U / 10U;
+  const auto minimum_rate = static_cast<double>(profile.fps) * 0.9;
+  return status.state == "running" && status.width == profile.width &&
+         status.height == profile.height &&
+         status.configured_fps == profile.fps &&
+         status.captured_frames >= minimum_captured &&
+         status.encoded_frames >= minimum_encoded &&
+         status.capture_fps >= minimum_rate &&
+         status.encoded_fps >= minimum_rate;
 }
 
 std::string StatusMessage(
@@ -43,15 +72,14 @@ std::string StatusMessage(
   return stream.str();
 }
 
-}  // namespace
-
-TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
+void RunCaptureAndEncodingSmoke(const CameraHardwareProfile& profile) {
   if (!CameraHardwareSmokeEnabled()) {
     GTEST_SKIP()
         << "set CF_RUN_CAMERA_HARDWARE_SMOKE=1 to require camera hardware";
   }
 
   camera_firmware::config::AppConfig config;
+  ApplyProfile(config, profile);
   camera_firmware::media::SnapshotTap snapshot_tap;
   camera_firmware::ai::AiFrameTap ai_frame_tap;
   camera_firmware::media::EncodedRing encoded_ring(128U);
@@ -68,7 +96,7 @@ TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
     const auto statuses = pipeline.Status();
     ASSERT_EQ(statuses.size(), 1U);
     status = statuses.front();
-    if (Meets1080p50Acceptance(status)) {
+    if (MeetsAcceptance(status, profile)) {
       accepted = true;
       break;
     }
@@ -77,18 +105,21 @@ TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
 
   pipeline.Stop();
 
-  EXPECT_TRUE(accepted) << StatusMessage(status);
-  EXPECT_EQ(status.capture_error_count, 0U) << StatusMessage(status);
-  EXPECT_EQ(status.encode_error_count, 0U) << StatusMessage(status);
+  EXPECT_TRUE(accepted) << profile.id << ": " << StatusMessage(status);
+  EXPECT_EQ(status.capture_error_count, 0U)
+      << profile.id << ": " << StatusMessage(status);
+  EXPECT_EQ(status.encode_error_count, 0U)
+      << profile.id << ": " << StatusMessage(status);
 }
 
-TEST(CameraPipelineHardwareSmokeTest, Packages1080p50AsFragmentedMp4) {
+void RunFragmentedMp4Smoke(const CameraHardwareProfile& profile) {
   if (!CameraHardwareSmokeEnabled()) {
     GTEST_SKIP()
         << "set CF_RUN_CAMERA_HARDWARE_SMOKE=1 to require camera hardware";
   }
 
   camera_firmware::config::AppConfig config;
+  ApplyProfile(config, profile);
   camera_firmware::media::SnapshotTap snapshot_tap;
   camera_firmware::ai::AiFrameTap ai_frame_tap;
   camera_firmware::media::EncodedRing encoded_ring(256U);
@@ -149,8 +180,11 @@ TEST(CameraPipelineHardwareSmokeTest, Packages1080p50AsFragmentedMp4) {
                                  << hub_status.last_error_message;
   EXPECT_TRUE(hub_status.last_error_code.empty())
       << hub_status.last_error_message;
-  EXPECT_GE(camera_status.capture_fps, 45.0) << StatusMessage(camera_status);
-  EXPECT_GE(camera_status.encoded_fps, 45.0) << StatusMessage(camera_status);
+  const auto minimum_rate = static_cast<double>(profile.fps) * 0.9;
+  EXPECT_GE(camera_status.capture_fps, minimum_rate)
+      << profile.id << ": " << StatusMessage(camera_status);
+  EXPECT_GE(camera_status.encoded_fps, minimum_rate)
+      << profile.id << ": " << StatusMessage(camera_status);
 
   const char* output_path = std::getenv("CF_FMP4_SMOKE_OUTPUT");
   if (output_path != nullptr && output_path[0] != '\0') {
@@ -160,4 +194,30 @@ TEST(CameraPipelineHardwareSmokeTest, Packages1080p50AsFragmentedMp4) {
                  static_cast<std::streamsize>(stream_bytes.size()));
     ASSERT_TRUE(output) << "failed to write fMP4 smoke output";
   }
+}
+
+}  // namespace
+
+TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
+  RunCaptureAndEncodingSmoke(k1080p50);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Packages1080p50AsFragmentedMp4) {
+  RunFragmentedMp4Smoke(k1080p50);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Sustains1080p30CaptureAndEncoding) {
+  RunCaptureAndEncodingSmoke(k1080p30);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Packages1080p30AsFragmentedMp4) {
+  RunFragmentedMp4Smoke(k1080p30);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Sustains720p50CaptureAndEncoding) {
+  RunCaptureAndEncodingSmoke(k720p50);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, Packages720p50AsFragmentedMp4) {
+  RunFragmentedMp4Smoke(k720p50);
 }

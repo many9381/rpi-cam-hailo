@@ -6,6 +6,8 @@ import {
   test,
 } from '@playwright/test';
 
+import type { RuntimeSettingsSnapshot } from '../src/features/settings/contracts';
+
 const LIVE_MP4_BASE64 = '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';
 
 const PRODUCTION_CSP = "default-src 'self'; img-src 'self' blob:; " +
@@ -81,11 +83,49 @@ const detectionSnapshot = {
   }],
 };
 
+const makeRuntimeSettingsSnapshot = (
+  state: RuntimeSettingsSnapshot['state'] = 'clean',
+): RuntimeSettingsSnapshot => ({
+  schema_version: 1,
+  revision: 1,
+  state,
+  capabilities: {
+    camera_profiles: [
+      { id: 'imx708-1080p50', width: 1920, height: 1080, fps: 50,
+        label: '1080p / 50 fps' },
+      { id: 'imx708-720p50', width: 1280, height: 720, fps: 50,
+        label: '720p / 50 fps' },
+    ],
+    bitrate_kbps: { minimum: 500, maximum: 20_000 },
+    gop: { minimum: 1, maximum: 300 },
+    models: [
+      { id: 'yolov8', kind: 'object_detection', input_width: 640,
+        input_height: 640, input_format: 'RGB', letterbox: true,
+        labels: 'person, vehicle' },
+      { id: 'pose', kind: 'pose', input_width: 640,
+        input_height: 640, input_format: 'RGB', letterbox: true,
+        labels: 'pose17' },
+    ],
+  },
+  active: {
+    camera: { profile_id: 'imx708-1080p50', bitrate_kbps: 6_000, gop: 25 },
+    models: [
+      { id: 'yolov8', enabled: true, confidence_threshold: 0.5 },
+      { id: 'pose', enabled: false, confidence_threshold: 0.5 },
+    ],
+  },
+  pending: null,
+  last_apply: { status: 'never', code: '', restored: false },
+});
+
 interface ApiMockOptions {
   setupRequired?: boolean;
   setupPhase?: 'administrator' | 'runtime_pending';
   authenticated?: boolean;
   runtimeFailed?: boolean;
+  settingsRevisionConflictOnce?: boolean;
+  settingsApplyFailureOnce?: boolean;
+  settingsRecoveryRequired?: boolean;
 }
 
 interface ApiMockControls {
@@ -93,6 +133,7 @@ interface ApiMockControls {
   runtimeRequests: Request[];
   runtimeRestartRequests: Request[];
   liveRequests: Request[];
+  settingsRequests: Request[];
   unhandledPaths: string[];
   emitDetection(): void;
 }
@@ -105,6 +146,11 @@ async function installApiMocks(
   const setupPhase = options.setupPhase ?? 'administrator';
   let authenticated = options.authenticated ?? true;
   let runtimeFailed = options.runtimeFailed ?? false;
+  let settingsRevisionConflictOnce = options.settingsRevisionConflictOnce ?? false;
+  let settingsApplyFailureOnce = options.settingsApplyFailureOnce ?? false;
+  let runtimeSettings = makeRuntimeSettingsSnapshot(
+    options.settingsRecoveryRequired ? 'recovery_required' : 'clean',
+  );
   let emitDetection!: () => void;
   const detectionGate = new Promise<void>((resolve) => {
     emitDetection = resolve;
@@ -113,6 +159,7 @@ async function installApiMocks(
   const runtimeRequests: Request[] = [];
   const runtimeRestartRequests: Request[] = [];
   const liveRequests: Request[] = [];
+  const settingsRequests: Request[] = [];
   const unhandledPaths: string[] = [];
 
   await page.addInitScript((liveMp4Base64) => {
@@ -209,6 +256,139 @@ async function installApiMocks(
       });
       return;
     }
+    if (path === '/api/v1/settings/runtime' && request.method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeSettings),
+      });
+      return;
+    }
+    if (path === '/api/v1/settings/runtime' && request.method() === 'PUT') {
+      settingsRequests.push(request);
+      const command = request.postDataJSON() as {
+        expected_revision: number;
+        settings: RuntimeSettingsSnapshot['active'];
+      };
+      if (settingsRevisionConflictOnce) {
+        settingsRevisionConflictOnce = false;
+        runtimeSettings = {
+          ...runtimeSettings,
+          revision: runtimeSettings.revision + 1,
+        };
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_REVISION_CONFLICT' }),
+        });
+        return;
+      }
+      if (command.expected_revision !== runtimeSettings.revision) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_REVISION_CONFLICT' }),
+        });
+        return;
+      }
+      runtimeSettings = {
+        ...runtimeSettings,
+        revision: runtimeSettings.revision + 1,
+        state: 'pending',
+        pending: structuredClone(command.settings),
+      };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeSettings),
+      });
+      return;
+    }
+    if (path === '/api/v1/settings/runtime/apply' && request.method() === 'POST') {
+      settingsRequests.push(request);
+      const command = request.postDataJSON() as { expected_revision: number };
+      if (command.expected_revision !== runtimeSettings.revision) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_REVISION_CONFLICT' }),
+        });
+        return;
+      }
+      if (runtimeSettings.pending === null) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_NO_PENDING' }),
+        });
+        return;
+      }
+      if (settingsApplyFailureOnce) {
+        settingsApplyFailureOnce = false;
+        runtimeSettings = {
+          ...runtimeSettings,
+          revision: runtimeSettings.revision + 1,
+          state: 'failed',
+          last_apply: {
+            status: 'failed',
+            code: 'E_SETTINGS_APPLY_FAILED',
+            restored: true,
+          },
+        };
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_APPLY_FAILED' }),
+        });
+        return;
+      }
+      runtimeSettings = {
+        ...runtimeSettings,
+        revision: runtimeSettings.revision + 1,
+        state: 'clean',
+        active: structuredClone(runtimeSettings.pending),
+        pending: null,
+        last_apply: { status: 'success', code: '', restored: false },
+      };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...runtimeSettings,
+          applied: true,
+          restored: false,
+        }),
+      });
+      return;
+    }
+    if (path === '/api/v1/settings/runtime/discard' && request.method() === 'POST') {
+      settingsRequests.push(request);
+      const command = request.postDataJSON() as { expected_revision: number };
+      if (command.expected_revision !== runtimeSettings.revision) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_REVISION_CONFLICT' }),
+        });
+        return;
+      }
+      if (runtimeSettings.pending === null) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_SETTINGS_NO_PENDING' }),
+        });
+        return;
+      }
+      runtimeSettings = {
+        ...runtimeSettings,
+        revision: runtimeSettings.revision + 1,
+        state: 'clean',
+        pending: null,
+      };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(runtimeSettings),
+      });
+      return;
+    }
     if (path === '/api/v1/cameras/imx708/live.mp4' && request.method() === 'GET') {
       liveRequests.push(request);
       await route.fulfill({
@@ -262,7 +442,7 @@ async function installApiMocks(
   });
 
   return { initializeRequests, runtimeRequests, runtimeRestartRequests,
-    liveRequests, unhandledPaths, emitDetection };
+    liveRequests, settingsRequests, unhandledPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -558,5 +738,161 @@ test('mobile dashboard drawer is modal, keyboard dismissible, and unclipped', as
   await expectNoOverlap(header, ai);
   await expectNoOverlap(preview, ai);
   await expectNoOverlap(header, reconnect);
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('camera settings save explicitly, confirm apply, and remain responsive', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/cameras');
+  await page.getByLabel('Capture profile').selectOption('imx708-720p50');
+  await page.getByLabel('Bitrate').fill('7200');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+
+  await expect(page.getByRole('status').filter({ hasText:
+    'Runtime settings are waiting to be applied.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Apply pending' }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Apply runtime settings' });
+  await expect(dialog).toContainText('Camera video and RTSP clients will reconnect briefly.');
+  await dialog.getByRole('button', { name: 'Apply now' }).click();
+
+  await expect(page.getByText('Active: 720p / 50 fps / 7200 kbps / GOP 25'))
+    .toBeVisible();
+  await expect(page.getByText('Runtime settings are waiting to be applied.'))
+    .toHaveCount(0);
+  expect(api.settingsRequests.map((request) => request.method()))
+    .toEqual(['PUT', 'POST']);
+  expect(api.settingsRequests[0].postDataJSON()).toMatchObject({
+    expected_revision: 1,
+    settings: {
+      camera: { profile_id: 'imx708-720p50', bitrate_kbps: 7200, gop: 25 },
+    },
+  });
+
+  await expectNoHorizontalOverflow(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: testInfo.outputPath('desktop-camera-settings.png'),
+    fullPage: true,
+  });
+  for (const width of [1024, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByLabel('Runtime settings actions')).toBeVisible();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await expect(page.getByLabel('Runtime settings actions')).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-camera-settings.png'),
+    fullPage: true,
+  });
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('AI settings save and discard a pending model change', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/ai');
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath('desktop-ai-settings.png'),
+    fullPage: true,
+  });
+  await page.getByRole('switch', { name: 'pose enabled' }).check();
+  await page.getByLabel('pose confidence value').fill('0.65');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText('Saved settings are waiting to be applied.'))
+    .toBeVisible();
+  await page.getByRole('button', { name: 'Discard pending' }).click();
+
+  await expect(page.getByRole('switch', { name: 'pose enabled' })).not.toBeChecked();
+  await expect(page.getByLabel('pose confidence value')).toHaveValue('0.5');
+  expect(api.settingsRequests.map((request) => request.method()))
+    .toEqual(['PUT', 'POST']);
+  expect(new URL(api.settingsRequests[1].url()).pathname)
+    .toBe('/api/v1/settings/runtime/discard');
+  for (const width of [1024, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByLabel('Runtime settings actions')).toBeVisible();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await expect(page.getByLabel('Runtime settings actions')).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-ai-settings.png'),
+    fullPage: true,
+  });
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('revision conflict preserves the local draft for an explicit retry', async ({ page }) => {
+  const api = await installApiMocks(page, { settingsRevisionConflictOnce: true });
+
+  await page.goto('/#/cameras');
+  await page.getByLabel('Bitrate').fill('7100');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+
+  await expect(page.getByRole('alert')).toContainText(
+    'Settings changed on the device. Review and save your changes again.',
+  );
+  await expect(page.getByLabel('Bitrate')).toHaveValue('7100');
+  await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  expect(api.settingsRequests).toHaveLength(1);
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('failed apply reports restored runtime and retains pending settings', async ({ page }) => {
+  const api = await installApiMocks(page, { settingsApplyFailureOnce: true });
+
+  await page.goto('/#/cameras');
+  await page.getByLabel('Bitrate').fill('7300');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await page.getByRole('button', { name: 'Apply pending' }).click();
+  await page.getByRole('button', { name: 'Apply now' }).click();
+
+  await expect(page.getByRole('alert').filter({ hasText:
+    'Settings could not be applied. The previous runtime was restored.' }))
+    .toBeVisible();
+  await expect(page.getByRole('button', { name: 'Apply pending' })).toBeEnabled();
+  await expect(page.getByText('Active: 1080p / 50 fps / 6000 kbps / GOP 25'))
+    .toBeVisible();
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('recovery settings are replaced through save and apply', async ({ page }) => {
+  const api = await installApiMocks(page, { settingsRecoveryRequired: true });
+
+  await page.goto('/#/cameras');
+  await expect(page.getByRole('status').filter({ hasText:
+    'Runtime settings need recovery.' })).toBeVisible();
+  await page.getByLabel('GOP interval').fill('30');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await page.getByRole('button', { name: 'Apply pending' }).click();
+  await page.getByRole('button', { name: 'Apply now' }).click();
+
+  await expect(page.getByText('Active: 1080p / 50 fps / 6000 kbps / GOP 30'))
+    .toBeVisible();
+  await expect(page.getByText('Runtime settings need recovery.')).toHaveCount(0);
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('logout remains available from the authenticated settings shell', async ({ page }) => {
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/cameras');
+  await page.getByRole('button', { name: 'Open user menu' }).click();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Administrator login' })).toBeVisible();
   expect(api.unhandledPaths).toEqual([]);
 });

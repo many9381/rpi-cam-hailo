@@ -69,6 +69,15 @@ SecurityRequestContext ValidManagementPost(std::string path) {
   return context;
 }
 
+SecurityRequestContext ValidManagementRequest(std::string path,
+                                              std::string method) {
+  auto context = Operational(std::move(path), std::move(method));
+  context.origin = "https://CAMERA.example:443";
+  context.has_management_header = true;
+  context.principal = Administrator();
+  return context;
+}
+
 TEST(SecurityRequestGateTest, DefaultStateAllowsOnlyExactSetupSurface) {
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/api/v1/setup/status")).ok());
 
@@ -203,6 +212,80 @@ TEST(SecurityRequestGateTest, RuntimeRestartUsesOperationalAdminCsrfPolicy) {
   auto wrong_role = AuthorizeSecurityRequest(context);
   ASSERT_FALSE(wrong_role.ok());
   EXPECT_EQ(wrong_role.error().code, "E_AUTHORIZATION_REQUIRED");
+}
+
+TEST(SecurityRequestGateTest, RuntimeSettingsGetRequiresManagementAdminOnly) {
+  auto context =
+      Operational("/api/v1/settings/runtime", "GET");
+
+  auto missing_session = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(missing_session.ok());
+  EXPECT_EQ(missing_session.error().code, "E_AUTHENTICATION_REQUIRED");
+
+  context.principal = Administrator();
+  EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
+
+  context.principal->role = UserRole::kViewer;
+  auto viewer = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(viewer.ok());
+  EXPECT_EQ(viewer.error().code, "E_AUTHORIZATION_REQUIRED");
+}
+
+TEST(SecurityRequestGateTest, RuntimeSettingsMutationsRequireCsrfAndAdmin) {
+  for (const auto& [path, method] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"/api/v1/settings/runtime", "PUT"},
+           {"/api/v1/settings/runtime/apply", "POST"},
+           {"/api/v1/settings/runtime/discard", "POST"},
+       }) {
+    auto context = Operational(path, method);
+    context.principal = Administrator();
+
+    auto missing_origin = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(missing_origin.ok()) << path;
+    EXPECT_EQ(missing_origin.error().code, "E_REQUEST_ORIGIN") << path;
+
+    context.origin = std::string(kOrigin);
+    auto missing_header = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(missing_header.ok()) << path;
+    EXPECT_EQ(missing_header.error().code, "E_REQUEST_HEADER") << path;
+
+    context.has_management_header = true;
+    EXPECT_TRUE(AuthorizeSecurityRequest(context).ok()) << path;
+  }
+}
+
+TEST(SecurityRequestGateTest, RuntimeSettingsRouteMethodsAreExact) {
+  for (const auto& [path, method] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"/api/v1/settings/runtime", "POST"},
+           {"/api/v1/settings/runtime", "PATCH"},
+           {"/api/v1/settings/runtime", "DELETE"},
+           {"/api/v1/settings/runtime/apply", "GET"},
+           {"/api/v1/settings/runtime/apply", "PUT"},
+           {"/api/v1/settings/runtime/discard", "GET"},
+           {"/api/v1/settings/runtime/extra", "GET"},
+       }) {
+    const auto result = AuthorizeSecurityRequest(
+        ValidManagementRequest(path, method));
+    ASSERT_FALSE(result.ok()) << path << ' ' << method;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED")
+        << path << ' ' << method;
+  }
+}
+
+TEST(SecurityRequestGateTest, DefaultStateCannotAccessRuntimeSettings) {
+  for (const auto& [path, method] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"/api/v1/settings/runtime", "GET"},
+           {"/api/v1/settings/runtime", "PUT"},
+           {"/api/v1/settings/runtime/apply", "POST"},
+           {"/api/v1/settings/runtime/discard", "POST"},
+       }) {
+    const auto result = AuthorizeSecurityRequest(Request(path, method));
+    ASSERT_FALSE(result.ok()) << path;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
+  }
 }
 
 TEST(SecurityRequestGateTest, GetMeNeedsSessionButNotCsrf) {

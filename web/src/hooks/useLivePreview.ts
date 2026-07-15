@@ -208,7 +208,7 @@ export function useLivePreview(cameraId: string): LivePreviewController {
         ? { ...current, state: 'live' }
         : current);
     };
-    const fail = (retryable: boolean) => {
+    const fail = (retryable: boolean, immediate = false) => {
       if (!isCurrent() || session.failed) {
         return;
       }
@@ -225,7 +225,7 @@ export function useLivePreview(cameraId: string): LivePreviewController {
       setResource((current) => current.generation === session.generation
         ? { ...current, state: 'reconnecting' }
         : current);
-      const delay = retryDelay(retryAttempt.current);
+      const delay = immediate ? 0 : retryDelay(retryAttempt.current);
       retryAttempt.current += 1;
       retryTimer.current = setTimeout(() => {
         retryTimer.current = null;
@@ -257,7 +257,7 @@ export function useLivePreview(cameraId: string): LivePreviewController {
         while (isCurrent()) {
           const next = await reader.read();
           if (next.done) {
-            fail(true);
+            fail(true, true);
             return;
           }
           if (next.value.byteLength === 0) {

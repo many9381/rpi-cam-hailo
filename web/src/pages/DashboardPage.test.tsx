@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient } from '../api/types';
 import type { OperationalController } from '../hooks/useOperationalData';
+import {
+  makeSettingsController,
+  makeSettingsSnapshot,
+} from '../features/settings/testSupport';
 import { DashboardPage } from './DashboardPage';
 
 let client: CameraApiClient;
@@ -34,6 +38,7 @@ class FakeEventSource {
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn((): Promise<Blob> => new Promise<Blob>(() => {})),
   setUnauthorizedHandler: vi.fn(),
@@ -200,5 +205,40 @@ describe('DashboardPage', () => {
       '/api/v1/runtime/restart', {}, expect.any(Function),
     );
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it('places camera and AI settings only in their operational views', () => {
+    const settingsController = makeSettingsController();
+    const { rerender } = render(<DashboardPage client={client}
+      controller={controller} runtimeSettings={settingsController} view="cameras" />);
+    expect(screen.getByRole('heading', { name: 'Camera settings' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Model settings' }))
+      .not.toBeInTheDocument();
+    expect(screen.getByLabelText('Runtime settings actions')).toBeVisible();
+
+    rerender(<DashboardPage client={client} controller={controller}
+      runtimeSettings={settingsController} view="ai" />);
+    expect(screen.getByRole('heading', { name: 'Model settings' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Camera settings' }))
+      .not.toBeInTheDocument();
+    expect(screen.getByLabelText('Runtime settings actions')).toBeVisible();
+  });
+
+  it('refreshes operational status after an apply command settles', async () => {
+    const user = userEvent.setup();
+    const refresh = vi.fn(async () => undefined);
+    const pending = makeSettingsSnapshot().active;
+    pending.camera = { ...pending.camera, profile_id: 'imx708-720p50' };
+    const settingsController = makeSettingsController({
+      snapshot: makeSettingsSnapshot({ pending }),
+      draft: pending,
+    });
+    render(<DashboardPage client={client} controller={{ ...controller, refresh }}
+      runtimeSettings={settingsController} view="cameras" />);
+
+    await user.click(screen.getByRole('button', { name: 'Apply pending' }));
+    await user.click(screen.getByRole('button', { name: 'Apply now' }));
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });
 });

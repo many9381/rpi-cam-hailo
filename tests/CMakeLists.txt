@@ -30,6 +30,45 @@ gtest_discover_tests(camera_firmware_config_tests
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
+add_executable(camera_firmware_settings_tests
+    unit/settings/RuntimeSettingsTest.cpp
+)
+
+target_link_libraries(camera_firmware_settings_tests
+    PRIVATE
+        camera_firmware_settings
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_settings_tests)
+
+add_executable(camera_firmware_runtime_settings_store_tests
+    unit/settings/RuntimeSettingsStoreTest.cpp
+)
+
+target_link_libraries(camera_firmware_runtime_settings_store_tests
+    PRIVATE
+        camera_firmware_settings
+        GTest::gtest_main
+)
+
+target_include_directories(camera_firmware_runtime_settings_store_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/settings
+)
+
+target_link_options(camera_firmware_runtime_settings_store_tests
+    PRIVATE
+        -Wl,--wrap=fstat
+        -Wl,--wrap=camera_firmware_settings_write
+        -Wl,--wrap=camera_firmware_settings_fdatasync
+        -Wl,--wrap=camera_firmware_settings_renameat
+        -Wl,--wrap=camera_firmware_settings_unlinkat
+        -Wl,--wrap=camera_firmware_settings_fsync
+)
+
+gtest_discover_tests(camera_firmware_runtime_settings_store_tests)
+
 add_executable(camera_firmware_security_tests
     unit/security/AuthServiceTest.cpp
     unit/security/BootstrapServiceTest.cpp
@@ -156,6 +195,68 @@ target_link_libraries(camera_firmware_runtime_tests
 
 gtest_discover_tests(camera_firmware_runtime_tests)
 
+add_executable(camera_firmware_managed_runtime_tests
+    unit/runtime/ManagedFirmwareRuntimeTest.cpp
+)
+
+target_link_libraries(camera_firmware_managed_runtime_tests
+    PRIVATE
+        camera_firmware_runtime
+        GTest::gtest_main
+)
+
+gtest_discover_tests(
+    camera_firmware_managed_runtime_tests
+    TEST_PREFIX camera_firmware_managed_runtime_tests.
+)
+
+add_executable(camera_firmware_runtime_settings_service_tests
+    unit/settings/RuntimeSettingsServiceTest.cpp
+)
+
+target_compile_definitions(camera_firmware_runtime_settings_service_tests
+    PRIVATE
+        CF_TEST_BINARY_DIR="${PROJECT_BINARY_DIR}/tests"
+)
+
+target_link_libraries(camera_firmware_runtime_settings_service_tests
+    PRIVATE
+        camera_firmware_runtime
+        camera_firmware_settings
+        GTest::gtest_main
+)
+
+target_link_options(camera_firmware_runtime_settings_service_tests
+    PRIVATE
+        -Wl,--wrap=camera_firmware_settings_renameat
+        -Wl,--wrap=camera_firmware_settings_fsync
+        -Wl,--wrap=_ZNK15camera_firmware7runtime22ManagedFirmwareRuntime5StateEv
+)
+
+gtest_discover_tests(
+    camera_firmware_runtime_settings_service_tests
+    TEST_PREFIX camera_firmware_runtime_settings_service_tests.
+    PROPERTIES
+        TIMEOUT 10
+)
+
+add_executable(camera_firmware_runtime_settings_http_tests
+    unit/service/RuntimeSettingsHttpTest.cpp
+)
+
+target_link_libraries(camera_firmware_runtime_settings_http_tests
+    PRIVATE
+        camera_firmware_service
+        GTest::gtest_main
+)
+
+gtest_discover_tests(
+    camera_firmware_runtime_settings_http_tests
+    TEST_PREFIX camera_firmware_runtime_settings_http_tests.
+    PROPERTIES
+        TIMEOUT 10
+)
+
 add_executable(camera_firmware_boot_tests
     unit/boot/FirmwareBootCoordinatorTest.cpp
 )
@@ -224,6 +325,21 @@ gtest_discover_tests(camera_firmware_fragmented_mp4_tests
         TIMEOUT 15
 )
 
+add_executable(camera_firmware_async_stream_backpressure_tests
+    integration/AsyncStreamBackpressureTest.cpp
+)
+
+target_link_libraries(camera_firmware_async_stream_backpressure_tests
+    PRIVATE
+        Drogon::Drogon
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
+    PROPERTIES
+        TIMEOUT 15
+)
+
 add_executable(camera_firmware_service_tests
     unit/service/SecurityRequestGateTest.cpp
     unit/service/ServiceResponseTest.cpp
@@ -267,13 +383,15 @@ gtest_discover_tests(camera_firmware_https_auth_integration
         TIMEOUT 90
 )
 
-if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
+if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
+        CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR)
     find_program(CF_TEST_GIT_EXECUTABLE NAMES git REQUIRED)
     add_test(
         NAME DrogonSourceIdentityConfigureTest
         COMMAND ${CMAKE_COMMAND}
             -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
             -DCF_DROGON_SOURCE_DIR=${CAMERA_FIRMWARE_DROGON_SOURCE_DIR}
+            -DCF_TRANTOR_SOURCE_DIR=${CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR}
             -DCF_GIT_EXECUTABLE=${CF_TEST_GIT_EXECUTABLE}
             -DCF_TEST_ROOT=${PROJECT_BINARY_DIR}/drogon-source-identity-test
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DrogonSourceIdentityTest.cmake

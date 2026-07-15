@@ -10,6 +10,7 @@ import { SetupPage } from './pages/SetupPage';
 import { RuntimeRecoveryPage } from './pages/RuntimeRecoveryPage';
 import { DashboardPage, type OperationalView } from './pages/DashboardPage';
 import { useOperationalData } from './hooks/useOperationalData';
+import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
 
 type BootstrapState =
   | { kind: 'checking' }
@@ -157,11 +158,17 @@ function DefaultOperationalShell({ client }: { client: CameraApiClient }) {
   const auth = useAuth();
   const location = useLocation();
   const controller = useOperationalData(client);
+  const runtimeSettings = useRuntimeSettings(client);
   const view = operationalViews[location.pathname] ?? 'dashboard';
   return (
     <AppShell principal={auth.principal!} logout={auth.logout}
-      onRefresh={() => void controller.refresh().catch(() => undefined)}>
-      <DashboardPage client={client} controller={controller} view={view} />
+      runtimeSettings={runtimeSettings}
+      onRefresh={() => {
+        void controller.refresh().catch(() => undefined);
+        void runtimeSettings.refresh().catch(() => undefined);
+      }}>
+      <DashboardPage client={client} controller={controller}
+        runtimeSettings={runtimeSettings} view={view} />
     </AppShell>
   );
 }

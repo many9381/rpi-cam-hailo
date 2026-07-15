@@ -55,6 +55,33 @@ describe('ApiClient', () => {
     }));
   });
 
+  it('sends PUT management JSON with same-origin credentials and the supplied signal', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      username: 'operator.one',
+      role: 'administrator',
+    }));
+    const signal = new AbortController().signal;
+    const client = new ApiClient(fetchMock);
+
+    await expect(client.putJson(
+      '/api/v1/settings/runtime',
+      { expected_revision: 4, settings: {} },
+      parsePrincipal,
+      signal,
+    )).resolves.toEqual({ username: 'operator.one', role: 'administrator' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/settings/runtime', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Camera-Request': 'management',
+      },
+      body: JSON.stringify({ expected_revision: 4, settings: {} }),
+      signal,
+    });
+  });
+
   it('gets JSON with same-origin credentials and the supplied signal', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       username: 'operator.one',

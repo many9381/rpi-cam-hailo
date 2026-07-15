@@ -186,7 +186,7 @@ describe('useLivePreview', () => {
     });
   });
 
-  it('reconnects with backoff after the HTTP stream ends', async () => {
+  it('reconnects immediately after a clean HTTP stream rotation', async () => {
     vi.useFakeTimers();
     responseWithReader([{ done: true, value: undefined }]);
     render(<Probe cameraId="cam-a" />);
@@ -197,9 +197,7 @@ describe('useLivePreview', () => {
     expect(screen.getByRole('status')).toHaveTextContent('reconnecting');
     expect(MockMediaSource.instances).toHaveLength(1);
 
-    act(() => vi.advanceTimersByTime(999));
-    expect(MockMediaSource.instances).toHaveLength(1);
-    act(() => vi.advanceTimersByTime(1));
+    act(() => vi.advanceTimersByTime(0));
     expect(MockMediaSource.instances).toHaveLength(2);
     expect(screen.getByTestId('generation')).toHaveTextContent('2');
   });

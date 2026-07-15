@@ -98,6 +98,32 @@ FirmwareRuntime::~FirmwareRuntime() {
   Stop();
 }
 
+common::Result<void> FirmwareRuntime::ValidateCandidateConfig(
+    const config::AppConfig& config) {
+  const auto semantics = config::ValidateAppConfigSemantics(config);
+  if (!semantics.ok()) {
+    return semantics;
+  }
+
+  try {
+    media::SnapshotTap snapshot_tap;
+    ai::AiFrameTap ai_frame_tap;
+    media::EncodedRing encoded_ring(64U);
+    media::CameraPipeline camera_pipeline(
+        snapshot_tap, ai_frame_tap, encoded_ring);
+    auto camera_validation = camera_pipeline.ValidateConfigOnly(config);
+    if (!camera_validation.ok()) {
+      return camera_validation;
+    }
+
+    FirmwareRuntime candidate(config);
+    return common::Result<void>::Ok();
+  } catch (...) {
+    return common::Result<void>::Err(
+        {"E_PIPELINE_CANDIDATE", "runtime candidate validation failed"});
+  }
+}
+
 common::Result<void> FirmwareRuntime::Start() {
   std::lock_guard lock(mutex_);
   if (state_ == FirmwareRuntimeState::kRunning) {

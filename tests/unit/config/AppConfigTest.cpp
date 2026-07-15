@@ -844,6 +844,33 @@ TEST(AppConfigTest, RejectsAiModelWithOutOfRangeConfidenceThreshold) {
   EXPECT_EQ(validated.error().code, "E_CONFIG_AI_MODEL");
 }
 
+TEST(AppConfigTest, ValidatesLoadedConfigurationSemanticsIndependently) {
+  const auto config = LoadInlineConfig(R"(
+http:
+  live:
+    fragment_duration_ms: 1000
+    stale_timeout_ms: 1500
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_FALSE(config.ok());
+  EXPECT_EQ(config.error().code, "E_CONFIG_HTTP_LIVE");
+
+  camera_firmware::config::AppConfig invalid;
+  invalid.secure_rtsp.enabled = false;
+  invalid.security.enabled = false;
+  invalid.http.live.fragment_duration_ms = 1000U;
+  invalid.http.live.stale_timeout_ms = 1500U;
+  const auto validated =
+      camera_firmware::config::ValidateAppConfigSemantics(invalid);
+
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_CONFIG_HTTP_LIVE");
+}
+
 TEST(AppConfigTest, RejectsMissingSessionKeyWhenSrtpEnabled) {
   const char* yaml = "/tmp/cf-missing-key.yaml";
   std::ofstream out(yaml);

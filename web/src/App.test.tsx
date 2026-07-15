@@ -34,6 +34,7 @@ const deferred = <T,>() => {
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn(),
   setUnauthorizedHandler: vi.fn(),
@@ -86,10 +87,11 @@ describe('App bootstrap gate', () => {
     render(<App client={client} />);
 
     expect(await screen.findByText('operator.one')).toBeVisible();
-    expect(await screen.findByRole('link', { name: 'Dashboard' })).toHaveAttribute(
-      'aria-current', 'page',
-    );
-    expect(window.location.hash).toBe('#/dashboard');
+    const dashboard = await screen.findByRole('link', { name: 'Dashboard' });
+    await waitFor(() => {
+      expect(dashboard).toHaveAttribute('aria-current', 'page');
+      expect(window.location.hash).toBe('#/dashboard');
+    });
     expect(client.getJson).toHaveBeenNthCalledWith(
       2,
       '/api/v1/auth/me',
@@ -125,6 +127,61 @@ describe('App bootstrap gate', () => {
     expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
       .toBeVisible();
     expect(screen.getByRole('combobox', { name: /camera/i })).toBeDisabled();
+  });
+
+  it('keeps one runtime settings controller across operational navigation', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.getJson).mockImplementation(async (path, parser) => {
+      const payloads: Record<string, unknown> = {
+        '/api/v1/setup/status': { required: false },
+        '/api/v1/auth/me': { username: 'operator.one', role: 'administrator' },
+        '/api/v1/health': { status: 'ok' },
+        '/api/v1/cameras': { cameras: [], ai: {
+          enabled: false, backend: 'disabled', state: 'disabled',
+          model_count: 0, runner_count: 0, reason: 'disabled by config',
+          models: [], runners: [],
+        } },
+        '/api/v1/stream': { url: 'rtsp://camera.local:8555/imx708/main',
+          control_tls: false, media_srtp: false, secure_media: {
+            control_scheme: 'rtsp', media_profile: 'RTP/AVP', keying: 'none',
+            requires_tls_control_channel: false,
+          } },
+        '/api/v1/ai/detections': { events: [] },
+        '/api/v1/settings/runtime': {
+          schema_version: 1,
+          revision: 0,
+          state: 'clean',
+          capabilities: {
+            camera_profiles: [{ id: 'imx708-1080p50', width: 1920,
+              height: 1080, fps: 50, label: '1080p / 50 fps' }],
+            bitrate_kbps: { minimum: 500, maximum: 20_000 },
+            gop: { minimum: 1, maximum: 300 },
+            models: [],
+          },
+          active: { camera: { profile_id: 'imx708-1080p50',
+            bitrate_kbps: 6_000, gop: 25 }, models: [] },
+          pending: null,
+          last_apply: { status: 'never', code: '', restored: false },
+        },
+      };
+      return parser(payloads[path]);
+    });
+
+    render(<App client={client} />);
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/settings/runtime',
+    )).toHaveLength(1));
+
+    await user.click(screen.getByRole('link', { name: 'Cameras' }));
+    await screen.findByRole('heading', { name: 'Cameras' });
+    await user.click(screen.getByRole('link', { name: 'AI' }));
+    await screen.findByRole('heading', { name: 'AI inference' });
+
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/settings/runtime',
+    )).toHaveLength(1);
   });
 
   it('forces anonymous users to login even after direct protected hash manipulation', async () => {

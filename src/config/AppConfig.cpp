@@ -3,6 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <string>
@@ -22,25 +23,22 @@ void AssignIfPresent(const YAML::Node& node, const char* key, T& value) {
   }
 }
 
-common::Result<AppConfig> SessionKeyError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_SESSION_KEY",
-       "secure_rtsp.session_key.path is required when SRTP is enabled"});
+common::Error SessionKeyError() {
+  return {"E_CONFIG_SESSION_KEY",
+          "secure_rtsp.session_key.path is required when SRTP is enabled"};
 }
 
-common::Result<AppConfig> TlsCertificateError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_TLS_CERT",
-       "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
-       "when control_tls is enabled unless "
-       "allow_development_self_signed_tls is true"});
+common::Error TlsCertificateError() {
+  return {"E_CONFIG_TLS_CERT",
+          "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
+          "when control_tls is enabled unless "
+          "allow_development_self_signed_tls is true"};
 }
 
-common::Result<AppConfig> HttpTlsError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_HTTP_TLS",
-       "http.tls.certificate_path and private_key_path are required together "
-       "when http.tls.enabled is true"});
+common::Error HttpTlsError() {
+  return {"E_CONFIG_HTTP_TLS",
+          "http.tls.certificate_path and private_key_path are required together "
+          "when http.tls.enabled is true"};
 }
 
 std::vector<std::string> ReadStringList(const YAML::Node& node) {
@@ -143,7 +141,8 @@ common::Result<void> ValidateAiConfigSemantics(
           {"E_CONFIG_AI_MODEL",
            "only ai.models[].input.format=rgb8 is supported"});
     }
-    if (model.confidence_threshold < 0.0F ||
+    if (!std::isfinite(model.confidence_threshold) ||
+        model.confidence_threshold < 0.0F ||
         model.confidence_threshold > 1.0F) {
       return common::Result<void>::Err(
           {"E_CONFIG_AI_MODEL",
@@ -289,6 +288,55 @@ common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
          "RTSP credentials must be located beneath the security state directory"});
   }
 
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
+  if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
+      config.secure_rtsp.session_key.path.empty()) {
+    return common::Result<void>::Err(SessionKeyError());
+  }
+
+  const auto ai_semantics =
+      ValidateAiConfigSemantics(config.ai, config.camera);
+  if (!ai_semantics.ok()) {
+    return common::Result<void>::Err(ai_semantics.error());
+  }
+  const auto secure_rtsp_semantics =
+      ValidateSecureRtspSemantics(config.secure_rtsp);
+  if (!secure_rtsp_semantics.ok()) {
+    return common::Result<void>::Err(secure_rtsp_semantics.error());
+  }
+  const auto http_snapshot_semantics =
+      ValidateHttpSnapshotSemantics(config.http.snapshot);
+  if (!http_snapshot_semantics.ok()) {
+    return common::Result<void>::Err(http_snapshot_semantics.error());
+  }
+  const auto http_live_semantics = ValidateHttpLiveSemantics(config.http.live);
+  if (!http_live_semantics.ok()) {
+    return common::Result<void>::Err(http_live_semantics.error());
+  }
+  if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
+    const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();
+    const bool has_key = !config.secure_rtsp.tls_private_key_path.empty();
+    if (has_cert != has_key ||
+        (!config.secure_rtsp.allow_development_self_signed_tls && !has_cert)) {
+      return common::Result<void>::Err(TlsCertificateError());
+    }
+  }
+  if (config.http.enabled && config.http.tls.enabled) {
+    const bool has_cert = !config.http.tls.certificate_path.empty();
+    const bool has_key = !config.http.tls.private_key_path.empty();
+    if (has_cert != has_key ||
+        (!config.http.tls.allow_development_self_signed_tls && !has_cert)) {
+      return common::Result<void>::Err(HttpTlsError());
+    }
+  }
+
+  const auto security_semantics = ValidateSecuritySemantics(config);
+  if (!security_semantics.ok()) {
+    return common::Result<void>::Err(security_semantics.error());
+  }
   return common::Result<void>::Ok();
 }
 
@@ -455,49 +503,9 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       }
     }
 
-    if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
-        config.secure_rtsp.session_key.path.empty()) {
-      return SessionKeyError();
-    }
-    auto ai_semantics = ValidateAiConfigSemantics(config.ai, config.camera);
-    if (!ai_semantics.ok()) {
-      return common::Result<AppConfig>::Err(ai_semantics.error());
-    }
-    auto secure_rtsp_semantics =
-        ValidateSecureRtspSemantics(config.secure_rtsp);
-    if (!secure_rtsp_semantics.ok()) {
-      return common::Result<AppConfig>::Err(secure_rtsp_semantics.error());
-    }
-    auto http_snapshot_semantics =
-        ValidateHttpSnapshotSemantics(config.http.snapshot);
-    if (!http_snapshot_semantics.ok()) {
-      return common::Result<AppConfig>::Err(http_snapshot_semantics.error());
-    }
-    auto http_live_semantics = ValidateHttpLiveSemantics(config.http.live);
-    if (!http_live_semantics.ok()) {
-      return common::Result<AppConfig>::Err(http_live_semantics.error());
-    }
-    if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
-      const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();
-      const bool has_key = !config.secure_rtsp.tls_private_key_path.empty();
-      if (has_cert != has_key ||
-          (!config.secure_rtsp.allow_development_self_signed_tls &&
-           !has_cert)) {
-        return TlsCertificateError();
-      }
-    }
-    if (config.http.enabled && config.http.tls.enabled) {
-      const bool has_cert = !config.http.tls.certificate_path.empty();
-      const bool has_key = !config.http.tls.private_key_path.empty();
-      if (has_cert != has_key ||
-          (!config.http.tls.allow_development_self_signed_tls && !has_cert)) {
-        return HttpTlsError();
-      }
-    }
-
-    auto security_semantics = ValidateSecuritySemantics(config);
-    if (!security_semantics.ok()) {
-      return common::Result<AppConfig>::Err(security_semantics.error());
+    const auto semantics = ValidateAppConfigSemantics(config);
+    if (!semantics.ok()) {
+      return common::Result<AppConfig>::Err(semantics.error());
     }
 
     return common::Result<AppConfig>::Ok(std::move(config));

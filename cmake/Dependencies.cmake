@@ -8,8 +8,14 @@ find_package(yaml-cpp REQUIRED)
 
 set(CAMERA_FIRMWARE_DROGON_SOURCE_DIR "" CACHE PATH
     "Read-only path to the exact Drogon 1.9.0 source tree")
+set(CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR "" CACHE PATH
+    "Read-only path to the exact Trantor 1.5.20 source tree")
 set(_cf_drogon_patch
     "${CMAKE_CURRENT_LIST_DIR}/../patches/drogon-1.9.0-preserve-raw-cookie-headers.patch")
+set(_cf_drogon_async_patch
+    "${CMAKE_CURRENT_LIST_DIR}/../patches/drogon-1.9.0-async-stream-response.patch")
+set(_cf_trantor_async_patch
+    "${CMAKE_CURRENT_LIST_DIR}/../patches/trantor-1.5.20-bounded-async-stream.patch")
 
 function(_cf_drogon_tree_digest root output_variable)
   file(GLOB_RECURSE _cf_tree_files
@@ -38,13 +44,26 @@ function(_cf_drogon_tree_digest root output_variable)
   set(${output_variable} "${_cf_tree_digest}" PARENT_SCOPE)
 endfunction()
 
-if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
+if(NOT CAMERA_FIRMWARE_DROGON_SOURCE_DIR OR
+    NOT CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR)
+  message(FATAL_ERROR
+      "exact Drogon and Trantor source directories are required; configure with both -DCAMERA_FIRMWARE_DROGON_SOURCE_DIR=/path/to/exact/drogon-1.9.0 and -DCAMERA_FIRMWARE_TRANTOR_SOURCE_DIR=/path/to/exact/trantor-1.5.20")
+endif()
+
+if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
+    CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR)
   get_filename_component(_cf_drogon_source
       "${CAMERA_FIRMWARE_DROGON_SOURCE_DIR}" REALPATH)
+  get_filename_component(_cf_trantor_source
+      "${CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR}" REALPATH)
   set(_cf_drogon_expected_commit
       "f215cb15a0f53abd0ca7ee8b95ed8c9c3b40d262")
   set(_cf_drogon_expected_tree
       "4e355209ce0666e1892c00703307d0b098d71b9d")
+  set(_cf_trantor_expected_commit
+      "79e1ffc59aa1b9c8226c2988fe2e1185e97cd795")
+  set(_cf_trantor_expected_tree
+      "0034a2e1b7de918b0dea8af146451f14e0e61010")
   find_package(Git REQUIRED)
   execute_process(
       COMMAND "${GIT_EXECUTABLE}" -C "${_cf_drogon_source}"
@@ -90,13 +109,59 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
     message(FATAL_ERROR
         "CAMERA_FIRMWARE_DROGON_SOURCE_DIR must be the exact clean official Drogon 1.9.0 source; tracked files are modified")
   endif()
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+              rev-parse --show-toplevel
+      RESULT_VARIABLE _cf_trantor_git_root_result
+      OUTPUT_VARIABLE _cf_trantor_git_root
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+              rev-parse --verify HEAD
+      RESULT_VARIABLE _cf_trantor_commit_result
+      OUTPUT_VARIABLE _cf_trantor_commit
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+              rev-parse --verify "HEAD^{tree}"
+      RESULT_VARIABLE _cf_trantor_tree_result
+      OUTPUT_VARIABLE _cf_trantor_tree
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  get_filename_component(_cf_trantor_git_root "${_cf_trantor_git_root}" REALPATH)
+  if(NOT _cf_trantor_git_root_result EQUAL 0 OR
+      NOT _cf_trantor_commit_result EQUAL 0 OR
+      NOT _cf_trantor_tree_result EQUAL 0 OR
+      NOT _cf_trantor_git_root STREQUAL _cf_trantor_source OR
+      NOT _cf_trantor_commit STREQUAL _cf_trantor_expected_commit OR
+      NOT _cf_trantor_tree STREQUAL _cf_trantor_expected_tree)
+    message(FATAL_ERROR
+        "CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR must be the exact clean official Trantor 1.5.20 Git source at commit ${_cf_trantor_expected_commit}")
+  endif()
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+              diff-files --quiet --
+      RESULT_VARIABLE _cf_trantor_worktree_result)
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+              diff-index --cached --quiet HEAD --
+      RESULT_VARIABLE _cf_trantor_index_result)
+  if(NOT _cf_trantor_worktree_result EQUAL 0 OR
+      NOT _cf_trantor_index_result EQUAL 0)
+    message(FATAL_ERROR
+        "CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR must be the exact clean official Trantor 1.5.20 source; tracked files are modified")
+  endif()
 
   find_program(_cf_patch_executable NAMES patch REQUIRED)
   set(_cf_drogon_copy
       "${CMAKE_BINARY_DIR}/_deps/camera-firmware-drogon-1.9.0-src")
   file(SHA256 "${_cf_drogon_patch}" _cf_drogon_patch_sha256)
+  file(SHA256 "${_cf_drogon_async_patch}" _cf_drogon_async_patch_sha256)
+  file(SHA256 "${_cf_trantor_async_patch}" _cf_trantor_async_patch_sha256)
   set(_cf_drogon_copy_identity
-      "format=2\nresolved_source=${_cf_drogon_source}\ncommit=${_cf_drogon_commit}\ntree=${_cf_drogon_tree}\npatch_sha256=${_cf_drogon_patch_sha256}\n")
+      "format=4\nresolved_source=${_cf_drogon_source}\ncommit=${_cf_drogon_commit}\ntree=${_cf_drogon_tree}\ntrantor_source=${_cf_trantor_source}\ntrantor_commit=${_cf_trantor_commit}\ntrantor_tree=${_cf_trantor_tree}\npatch_sha256=${_cf_drogon_patch_sha256}\nasync_patch_sha256=${_cf_drogon_async_patch_sha256}\ntrantor_async_patch_sha256=${_cf_trantor_async_patch_sha256}\n")
   set(_cf_drogon_stamp "${_cf_drogon_copy}/.camera-firmware-patch")
   set(_cf_drogon_copy_valid false)
   if(EXISTS "${_cf_drogon_stamp}")
@@ -142,6 +207,40 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
       message(FATAL_ERROR
           "Failed to extract exact Drogon 1.9.0 source: ${_cf_drogon_extract_error}")
     endif()
+    file(MAKE_DIRECTORY "${_cf_drogon_copy}/trantor")
+    set(_cf_trantor_archive
+        "${CMAKE_BINARY_DIR}/_deps/camera-firmware-trantor-1.5.20.tar")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${_cf_trantor_source}"
+                archive --format=tar --output "${_cf_trantor_archive}"
+                "${_cf_trantor_commit}"
+        RESULT_VARIABLE _cf_trantor_archive_result
+        ERROR_VARIABLE _cf_trantor_archive_error)
+    if(NOT _cf_trantor_archive_result EQUAL 0)
+      message(FATAL_ERROR
+          "Failed to archive exact Trantor 1.5.20 source: ${_cf_trantor_archive_error}")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E tar xf "${_cf_trantor_archive}"
+        WORKING_DIRECTORY "${_cf_drogon_copy}/trantor"
+        RESULT_VARIABLE _cf_trantor_extract_result
+        ERROR_VARIABLE _cf_trantor_extract_error)
+    file(REMOVE "${_cf_trantor_archive}")
+    if(NOT _cf_trantor_extract_result EQUAL 0)
+      message(FATAL_ERROR
+          "Failed to extract exact Trantor 1.5.20 source: ${_cf_trantor_extract_error}")
+    endif()
+    execute_process(
+        COMMAND "${_cf_patch_executable}" --batch --forward -p1
+                --input "${_cf_trantor_async_patch}"
+        WORKING_DIRECTORY "${_cf_drogon_copy}/trantor"
+        RESULT_VARIABLE _cf_trantor_async_patch_result
+        OUTPUT_VARIABLE _cf_trantor_async_patch_stdout
+        ERROR_VARIABLE _cf_trantor_async_patch_stderr)
+    if(NOT _cf_trantor_async_patch_result EQUAL 0)
+      message(FATAL_ERROR
+          "Failed to apply the bounded async stream Trantor 1.5.20 patch:\n${_cf_trantor_async_patch_stdout}${_cf_trantor_async_patch_stderr}")
+    endif()
     execute_process(
         COMMAND "${_cf_patch_executable}" --batch --forward -p1
                 --input "${_cf_drogon_patch}"
@@ -152,6 +251,17 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
     if(NOT _cf_drogon_patch_result EQUAL 0)
       message(FATAL_ERROR
           "Failed to apply the project Drogon 1.9.0 patch:\n${_cf_drogon_patch_stdout}${_cf_drogon_patch_stderr}")
+    endif()
+    execute_process(
+        COMMAND "${_cf_patch_executable}" --batch --forward -p1
+                --input "${_cf_drogon_async_patch}"
+        WORKING_DIRECTORY "${_cf_drogon_copy}"
+        RESULT_VARIABLE _cf_drogon_async_patch_result
+        OUTPUT_VARIABLE _cf_drogon_async_patch_stdout
+        ERROR_VARIABLE _cf_drogon_async_patch_stderr)
+    if(NOT _cf_drogon_async_patch_result EQUAL 0)
+      message(FATAL_ERROR
+          "Failed to apply the async stream Drogon 1.9.0 patch:\n${_cf_drogon_async_patch_stdout}${_cf_drogon_async_patch_stderr}")
     endif()
     _cf_drogon_tree_digest("${_cf_drogon_copy}"
         _cf_drogon_patched_copy_digest)
@@ -164,7 +274,7 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
   set(BUILD_ORM OFF CACHE BOOL "" FORCE)
   set(BUILD_BROTLI OFF CACHE BOOL "" FORCE)
   set(BUILD_YAML_CONFIG OFF CACHE BOOL "" FORCE)
-  set(USE_SUBMODULE OFF CACHE BOOL "" FORCE)
+  set(USE_SUBMODULE ON CACHE BOOL "" FORCE)
   set(_cf_project_build_testing "${BUILD_TESTING}")
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   add_subdirectory("${_cf_drogon_copy}"
@@ -174,37 +284,7 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR)
   add_library(Drogon::Drogon ALIAS drogon)
   set(Drogon_VERSION "1.9.0")
   message(STATUS
-      "Drogon 1.9.0: official commit ${_cf_drogon_commit}, tree ${_cf_drogon_tree}, patch ${_cf_drogon_patch_sha256}, source ${_cf_drogon_source}, copy ${_cf_drogon_copy}")
-else()
-  if(POLICY CMP0153)
-    cmake_policy(PUSH)
-    # Drogon's installed FindJsoncpp.cmake still uses exec_program() under CMake 3.31.
-    cmake_policy(SET CMP0153 OLD)
-  endif()
-  find_package(Drogon 1.9.0 EXACT CONFIG REQUIRED)
-  if(POLICY CMP0153)
-    cmake_policy(POP)
-  endif()
-
-  include(CheckCXXSourceCompiles)
-  set(_cf_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
-  set(CMAKE_REQUIRED_LIBRARIES Drogon::Drogon)
-  unset(CAMERA_FIRMWARE_HAS_PATCHED_DROGON_1_9_0 CACHE)
-  check_cxx_source_compiles([[
-    #include <drogon/HttpRequest.h>
-    #ifndef DROGON_CAMERA_FIRMWARE_RAW_COOKIE_HEADERS
-    #error "camera-firmware raw Cookie patch is absent"
-    #endif
-    int main() {
-      return drogon::cameraFirmwareRawCookiePatchVersion() == 2U ? 0 : 1;
-    }
-  ]] CAMERA_FIRMWARE_HAS_PATCHED_DROGON_1_9_0)
-  set(CMAKE_REQUIRED_LIBRARIES "${_cf_saved_required_libraries}")
-  if(NOT CAMERA_FIRMWARE_HAS_PATCHED_DROGON_1_9_0)
-    message(FATAL_ERROR
-        "Drogon 1.9.0 is unpatched or incompatible. Install the exact project-patched build or configure with -DCAMERA_FIRMWARE_DROGON_SOURCE_DIR=/path/to/exact/drogon-1.9.0")
-  endif()
-  message(STATUS "Drogon 1.9.0: exact compatible patched installation")
+      "Drogon 1.9.0: official commit ${_cf_drogon_commit}, tree ${_cf_drogon_tree}, Trantor 1.5.20 commit ${_cf_trantor_commit}, tree ${_cf_trantor_tree}, patches ${_cf_drogon_patch_sha256}/${_cf_drogon_async_patch_sha256}/${_cf_trantor_async_patch_sha256}, source ${_cf_drogon_source}, Trantor source ${_cf_trantor_source}, copy ${_cf_drogon_copy}")
 endif()
 
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-1.0)

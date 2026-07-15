@@ -1012,9 +1012,37 @@ TEST(ServiceResponseTest, LiveCapacityUsesOnlyPublicErrorContract) {
 TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   struct StreamState {
     std::string bytes{"fragmented-mp4-bytes"};
+    bool sent{false};
     bool released{false};
   };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string bytes;
+    bool closed{false};
+  };
+  class RecordingAsyncStream final : public trantor::AsyncStream {
+   public:
+    explicit RecordingAsyncStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char* data, std::size_t size) override {
+      std::lock_guard lock(state_->mutex);
+      state_->bytes.append(data, size);
+      return true;
+    }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      state_->closed = true;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
   auto state = std::make_shared<StreamState>();
+  auto output_state = std::make_shared<OutputState>();
 
   auto response = camera_firmware::service::BuildLiveMp4Response(
       [state](const std::string& camera_id) {
@@ -1029,6 +1057,10 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
                 state->released = true;
                 return std::size_t{0};
               }
+              if (state->sent) {
+                return std::size_t{0};
+              }
+              state->sent = true;
               const auto count = std::min(capacity, state->bytes.size());
               std::copy_n(state->bytes.data(), count, output);
               return count;
@@ -1043,14 +1075,79 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   EXPECT_EQ(response->statusCode(), drogon::k200OK);
   EXPECT_EQ(response->contentTypeString(), "video/mp4");
   EXPECT_EQ(response->getHeader("Content-Encoding"), "identity");
-  ASSERT_TRUE(response->streamCallback());
+  EXPECT_FALSE(response->streamCallback());
+  ASSERT_TRUE(response->asyncStreamCallback());
 
-  std::array<char, 32> output{};
-  const auto written =
-      response->streamCallback()(output.data(), output.size());
-  EXPECT_EQ(std::string_view(output.data(), written), "fragmented-mp4-bytes");
-  EXPECT_FALSE(state->released);
+  response->asyncStreamCallback()(
+      std::make_unique<RecordingAsyncStream>(output_state));
+  std::unique_lock lock(output_state->mutex);
+  ASSERT_TRUE(output_state->changed.wait_for(
+      lock, std::chrono::seconds(1), [&] { return output_state->closed; }));
+  EXPECT_EQ(output_state->bytes, "fragmented-mp4-bytes");
+  lock.unlock();
 
-  EXPECT_EQ(response->streamCallback()(nullptr, 0U), 0U);
   EXPECT_TRUE(state->released);
+}
+
+TEST(ServiceResponseTest, LiveMp4ResponseBoundsQueuedBytesPerConnection) {
+  constexpr std::size_t kResponseLimit = 32U * 1024U + 123U;
+  struct StreamState {
+    std::atomic_bool released{false};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t bytes{0U};
+    bool closed{false};
+  };
+  class CountingAsyncStream final : public trantor::AsyncStream {
+   public:
+    explicit CountingAsyncStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char*, std::size_t size) override {
+      std::lock_guard lock(state_->mutex);
+      state_->bytes += size;
+      return true;
+    }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      state_->closed = true;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  auto output_state = std::make_shared<OutputState>();
+
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [stream_state](const std::string&) {
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [stream_state](char* output, std::size_t capacity) {
+              if (output == nullptr) {
+                stream_state->released.store(true);
+                return std::size_t{0};
+              }
+              std::fill_n(output, capacity, 'x');
+              return capacity;
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      },
+      "imx708-main", kResponseLimit);
+
+  ASSERT_NE(response, nullptr);
+  ASSERT_TRUE(response->asyncStreamCallback());
+  response->asyncStreamCallback()(
+      std::make_unique<CountingAsyncStream>(output_state));
+  std::unique_lock lock(output_state->mutex);
+  ASSERT_TRUE(output_state->changed.wait_for(
+      lock, std::chrono::seconds(1), [&] { return output_state->closed; }));
+  EXPECT_EQ(output_state->bytes, kResponseLimit);
+  lock.unlock();
+  EXPECT_TRUE(stream_state->released.load());
 }
