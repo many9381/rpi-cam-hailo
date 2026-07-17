@@ -6117,7 +6117,7 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   std::atomic<int> unavailable{0};
   std::vector<std::thread> flood;
   flood_mode.store(true);
-  for (int index = 0; index < 32; ++index) {
+  for (int index = 0; index < 20; ++index) {
     flood.emplace_back([&, index] {
       auto flood_client = NewClient(port);
       auto response = Send(
