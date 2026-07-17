@@ -4618,20 +4618,59 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
         runtime_lifecycle->CloseAdmission();
       }
     }
+    if (stream_registry) {
+      try {
+        stream_registry->RevokeAll();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to revoke active service streams during shutdown");
+      }
+    }
     if (security_worker) {
-      security_worker->Stop();
+      try {
+        security_worker->Stop();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to quiesce service security worker");
+      }
     }
     if (runtime_settings_worker) {
-      runtime_settings_worker->Stop();
+      try {
+        runtime_settings_worker->Stop();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to quiesce runtime settings worker");
+      }
     }
     if (stream_registry) {
-      stream_registry->RevokeAll();
+      try {
+        stream_registry->RevokeAll();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to revoke drained service streams during shutdown");
+      }
     }
     if (runtime_lifecycle) {
-      runtime_lifecycle->WaitForDrain();
+      try {
+        runtime_lifecycle->WaitForDrain();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to drain service runtime callbacks during shutdown");
+      }
     }
     if (live_pump_manager) {
-      live_pump_manager->Stop();
+      try {
+        live_pump_manager->Stop();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to stop live stream pumps during shutdown");
+      }
     }
 
     if (running_ || server_thread_.joinable()) {
@@ -4750,6 +4789,15 @@ void ServiceApp::BeginShutdown() noexcept {
       }
     }
     return;
+  }
+  if (stream_registry) {
+    try {
+      stream_registry->RevokeAll();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to revoke active service streams during shutdown");
+    }
   }
   if (security_worker) {
     try {

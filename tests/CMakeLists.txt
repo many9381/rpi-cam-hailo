@@ -1,4 +1,5 @@
 find_package(GTest REQUIRED)
+find_package(jsoncpp CONFIG REQUIRED)
 pkg_check_modules(GSTREAMER_CHECK REQUIRED IMPORTED_TARGET gstreamer-check-1.0)
 
 add_executable(camera_firmware_common_tests
@@ -402,6 +403,37 @@ gtest_discover_tests(camera_firmware_https_auth_integration
 gtest_discover_tests(camera_firmware_https_auth_integration
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     TEST_FILTER "-HttpsAuthIntegrationTest.*"
+    PROPERTIES
+        TIMEOUT 90
+        RESOURCE_LOCK camera_firmware_loopback_listener
+)
+
+add_executable(camera_firmware_user_management_process_integration
+    integration/UserManagementProcessIntegrationTest.cpp
+)
+
+add_dependencies(camera_firmware_user_management_process_integration
+    camera-firmware
+    camera_firmware_web
+)
+
+target_compile_definitions(camera_firmware_user_management_process_integration
+    PRIVATE
+        CF_CAMERA_FIRMWARE_BIN="$<TARGET_FILE:camera-firmware>"
+        CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(camera_firmware_user_management_process_integration
+    PRIVATE
+        camera_firmware_security
+        GTest::gtest_main
+        JsonCpp::JsonCpp
+        OpenSSL::SSL
+        SQLite::SQLite3
+)
+
+gtest_discover_tests(camera_firmware_user_management_process_integration
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     PROPERTIES
         TIMEOUT 90
         RESOURCE_LOCK camera_firmware_loopback_listener

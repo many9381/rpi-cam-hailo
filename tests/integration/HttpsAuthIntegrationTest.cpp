@@ -3517,6 +3517,17 @@ void RunQueuedAuthorizationShutdownScenario(
   const std::string cookie =
       "camera_session=" + login.response->getCookie("camera_session").value();
 
+  auto active_live = std::async(std::launch::async, [port, cookie] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4",
+                       {cookie});
+  });
+  {
+    std::unique_lock lock(live_state->mutex);
+    ASSERT_TRUE(live_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return live_state->read_started == 1U; }));
+  }
+
   block_verification.store(true);
   auto blocked_login = std::async(std::launch::async, [&] {
     return Send(NewClient(port), drogon::Post, "/api/v1/auth/login",
@@ -3562,11 +3573,20 @@ void RunQueuedAuthorizationShutdownScenario(
       std::async(std::launch::async, [&] { service.BeginShutdown(); });
   EXPECT_EQ(shutting_down.wait_for(std::chrono::milliseconds(30)),
             std::future_status::timeout);
+  {
+    std::unique_lock lock(live_state->mutex);
+    EXPECT_TRUE(live_state->changed.wait_for(
+        lock, std::chrono::milliseconds(250),
+        [&] { return live_state->cancel_calls >= 1U; }));
+  }
   release_guard.Release();
   ASSERT_EQ(shutting_down.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
   shutting_down.get();
   ExpectStatus(blocked_login.get(), drogon::k401Unauthorized);
+  ASSERT_EQ(active_live.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(active_live.get().status, 200);
 
   for (auto& request : live_requests) {
     if (!request.valid()) {
@@ -3584,7 +3604,7 @@ void RunQueuedAuthorizationShutdownScenario(
         lock, std::chrono::seconds(2), [&] {
           return live_state->cancel_calls == live_state->opened;
         }));
-    EXPECT_EQ(live_state->opened, 0U);
+    EXPECT_EQ(live_state->opened, 1U);
     EXPECT_EQ(live_state->read_finished, live_state->read_started);
   }
   service.Stop();
