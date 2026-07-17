@@ -1,10 +1,13 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
+#include "SessionStreamRegistryInternal.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <future>
 #include <memory>
@@ -20,20 +23,837 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 #include <json/writer.h>
+#include <openssl/crypto.h>
 #include <trantor/net/EventLoop.h>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/security/UserManagementService.hpp"
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
+#include "camera_firmware/service/UserManagementHttp.hpp"
 
 namespace camera_firmware::service {
+namespace internal {
+
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+namespace {
+
+struct LiveMp4StartPause {
+  std::mutex mutex;
+  std::promise<void>* published{nullptr};
+  std::shared_future<void> release_publication;
+  std::atomic_size_t stop_calls_during_start{0U};
+};
+
+LiveMp4StartPause& LiveMp4StartPauseForTesting() {
+  static LiveMp4StartPause pause;
+  return pause;
+}
+
+void PauseAfterLiveMp4StartPublicationForTesting() noexcept {
+  std::promise<void>* published = nullptr;
+  std::shared_future<void> release_publication;
+  {
+    auto& pause = LiveMp4StartPauseForTesting();
+    std::lock_guard lock(pause.mutex);
+    published = pause.published;
+    release_publication = pause.release_publication;
+    pause.published = nullptr;
+    pause.release_publication = {};
+  }
+  if (published != nullptr) {
+    try {
+      published->set_value();
+    } catch (...) {
+    }
+  }
+  if (release_publication.valid()) {
+    release_publication.wait();
+  }
+}
+
+void RecordLiveMp4StopDuringStartForTesting() noexcept {
+  LiveMp4StartPauseForTesting().stop_calls_during_start.fetch_add(
+      1U, std::memory_order_relaxed);
+}
+
+}  // namespace
+
+void SetLiveMp4StartPublicationPauseForTesting(
+    std::promise<void>* published,
+    std::shared_future<void> release_publication) noexcept {
+  auto& pause = LiveMp4StartPauseForTesting();
+  std::lock_guard lock(pause.mutex);
+  pause.published = published;
+  pause.release_publication = std::move(release_publication);
+  pause.stop_calls_during_start.store(0U, std::memory_order_relaxed);
+}
+
+std::size_t LiveMp4StopCallsDuringStartForTesting() noexcept {
+  return LiveMp4StartPauseForTesting().stop_calls_during_start.load(
+      std::memory_order_relaxed);
+}
+
+namespace {
+std::atomic_bool fail_next_detection_sse_event_merge{false};
+std::atomic_bool fail_next_runtime_callback_lease_allocation{false};
+std::atomic_bool fail_next_live_mp4_pump_allocation{false};
+std::atomic_bool force_next_login_role_invalid{false};
+std::atomic_bool fail_next_user_management_pre_submit{false};
+std::atomic_bool fail_next_authorization_dispatch_queue{false};
+std::atomic_bool fail_next_terminal_response_queue{false};
+using UserManagementRequestBodyCleanupObserverForTesting = void (*)(
+    std::size_t,
+    bool,
+    bool) noexcept;
+std::atomic<UserManagementRequestBodyCleanupObserverForTesting>
+    user_management_request_body_cleanup_observer{nullptr};
+}
+
+void FailNextDetectionSseEventMergeForTesting() noexcept {
+  fail_next_detection_sse_event_merge.store(true, std::memory_order_release);
+}
+
+bool ConsumeDetectionSseEventMergeFailureForTesting() noexcept {
+  return fail_next_detection_sse_event_merge.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+void FailNextRuntimeCallbackLeaseAllocationForTesting() noexcept {
+  fail_next_runtime_callback_lease_allocation.store(
+      true, std::memory_order_release);
+}
+
+bool ConsumeRuntimeCallbackLeaseAllocationFailureForTesting() noexcept {
+  return fail_next_runtime_callback_lease_allocation.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+void FailNextLiveMp4PumpAllocationForTesting() noexcept {
+  fail_next_live_mp4_pump_allocation.store(true, std::memory_order_release);
+}
+
+bool ConsumeLiveMp4PumpAllocationFailureForTesting() noexcept {
+  return fail_next_live_mp4_pump_allocation.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+void ForceNextLoginRoleInvalidForTesting() noexcept {
+  force_next_login_role_invalid.store(true, std::memory_order_release);
+}
+
+bool ConsumeForcedInvalidLoginRoleForTesting() noexcept {
+  return force_next_login_role_invalid.exchange(false,
+                                                  std::memory_order_acq_rel);
+}
+
+void FailNextUserManagementPreSubmitForTesting() noexcept {
+  fail_next_user_management_pre_submit.store(true, std::memory_order_release);
+}
+
+void ResetUserManagementPreSubmitFailureForTesting() noexcept {
+  fail_next_user_management_pre_submit.store(false, std::memory_order_release);
+}
+
+bool ConsumeUserManagementPreSubmitFailureForTesting() noexcept {
+  return fail_next_user_management_pre_submit.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+void FailNextAuthorizationDispatchQueueForTesting() noexcept {
+  fail_next_authorization_dispatch_queue.store(true,
+                                                std::memory_order_release);
+}
+
+void ResetAuthorizationDispatchQueueFailureForTesting() noexcept {
+  fail_next_authorization_dispatch_queue.store(false,
+                                                std::memory_order_release);
+}
+
+bool ConsumeAuthorizationDispatchQueueFailureForTesting() noexcept {
+  return fail_next_authorization_dispatch_queue.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+void FailNextTerminalResponseQueueForTesting() noexcept {
+  fail_next_terminal_response_queue.store(true, std::memory_order_release);
+}
+
+void ResetTerminalResponseQueueFailureForTesting() noexcept {
+  fail_next_terminal_response_queue.store(false, std::memory_order_release);
+}
+
+bool ConsumeTerminalResponseQueueFailureForTesting() noexcept {
+  return fail_next_terminal_response_queue.exchange(false,
+                                                      std::memory_order_acq_rel);
+}
+
+void SetUserManagementRequestBodyCleanupObserverForTesting(
+    UserManagementRequestBodyCleanupObserverForTesting observer) noexcept {
+  user_management_request_body_cleanup_observer.store(
+      observer, std::memory_order_release);
+}
+
+void ResetUserManagementRequestBodyCleanupObserverForTesting() noexcept {
+  user_management_request_body_cleanup_observer.store(
+      nullptr, std::memory_order_release);
+}
+
+void NotifyUserManagementRequestBodyCleanupForTesting(
+    std::size_t source_size,
+    bool source_cleansed,
+    bool copied_to_secure_owner) noexcept {
+  const auto observer = user_management_request_body_cleanup_observer.load(
+      std::memory_order_acquire);
+  if (observer == nullptr) {
+    return;
+  }
+  try {
+    observer(source_size, source_cleansed, copied_to_secure_owner);
+  } catch (...) {
+  }
+}
+#else
+namespace {
+
+void PauseAfterLiveMp4StartPublicationForTesting() noexcept {}
+
+void RecordLiveMp4StopDuringStartForTesting() noexcept {}
+
+bool ConsumeDetectionSseEventMergeFailureForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeRuntimeCallbackLeaseAllocationFailureForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeLiveMp4PumpAllocationFailureForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeForcedInvalidLoginRoleForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeUserManagementPreSubmitFailureForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeAuthorizationDispatchQueueFailureForTesting() noexcept {
+  return false;
+}
+
+bool ConsumeTerminalResponseQueueFailureForTesting() noexcept {
+  return false;
+}
+
+void NotifyUserManagementRequestBodyCleanupForTesting(
+    std::size_t,
+    bool,
+    bool) noexcept {}
+
+}  // namespace
+#endif
+
+class RuntimeCallbackLifecycle final
+    : public std::enable_shared_from_this<RuntimeCallbackLifecycle> {
+ public:
+  class Lease;
+
+  class CallbackScope final {
+   public:
+    ~CallbackScope() {
+      active_callback_ = previous_;
+    }
+
+    CallbackScope(const CallbackScope&) = delete;
+    CallbackScope& operator=(const CallbackScope&) = delete;
+
+   private:
+    friend class RuntimeCallbackLifecycle::Lease;
+
+    explicit CallbackScope(std::shared_ptr<RuntimeCallbackLifecycle> owner)
+        : owner_(std::move(owner)), previous_(active_callback_) {
+      active_callback_ = owner_.get();
+    }
+
+    std::shared_ptr<RuntimeCallbackLifecycle> owner_;
+    RuntimeCallbackLifecycle* previous_{nullptr};
+  };
+
+  class Lease final {
+   public:
+    ~Lease() {
+      if (armed_ && owner_) {
+        owner_->Release();
+      }
+    }
+
+    Lease(const Lease&) = delete;
+    Lease& operator=(const Lease&) = delete;
+
+    [[nodiscard]] CallbackScope EnterCallback() const {
+      return CallbackScope(owner_);
+    }
+
+   private:
+    friend class RuntimeCallbackLifecycle;
+
+    explicit Lease(std::shared_ptr<RuntimeCallbackLifecycle> owner)
+        : owner_(std::move(owner)) {}
+
+    void Arm() noexcept {
+      armed_ = true;
+    }
+
+    std::shared_ptr<RuntimeCallbackLifecycle> owner_;
+    bool armed_{false};
+  };
+
+  [[nodiscard]] std::shared_ptr<Lease> TryAcquire() {
+    auto unarmed = std::unique_ptr<Lease>(new Lease(shared_from_this()));
+    if (ConsumeRuntimeCallbackLeaseAllocationFailureForTesting()) {
+      throw std::bad_alloc();
+    }
+    auto lease = std::shared_ptr<Lease>(std::move(unarmed));
+    std::lock_guard lock(mutex_);
+    if (!accepting_) {
+      return {};
+    }
+    ++active_;
+    lease->Arm();
+    return lease;
+  }
+
+  void CloseAdmission() noexcept {
+    std::lock_guard lock(mutex_);
+    accepting_ = false;
+  }
+
+  void WaitForDrain() noexcept {
+    std::unique_lock lock(mutex_);
+    changed_.wait(lock, [this] { return active_ == 0U; });
+  }
+
+  [[nodiscard]] bool IsCurrentCallbackThread() const noexcept {
+    return active_callback_ == this;
+  }
+
+ private:
+  void Release() noexcept {
+    {
+      std::lock_guard lock(mutex_);
+      if (active_ != 0U) {
+        --active_;
+      }
+    }
+    changed_.notify_all();
+  }
+
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  std::size_t active_{0U};
+  bool accepting_{true};
+  inline static thread_local RuntimeCallbackLifecycle* active_callback_ =
+      nullptr;
+};
+
+class LiveMp4PumpManager;
+
+class LiveMp4PumpState final {
+ public:
+  static std::shared_ptr<LiveMp4PumpState> Create(
+      LiveMp4StreamHandle stream,
+      std::size_t maximum_response_bytes,
+      std::shared_ptr<SessionStreamLease> stream_lease) {
+    struct OpenedStreamGuard {
+      ~OpenedStreamGuard() {
+        if (!armed || !stream.cancel) {
+          return;
+        }
+        try {
+          stream.cancel();
+        } catch (...) {
+        }
+      }
+
+      LiveMp4StreamHandle& stream;
+      bool armed{true};
+    } guard{stream};
+    if (ConsumeLiveMp4PumpAllocationFailureForTesting()) {
+      throw std::bad_alloc();
+    }
+    auto* raw_pump = new LiveMp4PumpState(
+        std::move(stream), maximum_response_bytes, stream_lease);
+    guard.armed = false;
+    auto pump = std::shared_ptr<LiveMp4PumpState>(raw_pump);
+    if (stream_lease) {
+      std::weak_ptr weak_pump = pump;
+      stream_lease->SetRevocationHandler([weak_pump] {
+        if (const auto current = weak_pump.lock()) {
+          current->CancelAndClose();
+        }
+      });
+    }
+    return pump;
+  }
+
+  ~LiveMp4PumpState() {
+    CancelAndClose();
+  }
+
+  bool AttachOutput(trantor::AsyncStreamPtr output) {
+    auto shared_output = std::shared_ptr<trantor::AsyncStream>(
+        std::move(output));
+    std::shared_ptr<trantor::AsyncStream> close_immediately;
+    bool start = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (terminal_ || started_) {
+        close_immediately = std::move(shared_output);
+      } else {
+        started_ = true;
+        output_ = std::move(shared_output);
+        start = true;
+      }
+    }
+    Close(std::move(close_immediately));
+    return start;
+  }
+
+  void Pump() noexcept {
+    std::array<char, 16U * 1024U> buffer{};
+    std::size_t sent_bytes = 0U;
+    try {
+      while (sent_bytes < maximum_response_bytes_) {
+        std::shared_ptr<SessionStreamLease> callback_lease;
+        LiveMp4PumpManager* owner_manager = nullptr;
+        if (!ActiveBeforeRead(callback_lease, owner_manager)) {
+          break;
+        }
+        const auto capacity =
+            std::min(buffer.size(), maximum_response_bytes_ - sent_bytes);
+        std::size_t size = 0U;
+        {
+          SessionStreamRevocationScope revocation_scope(
+              callback_lease, SessionStreamRevocationScope::Origin::kRead);
+          MediaCallbackScope callback_scope(owner_manager);
+          size = stream_.read(buffer.data(), capacity);
+        }
+        if (size == 0U || size > capacity ||
+            !SendUnlessActive(buffer.data(), size)) {
+          break;
+        }
+        sent_bytes += size;
+      }
+    } catch (...) {
+    }
+    CancelAndClose();
+  }
+
+  void CancelAndClose() noexcept {
+    terminal_requested_.store(true, std::memory_order_release);
+    std::shared_ptr<trantor::AsyncStream> output;
+    LiveMp4CancelCallback cancel;
+    std::shared_ptr<SessionStreamLease> stream_lease;
+    LiveMp4PumpManager* owner_manager = nullptr;
+    bool defer_media_cancel = false;
+    {
+      std::unique_lock lock(mutex_);
+      terminal_ = true;
+      if (send_in_progress_) {
+        if (sending_thread_ == std::this_thread::get_id() ||
+            SessionStreamRevocationScope::HandlerOriginatesFromSend()) {
+          finalization_pending_ = true;
+          return;
+        }
+        send_changed_.wait(lock, [this] { return !send_in_progress_; });
+      }
+      defer_media_cancel =
+          SessionStreamRevocationScope::HandlerOriginatesFromRead(
+              stream_lease_);
+      if (!output_closed_) {
+        output_closed_ = true;
+        output = std::move(output_);
+      }
+      if (!defer_media_cancel && !media_cancelled_) {
+        media_cancelled_ = true;
+        cancel = std::move(stream_.cancel);
+      }
+      if (!defer_media_cancel) {
+        stream_lease = std::move(stream_lease_);
+      }
+      owner_manager = owner_manager_;
+    }
+    Close(std::move(output));
+    if (defer_media_cancel) {
+      return;
+    }
+    if (cancel) {
+      try {
+        SessionStreamRevocationScope revocation_scope(
+            stream_lease, SessionStreamRevocationScope::Origin::kCancel);
+        MediaCallbackScope callback_scope(owner_manager);
+        cancel();
+      } catch (...) {
+      }
+    }
+    stream_lease.reset();
+  }
+
+ private:
+  friend class LiveMp4PumpManager;
+
+  class MediaCallbackScope final {
+   public:
+    explicit MediaCallbackScope(LiveMp4PumpManager* manager) noexcept
+        : previous_manager_(active_media_callback_manager_) {
+      active_media_callback_manager_ = manager;
+    }
+
+    ~MediaCallbackScope() {
+      active_media_callback_manager_ = previous_manager_;
+    }
+
+    MediaCallbackScope(const MediaCallbackScope&) = delete;
+    MediaCallbackScope& operator=(const MediaCallbackScope&) = delete;
+
+   private:
+    LiveMp4PumpManager* previous_manager_{nullptr};
+  };
+
+  LiveMp4PumpState(LiveMp4StreamHandle stream,
+                   std::size_t maximum_response_bytes,
+                   std::shared_ptr<SessionStreamLease> stream_lease) noexcept
+      : stream_(std::move(stream)),
+        maximum_response_bytes_(maximum_response_bytes),
+        stream_lease_(std::move(stream_lease)) {}
+
+  void SetOwnerManager(LiveMp4PumpManager* manager) noexcept {
+    std::lock_guard lock(mutex_);
+    if (owner_manager_ == nullptr) {
+      owner_manager_ = manager;
+    }
+  }
+
+  [[nodiscard]] static LiveMp4PumpManager*
+  CurrentMediaCallbackManager() noexcept {
+    return active_media_callback_manager_;
+  }
+
+  bool ActiveBeforeRead(
+      std::shared_ptr<SessionStreamLease>& callback_lease,
+      LiveMp4PumpManager*& owner_manager) {
+    if (terminal_requested_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    std::lock_guard lock(mutex_);
+    const bool active =
+        !terminal_requested_.load(std::memory_order_relaxed) && !terminal_ &&
+        (!stream_lease_ || !stream_lease_->revoked()) &&
+        static_cast<bool>(stream_.read);
+    if (active) {
+      callback_lease = stream_lease_;
+      owner_manager = owner_manager_;
+    }
+    return active;
+  }
+
+  bool SendUnlessActive(const char* data, std::size_t size) {
+    if (terminal_requested_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    std::shared_ptr<trantor::AsyncStream> output;
+    std::shared_ptr<SessionStreamLease> stream_lease;
+    {
+      std::lock_guard lock(mutex_);
+      if (terminal_requested_.load(std::memory_order_relaxed) || terminal_ ||
+          (stream_lease_ && stream_lease_->revoked()) || !output_ ||
+          send_in_progress_) {
+        return false;
+      }
+      output = output_;
+      stream_lease = stream_lease_;
+      send_in_progress_ = true;
+      sending_thread_ = std::this_thread::get_id();
+    }
+
+    bool sent = false;
+    std::exception_ptr failure;
+    try {
+      internal::SessionStreamRevocationScope revocation_scope(stream_lease);
+      sent = output->send(data, size);
+    } catch (...) {
+      failure = std::current_exception();
+    }
+
+    bool finalize = false;
+    {
+      std::lock_guard lock(mutex_);
+      send_in_progress_ = false;
+      sending_thread_ = {};
+      finalize = finalization_pending_ || terminal_ ||
+                 terminal_requested_.load(std::memory_order_relaxed);
+      finalization_pending_ = false;
+    }
+    send_changed_.notify_all();
+    if (finalize) {
+      CancelAndClose();
+    }
+    if (failure) {
+      std::rethrow_exception(failure);
+    }
+    return sent && !terminal_requested_.load(std::memory_order_acquire);
+  }
+
+  static void Close(std::shared_ptr<trantor::AsyncStream> output) noexcept {
+    if (!output) {
+      return;
+    }
+    try {
+      output->close();
+    } catch (...) {
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable send_changed_;
+  LiveMp4StreamHandle stream_;
+  std::size_t maximum_response_bytes_{0U};
+  std::shared_ptr<SessionStreamLease> stream_lease_;
+  std::shared_ptr<trantor::AsyncStream> output_;
+  std::atomic_bool terminal_requested_{false};
+  bool terminal_{false};
+  bool started_{false};
+  bool output_closed_{false};
+  bool media_cancelled_{false};
+  bool send_in_progress_{false};
+  bool finalization_pending_{false};
+  std::thread::id sending_thread_;
+  LiveMp4PumpManager* owner_manager_{nullptr};
+  inline static thread_local LiveMp4PumpManager*
+      active_media_callback_manager_ = nullptr;
+};
+
+class LiveMp4PumpManager final {
+ public:
+  explicit LiveMp4PumpManager(
+      std::size_t maximum_pumps = kMaximumServiceConnections)
+      : maximum_pumps_(
+            std::min(maximum_pumps, kMaximumServiceConnections)) {
+    entries_.reserve(maximum_pumps_);
+    pump_thread_ids_.reserve(maximum_pumps_);
+  }
+
+  ~LiveMp4PumpManager() {
+    Stop();
+  }
+
+  void Start(const std::shared_ptr<LiveMp4PumpState>& pump,
+             trantor::AsyncStreamPtr output) {
+    if (pump) {
+      pump->SetOwnerManager(this);
+    }
+    bool admitted = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (lifecycle_ == Lifecycle::kRunning) {
+        ++starts_in_progress_;
+        admitted = true;
+      }
+    }
+    if (!admitted) {
+      if (pump) {
+        (void)pump->AttachOutput(std::move(output));
+        pump->CancelAndClose();
+      }
+      return;
+    }
+
+    const auto finish_start = [this] {
+      {
+        std::lock_guard lock(mutex_);
+        --starts_in_progress_;
+      }
+      lifecycle_changed_.notify_all();
+    };
+    bool cancel_pump = false;
+    bool pump_published = false;
+    try {
+      auto completed = TakeCompleted();
+      Join(completed);
+      if (pump && pump->AttachOutput(std::move(output))) {
+        std::lock_guard lock(mutex_);
+        if (lifecycle_ != Lifecycle::kRunning ||
+            entries_.size() >= maximum_pumps_) {
+          cancel_pump = true;
+        } else {
+          auto done = std::make_shared<std::atomic_bool>(false);
+          auto start = std::make_shared<std::promise<void>>();
+          auto start_signal = start->get_future().share();
+          std::thread thread([pump, done, start_signal] {
+            start_signal.wait();
+            pump->Pump();
+            done->store(true, std::memory_order_release);
+          });
+          pump_thread_ids_.push_back(thread.get_id());
+          entries_.push_back(Entry{pump, std::move(thread), std::move(done)});
+          start->set_value();
+          pump_published = true;
+        }
+      }
+    } catch (...) {
+      cancel_pump = static_cast<bool>(pump);
+    }
+    if (pump_published) {
+      PauseAfterLiveMp4StartPublicationForTesting();
+    }
+    finish_start();
+    if (cancel_pump) {
+      pump->CancelAndClose();
+    }
+  }
+
+  void Stop() noexcept {
+    std::vector<Entry> entries;
+    std::array<std::shared_ptr<LiveMp4PumpState>,
+               kMaximumServiceConnections>
+        pump_thread_cancellations;
+    std::size_t pump_thread_cancellation_count = 0U;
+    bool called_from_pump_thread = false;
+    const auto current_thread = std::this_thread::get_id();
+    {
+      std::unique_lock lock(mutex_);
+      const bool pump_thread = IsPumpThreadLocked(current_thread);
+      if (lifecycle_ == Lifecycle::kStopped) {
+        return;
+      }
+      if (!pump_thread && starts_in_progress_ != 0U) {
+        RecordLiveMp4StopDuringStartForTesting();
+      }
+      lifecycle_ = Lifecycle::kStopping;
+      if (pump_thread) {
+        called_from_pump_thread = true;
+        for (const auto& entry : entries_) {
+          if (pump_thread_cancellation_count >=
+              pump_thread_cancellations.size()) {
+            break;
+          }
+          pump_thread_cancellations[pump_thread_cancellation_count++] =
+              entry.pump;
+        }
+      } else {
+        if (stop_owner_active_) {
+          lifecycle_changed_.wait(
+              lock, [this] { return lifecycle_ == Lifecycle::kStopped; });
+          return;
+        }
+        stop_owner_active_ = true;
+        lifecycle_changed_.wait(
+            lock, [this] { return starts_in_progress_ == 0U; });
+        entries.swap(entries_);
+      }
+    }
+    if (called_from_pump_thread) {
+      for (std::size_t index = 0U;
+           index < pump_thread_cancellation_count; ++index) {
+        pump_thread_cancellations[index]->CancelAndClose();
+      }
+      return;
+    }
+    for (const auto& entry : entries) {
+      if (entry.pump) {
+        const auto& pump = entry.pump;
+        pump->CancelAndClose();
+      }
+    }
+    Join(entries);
+    {
+      std::lock_guard lock(mutex_);
+      pump_thread_ids_.clear();
+      stop_owner_active_ = false;
+      lifecycle_ = Lifecycle::kStopped;
+    }
+    lifecycle_changed_.notify_all();
+  }
+
+  [[nodiscard]] bool IsPumpThread() const noexcept {
+    std::lock_guard lock(mutex_);
+    return IsPumpThreadLocked(std::this_thread::get_id());
+  }
+
+  [[nodiscard]] bool IsCurrentMediaCallback() const noexcept {
+    return LiveMp4PumpState::CurrentMediaCallbackManager() == this;
+  }
+
+ private:
+  struct Entry {
+    std::shared_ptr<LiveMp4PumpState> pump;
+    std::thread thread;
+    std::shared_ptr<std::atomic_bool> done;
+  };
+
+  enum class Lifecycle {
+    kRunning,
+    kStopping,
+    kStopped,
+  };
+
+  std::vector<Entry> TakeCompleted() {
+    std::vector<Entry> completed;
+    std::lock_guard lock(mutex_);
+    completed.reserve(entries_.size());
+    auto entry = entries_.begin();
+    while (entry != entries_.end()) {
+      if (entry->done->load(std::memory_order_acquire)) {
+        const auto id = entry->thread.get_id();
+        std::erase(pump_thread_ids_, id);
+        completed.push_back(std::move(*entry));
+        entry = entries_.erase(entry);
+      } else {
+        ++entry;
+      }
+    }
+    return completed;
+  }
+
+  static void Join(std::vector<Entry>& entries) noexcept {
+    for (auto& entry : entries) {
+      if (entry.thread.joinable()) {
+        entry.thread.join();
+      }
+    }
+  }
+
+  [[nodiscard]] bool IsPumpThreadLocked(std::thread::id id) const noexcept {
+    return std::find(pump_thread_ids_.begin(), pump_thread_ids_.end(), id) !=
+           pump_thread_ids_.end();
+  }
+
+  const std::size_t maximum_pumps_;
+  mutable std::mutex mutex_;
+  std::condition_variable lifecycle_changed_;
+  std::vector<Entry> entries_;
+  std::vector<std::thread::id> pump_thread_ids_;
+  std::size_t starts_in_progress_{0U};
+  bool stop_owner_active_{false};
+  Lifecycle lifecycle_{Lifecycle::kRunning};
+};
+
+}  // namespace internal
+
 namespace {
 
 struct ServiceState {
   ServiceInitArgs args;
+  std::shared_ptr<security::AuthService> auth_service;
+  std::shared_ptr<security::UserManagementService> user_management_service;
   std::shared_ptr<BoundedWorker> security_worker;
   std::shared_ptr<BoundedWorker> runtime_settings_worker;
+  std::shared_ptr<internal::LiveMp4PumpManager> live_pump_manager;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
   security::DeviceState device_state{security::DeviceState::kDefault};
   std::optional<std::string> runtime_pending_peer;
   bool shutting_down{false};
@@ -63,6 +883,41 @@ std::mutex& StateMutex() {
 }
 
 bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
+  if (path == "/api/v1/security/users") {
+    return method == drogon::Get || method == drogon::Post;
+  }
+  constexpr std::string_view users_prefix = "/api/v1/security/users/";
+  if (path.starts_with(users_prefix)) {
+    const auto remainder = path.substr(users_prefix.size());
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return method == drogon::Delete && !remainder.empty();
+    }
+    const auto id = remainder.substr(0U, slash);
+    const auto suffix = remainder.substr(slash);
+    return !id.empty() && method == drogon::Put &&
+           (suffix == "/enabled" || suffix == "/password");
+  }
+  if (path == "/api/v1/security/management-ips") {
+    return method == drogon::Get;
+  }
+  constexpr std::string_view management_ips_prefix =
+      "/api/v1/security/management-ips/";
+  if (path.starts_with(management_ips_prefix)) {
+    const auto remainder = path.substr(management_ips_prefix.size());
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return method == drogon::Post && !remainder.empty();
+    }
+    const auto role = remainder.substr(0U, slash);
+    const auto id = remainder.substr(slash + 1U);
+    return !role.empty() && !id.empty() &&
+           id.find('/') == std::string_view::npos &&
+           (method == drogon::Put || method == drogon::Delete);
+  }
+  if (path == "/api/v1/auth/password") {
+    return method == drogon::Put;
+  }
   if (method == drogon::Get) {
     if (path == "/api/v1/setup/status" || path == "/api/v1/auth/me" ||
         path == "/api/v1/health" || path == "/api/v1/cameras" ||
@@ -184,33 +1039,40 @@ Json::Value BuildLiveErrorJson(std::string_view code) {
   return json;
 }
 
-void PumpLiveMp4Stream(LiveMp4StreamCallback stream,
-                       trantor::AsyncStreamPtr output,
-                       std::size_t maximum_response_bytes) noexcept {
-  std::array<char, 16U * 1024U> buffer{};
-  std::size_t sent_bytes = 0U;
-  try {
-    while (output && stream && sent_bytes < maximum_response_bytes) {
-      const auto capacity =
-          std::min(buffer.size(), maximum_response_bytes - sent_bytes);
-      const auto size = stream(buffer.data(), capacity);
-      if (size == 0U || size > capacity ||
-          !output->send(buffer.data(), size)) {
-        break;
-      }
-      sent_bytes += size;
+drogon::HttpResponsePtr BuildManagedLiveMp4Response(
+    const CancellableLiveMp4OpenCallback& live_stream_callback,
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes,
+    std::shared_ptr<SessionStreamLease> stream_lease,
+    std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+        runtime_lease = {});
+
+CancellableLiveMp4OpenCallback AdaptLegacyLiveMp4OpenCallback(
+    LiveMp4OpenCallback legacy_callback) {
+  if (!legacy_callback) {
+    return {};
+  }
+  return [legacy_callback = std::move(legacy_callback)](
+             const std::string& requested_camera_id) mutable
+      -> common::Result<LiveMp4StreamHandle> {
+    auto opened = legacy_callback(requested_camera_id);
+    if (!opened.ok()) {
+      return common::Result<LiveMp4StreamHandle>::Err(opened.error());
     }
-  } catch (...) {
-  }
-  if (stream) {
-    try {
-      (void)stream(nullptr, 0U);
-    } catch (...) {
+    auto stream = std::make_shared<LiveMp4StreamCallback>(
+        std::move(opened).value());
+    if (!*stream) {
+      return common::Result<LiveMp4StreamHandle>::Err(
+          {"E_LIVE_UNAVAILABLE", "live preview is unavailable"});
     }
-  }
-  if (output) {
-    output->close();
-  }
+    return common::Result<LiveMp4StreamHandle>::Ok({
+        .read = [stream](char* output, std::size_t capacity) {
+          return (*stream)(output, capacity);
+        },
+        .cancel = [stream] { (void)(*stream)(nullptr, 0U); },
+    });
+  };
 }
 
 Json::Value BuildSecureMediaJson(
@@ -235,6 +1097,17 @@ drogon::HttpResponsePtr JsonResponse(Json::Value json,
   return response;
 }
 
+std::optional<std::string_view> SerializeUserRole(
+    security::UserRole role) noexcept {
+  switch (role) {
+    case security::UserRole::kAdministrator:
+      return "administrator";
+    case security::UserRole::kViewer:
+      return "viewer";
+  }
+  return std::nullopt;
+}
+
 using DrogonCallback =
     std::function<void(const drogon::HttpResponsePtr&)>;
 
@@ -254,9 +1127,18 @@ class TerminalResponse {
     if (completed_.exchange(true)) {
       return;
     }
-    event_loop_->queueInLoop(
-        [callback = std::move(callback_),
-         response = std::move(response)]() mutable { callback(response); });
+    try {
+      if (internal::ConsumeTerminalResponseQueueFailureForTesting()) {
+        throw std::bad_alloc();
+      }
+      auto queued_callback = callback_;
+      event_loop_->queueInLoop(
+          [callback = std::move(queued_callback),
+           response = std::move(response)]() mutable { callback(response); });
+    } catch (...) {
+      completed_.store(false);
+      throw;
+    }
   }
 
  private:
@@ -264,6 +1146,96 @@ class TerminalResponse {
   DrogonCallback callback_;
   std::atomic<bool> completed_{false};
 };
+
+}  // namespace
+
+namespace internal {
+
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+std::optional<std::string_view> SerializeUserRoleForTesting(
+    security::UserRole role) noexcept {
+  return SerializeUserRole(role);
+}
+
+bool HasRetainedUserManagementServiceForTesting() noexcept {
+  std::scoped_lock lock(StateMutex());
+  return static_cast<bool>(GlobalState().user_management_service);
+}
+
+common::Result<std::vector<security::ManagedUser>>
+ListRetainedUsersForTesting() {
+  std::shared_ptr<security::UserManagementService> service;
+  std::shared_ptr<security::SecurityStore> store;
+  {
+    std::scoped_lock lock(StateMutex());
+    service = GlobalState().user_management_service;
+    store = GlobalState().args.security_store;
+  }
+  if (!service || !store) {
+    return common::Result<std::vector<security::ManagedUser>>::Err(
+        {"E_USER_MANAGEMENT_UNAVAILABLE", "user management unavailable"});
+  }
+  return service->ListUsers();
+}
+#endif
+
+class DetectionSsePendingResponse {
+ public:
+  using ResponseCallback =
+      std::function<void(const drogon::HttpResponsePtr&)>;
+
+  static std::shared_ptr<DetectionSsePendingResponse> Create(
+      DetectionSnapshotProvider detection_snapshot_provider,
+      ResponseCallback response_callback,
+      std::shared_ptr<SessionStreamLease> stream_lease,
+      std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+          runtime_lease);
+
+  DetectionSsePendingResponse(const DetectionSsePendingResponse&) = delete;
+  DetectionSsePendingResponse& operator=(
+      const DetectionSsePendingResponse&) = delete;
+
+  bool AttachSubscription(const DetectionEventSubscriber& subscriber,
+                          ai::DetectionBus::Handler handler);
+  bool CompleteInitialSnapshotIfChanged(std::string_view last_event_id);
+  void SetTimeoutCancellation(std::function<void()> cancel_timeout);
+  void CompleteWithEvent(const ai::DetectionEvent& event);
+  void CompleteWithSnapshot();
+  void Revoke();
+
+ private:
+  struct State;
+
+  class RuntimeCallbackGuard {
+   public:
+    explicit RuntimeCallbackGuard(DetectionSsePendingResponse& owner) noexcept
+        : owner_(owner) {}
+    ~RuntimeCallbackGuard() { owner_.EndRuntimeCallback(); }
+
+    RuntimeCallbackGuard(const RuntimeCallbackGuard&) = delete;
+    RuntimeCallbackGuard& operator=(const RuntimeCallbackGuard&) = delete;
+
+   private:
+    DetectionSsePendingResponse& owner_;
+  };
+
+  explicit DetectionSsePendingResponse(std::shared_ptr<State> state) noexcept;
+  bool BeginRuntimeCallback(bool claim_terminal);
+  bool ClaimTerminalFromActiveCallback();
+  void EndRuntimeCallback() noexcept;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+  EndRuntimeCallbackLocked();
+  void CompleteFromProvider(const ai::DetectionEvent* event);
+  void Finish(std::vector<ai::DetectionEvent> events);
+
+  std::shared_ptr<State> state_;
+};
+
+}  // namespace internal
+
+namespace {
+
+using internal::DetectionSsePendingResponse;
 
 class HttpCallback {
  public:
@@ -287,8 +1259,13 @@ class HttpCallback {
   std::shared_ptr<TerminalResponse> terminal_;
 };
 
+struct AuthorizedRequest {
+  std::optional<security::Principal> principal;
+  std::shared_ptr<SessionStreamLease> stream_lease;
+};
+
 using AuthorizedContinuation =
-    std::function<void(std::optional<security::Principal>, HttpCallback)>;
+    std::function<void(AuthorizedRequest, HttpCallback)>;
 
 drogon::HttpResponsePtr SecurityErrorResponse(const common::Error& error) {
   Json::Value body(Json::objectValue);
@@ -357,12 +1334,12 @@ class AsyncAuthorization final
     });
   }
 
-  void Allow(std::optional<security::Principal> principal) {
-    Dispatch([principal = std::move(principal)](
+  void Allow(AuthorizedRequest authorized_request) {
+    Dispatch([authorized_request = std::move(authorized_request)](
                  HttpCallback terminal,
                  AuthorizedContinuation continuation) mutable {
       try {
-        continuation(std::move(principal), terminal);
+        continuation(std::move(authorized_request), terminal);
       } catch (...) {
         terminal(SecurityUnavailableResponse());
       }
@@ -377,13 +1354,21 @@ class AsyncAuthorization final
     if (completed_.exchange(true)) {
       return;
     }
-    auto terminal = terminal_;
-    auto continuation = std::move(continuation_);
-    event_loop_->queueInLoop(
-        [action = std::move(action), terminal = std::move(terminal),
-         continuation = std::move(continuation)]() mutable {
-          action(std::move(terminal), std::move(continuation));
-        });
+    try {
+      if (internal::ConsumeAuthorizationDispatchQueueFailureForTesting()) {
+        throw std::bad_alloc();
+      }
+      auto terminal = terminal_;
+      auto continuation = continuation_;
+      event_loop_->queueInLoop(
+          [action = std::move(action), terminal = std::move(terminal),
+           continuation = std::move(continuation)]() mutable {
+            action(std::move(terminal), std::move(continuation));
+          });
+    } catch (...) {
+      completed_.store(false);
+      throw;
+    }
   }
 
   trantor::EventLoop* event_loop_;
@@ -398,6 +1383,13 @@ struct SecurityDependencies {
   std::string expected_origin;
   std::shared_ptr<security::SecurityStore> store;
   std::shared_ptr<security::AuthService> auth_service;
+  std::shared_ptr<SessionStreamRegistry> stream_registry;
+  std::shared_ptr<BoundedWorker> worker;
+};
+
+struct AdministratorUserDependencies {
+  bool shutting_down{false};
+  std::shared_ptr<security::UserManagementService> service;
   std::shared_ptr<BoundedWorker> worker;
 };
 
@@ -454,8 +1446,103 @@ SecurityDependencies CopySecurityDependencies() {
           state.shutting_down,
           state.args.public_base_url,
           state.args.security_store,
-          state.args.auth_service,
+          state.auth_service,
+          state.args.stream_registry,
           state.security_worker};
+}
+
+AdministratorUserDependencies CopyAdministratorUserDependencies() {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return {state.shutting_down, state.user_management_service,
+          state.security_worker};
+}
+
+common::Result<security::UserMutationContext> BuildUserMutationContext(
+    const drogon::HttpRequestPtr& request,
+    const AuthorizedRequest& authorized_request) {
+  if (!request || !authorized_request.principal.has_value()) {
+    return common::Result<security::UserMutationContext>::Err(
+        {"E_AUTHENTICATION_REQUIRED", "authentication required"});
+  }
+  auto peer = NormalizePeerIp(request->peerAddr().toIp());
+  if (!peer.ok()) {
+    return common::Result<security::UserMutationContext>::Err(
+        {"E_USER_MANAGEMENT_UNAVAILABLE", "user management unavailable"});
+  }
+  security::UserMutationContext context;
+  context.actor = *authorized_request.principal;
+  context.normalized_peer_ip = std::move(peer).value();
+  return common::Result<security::UserMutationContext>::Ok(
+      std::move(context));
+}
+
+void CleanseSecretRequestBody(const drogon::HttpRequestPtr& request,
+                              std::string_view body,
+                              bool copied_to_secure_owner) noexcept {
+  bool source_cleansed = true;
+  if (!body.empty()) {
+    OPENSSL_cleanse(const_cast<char*>(body.data()), body.size());
+    source_cleansed = std::all_of(body.begin(), body.end(), [](char value) {
+      return value == '\0';
+    });
+  }
+  try {
+    request->setBody(std::string{});
+  } catch (...) {
+  }
+  internal::NotifyUserManagementRequestBodyCleanupForTesting(
+      body.size(), source_cleansed, copied_to_secure_owner);
+}
+
+common::Result<common::SecureBytes> CopySecretRequestBody(
+    const drogon::HttpRequestPtr& request) {
+  if (!request) {
+    return common::Result<common::SecureBytes>::Err(
+        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+  }
+  const std::string_view body = request->getBody();
+  if (body.size() > kMaximumSecurityBodyBytes) {
+    CleanseSecretRequestBody(request, body, false);
+    return common::Result<common::SecureBytes>::Err(
+        {"E_REQUEST_TOO_LARGE", "request could not be processed"});
+  }
+  try {
+    common::SecureBytes secure_body;
+    if (!body.empty()) {
+      secure_body.assign(reinterpret_cast<const unsigned char*>(body.data()),
+                         body.size());
+    }
+    CleanseSecretRequestBody(request, body, true);
+    return common::Result<common::SecureBytes>::Ok(std::move(secure_body));
+  } catch (...) {
+    CleanseSecretRequestBody(request, body, false);
+    return common::Result<common::SecureBytes>::Err(
+        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+  }
+}
+
+bool RequiresSessionStreamLease(std::string_view path,
+                                std::string_view method) {
+  if (method != "GET") {
+    return false;
+  }
+  if (path == "/api/v1/ai/detections/stream") {
+    return true;
+  }
+  constexpr std::string_view camera_prefix = "/api/v1/cameras/";
+  constexpr std::string_view live_suffix = "/live.mp4";
+  return path.starts_with(camera_prefix) && path.ends_with(live_suffix) &&
+         path.size() > camera_prefix.size() + live_suffix.size();
+}
+
+const security::SessionIdentity& ServiceLifecycleIdentity() {
+  static const security::SessionIdentity identity = [] {
+    security::SessionIdentity value;
+    value.bytes.fill(0xa5U);
+    return value;
+  }();
+  return identity;
 }
 
 void AuthorizeRequest(const drogon::HttpRequestPtr& request,
@@ -463,120 +1550,154 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
                       AuthorizedContinuation continuation) {
   auto completion = std::make_shared<AsyncAuthorization>(
       drogon::app().getLoop(), std::move(callback), std::move(continuation));
-  const auto dependencies = CopySecurityDependencies();
-  if (!dependencies.enabled) {
-    completion->Allow(std::nullopt);
-    return;
-  }
-  if (dependencies.shutting_down) {
-    completion->Deny(
-        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
-    return;
-  }
-  if (!request || !dependencies.store || !dependencies.auth_service ||
-      !dependencies.worker) {
-    completion->Deny(
-        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
-    return;
-  }
+  try {
+    const auto dependencies = CopySecurityDependencies();
+    if (dependencies.shutting_down) {
+      completion->Deny(
+          {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+      return;
+    }
+    if (!dependencies.enabled) {
+      AuthorizedRequest authorized_request;
+      bool shutting_down = false;
+      {
+        std::scoped_lock lock(StateMutex());
+        auto& state = GlobalState();
+        shutting_down = state.shutting_down;
+        if (!shutting_down && request && state.args.stream_registry &&
+            RequiresSessionStreamLease(request->path(),
+                                       request->methodString())) {
+          authorized_request.stream_lease =
+              state.args.stream_registry->Acquire(ServiceLifecycleIdentity());
+        }
+      }
+      if (shutting_down) {
+        completion->Deny(
+            {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+      } else {
+        completion->Allow(std::move(authorized_request));
+      }
+      return;
+    }
+    if (!request || !dependencies.store || !dependencies.auth_service ||
+        !dependencies.stream_registry || !dependencies.worker) {
+      completion->Deny(
+          {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+      return;
+    }
 
-  auto normalized_peer = NormalizePeerIp(request->peerAddr().toIp());
-  if (!normalized_peer.ok()) {
-    completion->Deny({"E_ACCESS_DENIED", "request denied"});
-    return;
-  }
-  SecurityRequestContext context;
-  context.path = request->path();
-  context.method = request->methodString();
-  context.normalized_peer_ip = std::move(normalized_peer).value();
-  context.origin = request->getHeader("origin");
-  context.expected_origin = dependencies.expected_origin;
-  context.has_management_header =
-      request->getHeader("x-camera-request") == "management";
-  std::shared_ptr<common::SecureBytes> session_token;
-  auto parsed_token =
-      ParseSessionCookieHeaders(request->getRawCookieHeaders());
-  if (parsed_token.ok()) {
-    session_token = std::make_shared<common::SecureBytes>(
-        std::move(parsed_token).value());
-  }
+    auto normalized_peer = NormalizePeerIp(request->peerAddr().toIp());
+    if (!normalized_peer.ok()) {
+      completion->Deny({"E_ACCESS_DENIED", "request denied"});
+      return;
+    }
+    SecurityRequestContext context;
+    context.path = request->path();
+    context.method = request->methodString();
+    context.normalized_peer_ip = std::move(normalized_peer).value();
+    context.origin = request->getHeader("origin");
+    context.expected_origin = dependencies.expected_origin;
+    context.has_management_header =
+        request->getHeader("x-camera-request") == "management";
+    std::shared_ptr<common::SecureBytes> session_token;
+    auto parsed_token =
+        ParseSessionCookieHeaders(request->getRawCookieHeaders());
+    if (parsed_token.ok()) {
+      session_token = std::make_shared<common::SecureBytes>(
+          std::move(parsed_token).value());
+    }
 
-  auto submitted = dependencies.worker->Submit(
-      [context = std::move(context), session_token,
-       dependencies, completion]() mutable {
-        try {
-          auto state = dependencies.store->State();
-          if (!state.ok()) {
-            completion->Deny(
-                {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
-            return;
-          }
-          std::optional<std::string> runtime_pending_peer;
-          security::DeviceState process_state;
-          {
-            std::scoped_lock lock(StateMutex());
-            runtime_pending_peer = GlobalState().runtime_pending_peer;
-            process_state = GlobalState().device_state;
-          }
-          context.state = runtime_pending_peer.has_value()
-                              ? security::DeviceState::kDefault
-                              : process_state;
-          const bool setup_initialize =
-              context.path == "/api/v1/setup/initialize";
-          const bool setup_runtime =
-              context.path == "/api/v1/setup/runtime";
-          if ((setup_initialize || setup_runtime) &&
-              runtime_pending_peer.has_value() &&
-              context.normalized_peer_ip != *runtime_pending_peer) {
-            completion->Deny({"E_ACCESS_DENIED", "request denied"});
-            return;
-          }
-          const bool login = context.path == "/api/v1/auth/login" &&
-                             context.method == "POST";
-          if (context.state == security::DeviceState::kOperational &&
-              !setup_initialize) {
-            auto management = dependencies.store->IsManagementPeer(
-                context.normalized_peer_ip);
-            if (!management.ok()) {
-              completion->Deny({"E_SECURITY_UNAVAILABLE",
-                                "security service unavailable"});
+    auto submitted = dependencies.worker->Submit(
+        [context = std::move(context), session_token,
+         dependencies, completion]() mutable {
+          try {
+            auto state = dependencies.store->State();
+            if (!state.ok()) {
+              completion->Deny(
+                  {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
               return;
             }
-            context.peer_is_management = management.value();
-            if (!login && context.peer_is_management && session_token) {
-              if (session_token->size() != 0U) {
-                auto principal = dependencies.auth_service->Verify(
-                    {session_token->data(), session_token->size()},
-                    context.normalized_peer_ip);
-                if (principal.ok()) {
-                  context.principal = std::move(principal).value();
-                } else if (principal.error().code ==
-                           "E_AUTHENTICATION_UNAVAILABLE") {
-                  completion->Deny({"E_SECURITY_UNAVAILABLE",
-                                    "security service unavailable"});
-                  return;
+            std::optional<std::string> runtime_pending_peer;
+            security::DeviceState process_state;
+            {
+              std::scoped_lock lock(StateMutex());
+              runtime_pending_peer = GlobalState().runtime_pending_peer;
+              process_state = GlobalState().device_state;
+            }
+            context.state = runtime_pending_peer.has_value()
+                                ? security::DeviceState::kDefault
+                                : process_state;
+            const bool setup_initialize =
+                context.path == "/api/v1/setup/initialize";
+            const bool setup_runtime =
+                context.path == "/api/v1/setup/runtime";
+            if ((setup_initialize || setup_runtime) &&
+                runtime_pending_peer.has_value() &&
+                context.normalized_peer_ip != *runtime_pending_peer) {
+              completion->Deny({"E_ACCESS_DENIED", "request denied"});
+              return;
+            }
+            const bool login = context.path == "/api/v1/auth/login" &&
+                               context.method == "POST";
+            if (context.state == security::DeviceState::kOperational &&
+                !setup_initialize) {
+              auto management = dependencies.store->IsManagementPeer(
+                  context.normalized_peer_ip);
+              if (!management.ok()) {
+                completion->Deny({"E_SECURITY_UNAVAILABLE",
+                                  "security service unavailable"});
+                return;
+              }
+              context.peer_is_management = management.value();
+              if (!login && context.peer_is_management && session_token) {
+                if (session_token->size() != 0U) {
+                  auto principal = dependencies.auth_service->Verify(
+                      {session_token->data(), session_token->size()},
+                      context.normalized_peer_ip);
+                  if (principal.ok()) {
+                    context.principal = std::move(principal).value();
+                  } else if (principal.error().code ==
+                             "E_AUTHENTICATION_UNAVAILABLE") {
+                    completion->Deny({"E_SECURITY_UNAVAILABLE",
+                                      "security service unavailable"});
+                    return;
+                  }
                 }
               }
             }
+            auto authorized = AuthorizeSecurityRequest(context);
+            if (!authorized.ok()) {
+              completion->Deny(authorized.error());
+              return;
+            }
+            AuthorizedRequest authorized_request;
+            authorized_request.principal = std::move(context.principal);
+            if (authorized_request.principal.has_value() &&
+                RequiresSessionStreamLease(context.path, context.method)) {
+              authorized_request.stream_lease =
+                  dependencies.stream_registry->Acquire(
+                      authorized_request.principal->session_identity);
+            }
+            completion->Allow(std::move(authorized_request));
+          } catch (...) {
+            completion->Deny(
+                {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
           }
-          auto authorized = AuthorizeSecurityRequest(context);
-          if (!authorized.ok()) {
-            completion->Deny(authorized.error());
-            return;
-          }
-          completion->Allow(std::move(context.principal));
-        } catch (...) {
-          completion->Deny(
-              {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
-        }
-      });
-  if (!submitted.ok()) {
-    completion->Deny(submitted.error());
+        });
+    if (!submitted.ok()) {
+      completion->Deny(submitted.error());
+    }
+  } catch (...) {
+    try {
+      completion->Deny(
+          {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+    } catch (...) {
+    }
   }
 }
 
 void QueueResponse(trantor::EventLoop* event_loop,
-                   HttpCallback callback,
+                   const HttpCallback& callback,
                    drogon::HttpResponsePtr response) {
   (void)event_loop;
   callback.Queue(std::move(response));
@@ -635,69 +1756,6 @@ std::string CompactJson(Json::Value json) {
   writer["indentation"] = "";
   return Json::writeString(writer, json);
 }
-
-class DetectionSsePendingResponse {
- public:
-  using ResponseCallback = HttpCallback;
-
-  DetectionSsePendingResponse(
-      DetectionSnapshotProvider detection_snapshot_provider,
-      ResponseCallback response_callback)
-      : detection_snapshot_provider_(
-            std::move(detection_snapshot_provider)),
-        response_callback_(std::move(response_callback)) {}
-
-  DetectionSsePendingResponse(const DetectionSsePendingResponse&) = delete;
-  DetectionSsePendingResponse& operator=(
-      const DetectionSsePendingResponse&) = delete;
-
-  void SetSubscription(ai::DetectionBus::Subscription subscription) {
-    std::lock_guard lock(mutex_);
-    if (!completed_) {
-      subscription_ = std::move(subscription);
-    }
-  }
-
-  void CompleteWithEvent(const ai::DetectionEvent& event) {
-    Complete(MergeDetectionSnapshotWithEvent(Snapshot(), event));
-  }
-
-  void CompleteWithSnapshot() {
-    Complete(Snapshot());
-  }
-
- private:
-  std::vector<ai::DetectionEvent> Snapshot() const {
-    if (detection_snapshot_provider_) {
-      return detection_snapshot_provider_();
-    }
-    return {};
-  }
-
-  void Complete(std::vector<ai::DetectionEvent> events) {
-    ResponseCallback callback;
-    ai::DetectionBus::Subscription subscription;
-    {
-      std::lock_guard lock(mutex_);
-      if (completed_) {
-        return;
-      }
-      completed_ = true;
-      callback = std::move(response_callback_);
-      subscription = std::move(subscription_);
-    }
-    if (callback) {
-      auto response = BuildDetectionSseResponse(events);
-      callback.Queue(std::move(response));
-    }
-  }
-
-  DetectionSnapshotProvider detection_snapshot_provider_;
-  mutable std::mutex mutex_;
-  ResponseCallback response_callback_;
-  ai::DetectionBus::Subscription subscription_;
-  bool completed_{false};
-};
 
 class ThreadCompletionReporter {
  public:
@@ -796,14 +1854,41 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/setup/initialize",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(SecurityUnavailableResponse());
+          return;
+        }
         auto peer = NormalizePeerIp(request->peerAddr().toIp());
         const std::string actual_peer = peer.ok() ? peer.value() : "";
         AuthorizeRequest(
             request, std::move(callback),
-            [request, actual_peer](
-                std::optional<security::Principal>, HttpCallback callback) {
-              auto parsed = ParseSetupJson(request->getBody(),
-                                           request->getHeader("content-type"));
+            [request, actual_peer, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest, HttpCallback callback) mutable {
+              if (body_error.has_value()) {
+                callback(SecurityErrorResponse(*body_error));
+                return;
+              }
+              if (!secure_body) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseSetupJson(
+                  std::move(*secure_body), request->getHeader("content-type"));
+              secure_body->clear();
               if (!parsed.ok()) {
                 callback(SecurityErrorResponse(parsed.error()));
                 return;
@@ -916,7 +2001,7 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request, actual_peer](
-                std::optional<security::Principal>, HttpCallback callback) {
+                AuthorizedRequest, HttpCallback callback) {
               auto validated = ValidateEmptyJsonObject(
                   request->getBody(), request->getHeader("content-type"));
               if (!validated.ok()) {
@@ -997,13 +2082,40 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/auth/login",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(SecurityUnavailableResponse());
+          return;
+        }
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip](
-                std::optional<security::Principal>, HttpCallback callback) {
-              auto parsed = ParseLoginJson(request->getBody(),
-                                           request->getHeader("content-type"));
+            [request, peer_ip, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest, HttpCallback callback) mutable {
+              if (body_error.has_value()) {
+                callback(SecurityErrorResponse(*body_error));
+                return;
+              }
+              if (!secure_body) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseLoginJson(
+                  std::move(*secure_body), request->getHeader("content-type"));
+              secure_body->clear();
               if (!parsed.ok()) {
                 callback(SecurityErrorResponse(parsed.error()));
                 return;
@@ -1012,7 +2124,7 @@ void RegisterHandlers() {
               std::shared_ptr<BoundedWorker> worker;
               {
                 std::scoped_lock lock(StateMutex());
-                auth = GlobalState().args.auth_service;
+                auth = GlobalState().auth_service;
                 worker = GlobalState().security_worker;
               }
               if (!auth || !worker) {
@@ -1036,8 +2148,15 @@ void RegisterHandlers() {
                         return;
                       }
                       auto result = std::move(login).value();
+                      const auto role = SerializeUserRole(result.role);
+                      if (!role.has_value()) {
+                        result.session_token.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                        return;
+                      }
                       Json::Value response_body(Json::objectValue);
-                      response_body["role"] = "administrator";
+                      response_body["role"] = std::string(*role);
                       response_body["idle_expires_at_seconds"] =
                           static_cast<Json::Int64>(
                               result.idle_expires_at_seconds);
@@ -1063,22 +2182,882 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal> principal,
-               HttpCallback callback) {
+            [request](AuthorizedRequest authorized_request,
+                      HttpCallback callback) {
+              auto& principal = authorized_request.principal;
               if (!principal.has_value()) {
                 callback(SecurityErrorResponse(
                     {"E_AUTHENTICATION_REQUIRED", "authentication required"}));
                 return;
               }
+              const auto request_body =
+                  ValidateEmptyRequestBody(request->getBody());
+              if (!request_body.ok()) {
+                callback(SecurityErrorResponse(request_body.error()));
+                return;
+              }
+              const auto role = SerializeUserRole(principal->role);
+              if (!role.has_value()) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
               Json::Value body(Json::objectValue);
               body["username"] = principal->username;
-              body["role"] = principal->role == security::UserRole::kAdministrator
-                                   ? "administrator"
-                                   : "viewer";
+              body["role"] = std::string(*role);
               callback(JsonResponse(std::move(body)));
             });
       },
       {Get});
+
+  app().registerHandler(
+      "/api/v1/security/users",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](AuthorizedRequest authorized_request,
+                      HttpCallback callback) {
+              try {
+                if (!authorized_request.principal.has_value()) {
+                  callback(SecurityErrorResponse(
+                      {"E_AUTHENTICATION_REQUIRED", "authentication required"}));
+                  return;
+                }
+                const auto body = ValidateEmptyRequestBody(
+                    request->getBody());
+                if (!body.ok()) {
+                  callback(BuildUserManagementErrorResponse(body.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto listed = service->ListUsers();
+                        if (!listed.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            listed.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        Json::Value users(Json::arrayValue);
+                        for (const auto& user : listed.value()) {
+                          users.append(BuildManagedUserJson(user));
+                        }
+                        body["users"] = std::move(users);
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/security/users",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(BuildUserManagementErrorResponse(
+              {"E_USER_MANAGEMENT_UNAVAILABLE",
+               "user management unavailable"}));
+          return;
+        }
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest authorized_request,
+                HttpCallback callback) mutable {
+              std::shared_ptr<ParsedCreateViewerRequest> parsed_request;
+              try {
+                if (body_error.has_value()) {
+                  callback(BuildUserManagementErrorResponse(*body_error));
+                  return;
+                }
+                if (!secure_body) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                auto parsed = ParseCreateViewerJson(
+                    std::move(*secure_body), request->getHeader("content-type"));
+                secure_body->clear();
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                if (internal::
+                        ConsumeUserManagementPreSubmitFailureForTesting()) {
+                  throw std::bad_alloc();
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  parsed.value().password.clear();
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                parsed_request = std::make_shared<ParsedCreateViewerRequest>(
+                    std::move(parsed).value());
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service,
+                     context = std::move(context).value(),
+                     parsed_request, callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto created = service->CreateViewer(
+                            std::move(parsed_request->username),
+                            std::move(parsed_request->password), context);
+                        parsed_request->password.clear();
+                        if (!created.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            created.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["user"] = BuildManagedUserJson(created.value());
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body), k201Created));
+                      } catch (...) {
+                        parsed_request->password.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  parsed_request->password.clear();
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                if (secure_body) {
+                  secure_body->clear();
+                }
+                if (parsed_request) {
+                  parsed_request->password.clear();
+                }
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/security/users/{1}/enabled",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_user_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_user_id](AuthorizedRequest authorized_request,
+                                   HttpCallback callback) {
+              try {
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                auto user_id = ParseManagedResourceId(raw_user_id);
+                auto parsed = ParseSetViewerEnabledJson(
+                    request->getBody(), request->getHeader("content-type"));
+                if (!user_id.ok()) {
+                  callback(BuildUserManagementErrorResponse(user_id.error()));
+                  return;
+                }
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, user_id = user_id.value(),
+                     enabled = parsed.value().enabled,
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto updated =
+                            service->SetViewerEnabled(user_id, enabled, context);
+                        if (!updated.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            updated.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["updated"] = true;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Put});
+
+  app().registerHandler(
+      "/api/v1/security/users/{1}/password",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_user_id) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(BuildUserManagementErrorResponse(
+              {"E_USER_MANAGEMENT_UNAVAILABLE",
+               "user management unavailable"}));
+          return;
+        }
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_user_id, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest authorized_request,
+                HttpCallback callback) mutable {
+              std::shared_ptr<ParsedPasswordResetRequest> parsed_request;
+              try {
+                if (body_error.has_value()) {
+                  callback(BuildUserManagementErrorResponse(*body_error));
+                  return;
+                }
+                if (!secure_body) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                auto user_id = ParseManagedResourceId(raw_user_id);
+                if (!user_id.ok()) {
+                  callback(BuildUserManagementErrorResponse(user_id.error()));
+                  return;
+                }
+                auto parsed = ParsePasswordResetJson(
+                    std::move(*secure_body), request->getHeader("content-type"));
+                secure_body->clear();
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  parsed.value().password.clear();
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                parsed_request = std::make_shared<ParsedPasswordResetRequest>(
+                    std::move(parsed).value());
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, user_id = user_id.value(),
+                     context = std::move(context).value(), parsed_request,
+                     callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto reset = service->ResetViewerPassword(
+                            user_id, std::move(parsed_request->password), context);
+                        parsed_request->password.clear();
+                        if (!reset.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            reset.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["password_reset"] = true;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        parsed_request->password.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  parsed_request->password.clear();
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                if (secure_body) {
+                  secure_body->clear();
+                }
+                if (parsed_request) {
+                  parsed_request->password.clear();
+                }
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Put});
+
+  app().registerHandler(
+      "/api/v1/security/users/{1}",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_user_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_user_id](AuthorizedRequest authorized_request,
+                                   HttpCallback callback) {
+              try {
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                const auto body = ValidateEmptyRequestBody(request->getBody());
+                const auto user_id = ParseManagedResourceId(raw_user_id);
+                if (!body.ok()) {
+                  callback(BuildUserManagementErrorResponse(body.error()));
+                  return;
+                }
+                if (!user_id.ok()) {
+                  callback(BuildUserManagementErrorResponse(user_id.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, user_id = user_id.value(),
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto deleted = service->DeleteViewer(user_id, context);
+                        if (!deleted.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            deleted.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["deleted"] = true;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Delete});
+
+  app().registerHandler(
+      "/api/v1/security/management-ips",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](AuthorizedRequest, HttpCallback callback) {
+              try {
+                const auto request_body =
+                    ValidateEmptyRequestBody(request->getBody());
+                if (!request_body.ok()) {
+                  callback(BuildUserManagementErrorResponse(
+                      request_body.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto listed = service->ListManagementIps();
+                        if (!listed.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            listed.error()));
+                          return;
+                        }
+                        Json::Value entries(Json::arrayValue);
+                        for (const auto& entry : listed.value()) {
+                          entries.append(BuildManagementIpJson(entry));
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["management_ips"] = std::move(entries);
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/security/management-ips/{1}",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_role) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_role](AuthorizedRequest authorized_request,
+                                HttpCallback callback) {
+              try {
+                auto role = ParseManagedRole(raw_role);
+                if (!role.ok()) {
+                  callback(BuildUserManagementErrorResponse(role.error()));
+                  return;
+                }
+                auto parsed = ParseManagementIpJson(
+                    request->getBody(), request->getHeader("content-type"));
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, role = role.value(),
+                     address = std::move(parsed).value().address,
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto created = service->AddManagementIp(
+                            role, std::move(address), context);
+                        address.clear();
+                        if (!created.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            created.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["management_ip"] =
+                            BuildManagementIpJson(created.value());
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body),
+                                                   drogon::k201Created));
+                      } catch (...) {
+                        address.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/security/management-ips/{1}/{2}",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_role, const std::string& raw_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_role,
+             raw_id](AuthorizedRequest authorized_request,
+                     HttpCallback callback) {
+              try {
+                auto role = ParseManagedRole(raw_role);
+                auto management_ip_id = ParseManagedResourceId(raw_id);
+                if (!role.ok()) {
+                  callback(BuildUserManagementErrorResponse(role.error()));
+                  return;
+                }
+                if (!management_ip_id.ok()) {
+                  callback(BuildUserManagementErrorResponse(
+                      management_ip_id.error()));
+                  return;
+                }
+                auto parsed = ParseManagementIpJson(
+                    request->getBody(), request->getHeader("content-type"));
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service,
+                     management_ip_id = management_ip_id.value(),
+                     role = role.value(),
+                     address = std::move(parsed).value().address,
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto updated = service->UpdateManagementIp(
+                            management_ip_id, role, std::move(address), context);
+                        address.clear();
+                        if (!updated.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            updated.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["updated"] = true;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        address.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Put});
+
+  app().registerHandler(
+      "/api/v1/security/management-ips/{1}/{2}",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback,
+         const std::string& raw_role, const std::string& raw_id) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, raw_role,
+             raw_id](AuthorizedRequest authorized_request,
+                     HttpCallback callback) {
+              try {
+                auto role = ParseManagedRole(raw_role);
+                auto management_ip_id = ParseManagedResourceId(raw_id);
+                if (!role.ok()) {
+                  callback(BuildUserManagementErrorResponse(role.error()));
+                  return;
+                }
+                if (!management_ip_id.ok()) {
+                  callback(BuildUserManagementErrorResponse(
+                      management_ip_id.error()));
+                  return;
+                }
+                const auto body = ValidateEmptyRequestBody(request->getBody());
+                if (!body.ok()) {
+                  callback(BuildUserManagementErrorResponse(body.error()));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service,
+                     management_ip_id = management_ip_id.value(),
+                     role = role.value(),
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto deleted = service->DeleteManagementIp(
+                            management_ip_id, role, context);
+                        if (!deleted.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            deleted.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["deleted"] = true;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Delete});
+
+  app().registerHandler(
+      "/api/v1/auth/password",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(BuildUserManagementErrorResponse(
+              {"E_USER_MANAGEMENT_UNAVAILABLE",
+               "user management unavailable"}));
+          return;
+        }
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest authorized_request,
+                HttpCallback callback) mutable {
+              std::shared_ptr<ParsedOwnPasswordRequest> parsed_request;
+              try {
+                if (body_error.has_value()) {
+                  callback(BuildUserManagementErrorResponse(*body_error));
+                  return;
+                }
+                if (!secure_body) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                auto parsed = ParseOwnPasswordJson(
+                    std::move(*secure_body),
+                    request->getHeader("content-type"));
+                secure_body->clear();
+                if (!parsed.ok()) {
+                  callback(BuildUserManagementErrorResponse(parsed.error()));
+                  return;
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  parsed.value().current_password.clear();
+                  parsed.value().replacement_password.clear();
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                parsed_request = std::make_shared<ParsedOwnPasswordRequest>(
+                    std::move(parsed).value());
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service,
+                     context = std::move(context).value(), parsed_request,
+                     callback, event_loop = app().getLoop()]() mutable {
+                      try {
+                        auto changed = service->ChangeOwnPassword(
+                            std::move(parsed_request->current_password),
+                            std::move(parsed_request->replacement_password),
+                            context);
+                        parsed_request->current_password.clear();
+                        parsed_request->replacement_password.clear();
+                        if (!changed.ok()) {
+                          QueueResponse(event_loop, std::move(callback),
+                                        BuildUserManagementErrorResponse(
+                                            changed.error()));
+                          return;
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["password_changed"] = true;
+                        body["logged_out"] = true;
+                        auto response = JsonResponse(std::move(body));
+                        response->addCookie(SessionCookie("", 0));
+                        QueueResponse(event_loop, std::move(callback),
+                                      std::move(response));
+                      } catch (...) {
+                        parsed_request->current_password.clear();
+                        parsed_request->replacement_password.clear();
+                        QueueResponse(event_loop, std::move(callback),
+                                      BuildUserManagementErrorResponse(
+                                          {"E_USER_MANAGEMENT_UNAVAILABLE",
+                                           "user management unavailable"}));
+                      }
+                    });
+                if (!submitted.ok()) {
+                  parsed_request->current_password.clear();
+                  parsed_request->replacement_password.clear();
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                if (secure_body) {
+                  secure_body->clear();
+                }
+                if (parsed_request) {
+                  parsed_request->current_password.clear();
+                  parsed_request->replacement_password.clear();
+                }
+                callback(BuildUserManagementErrorResponse(
+                    {"E_USER_MANAGEMENT_UNAVAILABLE",
+                     "user management unavailable"}));
+              }
+            });
+      },
+      {Put});
 
   app().registerHandler(
       "/api/v1/auth/logout",
@@ -1086,7 +3065,7 @@ void RegisterHandlers() {
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip](std::optional<security::Principal>,
+            [request, peer_ip](AuthorizedRequest,
                                HttpCallback callback) {
               auto token =
                   ParseSessionCookieHeaders(request->getRawCookieHeaders());
@@ -1098,7 +3077,7 @@ void RegisterHandlers() {
               std::shared_ptr<BoundedWorker> worker;
               {
                 std::scoped_lock lock(StateMutex());
-                auth = GlobalState().args.auth_service;
+                auth = GlobalState().auth_service;
                 worker = GlobalState().security_worker;
               }
               if (!auth || !worker) {
@@ -1144,7 +3123,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               std::string status;
               {
                 std::scoped_lock lock(StateMutex());
@@ -1160,7 +3139,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -1181,7 +3160,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](std::optional<security::Principal>,
+            [request](AuthorizedRequest,
                       HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
@@ -1222,7 +3201,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](std::optional<security::Principal>,
+            [request](AuthorizedRequest,
                       HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
@@ -1263,7 +3242,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](std::optional<security::Principal>,
+            [request](AuthorizedRequest,
                       HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
@@ -1303,7 +3282,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               Json::Value body(Json::objectValue);
               Json::Value cameras(Json::arrayValue);
               CameraStatusProvider provider;
@@ -1335,7 +3314,7 @@ void RegisterHandlers() {
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [camera_id](std::optional<security::Principal>,
+            [camera_id](AuthorizedRequest,
                         HttpCallback callback) {
               SnapshotCallback snapshot_callback;
               {
@@ -1353,15 +3332,44 @@ void RegisterHandlers() {
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [camera_id](std::optional<security::Principal>,
-                        HttpCallback callback) {
-              LiveMp4OpenCallback live_stream_callback;
+            [camera_id](AuthorizedRequest authorized_request,
+                        HttpCallback callback) mutable {
+              CancellableLiveMp4OpenCallback live_stream_callback;
+              std::shared_ptr<internal::LiveMp4PumpManager> pump_manager;
+              std::shared_ptr<internal::RuntimeCallbackLifecycle>
+                  runtime_lifecycle;
               {
                 std::scoped_lock lock(StateMutex());
                 live_stream_callback =
-                    GlobalState().args.live_stream_callback;
+                    GlobalState().args.cancellable_live_stream_callback;
+                if (!live_stream_callback) {
+                  live_stream_callback = AdaptLegacyLiveMp4OpenCallback(
+                      GlobalState().args.live_stream_callback);
+                }
+                pump_manager = GlobalState().live_pump_manager;
+                runtime_lifecycle = GlobalState().runtime_lifecycle;
               }
-              callback(BuildLiveMp4Response(live_stream_callback, camera_id));
+              std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+                  runtime_lease;
+              try {
+                runtime_lease = runtime_lifecycle
+                                    ? runtime_lifecycle->TryAcquire()
+                                    : nullptr;
+              } catch (...) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              if (!runtime_lease ||
+                  (authorized_request.stream_lease &&
+                   authorized_request.stream_lease->revoked())) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              callback(BuildManagedLiveMp4Response(
+                  live_stream_callback, camera_id,
+                  kDefaultLiveMp4ResponseByteLimit,
+                  std::move(authorized_request.stream_lease),
+                  std::move(pump_manager), std::move(runtime_lease)));
             });
       },
       {Get});
@@ -1371,7 +3379,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               DetectionSnapshotProvider provider;
               {
                 std::scoped_lock lock(StateMutex());
@@ -1387,7 +3395,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](std::optional<security::Principal>,
+            [request](AuthorizedRequest,
                       HttpCallback callback) {
               auto validated = ValidateEmptyJsonObject(
                   request->getBody(), request->getHeader("content-type"));
@@ -1425,7 +3433,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               AiControlCallback restart;
               AiStatusProvider status;
               {
@@ -1444,37 +3452,70 @@ void RegisterHandlers() {
         const std::string last_event_id = request->getHeader("Last-Event-ID");
         AuthorizeRequest(
             request, std::move(callback),
-            [last_event_id](std::optional<security::Principal>,
+            [last_event_id](AuthorizedRequest authorized_request,
                             HttpCallback callback) mutable {
               DetectionSnapshotProvider snapshot_provider;
               DetectionEventSubscriber subscriber;
+              std::shared_ptr<internal::RuntimeCallbackLifecycle>
+                  runtime_lifecycle;
               {
                 std::scoped_lock lock(StateMutex());
                 snapshot_provider =
                     GlobalState().args.detection_snapshot_provider;
                 subscriber = GlobalState().args.detection_event_subscriber;
+                runtime_lifecycle = GlobalState().runtime_lifecycle;
               }
-              DetectionSnapshotProvider provider_for_check = snapshot_provider;
-              auto pending = std::make_shared<DetectionSsePendingResponse>(
-                  std::move(snapshot_provider), std::move(callback));
+              std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+                  runtime_lease;
+              try {
+                runtime_lease = runtime_lifecycle
+                                    ? runtime_lifecycle->TryAcquire()
+                                    : nullptr;
+              } catch (...) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              if (!runtime_lease ||
+                  (authorized_request.stream_lease &&
+                   authorized_request.stream_lease->revoked())) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto pending = DetectionSsePendingResponse::Create(
+                  std::move(snapshot_provider),
+                  [callback = std::move(callback)](
+                      const drogon::HttpResponsePtr& response) mutable {
+                    try {
+                      callback.Queue(response);
+                    } catch (...) {
+                      callback.Queue(response);
+                    }
+                  },
+                  std::move(authorized_request.stream_lease),
+                  std::move(runtime_lease));
               if (!subscriber) {
                 pending->CompleteWithSnapshot();
                 return;
               }
-              pending->SetSubscription(subscriber(
-                  [pending](const ai::DetectionEvent& event) {
-                    pending->CompleteWithEvent(event);
-                  }));
-              if (provider_for_check) {
-                const auto snapshot = provider_for_check();
-                if (last_event_id.empty() ||
-                    last_event_id != BuildDetectionSseId(snapshot)) {
-                  pending->CompleteWithSnapshot();
-                  return;
-                }
+              std::weak_ptr weak_pending = pending;
+              if (!pending->AttachSubscription(
+                      subscriber,
+                      [weak_pending](const ai::DetectionEvent& event) {
+                        if (const auto current = weak_pending.lock()) {
+                          current->CompleteWithEvent(event);
+                        }
+                      })) {
+                return;
               }
-              app().getLoop()->runAfter(kDetectionSsePendingTimeout, [pending] {
-                pending->CompleteWithSnapshot();
+              if (!pending->CompleteInitialSnapshotIfChanged(last_event_id)) {
+                return;
+              }
+              auto* event_loop = app().getLoop();
+              const auto timeout = event_loop->runAfter(
+                  kDetectionSsePendingTimeout,
+                  [pending] { pending->CompleteWithSnapshot(); });
+              pending->SetTimeoutCancellation([event_loop, timeout] {
+                event_loop->invalidateTimer(timeout);
               });
             });
       },
@@ -1485,7 +3526,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](std::optional<security::Principal>, HttpCallback callback) {
+            [](AuthorizedRequest, HttpCallback callback) {
               const config::AppConfig* config = nullptr;
               std::string public_base_url;
               SecureStreamDiagnosticsProvider diagnostics_provider;
@@ -1516,6 +3557,342 @@ void RegisterHandlers() {
 }
 
 }  // namespace
+
+namespace internal {
+
+struct DetectionSsePendingResponse::State {
+  DetectionSnapshotProvider detection_snapshot_provider;
+  ResponseCallback response_callback;
+  std::shared_ptr<SessionStreamLease> stream_lease;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease;
+  std::mutex mutex;
+  ai::DetectionBus::Subscription subscription;
+  std::function<void()> cancel_timeout;
+  std::size_t active_runtime_callbacks{0U};
+  bool revoke_requested{false};
+  bool terminal_claimed{false};
+  bool finishing_started{false};
+  bool finish_external_done{false};
+  bool completed{false};
+};
+
+DetectionSsePendingResponse::DetectionSsePendingResponse(
+    std::shared_ptr<State> state) noexcept
+    : state_(std::move(state)) {}
+
+std::shared_ptr<DetectionSsePendingResponse>
+DetectionSsePendingResponse::Create(
+    DetectionSnapshotProvider detection_snapshot_provider,
+    ResponseCallback response_callback,
+    std::shared_ptr<SessionStreamLease> stream_lease,
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+        runtime_lease) {
+  auto state = std::make_shared<State>();
+  state->detection_snapshot_provider =
+      std::move(detection_snapshot_provider);
+  state->response_callback = std::move(response_callback);
+  state->stream_lease = std::move(stream_lease);
+  state->runtime_lease = std::move(runtime_lease);
+  auto pending = std::shared_ptr<DetectionSsePendingResponse>(
+      new DetectionSsePendingResponse(std::move(state)));
+  if (pending->state_->stream_lease) {
+    std::weak_ptr weak_pending = pending;
+    pending->state_->stream_lease->SetRevocationHandler([weak_pending] {
+      if (const auto current = weak_pending.lock()) {
+        current->Revoke();
+      }
+    });
+  }
+  return pending;
+}
+
+bool DetectionSsePendingResponse::BeginRuntimeCallback(
+    bool claim_terminal) {
+  std::shared_ptr<SessionStreamLease> stream_lease;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (state_->completed || state_->revoke_requested ||
+        state_->terminal_claimed) {
+      return false;
+    }
+    stream_lease = state_->stream_lease;
+  }
+  std::optional<internal::SessionStreamTerminalElection> election;
+  if (stream_lease) {
+    election.emplace(stream_lease->state_->TryBeginTerminalElection());
+    if (!*election) {
+      return false;
+    }
+  }
+  std::lock_guard lock(state_->mutex);
+  if (state_->completed || state_->revoke_requested ||
+      state_->terminal_claimed) {
+    return false;
+  }
+  if (claim_terminal) {
+    state_->terminal_claimed = true;
+  }
+  ++state_->active_runtime_callbacks;
+  return true;
+}
+
+bool DetectionSsePendingResponse::ClaimTerminalFromActiveCallback() {
+  std::shared_ptr<SessionStreamLease> stream_lease;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (state_->completed || state_->revoke_requested ||
+        state_->terminal_claimed) {
+      return false;
+    }
+    stream_lease = state_->stream_lease;
+  }
+  std::optional<internal::SessionStreamTerminalElection> election;
+  if (stream_lease) {
+    election.emplace(stream_lease->state_->TryBeginTerminalElection());
+    if (!*election) {
+      return false;
+    }
+  }
+  std::lock_guard lock(state_->mutex);
+  if (state_->completed || state_->revoke_requested ||
+      state_->terminal_claimed) {
+    return false;
+  }
+  state_->terminal_claimed = true;
+  return true;
+}
+
+std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+DetectionSsePendingResponse::EndRuntimeCallbackLocked() {
+  if (state_->active_runtime_callbacks != 0U) {
+    --state_->active_runtime_callbacks;
+  }
+  if (state_->active_runtime_callbacks == 0U &&
+      state_->finish_external_done && !state_->completed) {
+    state_->completed = true;
+    return std::move(state_->runtime_lease);
+  }
+  return {};
+}
+
+bool DetectionSsePendingResponse::AttachSubscription(
+    const DetectionEventSubscriber& subscriber,
+    ai::DetectionBus::Handler handler) {
+  if (!BeginRuntimeCallback(false)) {
+    return false;
+  }
+  RuntimeCallbackGuard runtime_callback_guard(*this);
+  ai::DetectionBus::Subscription subscription;
+  bool callback_failed = false;
+  try {
+    auto callback_scope = state_->runtime_lease->EnterCallback();
+    subscription = subscriber(std::move(handler));
+  } catch (...) {
+    callback_failed = true;
+  }
+
+  bool attached = false;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (!callback_failed && !state_->completed &&
+        !state_->revoke_requested && !state_->terminal_claimed) {
+      state_->subscription = std::move(subscription);
+      attached = true;
+    }
+  }
+  if (!attached) {
+    try {
+      auto callback_scope = state_->runtime_lease->EnterCallback();
+      subscription = {};
+    } catch (...) {
+      subscription = {};
+    }
+  }
+
+  bool can_continue = false;
+  {
+    std::lock_guard lock(state_->mutex);
+    can_continue = !state_->completed && !state_->revoke_requested &&
+                   !state_->terminal_claimed;
+  }
+  if (callback_failed && can_continue) {
+    CompleteWithSnapshot();
+  }
+  return !callback_failed && can_continue;
+}
+
+bool DetectionSsePendingResponse::CompleteInitialSnapshotIfChanged(
+    std::string_view last_event_id) {
+  if (!state_->detection_snapshot_provider) {
+    std::lock_guard lock(state_->mutex);
+    return !state_->completed && !state_->revoke_requested &&
+           !state_->terminal_claimed;
+  }
+  if (!BeginRuntimeCallback(false)) {
+    return false;
+  }
+  RuntimeCallbackGuard runtime_callback_guard(*this);
+
+  std::vector<ai::DetectionEvent> snapshot;
+  bool callback_failed = false;
+  bool snapshot_matches = false;
+  try {
+    auto callback_scope = state_->runtime_lease->EnterCallback();
+    snapshot = state_->detection_snapshot_provider();
+    snapshot_matches =
+        !last_event_id.empty() &&
+        last_event_id == BuildDetectionSseId(snapshot);
+  } catch (...) {
+    callback_failed = true;
+  }
+
+  const bool finish_snapshot =
+      (callback_failed || !snapshot_matches) &&
+      ClaimTerminalFromActiveCallback();
+  bool can_continue = false;
+  if (!callback_failed && snapshot_matches) {
+    std::lock_guard lock(state_->mutex);
+    can_continue = !state_->completed && !state_->revoke_requested &&
+                   !state_->terminal_claimed;
+  }
+  if (finish_snapshot) {
+    Finish(std::move(snapshot));
+  }
+  return can_continue;
+}
+
+void DetectionSsePendingResponse::SetTimeoutCancellation(
+    std::function<void()> cancel_timeout) {
+  std::function<void()> cancel_immediately;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (state_->completed || state_->revoke_requested ||
+        state_->terminal_claimed) {
+      cancel_immediately = std::move(cancel_timeout);
+    } else {
+      state_->cancel_timeout = std::move(cancel_timeout);
+    }
+  }
+  if (cancel_immediately) {
+    try {
+      cancel_immediately();
+    } catch (...) {
+    }
+  }
+}
+
+void DetectionSsePendingResponse::CompleteWithEvent(
+    const ai::DetectionEvent& event) {
+  CompleteFromProvider(&event);
+}
+
+void DetectionSsePendingResponse::CompleteWithSnapshot() {
+  CompleteFromProvider(nullptr);
+}
+
+void DetectionSsePendingResponse::CompleteFromProvider(
+    const ai::DetectionEvent* event) {
+  if (!BeginRuntimeCallback(true)) {
+    return;
+  }
+  RuntimeCallbackGuard runtime_callback_guard(*this);
+  std::vector<ai::DetectionEvent> snapshot;
+  try {
+    if (state_->detection_snapshot_provider) {
+      auto callback_scope = state_->runtime_lease->EnterCallback();
+      snapshot = state_->detection_snapshot_provider();
+    }
+    if (event != nullptr) {
+      if (internal::ConsumeDetectionSseEventMergeFailureForTesting()) {
+        throw std::bad_alloc();
+      }
+      snapshot =
+          MergeDetectionSnapshotWithEvent(std::move(snapshot), *event);
+    }
+  } catch (...) {
+    snapshot.clear();
+  }
+  Finish(std::move(snapshot));
+}
+
+void DetectionSsePendingResponse::EndRuntimeCallback() noexcept {
+  std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease;
+  {
+    std::lock_guard lock(state_->mutex);
+    runtime_lease = EndRuntimeCallbackLocked();
+  }
+  runtime_lease.reset();
+}
+
+void DetectionSsePendingResponse::Revoke() {
+  bool finish_revoke = false;
+  {
+    std::lock_guard lock(state_->mutex);
+    state_->revoke_requested = true;
+    if (!state_->completed && !state_->terminal_claimed) {
+      state_->terminal_claimed = true;
+      finish_revoke = true;
+    }
+  }
+  if (finish_revoke) {
+    Finish({});
+  }
+}
+
+void DetectionSsePendingResponse::Finish(
+    std::vector<ai::DetectionEvent> events) {
+  ResponseCallback callback;
+  ai::DetectionBus::Subscription subscription;
+  std::shared_ptr<SessionStreamLease> stream_lease;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+      callback_runtime_lease;
+  std::function<void()> cancel_timeout;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (state_->finishing_started) {
+      return;
+    }
+    state_->finishing_started = true;
+    callback = std::move(state_->response_callback);
+    subscription = std::move(state_->subscription);
+    stream_lease = std::move(state_->stream_lease);
+    cancel_timeout = std::move(state_->cancel_timeout);
+    callback_runtime_lease = state_->runtime_lease;
+  }
+  try {
+    auto callback_scope = callback_runtime_lease->EnterCallback();
+    subscription = {};
+  } catch (...) {
+    subscription = {};
+  }
+  stream_lease.reset();
+  if (cancel_timeout) {
+    try {
+      auto callback_scope = callback_runtime_lease->EnterCallback();
+      cancel_timeout();
+    } catch (...) {
+    }
+  }
+  if (callback) {
+    try {
+      auto callback_scope = callback_runtime_lease->EnterCallback();
+      callback(BuildDetectionSseResponse(events));
+    } catch (...) {
+    }
+  }
+  {
+    std::lock_guard lock(state_->mutex);
+    state_->finish_external_done = true;
+    if (state_->active_runtime_callbacks == 0U && !state_->completed) {
+      state_->completed = true;
+      runtime_lease = std::move(state_->runtime_lease);
+    }
+  }
+  runtime_lease.reset();
+}
+
+}  // namespace internal
 
 namespace internal {
 
@@ -1881,20 +4258,54 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
   return response;
 }
 
+drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
+    const CancellableLiveMp4OpenCallback& live_stream_callback,
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes,
+    std::shared_ptr<SessionStreamLease> stream_lease) {
+  static const auto pump_manager =
+      std::make_shared<internal::LiveMp4PumpManager>();
+  return BuildManagedLiveMp4Response(
+      live_stream_callback, camera_id, maximum_response_bytes,
+      std::move(stream_lease), pump_manager);
+}
+
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id,
-    std::size_t maximum_response_bytes) {
+    std::size_t maximum_response_bytes,
+    std::shared_ptr<SessionStreamLease> stream_lease) {
+  auto cancellable = AdaptLegacyLiveMp4OpenCallback(live_stream_callback);
+  return BuildCancellableLiveMp4Response(
+      cancellable, camera_id, maximum_response_bytes,
+      std::move(stream_lease));
+}
+
+namespace {
+
+drogon::HttpResponsePtr BuildManagedLiveMp4Response(
+    const CancellableLiveMp4OpenCallback& live_stream_callback,
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes,
+    std::shared_ptr<SessionStreamLease> stream_lease,
+    std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+        runtime_lease) {
   if (!live_stream_callback) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
 
-  common::Result<LiveMp4StreamCallback> opened =
-      common::Result<LiveMp4StreamCallback>::Err(
+  common::Result<LiveMp4StreamHandle> opened =
+      common::Result<LiveMp4StreamHandle>::Err(
           {"E_LIVE_UNAVAILABLE", "live preview is unavailable"});
   try {
-    opened = live_stream_callback(camera_id);
+    if (runtime_lease) {
+      auto callback_scope = runtime_lease->EnterCallback();
+      opened = live_stream_callback(camera_id);
+    } else {
+      opened = live_stream_callback(camera_id);
+    }
   } catch (...) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
@@ -1905,16 +4316,25 @@ drogon::HttpResponsePtr BuildLiveMp4Response(
   }
 
   auto stream = std::move(opened).value();
-  if (!stream) {
+  if (!stream.read || !stream.cancel || !pump_manager) {
+    return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
+                        drogon::k503ServiceUnavailable);
+  }
+  std::shared_ptr<internal::LiveMp4PumpState> pump;
+  try {
+    pump = internal::LiveMp4PumpState::Create(
+        std::move(stream), maximum_response_bytes, std::move(stream_lease));
+  } catch (...) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
   }
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
-      [stream = std::move(stream), maximum_response_bytes](
-          trantor::AsyncStreamPtr output) {
-        std::thread(PumpLiveMp4Stream, stream, std::move(output),
-                    maximum_response_bytes)
-            .detach();
+      [pump, pump_manager](trantor::AsyncStreamPtr output) {
+        try {
+          pump_manager->Start(pump, std::move(output));
+        } catch (...) {
+          pump->CancelAndClose();
+        }
       },
       drogon::CT_CUSTOM, "video/mp4");
   response->setStatusCode(drogon::k200OK);
@@ -1922,7 +4342,21 @@ drogon::HttpResponsePtr BuildLiveMp4Response(
   return response;
 }
 
+}  // namespace
+
 ServiceApp::~ServiceApp() {
+  const bool on_live_pump =
+      live_pump_manager_ && live_pump_manager_->IsPumpThread();
+  const bool on_media_callback =
+      live_pump_manager_ && live_pump_manager_->IsCurrentMediaCallback();
+  const bool on_runtime_callback =
+      runtime_lifecycle_ && runtime_lifecycle_->IsCurrentCallbackThread();
+  if (on_live_pump || on_media_callback || on_runtime_callback) {
+    common::Logger::instance().log(
+        common::Logger::Level::kError,
+        "ServiceApp destroyed from a managed callback");
+    std::terminate();
+  }
   Stop();
 }
 
@@ -1943,8 +4377,18 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
 
   try {
     ServiceInitArgs effective_args = args;
+    if (!effective_args.stream_registry) {
+      effective_args.stream_registry =
+          std::make_shared<SessionStreamRegistry>();
+    }
+    auto live_pump_manager =
+        std::make_shared<internal::LiveMp4PumpManager>();
+    auto runtime_lifecycle =
+        std::make_shared<internal::RuntimeCallbackLifecycle>();
     security::DeviceState initial_device_state =
         security::DeviceState::kDefault;
+    std::shared_ptr<security::UserManagementService> user_management_service;
+    std::shared_ptr<security::AuthService> auth_service;
     std::shared_ptr<BoundedWorker> security_worker;
     std::shared_ptr<BoundedWorker> runtime_settings_worker;
     if (args.app_config->security.enabled) {
@@ -1974,11 +4418,45 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
                 *effective_args.security_store, *args.app_config,
                 security::BuildReservedIdentities(*args.app_config));
       }
-      if (!effective_args.auth_service) {
-        effective_args.auth_service = std::make_shared<security::AuthService>(
-            *effective_args.security_store);
+      std::weak_ptr weak_registry = effective_args.stream_registry;
+      const auto revoke_sessions =
+          [weak_registry](
+              std::span<const security::SessionIdentity> identities) {
+            if (const auto registry = weak_registry.lock()) {
+              registry->Revoke(identities);
+            }
+          };
+      const auto revoke_all_streams = [weak_registry] {
+        if (const auto registry = weak_registry.lock()) {
+          registry->RevokeAll();
+        }
+      };
+      security::AuthServiceRuntimeHooks hooks;
+      hooks.revoke_sessions = revoke_sessions;
+      hooks.revoke_all_streams = revoke_all_streams;
+      security::AuthServiceDependencies auth_dependencies;
+      if (effective_args.auth_service_dependencies_provider) {
+        auth_dependencies =
+            effective_args.auth_service_dependencies_provider();
       }
+      auth_service = std::shared_ptr<security::AuthService>(
+          new security::AuthService(
+              *effective_args.security_store, std::move(auth_dependencies),
+              std::move(hooks), {}, [](security::UserRole role) {
+                if (internal::ConsumeForcedInvalidLoginRoleForTesting()) {
+                  role = static_cast<security::UserRole>(-1);
+                }
+                return SerializeUserRole(role).has_value();
+              }));
       security_worker = std::make_shared<BoundedWorker>(16U);
+      security::UserManagementDependencies user_management_dependencies;
+      user_management_dependencies.revoke_sessions = revoke_sessions;
+      user_management_dependencies.revoke_all_streams = revoke_all_streams;
+      user_management_service =
+          std::make_shared<security::UserManagementService>(
+              *effective_args.security_store,
+              security::BuildReservedIdentities(*args.app_config),
+              std::move(user_management_dependencies));
       if (HasCompleteRuntimeSettingsCallbacks(effective_args)) {
         runtime_settings_worker = std::make_shared<BoundedWorker>(1U);
       }
@@ -1998,13 +4476,20 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
     {
       std::scoped_lock lock(StateMutex());
       GlobalState().args = effective_args;
+      GlobalState().auth_service = auth_service;
+      GlobalState().user_management_service = user_management_service;
       GlobalState().security_worker = security_worker;
       GlobalState().runtime_settings_worker = runtime_settings_worker;
+      GlobalState().live_pump_manager = live_pump_manager;
+      GlobalState().runtime_lifecycle = runtime_lifecycle;
       GlobalState().device_state = initial_device_state;
       GlobalState().runtime_pending_peer.reset();
       GlobalState().shutting_down = false;
       security_worker_ = security_worker;
       runtime_settings_worker_ = runtime_settings_worker;
+      stream_registry_ = effective_args.stream_registry;
+      live_pump_manager_ = live_pump_manager;
+      runtime_lifecycle_ = runtime_lifecycle;
       {
         std::lock_guard shutdown_lock(shutdown_mutex_);
         if (!shutdown_thread_started_) {
@@ -2118,17 +4603,35 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
   try {
     std::shared_ptr<BoundedWorker> security_worker;
     std::shared_ptr<BoundedWorker> runtime_settings_worker;
+    std::shared_ptr<SessionStreamRegistry> stream_registry;
+    std::shared_ptr<internal::LiveMp4PumpManager> live_pump_manager;
+    std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
     {
       std::scoped_lock lock(StateMutex());
       GlobalState().shutting_down = true;
       security_worker = GlobalState().security_worker;
       runtime_settings_worker = GlobalState().runtime_settings_worker;
+      stream_registry = GlobalState().args.stream_registry;
+      live_pump_manager = GlobalState().live_pump_manager;
+      runtime_lifecycle = GlobalState().runtime_lifecycle;
+      if (runtime_lifecycle) {
+        runtime_lifecycle->CloseAdmission();
+      }
+    }
+    if (security_worker) {
+      security_worker->Stop();
     }
     if (runtime_settings_worker) {
       runtime_settings_worker->Stop();
     }
-    if (security_worker) {
-      security_worker->Stop();
+    if (stream_registry) {
+      stream_registry->RevokeAll();
+    }
+    if (runtime_lifecycle) {
+      runtime_lifecycle->WaitForDrain();
+    }
+    if (live_pump_manager) {
+      live_pump_manager->Stop();
     }
 
     if (running_ || server_thread_.joinable()) {
@@ -2175,13 +4678,20 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
   {
     std::scoped_lock lock(StateMutex());
     GlobalState().args = {};
+    GlobalState().auth_service.reset();
+    GlobalState().user_management_service.reset();
     GlobalState().security_worker.reset();
     GlobalState().runtime_settings_worker.reset();
+    GlobalState().live_pump_manager.reset();
+    GlobalState().runtime_lifecycle.reset();
     GlobalState().device_state = security::DeviceState::kDefault;
     GlobalState().runtime_pending_peer.reset();
   }
   security_worker_.reset();
   runtime_settings_worker_.reset();
+  stream_registry_.reset();
+  live_pump_manager_.reset();
+  runtime_lifecycle_.reset();
   tls_material_.reset();
   server_thread_done_ = {};
 }
@@ -2210,20 +4720,36 @@ void ServiceApp::JoinShutdownCoordinator() noexcept {
 void ServiceApp::BeginShutdown() noexcept {
   std::shared_ptr<BoundedWorker> security_worker;
   std::shared_ptr<BoundedWorker> runtime_settings_worker;
+  std::shared_ptr<SessionStreamRegistry> stream_registry;
+  std::shared_ptr<internal::LiveMp4PumpManager> live_pump_manager;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
   {
     std::scoped_lock lock(StateMutex());
     GlobalState().shutting_down = true;
     security_worker = GlobalState().security_worker;
     runtime_settings_worker = GlobalState().runtime_settings_worker;
-  }
-  if (runtime_settings_worker) {
-    try {
-      runtime_settings_worker->Stop();
-    } catch (...) {
-      common::Logger::instance().log(
-          common::Logger::Level::kWarn,
-          "failed to quiesce runtime settings worker");
+    stream_registry = GlobalState().args.stream_registry;
+    live_pump_manager = GlobalState().live_pump_manager;
+    runtime_lifecycle = GlobalState().runtime_lifecycle;
+    if (runtime_lifecycle) {
+      runtime_lifecycle->CloseAdmission();
     }
+  }
+  const bool on_media_callback =
+      live_pump_manager && live_pump_manager->IsCurrentMediaCallback();
+  const bool on_runtime_callback =
+      runtime_lifecycle && runtime_lifecycle->IsCurrentCallbackThread();
+  if (on_media_callback || on_runtime_callback) {
+    if (stream_registry) {
+      try {
+        stream_registry->RevokeAll();
+      } catch (...) {
+        common::Logger::instance().log(
+            common::Logger::Level::kWarn,
+            "failed to revoke service streams during callback shutdown");
+      }
+    }
+    return;
   }
   if (security_worker) {
     try {
@@ -2234,9 +4760,60 @@ void ServiceApp::BeginShutdown() noexcept {
           "failed to quiesce service security worker");
     }
   }
+  if (runtime_settings_worker) {
+    try {
+      runtime_settings_worker->Stop();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to quiesce runtime settings worker");
+    }
+  }
+  if (stream_registry) {
+    try {
+      stream_registry->RevokeAll();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to revoke service streams during shutdown");
+    }
+  }
+  if (runtime_lifecycle) {
+    try {
+      if (!runtime_lifecycle->IsCurrentCallbackThread()) {
+        runtime_lifecycle->WaitForDrain();
+      }
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to drain service runtime callbacks during shutdown");
+    }
+  }
+  if (live_pump_manager && !on_media_callback) {
+    try {
+      live_pump_manager->Stop();
+    } catch (...) {
+      common::Logger::instance().log(
+          common::Logger::Level::kWarn,
+          "failed to stop live stream pumps during shutdown");
+    }
+  }
 }
 
 void ServiceApp::Stop() {
+  std::shared_ptr<internal::LiveMp4PumpManager> live_pump_manager;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
+  {
+    std::scoped_lock lock(StateMutex());
+    live_pump_manager = GlobalState().live_pump_manager;
+    runtime_lifecycle = GlobalState().runtime_lifecycle;
+  }
+  const bool on_live_pump =
+      live_pump_manager && live_pump_manager->IsPumpThread();
+  const bool on_media_callback =
+      live_pump_manager && live_pump_manager->IsCurrentMediaCallback();
+  const bool on_runtime_callback =
+      runtime_lifecycle && runtime_lifecycle->IsCurrentCallbackThread();
   auto* current_loop = trantor::EventLoop::getEventLoopOfCurrentThread();
   bool on_service_loop = false;
   if (current_loop != nullptr && drogon::app().isRunning()) {
@@ -2260,10 +4837,14 @@ void ServiceApp::Stop() {
   shutdown_condition_.notify_all();
 
   if (!coordinator_started) {
+    if (on_live_pump || on_media_callback || on_runtime_callback) {
+      return;
+    }
     PerformShutdown(nullptr);
     return;
   }
-  if (!on_service_loop) {
+  if (!on_service_loop && !on_live_pump && !on_media_callback &&
+      !on_runtime_callback) {
     JoinShutdownCoordinator();
   }
 }

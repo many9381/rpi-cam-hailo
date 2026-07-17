@@ -5,7 +5,9 @@ add_library(camera_firmware_security STATIC
     DeviceTlsPlatform.cpp
     PasswordHasher.cpp
     PasswordPolicy.cpp
+    SecurityTypes.cpp
     SecurityStore.cpp
+    UserManagementService.cpp
 )
 
 target_include_directories(camera_firmware_security

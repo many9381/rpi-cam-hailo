@@ -42,6 +42,7 @@ class FragmentRing {
 
     [[nodiscard]] common::Result<std::optional<FragmentedMp4Chunk>> WaitNext(
         std::chrono::milliseconds timeout);
+    void Cancel() noexcept;
     [[nodiscard]] bool valid() const noexcept;
 
    private:
@@ -71,6 +72,7 @@ class FragmentRing {
   [[nodiscard]] std::uint64_t overrun_total() const noexcept;
   [[nodiscard]] std::size_t retained_bytes() const noexcept;
   [[nodiscard]] std::size_t active_readers() const noexcept;
+  [[nodiscard]] std::size_t waiting_readers() const noexcept;
 
  private:
   struct SharedState;

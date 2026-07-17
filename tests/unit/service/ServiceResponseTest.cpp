@@ -1,29 +1,79 @@
 #include "camera_firmware/service/ServiceApp.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <concepts>
 #include <cstdint>
 #include <filesystem>
 #include <future>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <fcntl.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 
 #include "camera_firmware/ai/AiTypes.hpp"
+#include "camera_firmware/service/SessionStreamRegistry.hpp"
+
+namespace camera_firmware::service::internal {
+void FailNextLiveMp4PumpAllocationForTesting() noexcept;
+std::optional<std::string_view> SerializeUserRoleForTesting(
+    security::UserRole role) noexcept;
+}
 
 namespace {
+
+template <typename T>
+concept HasCompletedAuthServiceInjection = requires(T value) {
+  value.auth_service;
+};
+
+template <typename T>
+concept HasAuthServiceFactoryInjection = requires(T value) {
+  value.auth_service_factory;
+};
+
+template <typename T>
+concept HasUserManagementServiceInjection = requires(T value) {
+  value.user_management_service;
+};
+
+template <typename T>
+concept HasCancellableLiveStreamCallback = requires(T value) {
+  value.cancellable_live_stream_callback;
+};
+
+template <typename T>
+concept HasExactLegacyLiveStreamCallback =
+    std::same_as<std::remove_cvref_t<decltype(
+                     std::declval<T&>().live_stream_callback)>,
+                 camera_firmware::service::LiveMp4OpenCallback>;
+
+static_assert(!HasCompletedAuthServiceInjection<
+              camera_firmware::service::ServiceInitArgs>);
+static_assert(!HasAuthServiceFactoryInjection<
+              camera_firmware::service::ServiceInitArgs>);
+static_assert(!HasUserManagementServiceInjection<
+              camera_firmware::service::ServiceInitArgs>);
+static_assert(HasExactLegacyLiveStreamCallback<
+              camera_firmware::service::ServiceInitArgs>);
+static_assert(HasCancellableLiveStreamCallback<
+              camera_firmware::service::ServiceInitArgs>);
 
 class TemporaryTlsDirectory {
  public:
@@ -945,6 +995,87 @@ TEST(ServiceResponseTest, InitReturnsErrorWhenConfigIsMissing) {
   EXPECT_EQ(initialized.error().code, "E_SERVICE_CONFIG");
 }
 
+TEST(ServiceResponseTest, ServiceInitArgsAcceptsInjectableStreamRegistry) {
+  camera_firmware::service::ServiceInitArgs args;
+  auto registry =
+      std::make_shared<camera_firmware::service::SessionStreamRegistry>();
+
+  args.stream_registry = registry;
+
+  EXPECT_EQ(args.stream_registry, registry);
+}
+
+TEST(ServiceResponseTest, ServiceInitArgsAcceptsAuthServiceDependenciesOnly) {
+  camera_firmware::service::ServiceInitArgs args;
+  bool provider_called = false;
+  args.auth_service_dependencies_provider = [&] {
+    provider_called = true;
+    return camera_firmware::security::AuthServiceDependencies{};
+  };
+
+  const auto dependencies = args.auth_service_dependencies_provider();
+
+  EXPECT_TRUE(provider_called);
+  EXPECT_FALSE(dependencies.now_seconds);
+}
+
+TEST(ServiceResponseTest,
+     ServiceInitArgsDoesNotExposeUserManagementServiceConstruction) {
+  EXPECT_FALSE(HasUserManagementServiceInjection<
+               camera_firmware::service::ServiceInitArgs>);
+}
+
+TEST(ServiceResponseTest, SerializesAdministratorRole) {
+  const auto role = camera_firmware::service::internal::
+      SerializeUserRoleForTesting(
+          camera_firmware::security::UserRole::kAdministrator);
+
+  ASSERT_TRUE(role.has_value());
+  EXPECT_EQ(*role, "administrator");
+}
+
+TEST(ServiceResponseTest, SerializesViewerRole) {
+  const auto role = camera_firmware::service::internal::
+      SerializeUserRoleForTesting(camera_firmware::security::UserRole::kViewer);
+
+  ASSERT_TRUE(role.has_value());
+  EXPECT_EQ(*role, "viewer");
+}
+
+TEST(ServiceResponseTest, RejectsUnknownRoleSerialization) {
+  using Role = camera_firmware::security::UserRole;
+  using Underlying = std::underlying_type_t<Role>;
+  const auto role = camera_firmware::service::internal::
+      SerializeUserRoleForTesting(
+          static_cast<Role>(std::numeric_limits<Underlying>::max()));
+
+  EXPECT_FALSE(role.has_value());
+}
+
+TEST(ServiceResponseTest, ServiceInitArgsRetainsTypedLegacyLiveCallback) {
+  EXPECT_TRUE(HasExactLegacyLiveStreamCallback<
+              camera_firmware::service::ServiceInitArgs>);
+  EXPECT_TRUE(HasCancellableLiveStreamCallback<
+              camera_firmware::service::ServiceInitArgs>);
+  camera_firmware::service::LiveMp4OpenCallback typed_legacy =
+      [](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Err(
+            {"E_LIVE_UNAVAILABLE", "unavailable"});
+      };
+  camera_firmware::service::ServiceInitArgs args;
+  args.live_stream_callback = typed_legacy;
+  EXPECT_TRUE(static_cast<bool>(args.live_stream_callback));
+}
+
+TEST(ServiceResponseTest, LegacyEmptyLiveCallbackRemainsSourceCompatible) {
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      {}, "imx708-main");
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
+}
+
 TEST(ServiceResponseTest, SnapshotResponseReturnsJpegBytesFromCallback) {
   const std::vector<std::uint8_t> jpeg{0xff, 0xd8, 0xff, 0xd9};
 
@@ -991,6 +1122,119 @@ TEST(ServiceResponseTest, LiveUnavailableUsesOnlyPublicErrorContract) {
   EXPECT_EQ((*json)["message"].asString(), "live preview is unavailable");
 }
 
+TEST(ServiceResponseTest,
+     LiveMp4PumpAllocationFailureCancelsOpenedMediaExactlyOnce) {
+  std::atomic_size_t cancel_calls{0U};
+  camera_firmware::service::internal::
+      FailNextLiveMp4PumpAllocationForTesting();
+
+  drogon::HttpResponsePtr response;
+  EXPECT_NO_THROW(
+      response = camera_firmware::service::BuildCancellableLiveMp4Response(
+                      [&](const std::string&) {
+                        return camera_firmware::common::Result<
+                            camera_firmware::service::LiveMp4StreamHandle>::Ok(
+                            {
+                                .read = [](char*, std::size_t) {
+                                  return std::size_t{0U};
+                                },
+                                .cancel = [&] {
+                                  cancel_calls.fetch_add(
+                                      1U, std::memory_order_relaxed);
+                                },
+                            });
+                      },
+                      "imx708-main"));
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k503ServiceUnavailable);
+  EXPECT_EQ(cancel_calls.load(std::memory_order_relaxed), 1U);
+}
+
+TEST(ServiceResponseTest,
+     LiveMp4TypedLegacyCallbackUsesOneStatefulFunctorForReadAndCancel) {
+  struct InvocationState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::atomic<unsigned int> next_id{0U};
+    std::atomic<unsigned int> read_id{0U};
+    std::atomic<unsigned int> cancel_id{0U};
+  };
+  class StatefulStream {
+   public:
+    explicit StatefulStream(std::shared_ptr<InvocationState> state)
+        : state_(std::move(state)), id_(++state_->next_id) {}
+    StatefulStream(const StatefulStream& other)
+        : state_(other.state_), id_(++state_->next_id) {}
+    StatefulStream(StatefulStream&&) noexcept = default;
+
+    std::size_t operator()(char* output, std::size_t capacity) {
+      if (output == nullptr) {
+        state_->cancel_id.store(id_);
+        state_->changed.notify_all();
+        return 0U;
+      }
+      state_->read_id.store(id_);
+      if (sent_ || capacity == 0U) {
+        return 0U;
+      }
+      sent_ = true;
+      output[0] = 'x';
+      return 1U;
+    }
+
+   private:
+    std::shared_ptr<InvocationState> state_;
+    unsigned int id_{0U};
+    bool sent_{false};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool closed{false};
+  };
+  class ClosingStream final : public trantor::AsyncStream {
+   public:
+    explicit ClosingStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+    bool send(const char*, std::size_t) override { return true; }
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      state_->closed = true;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+
+  auto invocation = std::make_shared<InvocationState>();
+  camera_firmware::service::LiveMp4OpenCallback callback =
+      [invocation](const std::string&) {
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            StatefulStream(invocation);
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      };
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      callback, "imx708-main");
+  auto output = std::make_shared<OutputState>();
+  ASSERT_TRUE(response->asyncStreamCallback());
+
+  response->asyncStreamCallback()(std::make_unique<ClosingStream>(output));
+
+  std::unique_lock lock(output->mutex);
+  ASSERT_TRUE(output->changed.wait_for(
+      lock, std::chrono::seconds(1), [&] { return output->closed; }));
+  lock.unlock();
+  std::unique_lock invocation_lock(invocation->mutex);
+  ASSERT_TRUE(invocation->changed.wait_for(
+      invocation_lock, std::chrono::seconds(1),
+      [&] { return invocation->cancel_id.load() != 0U; }));
+  ASSERT_NE(invocation->read_id.load(), 0U);
+  EXPECT_EQ(invocation->cancel_id.load(), invocation->read_id.load());
+}
+
 TEST(ServiceResponseTest, LiveCapacityUsesOnlyPublicErrorContract) {
   auto response = camera_firmware::service::BuildLiveMp4Response(
       [](const std::string&) {
@@ -1013,7 +1257,7 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   struct StreamState {
     std::string bytes{"fragmented-mp4-bytes"};
     bool sent{false};
-    bool released{false};
+    std::atomic_bool released{false};
   };
   struct OutputState {
     std::mutex mutex;
@@ -1054,7 +1298,7 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
         camera_firmware::service::LiveMp4StreamCallback stream =
             [state](char* output, std::size_t capacity) {
               if (output == nullptr) {
-                state->released = true;
+                state->released.store(true);
                 return std::size_t{0};
               }
               if (state->sent) {
@@ -1086,7 +1330,7 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   EXPECT_EQ(output_state->bytes, "fragmented-mp4-bytes");
   lock.unlock();
 
-  EXPECT_TRUE(state->released);
+  EXPECT_TRUE(state->released.load());
 }
 
 TEST(ServiceResponseTest, LiveMp4ResponseBoundsQueuedBytesPerConnection) {
@@ -1149,5 +1393,633 @@ TEST(ServiceResponseTest, LiveMp4ResponseBoundsQueuedBytesPerConnection) {
       lock, std::chrono::seconds(1), [&] { return output_state->closed; }));
   EXPECT_EQ(output_state->bytes, kResponseLimit);
   lock.unlock();
+  const auto release_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (!stream_state->released.load() &&
+         std::chrono::steady_clock::now() < release_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   EXPECT_TRUE(stream_state->released.load());
+}
+
+TEST(ServiceResponseTest,
+     LiveMp4RevocationClosesBlockedOutputWithoutSendingReturnedBytes) {
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancelled{false};
+    bool read_finished{false};
+    std::size_t cancel_calls{0U};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string bytes;
+    std::size_t close_calls{0U};
+  };
+  class RecordingAsyncStream final : public trantor::AsyncStream {
+   public:
+    explicit RecordingAsyncStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char* data, std::size_t size) override {
+      std::lock_guard lock(state_->mutex);
+      state_->bytes.append(data, size);
+      return true;
+    }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+
+  camera_firmware::service::SessionStreamRegistry registry;
+  camera_firmware::security::SessionIdentity identity;
+  identity.bytes.fill(34U);
+  auto lease = registry.Acquire(identity);
+  auto stream_state = std::make_shared<StreamState>();
+  auto output_state = std::make_shared<OutputState>();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [stream_state](const std::string&) {
+        camera_firmware::service::LiveMp4StreamHandle stream{
+            .read = [stream_state](char* output, std::size_t capacity) {
+              std::unique_lock lock(stream_state->mutex);
+              stream_state->read_started = true;
+              stream_state->changed.notify_all();
+              stream_state->changed.wait(
+                  lock, [&] { return stream_state->cancelled; });
+              stream_state->read_finished = true;
+              stream_state->changed.notify_all();
+              const auto count = std::min(capacity, std::size_t{4U});
+              std::fill_n(output, count, 'x');
+              return count;
+            },
+            .cancel = [stream_state] {
+              std::lock_guard lock(stream_state->mutex);
+              ++stream_state->cancel_calls;
+              stream_state->cancelled = true;
+              stream_state->changed.notify_all();
+            },
+        };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok(
+            std::move(stream));
+      },
+      "imx708-main",
+      camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, lease);
+  ASSERT_NE(response, nullptr);
+  ASSERT_TRUE(response->asyncStreamCallback());
+  response->asyncStreamCallback()(
+      std::make_unique<RecordingAsyncStream>(output_state));
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(1),
+        [&] { return stream_state->read_started; }));
+  }
+
+  const std::array revoked{identity};
+  const auto revoke_started = std::chrono::steady_clock::now();
+  const auto revoke_deadline = revoke_started + std::chrono::seconds(1);
+  registry.Revoke(revoked);
+
+  bool closed_promptly = false;
+  {
+    std::unique_lock lock(output_state->mutex);
+    closed_promptly = output_state->changed.wait_until(
+        lock, revoke_deadline,
+        [&] { return output_state->close_calls != 0U; });
+  }
+  {
+    std::unique_lock lock(stream_state->mutex);
+    EXPECT_TRUE(stream_state->changed.wait_until(
+        lock, revoke_deadline,
+        [&] { return stream_state->read_finished; }));
+    EXPECT_EQ(stream_state->cancel_calls, 1U);
+  }
+
+  EXPECT_TRUE(closed_promptly);
+  EXPECT_LT(std::chrono::steady_clock::now() - revoke_started,
+            std::chrono::seconds(1));
+  std::lock_guard output_lock(output_state->mutex);
+  EXPECT_TRUE(output_state->bytes.empty());
+  EXPECT_EQ(output_state->close_calls, 1U);
+}
+
+TEST(ServiceResponseTest, LiveMp4DuplicateStartUsesOnePumpThread) {
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t read_calls{0U};
+    std::size_t cancel_calls{0U};
+    bool cancelled{false};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t close_calls{0U};
+  };
+  class CloseCountingStream final : public trantor::AsyncStream {
+   public:
+    explicit CloseCountingStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char*, std::size_t) override { return true; }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+
+  camera_firmware::service::SessionStreamRegistry registry;
+  camera_firmware::security::SessionIdentity identity;
+  identity.bytes.fill(36U);
+  auto lease = registry.Acquire(identity);
+  auto stream_state = std::make_shared<StreamState>();
+  auto first_output = std::make_shared<OutputState>();
+  auto duplicate_output = std::make_shared<OutputState>();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [stream_state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [stream_state](char*, std::size_t) {
+              std::unique_lock lock(stream_state->mutex);
+              ++stream_state->read_calls;
+              stream_state->changed.notify_all();
+              stream_state->changed.wait(
+                  lock, [&] { return stream_state->cancelled; });
+              return std::size_t{0U};
+            },
+            .cancel = [stream_state] {
+              std::lock_guard lock(stream_state->mutex);
+              ++stream_state->cancel_calls;
+              stream_state->cancelled = true;
+              stream_state->changed.notify_all();
+            },
+        });
+      },
+      "imx708-main",
+      camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, lease);
+  ASSERT_TRUE(response->asyncStreamCallback());
+
+  response->asyncStreamCallback()(
+      std::make_unique<CloseCountingStream>(first_output));
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(1),
+        [&] { return stream_state->read_calls != 0U; }));
+  }
+  response->asyncStreamCallback()(
+      std::make_unique<CloseCountingStream>(duplicate_output));
+  {
+    std::unique_lock lock(duplicate_output->mutex);
+    EXPECT_TRUE(duplicate_output->changed.wait_for(
+        lock, std::chrono::seconds(1),
+        [&] { return duplicate_output->close_calls != 0U; }));
+  }
+  {
+    std::lock_guard lock(first_output->mutex);
+    EXPECT_EQ(first_output->close_calls, 0U);
+  }
+  {
+    std::lock_guard lock(stream_state->mutex);
+    EXPECT_EQ(stream_state->cancel_calls, 0U);
+  }
+
+  const std::array revoked{identity};
+  registry.Revoke(revoked);
+
+  {
+    std::unique_lock lock(first_output->mutex);
+    EXPECT_TRUE(first_output->changed.wait_for(
+        lock, std::chrono::seconds(1),
+        [&] { return first_output->close_calls != 0U; }));
+    EXPECT_EQ(first_output->close_calls, 1U);
+  }
+  {
+    std::lock_guard lock(duplicate_output->mutex);
+    EXPECT_EQ(duplicate_output->close_calls, 1U);
+  }
+  std::lock_guard lock(stream_state->mutex);
+  EXPECT_EQ(stream_state->read_calls, 1U);
+  EXPECT_EQ(stream_state->cancel_calls, 1U);
+}
+
+TEST(ServiceResponseTest, LiveMp4ReadExceptionCancelsAndClosesExactlyOnce) {
+  struct State {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t read_calls{0U};
+    std::size_t cancel_calls{0U};
+    std::size_t close_calls{0U};
+  };
+  class ClosingStream final : public trantor::AsyncStream {
+   public:
+    explicit ClosingStream(std::shared_ptr<State> state)
+        : state_(std::move(state)) {}
+    bool send(const char*, std::size_t) override { return true; }
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<State> state_;
+  };
+  auto state = std::make_shared<State>();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [state](char*, std::size_t) -> std::size_t {
+              std::lock_guard lock(state->mutex);
+              ++state->read_calls;
+              throw std::runtime_error("read failed");
+            },
+            .cancel = [state] {
+              std::lock_guard lock(state->mutex);
+              ++state->cancel_calls;
+              state->changed.notify_all();
+            },
+        });
+      },
+      "imx708-main");
+  response->asyncStreamCallback()(std::make_unique<ClosingStream>(state));
+
+  std::unique_lock lock(state->mutex);
+  ASSERT_TRUE(state->changed.wait_for(
+      lock, std::chrono::seconds(1),
+      [&] { return state->cancel_calls == 1U && state->close_calls == 1U; }));
+  EXPECT_EQ(state->read_calls, 1U);
+}
+
+TEST(ServiceResponseTest,
+     LiveMp4SendFailureCompletesWhenCancelAndCloseThrow) {
+  struct State {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t read_calls{0U};
+    std::size_t send_calls{0U};
+    std::size_t cancel_calls{0U};
+    std::size_t close_calls{0U};
+  };
+  class FailingStream final : public trantor::AsyncStream {
+   public:
+    explicit FailingStream(std::shared_ptr<State> state)
+        : state_(std::move(state)) {}
+    bool send(const char*, std::size_t) override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->send_calls;
+      return false;
+    }
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+      throw std::runtime_error("close failed");
+    }
+
+   private:
+    std::shared_ptr<State> state_;
+  };
+  auto state = std::make_shared<State>();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [state](char* output, std::size_t capacity) {
+              std::lock_guard lock(state->mutex);
+              ++state->read_calls;
+              const auto count = std::min(capacity, std::size_t{1U});
+              std::fill_n(output, count, 'x');
+              return count;
+            },
+            .cancel = [state] {
+              std::lock_guard lock(state->mutex);
+              ++state->cancel_calls;
+              state->changed.notify_all();
+              throw std::runtime_error("cancel failed");
+            },
+        });
+      },
+      "imx708-main");
+  response->asyncStreamCallback()(std::make_unique<FailingStream>(state));
+
+  std::unique_lock lock(state->mutex);
+  ASSERT_TRUE(state->changed.wait_for(
+      lock, std::chrono::seconds(1),
+      [&] { return state->cancel_calls == 1U && state->close_calls == 1U; }));
+  EXPECT_EQ(state->read_calls, 1U);
+  EXPECT_EQ(state->send_calls, 1U);
+}
+
+TEST(ServiceResponseTest, LiveMp4RevokeSerializesWithInProgressSend) {
+  struct State {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool send_started{false};
+    bool release_send{false};
+    std::size_t send_calls{0U};
+    std::size_t cancel_calls{0U};
+    std::size_t close_calls{0U};
+  };
+  class BlockingSendStream final : public trantor::AsyncStream {
+   public:
+    explicit BlockingSendStream(std::shared_ptr<State> state)
+        : state_(std::move(state)) {}
+    bool send(const char*, std::size_t) override {
+      std::unique_lock lock(state_->mutex);
+      ++state_->send_calls;
+      state_->send_started = true;
+      state_->changed.notify_all();
+      state_->changed.wait(lock, [&] { return state_->release_send; });
+      return true;
+    }
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<State> state_;
+  };
+
+  camera_firmware::service::SessionStreamRegistry registry;
+  camera_firmware::security::SessionIdentity identity;
+  identity.bytes.fill(37U);
+  auto lease = registry.Acquire(identity);
+  auto state = std::make_shared<State>();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [](char* output, std::size_t capacity) {
+              const auto count = std::min(capacity, std::size_t{1U});
+              std::fill_n(output, count, 'x');
+              return count;
+            },
+            .cancel = [state] {
+              std::lock_guard lock(state->mutex);
+              ++state->cancel_calls;
+              state->changed.notify_all();
+            },
+        });
+      },
+      "imx708-main",
+      camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, lease);
+  response->asyncStreamCallback()(
+      std::make_unique<BlockingSendStream>(state));
+  {
+    std::unique_lock lock(state->mutex);
+    ASSERT_TRUE(state->changed.wait_for(
+        lock, std::chrono::seconds(1), [&] { return state->send_started; }));
+  }
+
+  const std::array revoked{identity};
+  auto revoking = std::async(std::launch::async,
+                             [&] { registry.Revoke(revoked); });
+  EXPECT_EQ(revoking.wait_for(std::chrono::milliseconds(30)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(state->mutex);
+    state->release_send = true;
+    state->changed.notify_all();
+  }
+  ASSERT_EQ(revoking.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  revoking.get();
+
+  std::unique_lock lock(state->mutex);
+  ASSERT_TRUE(state->changed.wait_for(
+      lock, std::chrono::seconds(1),
+      [&] { return state->cancel_calls == 1U && state->close_calls == 1U; }));
+  EXPECT_EQ(state->send_calls, 1U);
+}
+
+TEST(ServiceResponseTest, LiveMp4SendMayRevokeItsOwnLeaseWithoutDeadlock) {
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(5U);
+    struct State {
+      std::mutex mutex;
+      std::condition_variable changed;
+      std::size_t send_calls{0U};
+      std::size_t cancel_calls{0U};
+      std::size_t close_calls{0U};
+      bool revoke_returned{false};
+    };
+    class ReentrantStream final : public trantor::AsyncStream {
+     public:
+      ReentrantStream(
+          std::shared_ptr<State> state,
+          camera_firmware::service::SessionStreamRegistry& registry,
+          camera_firmware::security::SessionIdentity identity)
+          : state_(std::move(state)),
+            registry_(registry),
+            identity_(identity) {}
+
+      bool send(const char*, std::size_t) override {
+        {
+          std::lock_guard lock(state_->mutex);
+          ++state_->send_calls;
+        }
+        const std::array revoked{identity_};
+        registry_.Revoke(revoked);
+        {
+          std::lock_guard lock(state_->mutex);
+          state_->revoke_returned = true;
+          state_->changed.notify_all();
+        }
+        return true;
+      }
+
+      void close() override {
+        std::lock_guard lock(state_->mutex);
+        ++state_->close_calls;
+        state_->changed.notify_all();
+      }
+
+     private:
+      std::shared_ptr<State> state_;
+      camera_firmware::service::SessionStreamRegistry& registry_;
+      camera_firmware::security::SessionIdentity identity_;
+    };
+
+    camera_firmware::service::SessionStreamRegistry registry;
+    camera_firmware::security::SessionIdentity identity;
+    identity.bytes.fill(38U);
+    auto lease = registry.Acquire(identity);
+    auto state = std::make_shared<State>();
+    auto response =
+        camera_firmware::service::BuildCancellableLiveMp4Response(
+        [state](const std::string&) {
+          return camera_firmware::common::Result<
+              camera_firmware::service::LiveMp4StreamHandle>::Ok({
+              .read = [](char* output, std::size_t capacity) {
+                const auto count = std::min(capacity, std::size_t{1U});
+                std::fill_n(output, count, 'x');
+                return count;
+              },
+              .cancel = [state] {
+                std::lock_guard lock(state->mutex);
+                ++state->cancel_calls;
+                state->changed.notify_all();
+              },
+          });
+        },
+        "imx708-main",
+        camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, lease);
+    response->asyncStreamCallback()(
+        std::make_unique<ReentrantStream>(state, registry, identity));
+
+    {
+      std::unique_lock lock(state->mutex);
+      EXPECT_TRUE(state->changed.wait_for(
+          lock, std::chrono::seconds(2), [&] {
+            return state->revoke_returned && state->cancel_calls == 1U &&
+                   state->close_calls == 1U;
+          }));
+      EXPECT_EQ(state->send_calls, 1U);
+    }
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(ServiceResponseTest,
+     LiveMp4ConcurrentSendsMayRevokePeerLeasesWithoutDeadlock) {
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(5U);
+    struct State {
+      std::mutex mutex;
+      std::condition_variable changed;
+      std::size_t sends_entered{0U};
+      std::size_t revokes_returned{0U};
+      std::size_t cancel_calls{0U};
+      std::size_t close_calls{0U};
+    };
+    class CrossRevokingStream final : public trantor::AsyncStream {
+     public:
+      CrossRevokingStream(
+          std::shared_ptr<State> state,
+          camera_firmware::service::SessionStreamRegistry& registry,
+          camera_firmware::security::SessionIdentity peer_identity)
+          : state_(std::move(state)),
+            registry_(registry),
+            peer_identity_(peer_identity) {}
+
+      bool send(const char*, std::size_t) override {
+        if (!first_send_) {
+          return false;
+        }
+        first_send_ = false;
+        {
+          std::unique_lock lock(state_->mutex);
+          ++state_->sends_entered;
+          state_->changed.notify_all();
+          state_->changed.wait(
+              lock, [&] { return state_->sends_entered == 2U; });
+        }
+        const std::array revoked{peer_identity_};
+        registry_.Revoke(revoked);
+        {
+          std::lock_guard lock(state_->mutex);
+          ++state_->revokes_returned;
+          state_->changed.notify_all();
+        }
+        return true;
+      }
+
+      void close() override {
+        std::lock_guard lock(state_->mutex);
+        ++state_->close_calls;
+        state_->changed.notify_all();
+      }
+
+     private:
+      std::shared_ptr<State> state_;
+      camera_firmware::service::SessionStreamRegistry& registry_;
+      camera_firmware::security::SessionIdentity peer_identity_;
+      bool first_send_{true};
+    };
+
+    camera_firmware::service::SessionStreamRegistry registry;
+    camera_firmware::security::SessionIdentity first_identity;
+    camera_firmware::security::SessionIdentity second_identity;
+    first_identity.bytes.fill(39U);
+    second_identity.bytes.fill(40U);
+    auto first_lease = registry.Acquire(first_identity);
+    auto second_lease = registry.Acquire(second_identity);
+    auto state = std::make_shared<State>();
+    const auto build_response = [&](
+                                    const auto& lease) {
+      return camera_firmware::service::BuildCancellableLiveMp4Response(
+          [state](const std::string&) {
+            return camera_firmware::common::Result<
+                camera_firmware::service::LiveMp4StreamHandle>::Ok({
+                .read = [](char* output, std::size_t capacity) {
+                  const auto count = std::min(capacity, std::size_t{1U});
+                  std::fill_n(output, count, 'x');
+                  return count;
+                },
+                .cancel = [state] {
+                  std::lock_guard lock(state->mutex);
+                  ++state->cancel_calls;
+                  state->changed.notify_all();
+                },
+            });
+          },
+          "imx708-main",
+          camera_firmware::service::kDefaultLiveMp4ResponseByteLimit,
+          lease);
+    };
+    auto first_response = build_response(first_lease);
+    auto second_response = build_response(second_lease);
+    first_response->asyncStreamCallback()(std::make_unique<CrossRevokingStream>(
+        state, registry, second_identity));
+    second_response->asyncStreamCallback()(
+        std::make_unique<CrossRevokingStream>(state, registry,
+                                             first_identity));
+
+    {
+      std::unique_lock lock(state->mutex);
+      const bool completed = state->changed.wait_for(
+          lock, std::chrono::seconds(2), [&] {
+            return state->revokes_returned == 2U &&
+                   state->cancel_calls == 2U && state->close_calls == 2U;
+          });
+      EXPECT_TRUE(completed)
+          << "sends_entered=" << state->sends_entered
+          << " revokes_returned=" << state->revokes_returned
+          << " cancel_calls=" << state->cancel_calls
+          << " close_calls=" << state->close_calls;
+    }
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
 }

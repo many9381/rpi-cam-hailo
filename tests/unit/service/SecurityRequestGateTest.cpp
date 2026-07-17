@@ -43,6 +43,10 @@ Principal Administrator() {
   return {1, "operator", UserRole::kAdministrator};
 }
 
+Principal Viewer() {
+  return {2, "viewer", UserRole::kViewer};
+}
+
 SecurityRequestContext Request(std::string path, std::string method = "GET") {
   SecurityRequestContext context;
   context.state = DeviceState::kDefault;
@@ -296,6 +300,152 @@ TEST(SecurityRequestGateTest, GetMeNeedsSessionButNotCsrf) {
 
   context.principal = Administrator();
   EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
+}
+
+TEST(SecurityRequestGateTest, UserManagementRoutesRecognizeExactMethodsAndShapes) {
+  struct Route {
+    const char* method;
+    const char* path;
+  };
+  const std::array<Route, 9> routes = {{
+      {"GET", "/api/v1/security/users"},
+      {"POST", "/api/v1/security/users"},
+      {"PUT", "/api/v1/security/users/7/enabled"},
+      {"PUT", "/api/v1/security/users/7/password"},
+      {"DELETE", "/api/v1/security/users/7"},
+      {"GET", "/api/v1/security/management-ips"},
+      {"POST", "/api/v1/security/management-ips/viewer"},
+      {"PUT", "/api/v1/security/management-ips/viewer/7"},
+      {"DELETE", "/api/v1/security/management-ips/viewer/7"},
+  }};
+
+  for (const auto& route : routes) {
+    auto context = ValidManagementRequest(route.path, route.method);
+    EXPECT_TRUE(AuthorizeSecurityRequest(context).ok())
+        << route.method << " " << route.path;
+  }
+
+  auto own_password = ValidManagementRequest("/api/v1/auth/password", "PUT");
+  EXPECT_TRUE(AuthorizeSecurityRequest(own_password).ok());
+
+  for (const auto& route : std::array<Route, 3>{{
+           {"POST", "/api/v1/security/users/"},
+           {"PUT", "/api/v1/security/management-ips/viewer/7/extra"},
+           {"POST", "/api/v1/auth/password"},
+       }}) {
+    const auto result = AuthorizeSecurityRequest(
+        ValidManagementRequest(route.path, route.method));
+    EXPECT_FALSE(result.ok()) << route.method << " " << route.path;
+    if (!result.ok()) {
+      EXPECT_EQ(result.error().code, "E_ACCESS_DENIED")
+          << route.method << " " << route.path;
+    }
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     ManagementIpMalformedRoleAndIdsRemainAdministratorProtectedForHandlers) {
+  struct Route {
+    const char* method;
+    const char* path;
+  };
+
+  for (const auto& route : std::array<Route, 6>{{
+           {"POST", "/api/v1/security/management-ips/operator"},
+           {"PUT", "/api/v1/security/management-ips/viewer/0"},
+           {"PUT", "/api/v1/security/management-ips/viewer/+7"},
+           {"DELETE", "/api/v1/security/management-ips/viewer/07"},
+           {"DELETE",
+            "/api/v1/security/management-ips/viewer/9223372036854775808"},
+           {"DELETE", "/api/v1/security/management-ips/viewer/7x"},
+       }}) {
+    const auto result = AuthorizeSecurityRequest(
+        ValidManagementRequest(route.path, route.method));
+    EXPECT_TRUE(result.ok()) << route.method << " " << route.path;
+
+    auto viewer_request =
+        ValidManagementRequest(route.path, route.method);
+    viewer_request.principal = Viewer();
+    const auto viewer_result = AuthorizeSecurityRequest(viewer_request);
+    ASSERT_FALSE(viewer_result.ok()) << route.method << " " << route.path;
+    EXPECT_EQ(viewer_result.error().code, "E_AUTHORIZATION_REQUIRED")
+        << route.method << " " << route.path;
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     UserManagementMalformedIdsRemainAdministratorProtectedForHandlers) {
+  struct Route {
+    const char* method;
+    const char* path;
+  };
+
+  for (const auto& route : std::array<Route, 5>{{
+           {"PUT", "/api/v1/security/users/0/enabled"},
+           {"PUT", "/api/v1/security/users/+7/password"},
+           {"DELETE", "/api/v1/security/users/07"},
+           {"DELETE", "/api/v1/security/users/9223372036854775808"},
+           {"DELETE", "/api/v1/security/users/7x"},
+       }}) {
+    const auto result = AuthorizeSecurityRequest(
+        ValidManagementRequest(route.path, route.method));
+    EXPECT_TRUE(result.ok()) << route.method << " " << route.path;
+  }
+
+  for (const auto& route : std::array<Route, 3>{{
+           {"PUT", "/api/v1/security/users/7/enabled/extra"},
+           {"PUT", "/api/v1/security/users/7/unknown"},
+           {"POST", "/api/v1/security/users/7/password"},
+       }}) {
+    const auto result = AuthorizeSecurityRequest(
+        ValidManagementRequest(route.path, route.method));
+    ASSERT_FALSE(result.ok()) << route.method << " " << route.path;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED")
+        << route.method << " " << route.path;
+  }
+}
+
+TEST(SecurityRequestGateTest, ViewerCanReadMonitoringAndOwnAuthOnly) {
+  for (const std::string path : {
+           "/api/v1/auth/me", "/api/v1/cameras", "/api/v1/cameras/main/snapshot.jpg",
+           "/api/v1/cameras/main/live.mp4", "/api/v1/ai/detections",
+           "/api/v1/ai/detections/stream", "/api/v1/stream",
+       }) {
+    auto context = Operational(path);
+    context.principal = Viewer();
+    EXPECT_TRUE(AuthorizeSecurityRequest(context).ok()) << path;
+  }
+
+  auto password = Operational("/api/v1/auth/password", "PUT");
+  password.principal = Viewer();
+  password.origin = std::string(kOrigin);
+  password.has_management_header = true;
+  EXPECT_TRUE(AuthorizeSecurityRequest(password).ok());
+
+  auto logout = Operational("/api/v1/auth/logout", "POST");
+  logout.principal = Viewer();
+  logout.origin = std::string(kOrigin);
+  logout.has_management_header = true;
+  EXPECT_TRUE(AuthorizeSecurityRequest(logout).ok());
+
+  for (const std::string path : {"/api/v1/security/users",
+                                 "/api/v1/security/management-ips"}) {
+    auto context = Operational(path);
+    context.principal = Viewer();
+    const auto result = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(result.ok()) << path;
+    EXPECT_EQ(result.error().code, "E_AUTHORIZATION_REQUIRED") << path;
+  }
+
+  auto management_mutation =
+      Operational("/api/v1/security/users", "POST");
+  management_mutation.principal = Viewer();
+  management_mutation.origin = std::string(kOrigin);
+  management_mutation.has_management_header = true;
+  const auto denied_mutation =
+      AuthorizeSecurityRequest(management_mutation);
+  ASSERT_FALSE(denied_mutation.ok());
+  EXPECT_EQ(denied_mutation.error().code, "E_AUTHORIZATION_REQUIRED");
 }
 
 TEST(SecurityRequestGateTest, RetiredMjpegPreviewIsNotAnOperationalApi) {

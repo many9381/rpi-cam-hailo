@@ -17,6 +17,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <gio/gio.h>
 #include <openssl/crypto.h>
@@ -32,7 +33,6 @@ namespace {
 constexpr std::size_t kSessionTokenBytes = 32U;
 constexpr std::size_t kSessionTokenHashBytes = 32U;
 constexpr std::int64_t kLockDurationSeconds = 5 * 60;
-constexpr std::int64_t kIdleDurationSeconds = 10 * 60;
 constexpr int kFailureLimit = 5;
 constexpr int kTokenGenerationAttempts = 4;
 constexpr std::string_view kAuthenticationFailureCode =
@@ -53,17 +53,28 @@ common::Result<T> AuthenticationUnavailable() {
       {"E_AUTHENTICATION_UNAVAILABLE", "authentication service unavailable"});
 }
 
-class PasswordCleanupGuard {
+class SensitiveCleanupGuard {
  public:
-  explicit PasswordCleanupGuard(common::SecureBytes& password) noexcept
-      : password_(password) {}
-  ~PasswordCleanupGuard() { password_.clear(); }
+  SensitiveCleanupGuard() = default;
+  explicit SensitiveCleanupGuard(common::SecureBytes& bytes) noexcept
+      : bytes_(&bytes) {}
+  ~SensitiveCleanupGuard() { Clear(); }
 
-  PasswordCleanupGuard(const PasswordCleanupGuard&) = delete;
-  PasswordCleanupGuard& operator=(const PasswordCleanupGuard&) = delete;
+  SensitiveCleanupGuard(const SensitiveCleanupGuard&) = delete;
+  SensitiveCleanupGuard& operator=(const SensitiveCleanupGuard&) = delete;
+
+  void Bind(common::SecureBytes& bytes) noexcept { bytes_ = &bytes; }
+
+  void Clear() noexcept {
+    if (bytes_ == nullptr) {
+      return;
+    }
+    bytes_->clear();
+    bytes_ = nullptr;
+  }
 
  private:
-  common::SecureBytes& password_;
+  common::SecureBytes* bytes_{nullptr};
 };
 
 struct InetAddressDeleter {
@@ -174,10 +185,11 @@ const ProcessDummyPassword& DummyPassword() {
   return dummy;
 }
 
-bool HasSafeDeadline(std::int64_t now_seconds) {
-  return now_seconds >= 0 &&
-         now_seconds <=
-             std::numeric_limits<std::int64_t>::max() - kIdleDurationSeconds;
+bool HasSafeDeadline(std::int64_t now_seconds,
+                     std::int64_t idle_timeout_seconds) {
+  return now_seconds >= 0 && idle_timeout_seconds > 0 &&
+         now_seconds <= std::numeric_limits<std::int64_t>::max() -
+                            idle_timeout_seconds;
 }
 
 bool PasswordRecordsEqual(const PasswordRecord& first,
@@ -360,18 +372,166 @@ class AuthService::FirmwareLogWorker {
   std::thread worker_;
 };
 
-AuthService::AuthService(SecurityStore& store)
-    : AuthService(store, AuthServiceDependencies{}) {}
+class AuthService::SessionExpiryWorker {
+ public:
+  SessionExpiryWorker(SecurityStore& store,
+                      AuthClockCallback now_seconds,
+                      AuthServiceRuntimeHooks hooks)
+      : store_(store),
+        now_seconds_(std::move(now_seconds)),
+        hooks_(std::move(hooks)),
+        worker_([this] { Run(); }) {}
+
+  ~SessionExpiryWorker() {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+      condition_.notify_all();
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+  SessionExpiryWorker(const SessionExpiryWorker&) = delete;
+  SessionExpiryWorker& operator=(const SessionExpiryWorker&) = delete;
+
+  void Wake() noexcept {
+    std::lock_guard lock(mutex_);
+    wake_requested_ = true;
+    condition_.notify_one();
+  }
+
+ private:
+  struct SweepResult {
+    bool ok{false};
+    std::optional<std::int64_t> next_expiry;
+  };
+
+  SweepResult Sweep() noexcept {
+    try {
+      const std::int64_t now_seconds = now_seconds_();
+      if (now_seconds < 0) {
+        return {};
+      }
+      auto started = store_.BeginTransaction();
+      if (!started.ok()) {
+        return {};
+      }
+      auto transaction = std::move(started).value();
+      auto expired = store_.DeleteExpiredSessions(transaction, now_seconds);
+      if (!expired.ok()) {
+        return {};
+      }
+      auto next = store_.ReadNextSessionExpiry(transaction);
+      if (!next.ok()) {
+        return {};
+      }
+      auto identities = std::move(expired).value();
+      auto next_expiry = std::move(next).value();
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return {};
+      }
+      PublishSessionRevocations(identities, hooks_.revoke_sessions,
+                                hooks_.revoke_all_streams);
+      return {true, next_expiry};
+    } catch (...) {
+      return {};
+    }
+  }
+
+  void Run() noexcept {
+    std::unique_lock lock(mutex_);
+    while (!stopping_) {
+      wake_requested_ = false;
+      lock.unlock();
+      const auto sweep = Sweep();
+      lock.lock();
+      if (stopping_) {
+        return;
+      }
+      if (!sweep.ok) {
+        condition_.wait_for(lock, std::chrono::seconds(1), [this] {
+          return stopping_ || wake_requested_;
+        });
+        continue;
+      }
+      if (!sweep.next_expiry.has_value()) {
+        condition_.wait(lock,
+                        [this] { return stopping_ || wake_requested_; });
+        continue;
+      }
+      std::int64_t now_seconds = 0;
+      try {
+        now_seconds = now_seconds_();
+      } catch (...) {
+        condition_.wait_for(lock, std::chrono::seconds(1), [this] {
+          return stopping_ || wake_requested_;
+        });
+        continue;
+      }
+      if (now_seconds >= *sweep.next_expiry) {
+        continue;
+      }
+      const auto delay_seconds =
+          std::min<std::int64_t>(*sweep.next_expiry - now_seconds,
+                                 24 * 60 * 60);
+      condition_.wait_for(lock, std::chrono::seconds(delay_seconds), [this] {
+        return stopping_ || wake_requested_;
+      });
+    }
+  }
+
+  SecurityStore& store_;
+  AuthClockCallback now_seconds_;
+  AuthServiceRuntimeHooks hooks_;
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool stopping_{false};
+  bool wake_requested_{true};
+  std::thread worker_;
+};
+
+AuthService::AuthService(SecurityStore& store,
+                         AuthServiceRuntimeHooks hooks)
+    : AuthService(store, AuthServiceDependencies{}, std::move(hooks), {}) {}
 
 AuthService::AuthService(SecurityStore& store,
                          AuthServiceDependencies dependencies)
-    : AuthService(store, std::move(dependencies), {}) {}
+    : AuthService(store, std::move(dependencies), AuthServiceRuntimeHooks{},
+                  {}) {}
 
 AuthService::AuthService(
     SecurityStore& store,
     AuthServiceDependencies dependencies,
     FirmwareLogBeforeAckCallback firmware_log_before_ack)
-    : store_(store), dependencies_(std::move(dependencies)) {
+    : AuthService(store, std::move(dependencies), AuthServiceRuntimeHooks{},
+                  std::move(firmware_log_before_ack)) {}
+
+AuthService::AuthService(SecurityStore& store,
+                         AuthServiceDependencies dependencies,
+                         AuthServiceRuntimeHooks hooks)
+    : AuthService(store, std::move(dependencies), std::move(hooks), {}) {}
+
+AuthService::AuthService(
+    SecurityStore& store,
+    AuthServiceDependencies dependencies,
+    AuthServiceRuntimeHooks hooks,
+    FirmwareLogBeforeAckCallback firmware_log_before_ack)
+    : AuthService(store, std::move(dependencies), std::move(hooks),
+                  std::move(firmware_log_before_ack), {}) {}
+
+AuthService::AuthService(
+    SecurityStore& store,
+    AuthServiceDependencies dependencies,
+    AuthServiceRuntimeHooks hooks,
+    FirmwareLogBeforeAckCallback firmware_log_before_ack,
+    LoginRoleValidatorCallback login_role_validator)
+    : store_(store),
+      dependencies_(std::move(dependencies)),
+      hooks_(std::move(hooks)),
+      login_role_validator_(std::move(login_role_validator)) {
   if (!dependencies_.now_seconds) {
     dependencies_.now_seconds = DefaultNowSeconds;
   }
@@ -400,17 +560,24 @@ AuthService::AuthService(
   if (!dependencies_.firmware_log_random_bytes) {
     dependencies_.firmware_log_random_bytes = DefaultRandom;
   }
+  if (!login_role_validator_) {
+    login_role_validator_ = [](UserRole role) {
+      return !UserRoleName(role).empty();
+    };
+  }
   firmware_log_worker_ = std::make_unique<FirmwareLogWorker>(
       store_, dependencies_.now_seconds,
       std::move(dependencies_.firmware_log_random_bytes),
       std::move(dependencies_.high_severity_log),
       std::move(firmware_log_before_ack));
+  session_expiry_worker_ = std::make_unique<SessionExpiryWorker>(
+      store_, dependencies_.now_seconds, hooks_);
 }
 
 AuthService::~AuthService() = default;
 
 common::Result<LoginResult> AuthService::Login(LoginRequest request) {
-  PasswordCleanupGuard password_cleanup(request.password);
+  SensitiveCleanupGuard password_cleanup(request.password);
   bool reached_limit = false;
   std::string normalized_peer;
   try {
@@ -424,7 +591,9 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
     }
     normalized_peer = std::move(peer).value();
     const std::int64_t snapshot_now_seconds = dependencies_.now_seconds();
-    if (!HasSafeDeadline(snapshot_now_seconds) || !DummyPassword().valid) {
+    if (!HasSafeDeadline(snapshot_now_seconds,
+                         dependencies_.session_idle_timeout_seconds) ||
+        !DummyPassword().valid) {
       return AuthenticationUnavailable<LoginResult>();
     }
 
@@ -464,7 +633,9 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
     }
 
     const std::int64_t now_seconds = dependencies_.now_seconds();
-    if (!HasSafeDeadline(now_seconds) || now_seconds < snapshot_now_seconds) {
+    if (!HasSafeDeadline(now_seconds,
+                         dependencies_.session_idle_timeout_seconds) ||
+        now_seconds < snapshot_now_seconds) {
       return AuthenticationUnavailable<LoginResult>();
     }
     auto started = store_.BeginTransaction();
@@ -540,6 +711,46 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
     const std::optional<std::int64_t> actor_user_id =
         has_user ? std::optional<std::int64_t>(context.value().user->id)
                  : std::nullopt;
+    const bool duplicate_check_allowed =
+        operational && peer_registered && enabled && user_role.has_value() &&
+        !lock_active && password_matches && immutable_context_current;
+    std::vector<SessionIdentity> expired_identities;
+    const auto publish_expired = [this, &expired_identities] {
+      PublishSessionRevocations(expired_identities, hooks_.revoke_sessions,
+                                hooks_.revoke_all_streams);
+    };
+    if (duplicate_check_allowed) {
+      auto expired = store_.DeleteExpiredSessions(transaction, now_seconds);
+      if (!expired.ok()) {
+        return rollback_unavailable();
+      }
+      expired_identities = std::move(expired).value();
+      auto active_session = store_.ReadSessionByUserId(
+          transaction, context.value().user->id);
+      if (!active_session.ok()) {
+        return rollback_unavailable();
+      }
+      if (active_session.value().has_value()) {
+        active_session.value()->token_hash.clear();
+        const std::string_view duplicate_detail =
+            *user_role == UserRole::kAdministrator
+                ? "active_administrator_session"
+                : "active_viewer_session";
+        auto duplicate_audit = store_.InsertAuditEvent(
+            transaction, now_seconds, "authentication_failed", "failure",
+            actor_user_id, normalized_peer, duplicate_detail);
+        if (!duplicate_audit.ok()) {
+          return rollback_unavailable();
+        }
+        auto committed = transaction.Commit();
+        if (!committed.ok()) {
+          return rollback_unavailable();
+        }
+        session_expiry_worker_->Wake();
+        publish_expired();
+        return AuthenticationFailure<LoginResult>();
+      }
+    }
     if (!accepted) {
       const bool counts_as_failure = operational && peer_registered && enabled &&
                                      user_role.has_value() && !lock_active &&
@@ -595,41 +806,27 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       if (!committed.ok()) {
         return rollback_unavailable();
       }
+      session_expiry_worker_->Wake();
       if (reached_limit) {
         firmware_log_worker_->Wake();
       }
+      publish_expired();
       return response;
     }
 
-    auto expired = store_.DeleteExpiredSessions(transaction, now_seconds);
-    if (!expired.ok()) {
+    bool login_role_valid = false;
+    try {
+      login_role_valid = login_role_validator_(*user_role);
+    } catch (...) {
       return rollback_unavailable();
     }
-    common::Result<std::optional<SecurityStore::StoredSession>> active_session =
-        common::Result<std::optional<SecurityStore::StoredSession>>::Ok(
-            std::nullopt);
-    if (*user_role == UserRole::kAdministrator) {
-      active_session = store_.ReadAdministratorSession(transaction);
-    }
-    if (!active_session.ok()) {
+    if (!login_role_valid) {
       return rollback_unavailable();
-    }
-    if (active_session.value().has_value()) {
-      auto duplicate_audit = store_.InsertAuditEvent(
-          transaction, now_seconds, "authentication_failed", "failure",
-          actor_user_id, normalized_peer, "active_administrator_session");
-      if (!duplicate_audit.ok()) {
-        return rollback_unavailable();
-      }
-      auto committed = transaction.Commit();
-      if (!committed.ok()) {
-        return rollback_unavailable();
-      }
-      return AuthenticationFailure<LoginResult>();
     }
 
     common::SecureBytes session_token;
     common::SecureBytes token_hash;
+    SensitiveCleanupGuard token_hash_cleanup(token_hash);
     bool token_ready = false;
     for (int attempt = 0; attempt < kTokenGenerationAttempts; ++attempt) {
       auto generated = dependencies_.random_bytes(kSessionTokenBytes);
@@ -669,11 +866,13 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       if (!committed.ok()) {
         return rollback_unavailable();
       }
+      session_expiry_worker_->Wake();
+      publish_expired();
       return AuthenticationFailure<LoginResult>();
     }
 
     const std::int64_t expires_at_seconds =
-        now_seconds + kIdleDurationSeconds;
+        now_seconds + dependencies_.session_idle_timeout_seconds;
     auto inserted = store_.InsertSession(
         transaction, {token_hash.data(), token_hash.size()},
         context.value().user->id, UserRoleName(*user_role), now_seconds,
@@ -697,7 +896,9 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
     if (!committed.ok()) {
       return rollback_unavailable();
     }
-    token_hash.clear();
+    session_expiry_worker_->Wake();
+    token_hash_cleanup.Clear();
+    publish_expired();
     return common::Result<LoginResult>::Ok(
         {std::move(session_token), *user_role, expires_at_seconds});
   } catch (...) {
@@ -713,32 +914,31 @@ common::Result<Principal> AuthService::Verify(
     if (!token_hash.ok() || !DummyPassword().valid) {
       return AuthenticationUnavailable<Principal>();
     }
+    SensitiveCleanupGuard token_hash_cleanup(token_hash.value());
+    SensitiveCleanupGuard stored_hash_cleanup;
     auto peer = NormalizePeerIp(peer_ip);
     if (!peer.ok()) {
       (void)::CRYPTO_memcmp(token_hash.value().data(),
                             DummyPassword().record.derived.data(),
                             kSessionTokenHashBytes);
-      token_hash.value().clear();
       return AuthenticationFailure<Principal>();
     }
     const std::string normalized_peer = std::move(peer).value();
     const std::int64_t now_seconds = dependencies_.now_seconds();
-    if (!HasSafeDeadline(now_seconds)) {
-      token_hash.value().clear();
+    if (!HasSafeDeadline(now_seconds,
+                         dependencies_.session_idle_timeout_seconds)) {
       return AuthenticationUnavailable<Principal>();
     }
 
     auto started = store_.BeginTransaction();
     if (!started.ok()) {
-      token_hash.value().clear();
       return AuthenticationUnavailable<Principal>();
     }
     auto transaction = std::move(started).value();
-    const auto rollback_unavailable = [&transaction, &token_hash]() {
+    const auto rollback_unavailable = [&transaction]() {
       if (transaction.active()) {
         (void)transaction.Rollback();
       }
-      token_hash.value().clear();
       return AuthenticationUnavailable<Principal>();
     };
 
@@ -746,10 +946,15 @@ common::Result<Principal> AuthService::Verify(
     if (!expired.ok()) {
       return rollback_unavailable();
     }
+    auto expired_identities = std::move(expired).value();
     auto session = store_.ReadSessionByTokenHash(
-        transaction, {token_hash.value().data(), token_hash.value().size()});
+        transaction, {token_hash.value().data(), token_hash.value().size()},
+        normalized_peer, now_seconds);
     if (!session.ok()) {
       return rollback_unavailable();
+    }
+    if (session.value().has_value()) {
+      stored_hash_cleanup.Bind(session.value()->token_hash);
     }
     const unsigned char* expected_hash =
         DummyPassword().record.derived.data();
@@ -769,13 +974,19 @@ common::Result<Principal> AuthService::Verify(
         session.value().has_value()
             ? ParseUserRole(session.value()->role)
             : std::nullopt;
-    const bool valid = session.value().has_value() && hash_matches &&
-                       session.value()->peer_ip == normalized_peer &&
-                       role.has_value();
+    bool valid = session.value().has_value() && hash_matches &&
+                 session.value()->peer_ip == normalized_peer &&
+                 role.has_value() &&
+                 session.value()->token_hash.size() == kSessionIdentityBytes;
+    SessionIdentity session_identity;
+    if (valid) {
+      std::copy_n(session.value()->token_hash.data(), kSessionIdentityBytes,
+                  session_identity.bytes.begin());
+    }
     if (valid) {
       auto refreshed = store_.RefreshSession(
           transaction, session.value()->id, now_seconds,
-          now_seconds + kIdleDurationSeconds);
+          now_seconds + dependencies_.session_idle_timeout_seconds);
       if (!refreshed.ok()) {
         return rollback_unavailable();
       }
@@ -784,13 +995,17 @@ common::Result<Principal> AuthService::Verify(
     if (!committed.ok()) {
       return rollback_unavailable();
     }
-    token_hash.value().clear();
+    session_expiry_worker_->Wake();
+    stored_hash_cleanup.Clear();
+    token_hash_cleanup.Clear();
+    PublishSessionRevocations(expired_identities, hooks_.revoke_sessions,
+                              hooks_.revoke_all_streams);
     if (!valid) {
       return AuthenticationFailure<Principal>();
     }
     return common::Result<Principal>::Ok(
         {session.value()->user_id, std::move(session.value()->username),
-         *role});
+         *role, std::move(session_identity)});
   } catch (...) {
     return AuthenticationUnavailable<Principal>();
   }
@@ -804,32 +1019,31 @@ common::Result<void> AuthService::Logout(
     if (!token_hash.ok() || !DummyPassword().valid) {
       return AuthenticationUnavailable<void>();
     }
+    SensitiveCleanupGuard token_hash_cleanup(token_hash.value());
+    SensitiveCleanupGuard stored_hash_cleanup;
     auto peer = NormalizePeerIp(peer_ip);
     if (!peer.ok()) {
       (void)::CRYPTO_memcmp(token_hash.value().data(),
                             DummyPassword().record.derived.data(),
                             kSessionTokenHashBytes);
-      token_hash.value().clear();
       return AuthenticationFailure<void>();
     }
     const std::string normalized_peer = std::move(peer).value();
     const std::int64_t now_seconds = dependencies_.now_seconds();
-    if (!HasSafeDeadline(now_seconds)) {
-      token_hash.value().clear();
+    if (!HasSafeDeadline(now_seconds,
+                         dependencies_.session_idle_timeout_seconds)) {
       return AuthenticationUnavailable<void>();
     }
 
     auto started = store_.BeginTransaction();
     if (!started.ok()) {
-      token_hash.value().clear();
       return AuthenticationUnavailable<void>();
     }
     auto transaction = std::move(started).value();
-    const auto rollback_unavailable = [&transaction, &token_hash]() {
+    const auto rollback_unavailable = [&transaction]() {
       if (transaction.active()) {
         (void)transaction.Rollback();
       }
-      token_hash.value().clear();
       return AuthenticationUnavailable<void>();
     };
 
@@ -837,10 +1051,15 @@ common::Result<void> AuthService::Logout(
     if (!expired.ok()) {
       return rollback_unavailable();
     }
+    auto identities = std::move(expired).value();
     auto session = store_.ReadSessionByTokenHash(
-        transaction, {token_hash.value().data(), token_hash.value().size()});
+        transaction, {token_hash.value().data(), token_hash.value().size()},
+        normalized_peer, now_seconds);
     if (!session.ok()) {
       return rollback_unavailable();
+    }
+    if (session.value().has_value()) {
+      stored_hash_cleanup.Bind(session.value()->token_hash);
     }
     const unsigned char* expected_hash =
         DummyPassword().record.derived.data();
@@ -854,8 +1073,13 @@ common::Result<void> AuthService::Logout(
     const bool valid =
         session.value().has_value() && hash_matches &&
         session.value()->peer_ip == normalized_peer &&
-        ParseUserRole(session.value()->role).has_value();
+        ParseUserRole(session.value()->role).has_value() &&
+        session.value()->token_hash.size() == kSessionIdentityBytes;
+    SessionIdentity session_identity;
     if (valid) {
+      std::copy_n(session.value()->token_hash.data(), kSessionIdentityBytes,
+                  session_identity.bytes.begin());
+      identities.emplace_back(std::move(session_identity));
       auto removed = store_.DeleteSession(transaction, session.value()->id);
       if (!removed.ok()) {
         return rollback_unavailable();
@@ -871,7 +1095,11 @@ common::Result<void> AuthService::Logout(
     if (!committed.ok()) {
       return rollback_unavailable();
     }
-    token_hash.value().clear();
+    session_expiry_worker_->Wake();
+    stored_hash_cleanup.Clear();
+    token_hash_cleanup.Clear();
+    PublishSessionRevocations(identities, hooks_.revoke_sessions,
+                              hooks_.revoke_all_streams);
     return valid ? common::Result<void>::Ok()
                  : AuthenticationFailure<void>();
   } catch (...) {

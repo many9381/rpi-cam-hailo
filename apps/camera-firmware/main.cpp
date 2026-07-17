@@ -48,10 +48,6 @@ class LiveMp4ByteStream {
       : reader_(std::move(reader)), stale_timeout_(stale_timeout) {}
 
   std::size_t Read(char* output, std::size_t capacity) {
-    if (output == nullptr) {
-      Close();
-      return 0U;
-    }
     if (capacity == 0U || !reader_.valid()) {
       return 0U;
     }
@@ -62,7 +58,6 @@ class LiveMp4ByteStream {
       auto next = reader_.WaitNext(stale_timeout_);
       if (!next.ok() || !next.value().has_value() ||
           !next.value()->bytes || next.value()->bytes->empty()) {
-        Close();
         return 0U;
       }
       current_bytes_ = std::move(next).value()->bytes;
@@ -75,13 +70,11 @@ class LiveMp4ByteStream {
     return count;
   }
 
- private:
-  void Close() noexcept {
-    reader_ = {};
-    current_bytes_.reset();
-    current_offset_ = 0U;
+  void Cancel() noexcept {
+    reader_.Cancel();
   }
 
+ private:
   camera_firmware::media::FragmentRing::Reader reader_;
   const std::chrono::milliseconds stale_timeout_;
   std::shared_ptr<const std::vector<std::uint8_t>> current_bytes_;
@@ -380,27 +373,29 @@ int RunFirmware(const std::string& config_path) {
       [&runtime](const std::string& camera_id) {
         return runtime->Snapshot(camera_id);
       };
-  service_args.live_stream_callback =
+  service_args.cancellable_live_stream_callback =
       [&runtime](
           const std::string& camera_id)
           -> camera_firmware::common::Result<
-              camera_firmware::service::LiveMp4StreamCallback> {
+              camera_firmware::service::LiveMp4StreamHandle> {
         auto opened = runtime->OpenLiveStream(camera_id);
         if (!opened.ok()) {
           return camera_firmware::common::Result<
-              camera_firmware::service::LiveMp4StreamCallback>::Err(
+              camera_firmware::service::LiveMp4StreamHandle>::Err(
               opened.error());
         }
         const auto stale_timeout = std::chrono::milliseconds(
             runtime->ActiveConfig().http.live.stale_timeout_ms);
         auto state = std::make_shared<LiveMp4ByteStream>(
             std::move(opened).value(), stale_timeout);
-        camera_firmware::service::LiveMp4StreamCallback stream =
-            [state = std::move(state)](char* output, std::size_t capacity) {
+        camera_firmware::service::LiveMp4StreamHandle stream{
+            .read = [state](char* output, std::size_t capacity) {
               return state->Read(output, capacity);
-            };
+            },
+            .cancel = [state] { state->Cancel(); },
+        };
         return camera_firmware::common::Result<
-            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            camera_firmware::service::LiveMp4StreamHandle>::Ok(
             std::move(stream));
       };
 
