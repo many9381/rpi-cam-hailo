@@ -339,6 +339,7 @@ target_link_libraries(camera_firmware_async_stream_backpressure_tests
 gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
     PROPERTIES
         TIMEOUT 15
+        RESOURCE_LOCK camera_firmware_loopback_listener
 )
 
 add_executable(camera_firmware_service_tests
@@ -395,6 +396,7 @@ gtest_discover_tests(camera_firmware_https_auth_integration
     TEST_SUFFIX .ServiceSecurityIntegrationTest
     PROPERTIES
         TIMEOUT 90
+        RESOURCE_LOCK camera_firmware_loopback_listener
 )
 
 gtest_discover_tests(camera_firmware_https_auth_integration
@@ -402,6 +404,7 @@ gtest_discover_tests(camera_firmware_https_auth_integration
     TEST_FILTER "-HttpsAuthIntegrationTest.*"
     PROPERTIES
         TIMEOUT 90
+        RESOURCE_LOCK camera_firmware_loopback_listener
 )
 
 if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
