@@ -5474,8 +5474,11 @@ void RunAuthenticatedLiveMp4Scenario(
       EXPECT_LT(std::chrono::steady_clock::now() - logout_started,
                 std::chrono::seconds(1));
     }
-    std::lock_guard lock(blocking_live->mutex);
-    EXPECT_EQ(blocking_live->reads_finished, blocked_stream_count);
+    std::unique_lock lock(blocking_live->mutex);
+    EXPECT_TRUE(blocking_live->changed.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return blocking_live->reads_finished == blocked_stream_count;
+        }));
     EXPECT_EQ(blocking_live->cancel_calls, blocked_stream_count);
   } else {
     const auto build_sse_request = [&cookie] {
