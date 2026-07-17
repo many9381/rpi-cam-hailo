@@ -920,7 +920,8 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
   }
   if (method == drogon::Get) {
     if (path == "/api/v1/setup/status" || path == "/api/v1/auth/me" ||
-        path == "/api/v1/health" || path == "/api/v1/cameras" ||
+        path == "/api/v1/health" ||
+        path == "/api/v1/monitoring/cameras" || path == "/api/v1/cameras" ||
         path == "/api/v1/ai/detections" ||
         path == "/api/v1/ai/detections/stream" ||
         path == "/api/v1/stream" ||
@@ -1017,6 +1018,16 @@ Json::Value BuildCameraStatusJsonValue(const CameraStatus& camera) {
   json["encoded_frames"] = Json::UInt64(camera.encoded_frames);
   json["capture_error_count"] = Json::UInt64(camera.capture_error_count);
   json["encode_error_count"] = Json::UInt64(camera.encode_error_count);
+  return json;
+}
+
+Json::Value BuildMonitoringCameraJsonValue(const CameraStatus& camera) {
+  Json::Value json(Json::objectValue);
+  json["id"] = camera.id;
+  json["state"] = camera.state;
+  json["width"] = camera.width;
+  json["height"] = camera.height;
+  json["snapshot_available"] = camera.snapshot_available;
   return json;
 }
 
@@ -3276,6 +3287,31 @@ void RegisterHandlers() {
             });
       },
       {Post});
+
+  app().registerHandler(
+      "/api/v1/monitoring/cameras",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](AuthorizedRequest, HttpCallback callback) {
+              CameraStatusProvider provider;
+              {
+                std::scoped_lock lock(StateMutex());
+                provider = GlobalState().args.camera_status_provider;
+              }
+
+              Json::Value body(Json::objectValue);
+              Json::Value cameras(Json::arrayValue);
+              if (provider) {
+                for (const auto& camera : provider()) {
+                  cameras.append(BuildMonitoringCameraJsonValue(camera));
+                }
+              }
+              body["cameras"] = std::move(cameras);
+              callback(JsonResponse(std::move(body)));
+            });
+      },
+      {Get});
 
   app().registerHandler(
       "/api/v1/cameras",

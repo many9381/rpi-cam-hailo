@@ -5,10 +5,12 @@ import { parseSetupStatus } from './api/contracts';
 import type { CameraApiClient, SetupStatus } from './api/types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AppShell } from './components/AppShell';
+import { ViewerShell } from './components/ViewerShell';
 import { LoginPage } from './pages/LoginPage';
 import { SetupPage } from './pages/SetupPage';
 import { RuntimeRecoveryPage } from './pages/RuntimeRecoveryPage';
 import { DashboardPage, type OperationalView } from './pages/DashboardPage';
+import { MonitorPage } from './pages/MonitorPage';
 import { useOperationalData } from './hooks/useOperationalData';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
 
@@ -26,7 +28,7 @@ interface BootstrapGateProps {
 export function BootstrapGate({
   client,
   operationalChild = (
-    <main className="loading-surface">Checking administrator session...</main>
+    <main className="loading-surface">Checking session...</main>
   ),
 }: BootstrapGateProps) {
   const location = useLocation();
@@ -146,7 +148,7 @@ export function BootstrapGate({
   return operationalChild;
 }
 
-const protectedPaths = new Set(['/dashboard', '/cameras', '/ai', '/system']);
+const administratorPaths = new Set(['/dashboard', '/cameras', '/ai', '/system', '/users']);
 const operationalViews: Record<string, OperationalView> = {
   '/dashboard': 'dashboard',
   '/cameras': 'cameras',
@@ -154,14 +156,14 @@ const operationalViews: Record<string, OperationalView> = {
   '/system': 'system',
 };
 
-function DefaultOperationalShell({ client }: { client: CameraApiClient }) {
+function AdministratorDefaultShell({ client }: { client: CameraApiClient }) {
   const auth = useAuth();
   const location = useLocation();
   const controller = useOperationalData(client);
   const runtimeSettings = useRuntimeSettings(client);
   const view = operationalViews[location.pathname] ?? 'dashboard';
   return (
-    <AppShell principal={auth.principal!} logout={auth.logout}
+    <AppShell principal={auth.principal!} logout={auth.logout} changePassword={auth.changePassword}
       runtimeSettings={runtimeSettings}
       onRefresh={() => {
         void controller.refresh().catch(() => undefined);
@@ -173,7 +175,7 @@ function DefaultOperationalShell({ client }: { client: CameraApiClient }) {
   );
 }
 
-function OperationalApplication({ child, client }: {
+function AdministratorApplication({ child, client }: {
   child?: ReactNode;
   client: CameraApiClient;
 }) {
@@ -182,30 +184,64 @@ function OperationalApplication({ child, client }: {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const destination = auth.state === 'anonymous'
-      ? '/login'
-      : auth.state === 'authenticated' && !protectedPaths.has(location.pathname)
-        ? '/dashboard'
-        : null;
-    if (destination !== null && location.pathname !== destination) {
-      navigate(destination, { replace: true });
+    if (!administratorPaths.has(location.pathname)) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
+  if (child === undefined) {
+    return <AdministratorDefaultShell client={client} />;
+  }
+  return (
+    <AppShell principal={auth.principal!} logout={auth.logout}
+      changePassword={auth.changePassword}>
+      {child}
+    </AppShell>
+  );
+}
+
+function ViewerApplication({ client }: { client: CameraApiClient }) {
+  const auth = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (location.pathname !== '/monitor') {
+      navigate('/monitor', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
+  return (
+    <ViewerShell principal={auth.principal!} logout={auth.logout}
+      changePassword={auth.changePassword}>
+      <MonitorPage client={client} />
+    </ViewerShell>
+  );
+}
+
+function AuthenticatedApplication({ child, client }: {
+  child?: ReactNode;
+  client: CameraApiClient;
+}) {
+  const auth = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (auth.state === 'anonymous' && location.pathname !== '/login') {
+      navigate('/login', { replace: true });
     }
   }, [auth.state, location.pathname, navigate]);
 
   if (auth.state === 'checking') {
-    return <main className="loading-surface">Checking administrator session...</main>;
+    return <main className="loading-surface">Checking session...</main>;
   }
   if (auth.state === 'anonymous') {
     return <LoginPage login={auth.login} />;
   }
-  if (child === undefined) {
-    return <DefaultOperationalShell client={client} />;
-  }
-  return (
-    <AppShell principal={auth.principal!} logout={auth.logout}>
-      {child}
-    </AppShell>
-  );
+  return auth.principal!.role === 'viewer'
+    ? <ViewerApplication client={client} />
+    : <AdministratorApplication child={child} client={client} />;
 }
 
 interface AppProps {
@@ -220,7 +256,7 @@ export function App({ client, operationalChild }: AppProps) {
         client={client}
         operationalChild={(
           <AuthProvider client={client}>
-            <OperationalApplication child={operationalChild} client={client} />
+            <AuthenticatedApplication child={operationalChild} client={client} />
           </AuthProvider>
         )}
       />

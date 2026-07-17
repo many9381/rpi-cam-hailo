@@ -8,6 +8,40 @@ import { UnauthorizedError } from './api/client';
 import type { CameraApiClient, SetupStatus } from './api/types';
 import { App } from './App';
 
+const administratorHooks = vi.hoisted(() => ({
+  throwOnConstruction: false,
+  operationalConstructed: 0,
+  runtimeConstructed: 0,
+}));
+
+vi.mock('./hooks/useOperationalData', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./hooks/useOperationalData')>();
+  return {
+    ...actual,
+    useOperationalData: (...args: Parameters<typeof actual.useOperationalData>) => {
+      administratorHooks.operationalConstructed += 1;
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useOperationalData');
+      }
+      return actual.useOperationalData(...args);
+    },
+  };
+});
+
+vi.mock('./features/settings/useRuntimeSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./features/settings/useRuntimeSettings')>();
+  return {
+    ...actual,
+    useRuntimeSettings: (...args: Parameters<typeof actual.useRuntimeSettings>) => {
+      administratorHooks.runtimeConstructed += 1;
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useRuntimeSettings');
+      }
+      return actual.useRuntimeSettings(...args);
+    },
+  };
+});
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -34,6 +68,7 @@ const deferred = <T,>() => {
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  deleteJson: vi.fn(),
   putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn(),
@@ -45,6 +80,9 @@ afterEach(() => {
   window.location.hash = '';
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  administratorHooks.throwOnConstruction = false;
+  administratorHooks.operationalConstructed = 0;
+  administratorHooks.runtimeConstructed = 0;
 });
 
 describe('App bootstrap gate', () => {
@@ -55,7 +93,7 @@ describe('App bootstrap gate', () => {
     render(<App client={client} />);
 
     expect(screen.getByText('Checking camera setup...')).toBeVisible();
-    expect(screen.queryByText('Checking administrator session...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Checking session...')).not.toBeInTheDocument();
   });
 
   it('renders setup and synchronizes the setup hash only when the server requires it', async () => {
@@ -193,7 +231,7 @@ describe('App bootstrap gate', () => {
 
     render(<App client={client} />);
 
-    expect(await screen.findByRole('heading', { name: /administrator login/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
     await waitFor(() => expect(window.location.hash).toBe('#/login'));
     expect(screen.queryByRole('navigation', { name: /primary/i })).not.toBeInTheDocument();
   });
@@ -238,7 +276,7 @@ describe('App bootstrap gate', () => {
     expect(screen.queryByText(/private transport detail/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /retry/i }));
 
-    expect(await screen.findByRole('heading', { name: /administrator login/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
     expect(client.getJson).toHaveBeenCalledTimes(3);
   });
 
@@ -258,7 +296,7 @@ describe('App bootstrap gate', () => {
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /initialize camera/i }));
 
-    expect(await screen.findByRole('heading', { name: /administrator login/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
     expect(client.getJson).toHaveBeenCalledTimes(3);
     expect(window.location.hash).toBe('#/login');
   });
@@ -303,7 +341,7 @@ describe('App bootstrap gate', () => {
       {},
       expect.any(Function),
     );
-    expect(await screen.findByRole('heading', { name: 'Administrator login' }))
+    expect(await screen.findByRole('heading', { name: 'Camera login' }))
       .toBeVisible();
   });
 
@@ -454,7 +492,7 @@ describe('App bootstrap gate', () => {
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Start runtime' }));
 
-    expect(await screen.findByRole('heading', { name: 'Administrator login' }))
+    expect(await screen.findByRole('heading', { name: 'Camera login' }))
       .toBeVisible();
     expect(screen.queryByText(/response lost/i)).not.toBeInTheDocument();
   });
@@ -473,7 +511,7 @@ describe('App bootstrap gate', () => {
     view.unmount();
     render(<App client={client} />);
     await user.click(await screen.findByRole('button', { name: /retry/i }));
-    expect(await screen.findByRole('heading', { name: /administrator login/i })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
 
     await act(async () => first.resolve({
       required: true,
@@ -561,7 +599,7 @@ describe('App bootstrap gate', () => {
         await user.click(screen.getByRole('button', { name: 'Sign out' }));
       }
 
-      expect(await screen.findByRole('heading', { name: 'Administrator login' })).toBeVisible();
+      expect(await screen.findByRole('heading', { name: 'Camera login' })).toBeVisible();
       expect(firstSource.close).toHaveBeenCalledOnce();
       expect(FakeEventSource.instances).toHaveLength(1);
 
@@ -576,4 +614,159 @@ describe('App bootstrap gate', () => {
         .toBe('/api/v1/ai/detections/stream');
     },
   );
+});
+
+function renderRecoveredSession(
+  role: 'administrator' | 'viewer',
+  pathname: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const client = makeClient();
+  window.location.hash = `#${pathname}`;
+  vi.mocked(client.getBlob).mockResolvedValue(new Blob(['snapshot'], { type: 'image/jpeg' }));
+  vi.mocked(client.getJson).mockImplementation(async (path, parser) => {
+    const payloads: Record<string, unknown> = {
+      '/api/v1/setup/status': { required: false },
+      '/api/v1/auth/me': { username: `${role}.one`, role },
+      '/api/v1/health': { status: 'ok' },
+      '/api/v1/cameras': {
+        cameras: [],
+        ai: {
+          enabled: false, backend: 'disabled', state: 'disabled', model_count: 0,
+          runner_count: 0, reason: 'disabled', models: [], runners: [],
+        },
+      },
+      '/api/v1/stream': {
+        url: 'rtsp://camera.local:8555/main', control_tls: false, media_srtp: false,
+        secure_media: {
+          control_scheme: 'rtsp', media_profile: 'RTP/AVP', keying: 'none',
+          requires_tls_control_channel: false,
+        },
+      },
+      '/api/v1/settings/runtime': {
+        schema_version: 1,
+        revision: 0,
+        state: 'clean',
+        capabilities: {
+          camera_profiles: [], bitrate_kbps: { minimum: 500, maximum: 20_000 },
+          gop: { minimum: 1, maximum: 300 }, models: [],
+        },
+        active: { camera: { profile_id: '', bitrate_kbps: 500, gop: 1 }, models: [] },
+        pending: null,
+        last_apply: { status: 'never', code: '', restored: false },
+      },
+      '/api/v1/monitoring/cameras': {
+        cameras: [{ id: 'imx708', state: 'streaming', snapshot_available: true,
+          width: 1920, height: 1080 }],
+      },
+    };
+    return parser({ ...payloads, ...overrides }[path]) as never;
+  });
+  render(<App client={client} />);
+  return client;
+}
+
+describe('App role-specific route trees', () => {
+  it('uses the supplied parser when recovering a principal', async () => {
+    renderRecoveredSession('viewer', '/monitor', {
+      '/api/v1/auth/me': { username: 'viewer.one', role: 'operator' },
+    });
+
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
+  });
+
+  it('preserves administrator child injection without constructing default controllers', async () => {
+    const client = makeClient();
+    window.location.hash = '#/dashboard';
+    vi.mocked(client.getJson)
+      .mockResolvedValueOnce({ required: false })
+      .mockResolvedValueOnce({ username: 'administrator.one', role: 'administrator' });
+
+    render(<App client={client} operationalChild={<p>Injected operational child</p>} />);
+
+    expect(await screen.findByText('Injected operational child')).toBeVisible();
+    expect(administratorHooks.operationalConstructed).toBe(0);
+    expect(administratorHooks.runtimeConstructed).toBe(0);
+  });
+
+  it.each(['/dashboard', '/cameras', '/ai', '/system', '/users', '/monitor'])(
+    'redirects an anonymous operational deep link from %s to login',
+    async (pathname) => {
+      const client = makeClient();
+      window.location.hash = `#${pathname}`;
+      vi.mocked(client.getJson)
+        .mockResolvedValueOnce({ required: false })
+        .mockRejectedValueOnce(new UnauthorizedError());
+
+      render(<App client={client} />);
+
+      await screen.findByRole('heading', { name: /camera login/i });
+      await waitFor(() => expect(window.location.hash).toBe('#/login'));
+    },
+  );
+
+  it.each([
+    ['/login', '/dashboard'],
+    ['/monitor', '/dashboard'],
+    ['/dashboard', '/dashboard'],
+    ['/cameras', '/cameras'],
+    ['/ai', '/ai'],
+    ['/system', '/system'],
+    ['/users', '/users'],
+  ] as const)('routes administrator %s to %s', async (pathname, expectedPath) => {
+    renderRecoveredSession('administrator', pathname);
+
+    await waitFor(() => expect(window.location.hash).toBe(`#${expectedPath}`));
+  });
+
+  it.each([
+    ['/login', '/monitor'],
+    ['/dashboard', '/monitor'],
+    ['/cameras', '/monitor'],
+    ['/ai', '/monitor'],
+    ['/system', '/monitor'],
+    ['/users', '/monitor'],
+    ['/unknown', '/monitor'],
+    ['/monitor', '/monitor'],
+  ] as const)('routes viewer %s to %s without administrator hooks', async (pathname, expectedPath) => {
+    administratorHooks.throwOnConstruction = true;
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const client = renderRecoveredSession('viewer', pathname);
+
+    await screen.findByRole('heading', { name: 'Live monitoring' });
+    await waitFor(() => expect(window.location.hash).toBe(`#${expectedPath}`));
+    expect(administratorHooks.operationalConstructed).toBe(0);
+    expect(administratorHooks.runtimeConstructed).toBe(0);
+    const getJsonPaths = vi.mocked(client.getJson).mock.calls.map(([path]) => path);
+    expect(getJsonPaths).toEqual(expect.arrayContaining([
+      '/api/v1/setup/status',
+      '/api/v1/auth/me',
+      '/api/v1/monitoring/cameras',
+    ]));
+    expect(getJsonPaths.every((path) => [
+      '/api/v1/setup/status',
+      '/api/v1/auth/me',
+      '/api/v1/monitoring/cameras',
+    ].includes(path))).toBe(true);
+    for (const path of [
+      '/api/v1/health',
+      '/api/v1/cameras',
+      '/api/v1/stream',
+      '/api/v1/settings/runtime',
+      '/api/v1/security/users',
+      '/api/v1/security/management-ips',
+    ]) {
+      expect(getJsonPaths).not.toContain(path);
+    }
+    expect(vi.mocked(client.getBlob).mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/cameras/imx708/snapshot.jpg',
+    ]);
+    expect(vi.mocked(client.postJson).mock.calls).toEqual([]);
+    expect(vi.mocked(client.putJson).mock.calls).toEqual([]);
+    expect(vi.mocked(client.deleteJson).mock.calls).toEqual([]);
+    expect(FakeEventSource.instances.map(({ url }) => url)).toEqual([
+      '/api/v1/ai/detections/stream',
+    ]);
+  });
 });

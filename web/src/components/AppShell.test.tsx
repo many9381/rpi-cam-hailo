@@ -17,10 +17,11 @@ const principal: Principal = { username: 'operator.one', role: 'administrator' }
 const renderShell = (
   logout = vi.fn(),
   runtimeSettings?: RuntimeSettingsController,
+  changePassword = vi.fn(),
 ) => render(
   <HashRouter>
     <AppShell principal={principal} logout={logout}
-      runtimeSettings={runtimeSettings}>Dashboard content</AppShell>
+      changePassword={changePassword} runtimeSettings={runtimeSettings}>Dashboard content</AppShell>
   </HashRouter>,
 );
 
@@ -95,12 +96,12 @@ describe('AppShell', () => {
 
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(trigger).toHaveAttribute('aria-controls', 'user-disclosure');
-    expect(screen.getByTestId('user-disclosure')).not.toHaveAttribute('role', 'menu');
+    expect(document.getElementById('user-disclosure')).not.toHaveAttribute('role', 'menu');
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
     await user.keyboard('{Escape}');
 
-    expect(screen.queryByTestId('user-disclosure')).not.toBeInTheDocument();
+    expect(document.getElementById('user-disclosure')).not.toBeInTheDocument();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
   });
@@ -128,7 +129,7 @@ describe('AppShell', () => {
     rerender(
       <HashRouter>
         <AppShell principal={principal} logout={vi.fn()}
-          runtimeSettings={aiController}>Dashboard content</AppShell>
+          changePassword={vi.fn()} runtimeSettings={aiController}>Dashboard content</AppShell>
       </HashRouter>,
     );
     expect(screen.getByRole('link', { name: 'Review AI settings' }))
@@ -151,7 +152,7 @@ describe('AppShell', () => {
     rerender(
       <HashRouter>
         <AppShell principal={principal} logout={vi.fn()}
-          runtimeSettings={makeSettingsController({
+          changePassword={vi.fn()} runtimeSettings={makeSettingsController({
             status: 'error', snapshot: failed, draft: failed.pending,
           })}>Dashboard content</AppShell>
       </HashRouter>,

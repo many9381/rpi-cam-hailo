@@ -12,6 +12,8 @@ import type {
   InitializeResult,
   LoginResult,
   LogoutResult,
+  MonitoringCamera,
+  MonitoringCameraList,
   Principal,
   RestartAiResult,
   RuntimeRestartResult,
@@ -27,6 +29,15 @@ const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 const isNonnegativeInteger = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
+const isNonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+const hasExactKeys = (
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> => isRecord(value) &&
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 
 function invalid(message: string): never {
   throw new Error(message);
@@ -158,7 +169,8 @@ export function parseStream(value: unknown): StreamStatus {
 }
 
 function parseKeypoint(value: unknown): DetectionKeypoint {
-  if (!isRecord(value) || !isString(value.name) || !isFiniteNumber(value.x) ||
+  if (!hasExactKeys(value, ['name', 'x', 'y', 'confidence']) ||
+      !isString(value.name) || !isFiniteNumber(value.x) ||
       !isFiniteNumber(value.y) || !isFiniteNumber(value.confidence)) {
     return invalid('Invalid detection response');
   }
@@ -166,9 +178,11 @@ function parseKeypoint(value: unknown): DetectionKeypoint {
 }
 
 function parseDetection(value: unknown): Detection {
-  if (!isRecord(value) || !isNonnegativeInteger(value.class_id) ||
+  if (!hasExactKeys(value, ['class_id', 'label', 'confidence', 'box', 'keypoints']) ||
+      !isNonnegativeInteger(value.class_id) ||
       !isString(value.label) ||
-      !isFiniteNumber(value.confidence) || !isRecord(value.box) ||
+      !isFiniteNumber(value.confidence) ||
+      !hasExactKeys(value.box, ['x', 'y', 'width', 'height']) ||
       !isFiniteNumber(value.box.x) || !isFiniteNumber(value.box.y) ||
       !isFiniteNumber(value.box.width) || !isFiniteNumber(value.box.height) ||
       !Array.isArray(value.keypoints)) {
@@ -185,7 +199,10 @@ function parseDetection(value: unknown): Detection {
 }
 
 function parseDetectionEvent(value: unknown): DetectionEvent {
-  if (!isRecord(value) || !isString(value.camera_id) ||
+  if (!hasExactKeys(value, [
+    'camera_id', 'model_id', 'model_kind', 'result_state',
+    'frame_sequence', 'frame_timestamp_ns', 'detections',
+  ]) || !isString(value.camera_id) ||
       !isString(value.model_id) || !isString(value.model_kind) ||
       !isString(value.result_state) || !isNonnegativeInteger(value.frame_sequence) ||
       !isFiniteNumber(value.frame_timestamp_ns) ||
@@ -204,7 +221,7 @@ function parseDetectionEvent(value: unknown): DetectionEvent {
 }
 
 export function parseDetectionSnapshot(value: unknown): DetectionSnapshot {
-  if (!isRecord(value) || !Array.isArray(value.events)) {
+  if (!hasExactKeys(value, ['events']) || !Array.isArray(value.events)) {
     return invalid('Invalid detection response');
   }
   return { events: value.events.map(parseDetectionEvent) };
@@ -266,7 +283,7 @@ export function parseInitializeResult(value: unknown): InitializeResult {
 }
 
 export function parsePrincipal(value: unknown): Principal {
-  if (!isRecord(value) ||
+  if (!hasExactKeys(value, ['username', 'role']) ||
       typeof value.username !== 'string' || value.username.length === 0 ||
       (value.role !== 'administrator' && value.role !== 'viewer')) {
     throw new Error('Invalid principal response');
@@ -275,19 +292,42 @@ export function parsePrincipal(value: unknown): Principal {
 }
 
 export function parseLoginResult(value: unknown): LoginResult {
-  if (!isRecord(value) || value.role !== 'administrator' ||
-      !Number.isSafeInteger(value.idle_expires_at_seconds) ||
-      (value.idle_expires_at_seconds as number) < 0) {
+  if (!hasExactKeys(value, ['role', 'idle_expires_at_seconds']) ||
+      (value.role !== 'administrator' && value.role !== 'viewer') ||
+      !isNonnegativeInteger(value.idle_expires_at_seconds)) {
     throw new Error('Invalid login response');
   }
   return {
-    role: 'administrator',
-    idle_expires_at_seconds: value.idle_expires_at_seconds as number,
+    role: value.role,
+    idle_expires_at_seconds: value.idle_expires_at_seconds,
   };
 }
 
+function parseMonitoringCamera(value: unknown): MonitoringCamera {
+  if (!hasExactKeys(value, ['id', 'state', 'width', 'height', 'snapshot_available']) ||
+      !isNonemptyString(value.id) || !isNonemptyString(value.state) ||
+      !isNonnegativeInteger(value.width) || !isNonnegativeInteger(value.height) ||
+      typeof value.snapshot_available !== 'boolean') {
+    return invalid('Invalid monitoring cameras response');
+  }
+  return {
+    id: value.id,
+    state: value.state,
+    width: value.width,
+    height: value.height,
+    snapshot_available: value.snapshot_available,
+  };
+}
+
+export function parseMonitoringCameras(value: unknown): MonitoringCameraList {
+  if (!hasExactKeys(value, ['cameras']) || !Array.isArray(value.cameras)) {
+    return invalid('Invalid monitoring cameras response');
+  }
+  return { cameras: value.cameras.map(parseMonitoringCamera) };
+}
+
 export function parseLogoutResult(value: unknown): LogoutResult {
-  if (!isRecord(value) || value.logged_out !== true) {
+  if (!hasExactKeys(value, ['logged_out']) || value.logged_out !== true) {
     throw new Error('Invalid logout response');
   }
   return { logged_out: true };

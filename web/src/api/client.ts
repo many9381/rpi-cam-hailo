@@ -69,6 +69,22 @@ export class ApiClient implements CameraApiClient {
     return parser(await response.json());
   }
 
+  async deleteJson<T>(
+    path: string,
+    parser: Parser<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const fetchImpl = this.fetchImpl;
+    const response = await fetchImpl(path, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { 'X-Camera-Request': 'management' },
+      signal,
+    });
+    await this.requireSuccess(response);
+    return parser(await response.json());
+  }
+
   async putJson<B, T>(
     path: string,
     body: B,

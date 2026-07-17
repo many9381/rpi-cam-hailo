@@ -11,12 +11,18 @@ import {
 
 import { parseLoginResult, parseLogoutResult, parsePrincipal } from '../api/contracts';
 import type { CameraApiClient, Principal } from '../api/types';
+import { parseSelfPasswordChangeResult } from '../features/users/contracts';
 
 export interface AuthContextValue {
   state: 'checking' | 'anonymous' | 'authenticated';
   principal: Principal | null;
   login(username: string, password: string): Promise<void>;
   logout(): Promise<void>;
+  changePassword(
+    currentPassword: string,
+    replacementPassword: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 interface AuthProviderProps {
@@ -116,12 +122,30 @@ export function AuthProvider({ client, children }: AuthProviderProps) {
     }
   }, [client, invalidate]);
 
+  const changePassword = useCallback(async (
+    currentPassword: string,
+    replacementPassword: string,
+    signal?: AbortSignal,
+  ) => {
+    await client.putJson(
+      '/api/v1/auth/password',
+      {
+        current_password: currentPassword,
+        replacement_password: replacementPassword,
+      },
+      parseSelfPasswordChangeResult,
+      signal,
+    );
+    invalidate();
+  }, [client, invalidate]);
+
   const value = useMemo<AuthContextValue>(() => ({
     state,
     principal,
     login,
     logout,
-  }), [login, logout, principal, state]);
+    changePassword,
+  }), [changePassword, login, logout, principal, state]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -137,13 +137,13 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
   }
 
   if (method == "GET") {
-    if (path == "/api/v1/health" || path == "/api/v1/cameras" ||
+    if (path == "/api/v1/monitoring/cameras" ||
         path == "/api/v1/ai/detections" ||
-        path == "/api/v1/ai/detections/stream" ||
-        path == "/api/v1/stream" || path == "/api/v1/auth/me") {
+        path == "/api/v1/ai/detections/stream") {
       return RoutePolicy::kViewer;
     }
-    if (path == "/api/v1/settings/runtime") {
+    if (path == "/api/v1/health" || path == "/api/v1/cameras" ||
+        path == "/api/v1/stream" || path == "/api/v1/settings/runtime") {
       return RoutePolicy::kAdministrator;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";

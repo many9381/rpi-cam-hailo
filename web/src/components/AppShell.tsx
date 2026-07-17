@@ -1,12 +1,10 @@
 import {
   Camera,
   LayoutDashboard,
-  LogOut,
   Menu,
   RefreshCw,
   ScanSearch,
   Settings,
-  UserRound,
   X,
 } from 'lucide-react';
 import {
@@ -19,12 +17,15 @@ import {
 import { useLocation } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
+import type { AuthContextValue } from '../auth/AuthContext';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
+import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
 
 interface AppShellProps {
   principal: Principal;
   logout(): Promise<void>;
+  changePassword: AuthContextValue['changePassword'];
   children: ReactNode;
   onRefresh?: () => void;
   runtimeSettings?: RuntimeSettingsController;
@@ -118,15 +119,14 @@ function NavigationLinks({ pathname, onSelect }: {
 export function AppShell({
   principal,
   logout,
+  changePassword,
   children,
   onRefresh = () => undefined,
   runtimeSettings,
 }: AppShellProps) {
   const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const userMenuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const drawerWasOpen = useRef(false);
 
@@ -155,20 +155,6 @@ export function AppShell({
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [drawerOpen]);
-
-  useEffect(() => {
-    if (!userMenuOpen) {
-      return;
-    }
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setUserMenuOpen(false);
-        userMenuButtonRef.current?.focus();
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [userMenuOpen]);
 
   const trapDrawerFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Tab') {
@@ -214,34 +200,7 @@ export function AppShell({
           <IconButton label="Refresh device state" onClick={onRefresh}>
             <RefreshCw size={18} aria-hidden="true" />
           </IconButton>
-          <span className="header-username">{principal.username}</span>
-          <div className="user-menu-wrap">
-            <IconButton
-              ref={userMenuButtonRef}
-              label="Open user menu"
-              aria-expanded={userMenuOpen}
-              aria-controls="user-disclosure"
-              onClick={() => setUserMenuOpen((open) => !open)}
-            >
-              <UserRound size={19} aria-hidden="true" />
-            </IconButton>
-            {userMenuOpen && (
-              <div className="user-menu" id="user-disclosure"
-                data-testid="user-disclosure">
-                <span className="user-role">{principal.role}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserMenuOpen(false);
-                    void logout();
-                  }}
-                >
-                  <LogOut size={17} aria-hidden="true" />
-                  Sign out
-                </button>
-              </div>
-            )}
-          </div>
+          <AccountMenu principal={principal} logout={logout} changePassword={changePassword} />
         </div>
       </header>
 

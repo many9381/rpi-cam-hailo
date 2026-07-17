@@ -7,6 +7,7 @@ import {
   parseInitializeResult,
   parseLoginResult,
   parseLogoutResult,
+  parseMonitoringCameras,
   parseRestartAiResult,
   parseRuntimeRestartResult,
   parsePrincipal,
@@ -34,6 +35,26 @@ const ai = {
     last_preprocess_ms: 1.2, last_inference_ms: 3.4,
     last_processed_sequence: 11,
     last_error_code: '', last_error_message: '',
+  }],
+};
+
+const detectionSnapshot = {
+  events: [{
+    camera_id: 'imx708-main',
+    model_id: 'objects',
+    model_kind: 'object_detection',
+    result_state: 'decoded',
+    frame_sequence: 12,
+    frame_timestamp_ns: 123456,
+    detections: [{
+      class_id: 2,
+      label: 'person',
+      confidence: 0.9,
+      box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      keypoints: [{
+        name: 'nose', x: 0.2, y: 0.3, confidence: 0.8,
+      }],
+    }],
   }],
 };
 
@@ -121,17 +142,44 @@ describe('operational response parsers', () => {
   );
 
   it('validates the initial detection snapshot shape', () => {
-    expect(parseDetectionSnapshot({ events: [{
-      camera_id: 'imx708-main', model_id: 'objects',
-      model_kind: 'object_detection', result_state: 'decoded',
-      frame_sequence: 12, frame_timestamp_ns: 123456,
+    expect(parseDetectionSnapshot(detectionSnapshot)
+      .events[0].detections[0].class_id).toBe(2);
+  });
+
+  it.each([
+    ['snapshot', () => ({ ...detectionSnapshot, token: 'viewer-secret' })],
+    ['event', () => ({ events: [{
+      ...detectionSnapshot.events[0], token: 'viewer-secret',
+    }] })],
+    ['detection', () => ({ events: [{
+      ...detectionSnapshot.events[0],
       detections: [{
-        class_id: 2,
-        label: 'person', confidence: 0.9,
-        box: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-        keypoints: [],
+        ...detectionSnapshot.events[0].detections[0], hash: 'viewer-secret',
       }],
-    }] }).events[0].detections[0].class_id).toBe(2);
+    }] })],
+    ['box', () => ({ events: [{
+      ...detectionSnapshot.events[0],
+      detections: [{
+        ...detectionSnapshot.events[0].detections[0],
+        box: {
+          ...detectionSnapshot.events[0].detections[0].box,
+          salt: 'viewer-secret',
+        },
+      }],
+    }] })],
+    ['keypoint', () => ({ events: [{
+      ...detectionSnapshot.events[0],
+      detections: [{
+        ...detectionSnapshot.events[0].detections[0],
+        keypoints: [{
+          ...detectionSnapshot.events[0].detections[0].keypoints[0],
+          password: 'viewer-secret',
+        }],
+      }],
+    }] })],
+  ])('rejects an unknown field at the %s level', (_level, makeValue) => {
+    expect(() => parseDetectionSnapshot(makeValue()))
+      .toThrow('Invalid detection response');
   });
 
   it('rejects detection snapshots with invalid class IDs', () => {
@@ -271,27 +319,80 @@ describe('parsePrincipal', () => {
     { username: '', role: 'administrator' },
     { username: 'operator.one', role: 'operator' },
     { username: 42, role: 'viewer' },
+    { username: 'operator.one', role: 'viewer', token: 'not-returned' },
   ])('rejects malformed principal %#', (value) => {
     expect(() => parsePrincipal(value)).toThrow('Invalid principal response');
   });
 });
 
 describe('parseLoginResult', () => {
-  it('accepts an administrator login result', () => {
-    expect(parseLoginResult({
-      role: 'administrator',
-      idle_expires_at_seconds: 100,
-    })).toEqual({ role: 'administrator', idle_expires_at_seconds: 100 });
+  it.each(['administrator', 'viewer'] as const)('accepts a %s login result', (role) => {
+    const value = { role, idle_expires_at_seconds: 100 };
+
+    const result = parseLoginResult(value);
+
+    expect(result).toEqual(value);
+    expect(result).not.toBe(value);
   });
 
   it.each([
     null,
-    { role: 'viewer', idle_expires_at_seconds: 100 },
+    {},
+    { role: 'operator', idle_expires_at_seconds: 100 },
     { role: 'administrator', idle_expires_at_seconds: -1 },
     { role: 'administrator', idle_expires_at_seconds: 1.5 },
     { role: 'administrator', idle_expires_at_seconds: Number.POSITIVE_INFINITY },
+    { role: 'viewer', idle_expires_at_seconds: 100, password: 'not-returned' },
   ])('rejects malformed login result %#', (value) => {
     expect(() => parseLoginResult(value)).toThrow('Invalid login response');
+  });
+});
+
+describe('parseMonitoringCameras', () => {
+  const camera = {
+    id: 'imx708-main',
+    state: 'running',
+    width: 1920,
+    height: 1080,
+    snapshot_available: true,
+  };
+
+  it('accepts only the public monitoring projection as fresh values', () => {
+    const value = { cameras: [camera] };
+
+    const result = parseMonitoringCameras(value);
+
+    expect(result).toEqual(value);
+    expect(result).not.toBe(value);
+    expect(result.cameras).not.toBe(value.cameras);
+    expect(result.cameras[0]).not.toBe(camera);
+  });
+
+  it.each([
+    ['missing camera key', () => ({ cameras: [{ ...camera, width: undefined }] })],
+    ['unknown root key', () => ({ cameras: [camera], ai: {} })],
+    ['unknown credential field', () => ({ cameras: [{ ...camera, password: 'viewer-secret' }] })],
+    ['credential hash field', () => ({ cameras: [{ ...camera, hash: 'viewer-secret' }] })],
+    ['credential salt field', () => ({ cameras: [{ ...camera, salt: 'viewer-secret' }] })],
+    ['empty identifier', () => ({ cameras: [{ ...camera, id: '' }] })],
+    ['empty state', () => ({ cameras: [{ ...camera, state: '' }] })],
+    ['negative width', () => ({ cameras: [{ ...camera, width: -1 }] })],
+    ['fractional height', () => ({ cameras: [{ ...camera, height: 1.5 }] })],
+    ['unsafe width', () => ({ cameras: [{ ...camera, width: Number.MAX_SAFE_INTEGER + 1 }] })],
+    ['invalid snapshot flag', () => ({ cameras: [{ ...camera, snapshot_available: 'true' }] })],
+  ])('rejects %s without echoing rejected data', (_name, makeValue) => {
+    const value = makeValue();
+    let error: unknown;
+
+    try {
+      parseMonitoringCameras(value);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Invalid monitoring cameras response');
+    expect((error as Error).message).not.toContain('viewer-secret');
   });
 });
 
@@ -300,7 +401,13 @@ describe('parseLogoutResult', () => {
     expect(parseLogoutResult({ logged_out: true })).toEqual({ logged_out: true });
   });
 
-  it.each([null, {}, { logged_out: false }, { logged_out: 'true' }])(
+  it.each([
+    null,
+    {},
+    { logged_out: false },
+    { logged_out: 'true' },
+    { logged_out: true, token: 'not-returned' },
+  ])(
     'rejects malformed logout result %#',
     (value) => {
       expect(() => parseLogoutResult(value)).toThrow('Invalid logout response');

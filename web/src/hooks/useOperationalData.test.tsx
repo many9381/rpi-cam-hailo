@@ -45,6 +45,7 @@ const makeClient = (): CameraApiClient => ({
     };
     return parser(values[path]);
   }) as CameraApiClient['getJson'],
+  deleteJson: vi.fn(),
   putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn(),

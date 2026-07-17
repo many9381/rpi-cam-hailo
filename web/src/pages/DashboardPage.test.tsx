@@ -38,6 +38,7 @@ class FakeEventSource {
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  deleteJson: vi.fn(),
   putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn((): Promise<Blob> => new Promise<Blob>(() => {})),
