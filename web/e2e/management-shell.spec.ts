@@ -83,6 +83,29 @@ const detectionSnapshot = {
   }],
 };
 
+const monitoringPayload = {
+  cameras: [{
+    id: 'imx708', state: 'streaming', snapshot_available: true, width: 320, height: 180,
+  }],
+};
+
+const SNAPSHOT_JPEG_BASE64 =
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////'
+  + '2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/'
+  + 'xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9k=';
+
+const administratorOnlyPaths = new Set([
+  '/api/v1/health',
+  '/api/v1/cameras',
+  '/api/v1/stream',
+  '/api/v1/runtime/restart',
+  '/api/v1/settings/runtime',
+  '/api/v1/settings/runtime/apply',
+  '/api/v1/settings/runtime/discard',
+  '/api/v1/security/users',
+  '/api/v1/security/management-ips',
+]);
+
 const makeRuntimeSettingsSnapshot = (
   state: RuntimeSettingsSnapshot['state'] = 'clean',
 ): RuntimeSettingsSnapshot => ({
@@ -122,6 +145,8 @@ interface ApiMockOptions {
   setupRequired?: boolean;
   setupPhase?: 'administrator' | 'runtime_pending';
   authenticated?: boolean;
+  role?: 'administrator' | 'viewer';
+  username?: string;
   runtimeFailed?: boolean;
   settingsRevisionConflictOnce?: boolean;
   settingsApplyFailureOnce?: boolean;
@@ -134,7 +159,11 @@ interface ApiMockControls {
   runtimeRestartRequests: Request[];
   liveRequests: Request[];
   settingsRequests: Request[];
+  passwordRequests: Request[];
+  snapshotRequests: Request[];
+  authMeRequests: Request[];
   unhandledPaths: string[];
+  requestedAdministratorPaths: string[];
   emitDetection(): void;
 }
 
@@ -145,6 +174,8 @@ async function installApiMocks(
   let setupRequired = options.setupRequired ?? false;
   const setupPhase = options.setupPhase ?? 'administrator';
   let authenticated = options.authenticated ?? true;
+  const role = options.role ?? 'administrator';
+  let username = options.username ?? 'operator.one';
   let runtimeFailed = options.runtimeFailed ?? false;
   let settingsRevisionConflictOnce = options.settingsRevisionConflictOnce ?? false;
   let settingsApplyFailureOnce = options.settingsApplyFailureOnce ?? false;
@@ -160,7 +191,11 @@ async function installApiMocks(
   const runtimeRestartRequests: Request[] = [];
   const liveRequests: Request[] = [];
   const settingsRequests: Request[] = [];
+  const passwordRequests: Request[] = [];
+  const snapshotRequests: Request[] = [];
+  const authMeRequests: Request[] = [];
   const unhandledPaths: string[] = [];
+  const requestedAdministratorPaths: string[] = [];
 
   await page.addInitScript((liveMp4Base64) => {
     const nativeFetch = window.fetch.bind(window);
@@ -191,6 +226,10 @@ async function installApiMocks(
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+
+    if (administratorOnlyPaths.has(path)) {
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+    }
 
     if (path === '/api/v1/setup/status' && request.method() === 'GET') {
       await route.fulfill({
@@ -230,9 +269,10 @@ async function installApiMocks(
       return;
     }
     if (path === '/api/v1/auth/me' && request.method() === 'GET') {
+      authMeRequests.push(request);
       await route.fulfill(authenticated ? {
         contentType: 'application/json',
-        body: JSON.stringify({ username: 'operator.one', role: 'administrator' }),
+        body: JSON.stringify({ username, role }),
       } : {
         status: 401,
         contentType: 'application/json',
@@ -241,10 +281,23 @@ async function installApiMocks(
       return;
     }
     if (path === '/api/v1/auth/login' && request.method() === 'POST') {
+      const body = request.postDataJSON() as { username?: unknown };
+      if (typeof body.username === 'string' && body.username.length > 0) {
+        username = body.username;
+      }
       authenticated = true;
       await route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({ role: 'administrator', idle_expires_at_seconds: 300 }),
+        body: JSON.stringify({ role, idle_expires_at_seconds: 300 }),
+      });
+      return;
+    }
+    if (path === '/api/v1/auth/password' && request.method() === 'PUT') {
+      passwordRequests.push(request);
+      authenticated = false;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ password_changed: true, logged_out: true }),
       });
       return;
     }
@@ -389,6 +442,21 @@ async function installApiMocks(
       });
       return;
     }
+    if (path === '/api/v1/monitoring/cameras' && request.method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(monitoringPayload),
+      });
+      return;
+    }
+    if (path === '/api/v1/cameras/imx708/snapshot.jpg' && request.method() === 'GET') {
+      snapshotRequests.push(request);
+      await route.fulfill({
+        contentType: 'image/jpeg',
+        body: Buffer.from(SNAPSHOT_JPEG_BASE64, 'base64'),
+      });
+      return;
+    }
     if (path === '/api/v1/cameras/imx708/live.mp4' && request.method() === 'GET') {
       liveRequests.push(request);
       await route.fulfill({
@@ -442,7 +510,8 @@ async function installApiMocks(
   });
 
   return { initializeRequests, runtimeRequests, runtimeRestartRequests,
-    liveRequests, settingsRequests, unhandledPaths, emitDetection };
+    liveRequests, settingsRequests, passwordRequests, snapshotRequests, authMeRequests,
+    unhandledPaths, requestedAdministratorPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -515,7 +584,7 @@ test('first boot creates an administrator then shows login', async ({ page }) =>
   await page.getByLabel('Confirm password').fill('NorthStar!9');
   await page.getByRole('button', { name: 'Initialize camera' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Administrator login' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Camera login' })).toBeVisible();
   expect(api.initializeRequests).toHaveLength(1);
   expect(api.initializeRequests[0].postDataJSON()).toEqual({
     username: 'operator.one',
@@ -893,6 +962,133 @@ test('logout remains available from the authenticated settings shell', async ({ 
   await page.getByRole('button', { name: 'Open user menu' }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Administrator login' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Camera login' })).toBeVisible();
   expect(api.unhandledPaths).toEqual([]);
+});
+
+test('viewer monitoring keeps the live shell least-privileged and responsive', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const api = await installApiMocks(page, {
+    role: 'viewer',
+    username: 'viewer.initial',
+  });
+
+  await page.goto('/#/dashboard');
+  await expect(page).toHaveURL(/#\/monitor$/);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx)).toBe(0);
+  await expect(page.getByRole('heading', { name: 'Live monitoring' })).toBeVisible();
+  const video = page.getByLabel('imx708 camera preview');
+  const snapshot = page.getByRole('img', { name: 'imx708 camera snapshot' });
+  await expect(video).toBeVisible();
+  await expect(snapshot).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Live' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Dashboard' })).toHaveCount(0);
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => ({
+    readyState: element.readyState,
+    width: element.videoWidth,
+    height: element.videoHeight,
+  }))).toEqual({ readyState: 4, width: 320, height: 180 });
+
+  const canvas = page.locator('canvas.detection-overlay');
+  await expect(canvas).toBeVisible();
+  await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) =>
+    element.width > 0 && element.height > 0)).toBe(true);
+  const beforeDetection = await canvasChecksum(canvas);
+  api.emitDetection();
+  await expect.poll(() => canvasChecksum(canvas)).toBeGreaterThan(beforeDetection);
+
+  await expectNoHorizontalOverflow(page);
+  const header = page.locator('.topbar');
+  const livePreview = page.getByRole('heading', { name: 'Camera preview' }).locator('..').locator('..');
+  const snapshotSection = page.getByRole('region', { name: 'Snapshot' });
+  await expectNoOverlap(header, livePreview);
+  await expectNoOverlap(header, snapshotSection);
+  await expectNoOverlap(livePreview, snapshotSection);
+  for (const surface of [video, snapshot]) {
+    const box = await surface.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(0);
+    expect(box!.height).toBeGreaterThan(0);
+  }
+  await page.screenshot({
+    path: testInfo.outputPath('desktop-viewer-monitoring.png'),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await expectNoOverlap(header, livePreview);
+  await expectNoOverlap(header, snapshotSection);
+  for (const surface of [video, snapshot]) {
+    const box = await surface.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(0);
+    expect(box!.height).toBeGreaterThan(0);
+  }
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-viewer-monitoring.png'),
+    fullPage: true,
+  });
+
+  const navigationTrigger = page.getByRole('button', { name: 'Open navigation' });
+  await navigationTrigger.click();
+  const drawer = page.getByRole('dialog', { name: 'Navigation' });
+  const closeNavigation = drawer.getByRole('button', { name: 'Close navigation' });
+  await expect(drawer).toBeVisible();
+  await expect(closeNavigation).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(drawer.getByRole('link', { name: 'Live' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(closeNavigation).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(navigationTrigger).toBeFocused();
+
+  await page.getByRole('button', { name: 'Open user menu' }).click();
+  await page.getByRole('button', { name: 'Change password' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Change password' });
+  const currentPassword = dialog.getByLabel('Current password');
+  await expect(currentPassword).toBeFocused();
+  const closePasswordDialog = dialog.getByRole('button', {
+    name: 'Close change password dialog',
+  });
+  await page.keyboard.press('Shift+Tab');
+  await expect(closePasswordDialog).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(currentPassword).toBeFocused();
+  await currentPassword.fill('NorthStar!9');
+  await dialog.getByLabel('New password', { exact: true }).fill('Skyline!9');
+  await dialog.getByLabel('Confirm new password', { exact: true }).fill('Skyline!9');
+  await dialog.getByRole('button', { name: 'Change password', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Camera login' })).toBeVisible();
+  expect(api.passwordRequests).toHaveLength(1);
+  expect(api.passwordRequests[0].postDataJSON()).toEqual({
+    current_password: 'NorthStar!9',
+    replacement_password: 'Skyline!9',
+  });
+  expect(api.passwordRequests[0].headers()['x-camera-request']).toBe('management');
+  expect(api.authMeRequests).toHaveLength(1);
+
+  await page.getByLabel('Username').fill('viewer.reauthenticated');
+  await page.getByLabel('Password', { exact: true }).fill('Skyline!9');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page).toHaveURL(/#\/monitor$/);
+  await expect(page.locator('.header-username')).toHaveText('viewer.reauthenticated');
+  await page.getByRole('button', { name: 'Open user menu' }).click();
+  await page.getByRole('button', { name: 'Change password' }).click();
+  const reopenedDialog = page.getByRole('dialog', { name: 'Change password' });
+  await expect(reopenedDialog.getByLabel('Current password')).toHaveValue('');
+  await expect(reopenedDialog.getByLabel('New password', { exact: true })).toHaveValue('');
+  await expect(reopenedDialog.getByLabel('Confirm new password', { exact: true })).toHaveValue('');
+
+  expect(api.unhandledPaths).toEqual([]);
+  expect(api.requestedAdministratorPaths).toEqual([]);
+  expect(api.liveRequests).not.toHaveLength(0);
+  expect(api.liveRequests.every((request) =>
+    new URL(request.url()).pathname === '/api/v1/cameras/imx708/live.mp4')).toBe(true);
+  expect(api.snapshotRequests).not.toHaveLength(0);
+  expect(api.snapshotRequests.every((request) =>
+    new URL(request.url()).pathname === '/api/v1/cameras/imx708/snapshot.jpg')).toBe(true);
 });

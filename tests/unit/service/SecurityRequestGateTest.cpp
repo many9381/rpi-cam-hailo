@@ -405,11 +405,14 @@ TEST(SecurityRequestGateTest,
   }
 }
 
-TEST(SecurityRequestGateTest, ViewerCanReadMonitoringAndOwnAuthOnly) {
+TEST(SecurityRequestGateTest, ViewerCanReadOnlyMonitoringMediaAndOwnAuth) {
   for (const std::string path : {
-           "/api/v1/auth/me", "/api/v1/cameras", "/api/v1/cameras/main/snapshot.jpg",
-           "/api/v1/cameras/main/live.mp4", "/api/v1/ai/detections",
-           "/api/v1/ai/detections/stream", "/api/v1/stream",
+           "/api/v1/auth/me",
+           "/api/v1/monitoring/cameras",
+           "/api/v1/cameras/main/snapshot.jpg",
+           "/api/v1/cameras/main/live.mp4",
+           "/api/v1/ai/detections",
+           "/api/v1/ai/detections/stream",
        }) {
     auto context = Operational(path);
     context.principal = Viewer();
@@ -428,8 +431,11 @@ TEST(SecurityRequestGateTest, ViewerCanReadMonitoringAndOwnAuthOnly) {
   logout.has_management_header = true;
   EXPECT_TRUE(AuthorizeSecurityRequest(logout).ok());
 
-  for (const std::string path : {"/api/v1/security/users",
-                                 "/api/v1/security/management-ips"}) {
+  for (const std::string path : {
+           "/api/v1/health", "/api/v1/cameras", "/api/v1/stream",
+           "/api/v1/settings/runtime", "/api/v1/security/users",
+           "/api/v1/security/management-ips",
+       }) {
     auto context = Operational(path);
     context.principal = Viewer();
     const auto result = AuthorizeSecurityRequest(context);

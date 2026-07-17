@@ -1,13 +1,16 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { UnauthorizedError } from '../api/client';
+import { ApiError, UnauthorizedError } from '../api/client';
 import type { CameraApiClient, Principal } from '../api/types';
+import { parseSelfPasswordChangeResult } from '../features/users/contracts';
 import { AuthProvider, useAuth } from './AuthContext';
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
+  deleteJson: vi.fn(),
   putJson: vi.fn(),
   postJson: vi.fn(),
   getBlob: vi.fn(),
@@ -16,6 +19,7 @@ const makeClient = (): CameraApiClient => ({
 
 function Probe() {
   const auth = useAuth();
+  const passwordChangeController = useRef(new AbortController());
   return (
     <div>
       <output>{auth.state}</output>
@@ -25,6 +29,15 @@ function Probe() {
       </button>
       <button type="button" onClick={() => void auth.logout()}>
         Logout
+      </button>
+      <button type="button" onClick={() => {
+        void auth.changePassword(
+          'CurrentPass9!',
+          'ReplacementPass9!',
+          passwordChangeController.current.signal,
+        ).catch(() => undefined);
+      }}>
+        Change password
       </button>
     </div>
   );
@@ -106,6 +119,50 @@ describe('AuthProvider', () => {
 
     expect(await screen.findByText('anonymous')).toBeVisible();
     expect(screen.queryByText('operator.one')).not.toBeInTheDocument();
+  });
+
+  it('changes its own password with the strict result parser and invalidates immediately', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.getJson).mockResolvedValue({
+      username: 'operator.one',
+      role: 'administrator',
+    });
+    vi.mocked(client.putJson).mockResolvedValue({ password_changed: true, logged_out: true });
+    render(<AuthProvider client={client}><Probe /></AuthProvider>);
+    await screen.findByText('operator.one');
+
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+
+    expect(client.putJson).toHaveBeenCalledWith(
+      '/api/v1/auth/password',
+      { current_password: 'CurrentPass9!', replacement_password: 'ReplacementPass9!' },
+      parseSelfPasswordChangeResult,
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByText('anonymous')).toBeVisible();
+    expect(screen.queryByText('operator.one')).not.toBeInTheDocument();
+    expect(client.getJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an authenticated principal after a public password-change API failure', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.getJson).mockResolvedValue({
+      username: 'operator.one',
+      role: 'administrator',
+    });
+    vi.mocked(client.putJson).mockRejectedValue(
+      new ApiError(400, 'E_CURRENT_PASSWORD_INVALID'),
+    );
+    render(<AuthProvider client={client}><Probe /></AuthProvider>);
+    await screen.findByText('operator.one');
+
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+
+    await waitFor(() => expect(client.putJson).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('authenticated')).toBeVisible();
+    expect(screen.getByText('operator.one')).toBeVisible();
   });
 
   it.each([

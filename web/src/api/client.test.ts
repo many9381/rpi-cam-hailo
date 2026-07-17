@@ -82,6 +82,56 @@ describe('ApiClient', () => {
     });
   });
 
+  it('deletes JSON with the management header, supplied signal, and parser', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ deleted: true }));
+    const parser = vi.fn((value: unknown) => {
+      if (typeof value !== 'object' || value === null ||
+          (value as { deleted?: unknown }).deleted !== true) {
+        throw new Error('Invalid delete response');
+      }
+      return { deleted: true as const };
+    });
+    const signal = new AbortController().signal;
+    const client = new ApiClient(fetchMock);
+
+    await expect(client.deleteJson('/api/v1/security/users/7', parser, signal))
+      .resolves.toEqual({ deleted: true });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/security/users/7', {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { 'X-Camera-Request': 'management' },
+      signal,
+    });
+    expect(parser).toHaveBeenCalledWith({ deleted: true });
+  });
+
+  it('notifies the global handler for a DELETE 401 only', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 'E_SESSION_EXPIRED' }, 401))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 'E_ACCESS_DENIED',
+        message: 'rejected viewer-secret',
+        echoed_body: { password: 'viewer-secret' },
+      }, 403));
+    const unauthorized = vi.fn();
+    const client = new ApiClient(fetchMock, unauthorized);
+    const parser = (value: unknown) => value;
+
+    await expect(client.deleteJson('/api/v1/security/users/7', parser))
+      .rejects.toEqual(new UnauthorizedError('E_SESSION_EXPIRED'));
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+
+    const error = await client.deleteJson('/api/v1/security/users/7', parser)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      status: 403,
+      code: 'E_ACCESS_DENIED',
+      message: 'Request failed',
+    });
+    expect(String(error)).not.toContain('viewer-secret');
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+  });
+
   it('gets JSON with same-origin credentials and the supplied signal', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       username: 'operator.one',

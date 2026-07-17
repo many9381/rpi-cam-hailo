@@ -2948,7 +2948,13 @@ void RunViewerOwnPasswordLifecycleScenario(
     return camera_firmware::common::Result<void>::Ok();
   };
   args.camera_status_provider = [] {
-    return std::vector<camera_firmware::service::CameraStatus>{};
+    return std::vector<camera_firmware::service::CameraStatus>{
+        {.id = "imx708-main",
+         .state = "streaming",
+         .snapshot_available = true,
+         .width = 1920U,
+         .height = 1080U},
+    };
   };
   args.ai_status_provider = [] {
     return camera_firmware::service::AiServiceStatus{};
@@ -3087,13 +3093,35 @@ void RunViewerOwnPasswordLifecycleScenario(
                     viewer_cookie),
                drogon::k400BadRequest, "E_INVALID_REQUEST");
 
+  expect_error(Send(client, drogon::Get, "/api/v1/monitoring/cameras"),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  const auto monitoring = Send(client, drogon::Get,
+                               "/api/v1/monitoring/cameras", {}, {},
+                               viewer_cookie);
+  ExpectStatus(monitoring, drogon::k200OK);
+  ASSERT_NE(monitoring.response->getJsonObject(), nullptr);
+  expect_fields(*monitoring.response->getJsonObject(), {"cameras"});
+  const auto& cameras = (*monitoring.response->getJsonObject())["cameras"];
+  ASSERT_EQ(cameras.size(), 1U);
+  expect_fields(cameras[0],
+                {"height", "id", "snapshot_available", "state", "width"});
+  EXPECT_EQ(cameras[0]["id"].asString(), "imx708-main");
+  EXPECT_EQ(cameras[0]["width"].asUInt(), 1920U);
+  EXPECT_EQ(cameras[0]["height"].asUInt(), 1080U);
+
   for (const std::string& path : {
-           "/api/v1/health", "/api/v1/cameras",
            "/api/v1/cameras/imx708-main/snapshot.jpg",
-           "/api/v1/ai/detections", "/api/v1/stream",
+           "/api/v1/ai/detections",
        }) {
     ExpectStatus(Send(client, drogon::Get, path, {}, {}, viewer_cookie),
                  drogon::k200OK);
+  }
+
+  for (const std::string& path : {
+           "/api/v1/health", "/api/v1/cameras", "/api/v1/stream",
+       }) {
+    expect_error(Send(client, drogon::Get, path, {}, {}, viewer_cookie),
+                 drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
   }
 
   expect_error(Send(client, drogon::Get, "/api/v1/security/users", {}, {},
@@ -3360,7 +3388,8 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
     const std::string cookie = "camera_session=" +
                                login.response->getCookie("camera_session")
                                    .value();
-    const auto response = RawHttpsGet(port, "/api/v1/cameras", {cookie});
+    const auto response =
+        RawHttpsGet(port, "/api/v1/monitoring/cameras", {cookie});
     if (response.status != 200 || provider_calls.load() != 1 ||
         provider_stop_milliseconds.load() < 0 ||
         provider_stop_milliseconds.load() >= 500) {

@@ -12,7 +12,7 @@ describe('LoginPage', () => {
     const login = vi.fn().mockResolvedValue(undefined);
     render(<LoginPage login={login} />);
 
-    expect(screen.getByRole('heading', { name: /administrator login/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /camera login/i })).toBeVisible();
     const password = screen.getByLabelText(/^password$/i);
     expect(password).toHaveAttribute('type', 'password');
     await user.type(screen.getByLabelText(/^username$/i), 'operator.one');

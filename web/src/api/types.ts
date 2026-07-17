@@ -14,11 +14,13 @@ export interface InitializeResult {
 
 export interface Principal {
   username: string;
-  role: 'administrator' | 'viewer';
+  role: UserRole;
 }
 
+export type UserRole = 'administrator' | 'viewer';
+
 export interface LoginResult {
-  role: 'administrator';
+  role: UserRole;
   idle_expires_at_seconds: number;
 }
 
@@ -34,6 +36,20 @@ export interface CameraStatus {
   id: string;
   state: string;
   snapshot_available: boolean;
+}
+
+export interface MonitoringCamera extends CameraStatus {
+  width: number;
+  height: number;
+}
+
+export interface MonitoringCameraList {
+  cameras: MonitoringCamera[];
+}
+
+export interface SelfPasswordChangeResult {
+  password_changed: true;
+  logged_out: true;
 }
 
 export interface AiModelStatus {
@@ -142,6 +158,7 @@ export type Parser<T> = (value: unknown) => T;
 
 export interface CameraApiClient {
   getJson<T>(path: string, parser: Parser<T>, signal?: AbortSignal): Promise<T>;
+  deleteJson<T>(path: string, parser: Parser<T>, signal?: AbortSignal): Promise<T>;
   putJson<B, T>(
     path: string,
     body: B,
