@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -71,14 +72,79 @@ bool IsStateChanging(std::string_view method) {
          method == "DELETE";
 }
 
-bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
+enum class RoutePolicy { kAdministrator, kViewer };
+
+std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
+                                                 std::string_view method) {
+  if (path == "/api/v1/auth/me" || path == "/api/v1/auth/logout" ||
+      path == "/api/v1/auth/password") {
+    if ((path == "/api/v1/auth/me" && method == "GET") ||
+        (path == "/api/v1/auth/logout" && method == "POST") ||
+        (path == "/api/v1/auth/password" && method == "PUT")) {
+      return RoutePolicy::kViewer;
+    }
+    return std::nullopt;
+  }
+
+  if (path == "/api/v1/security/users") {
+    return method == "GET" || method == "POST"
+               ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+               : std::nullopt;
+  }
+  constexpr std::string_view users_prefix = "/api/v1/security/users/";
+  if (path.starts_with(users_prefix)) {
+    const auto remainder = path.substr(users_prefix.size());
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return !remainder.empty() && method == "DELETE"
+                 ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+                 : std::nullopt;
+    }
+    if (remainder.substr(0, slash).empty()) {
+      return std::nullopt;
+    }
+    const auto suffix = remainder.substr(slash);
+    if ((suffix == "/enabled" || suffix == "/password") &&
+        method == "PUT") {
+      return RoutePolicy::kAdministrator;
+    }
+    return std::nullopt;
+  }
+
+  if (path == "/api/v1/security/management-ips") {
+    return method == "GET"
+               ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+               : std::nullopt;
+  }
+  constexpr std::string_view management_ips_prefix =
+      "/api/v1/security/management-ips/";
+  if (path.starts_with(management_ips_prefix)) {
+    const auto remainder = path.substr(management_ips_prefix.size());
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return !remainder.empty() && method == "POST"
+                 ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+                 : std::nullopt;
+    }
+    const auto role = remainder.substr(0, slash);
+    const auto id = remainder.substr(slash + 1U);
+    if (role.empty() || id.empty() || id.find('/') != std::string_view::npos) {
+      return std::nullopt;
+    }
+    return method == "PUT" || method == "DELETE"
+               ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+               : std::nullopt;
+  }
+
   if (method == "GET") {
     if (path == "/api/v1/health" || path == "/api/v1/cameras" ||
         path == "/api/v1/ai/detections" ||
         path == "/api/v1/ai/detections/stream" ||
-        path == "/api/v1/stream" || path == "/api/v1/auth/me" ||
-        path == "/api/v1/settings/runtime") {
-      return true;
+        path == "/api/v1/stream" || path == "/api/v1/auth/me") {
+      return RoutePolicy::kViewer;
+    }
+    if (path == "/api/v1/settings/runtime") {
+      return RoutePolicy::kAdministrator;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
     constexpr std::array<std::string_view, 2> suffixes = {
@@ -89,20 +155,35 @@ bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
         const auto camera_id = path.substr(
             prefix.size(), path.size() - prefix.size() - suffix.size());
         if (camera_id.find('/') == std::string_view::npos) {
-          return true;
+          return RoutePolicy::kViewer;
         }
       }
     }
   }
   if (method == "PUT" && path == "/api/v1/settings/runtime") {
-    return true;
+    return RoutePolicy::kAdministrator;
   }
-  return method == "POST" &&
-         (path == "/api/v1/ai/restart" ||
-          path == "/api/v1/runtime/restart" ||
-          path == "/api/v1/auth/logout" ||
-          path == "/api/v1/settings/runtime/apply" ||
-          path == "/api/v1/settings/runtime/discard");
+  if (method == "POST" &&
+      (path == "/api/v1/ai/restart" ||
+       path == "/api/v1/runtime/restart" ||
+       path == "/api/v1/auth/logout" ||
+       path == "/api/v1/settings/runtime/apply" ||
+       path == "/api/v1/settings/runtime/discard")) {
+    return RoutePolicy::kAdministrator;
+  }
+  return std::nullopt;
+}
+
+bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
+  return ClassifySecurityRoute(path, method).has_value();
+}
+
+RoutePolicy PolicyForRoute(std::string_view path, std::string_view method) {
+  const auto policy = ClassifySecurityRoute(path, method);
+  if (policy.has_value()) {
+    return *policy;
+  }
+  return RoutePolicy::kAdministrator;
 }
 
 common::Result<std::string> CanonicalOrigin(std::string_view origin,
@@ -230,7 +311,8 @@ class InSituCredentialParser {
     bool have_peer = false;
     for (;;) {
       DecodedJsonString key_slice;
-      if (!ParseString(key_slice)) {
+      bool key_was_escaped = false;
+      if (!ParseString(key_slice, &key_was_escaped) || key_was_escaped) {
         return false;
       }
       const std::string key = OrdinaryString(key_slice);
@@ -272,7 +354,7 @@ class InSituCredentialParser {
   }
 
  private:
-  bool ParseString(DecodedJsonString& decoded) {
+  bool ParseString(DecodedJsonString& decoded, bool* was_escaped = nullptr) {
     if (!Consume('"')) {
       return false;
     }
@@ -282,9 +364,13 @@ class InSituCredentialParser {
       const unsigned char value = body_.data()[position_++];
       if (value == '"') {
         decoded = {output_start, output - output_start};
-        return g_utf8_validate(
-            reinterpret_cast<const char*>(body_.data() + decoded.offset),
-            static_cast<gssize>(decoded.size), nullptr);
+        return std::find(body_.data() + decoded.offset,
+                         body_.data() + decoded.offset + decoded.size,
+                         static_cast<unsigned char>(0U)) ==
+                   body_.data() + decoded.offset + decoded.size &&
+               g_utf8_validate(
+                   reinterpret_cast<const char*>(body_.data() + decoded.offset),
+                   static_cast<gssize>(decoded.size), nullptr);
       }
       if (value < 0x20U) {
         return false;
@@ -292,6 +378,9 @@ class InSituCredentialParser {
       if (value != '\\') {
         body_.data()[output++] = value;
         continue;
+      }
+      if (was_escaped != nullptr) {
+        *was_escaped = true;
       }
       if (position_ >= body_.size()) {
         return false;
@@ -487,7 +576,9 @@ common::Result<void> AuthorizeSecurityRequest(
       return GateError("E_REQUEST_HEADER", "request denied");
     }
   }
-  if (!login && context.principal->role != security::UserRole::kAdministrator) {
+  if (!login &&
+      PolicyForRoute(context.path, method) == RoutePolicy::kAdministrator &&
+      context.principal->role != security::UserRole::kAdministrator) {
     return GateError("E_AUTHORIZATION_REQUIRED", "authorization required");
   }
   return common::Result<void>::Ok();

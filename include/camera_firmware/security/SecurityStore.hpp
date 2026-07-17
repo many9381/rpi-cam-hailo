@@ -13,11 +13,15 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/SecurityTypes.hpp"
 
 namespace camera_firmware::security {
 
 class BootstrapService;
 class AuthService;
+class UserManagementService;
+
+inline constexpr int kSecuritySchemaRevision = 3;
 
 enum class DeviceState { kDefault, kOperational };
 
@@ -34,6 +38,46 @@ struct BootstrapRecord {
 };
 
 using CredentialInstaller = std::function<common::Result<void>()>;
+
+struct StoredManagedUser {
+  std::int64_t id{0};
+  std::string canonical_username;
+  std::string display_username;
+  UserRole role{UserRole::kViewer};
+  bool enabled{false};
+  std::optional<std::int64_t> lock_until_seconds;
+  std::int64_t created_at_seconds{0};
+  std::int64_t password_changed_at_seconds{0};
+  std::optional<std::int64_t> last_login_at_seconds;
+};
+
+struct StoredManagementIp {
+  std::int64_t id{0};
+  std::string normalized_ip;
+  UserRole role{UserRole::kViewer};
+  std::int64_t created_at_seconds{0};
+};
+
+struct PasswordMutationSnapshot {
+  std::int64_t user_id{0};
+  std::string canonical_username;
+  PasswordRecord current;
+  std::optional<PasswordRecord> previous;
+  std::int64_t password_changed_at_seconds{0};
+};
+
+struct CommittedRevocation {
+  std::vector<SessionIdentity> session_identities;
+};
+
+struct SecurityMutationContext {
+  std::int64_t actor_user_id{0};
+  std::string actor_username;
+  UserRole actor_role{UserRole::kViewer};
+  std::string normalized_peer_ip;
+};
+
+enum class PasswordMutationKind { kSelfChange, kAdministratorReset };
 
 class SecurityStore {
  private:
@@ -84,6 +128,7 @@ class SecurityStore {
  private:
   friend class BootstrapService;
   friend class AuthService;
+  friend class UserManagementService;
 
   struct AuthenticationUser {
     std::int64_t id{0};
@@ -123,7 +168,9 @@ class SecurityStore {
 
   explicit SecurityStore(std::shared_ptr<Impl> impl) noexcept;
   common::Result<void> InitializeSchema();
-  common::Result<Transaction> BeginReadTransaction();
+  common::Result<void> MigrateRevisionTwoToThree();
+  common::Result<void> RollbackSchemaTransaction();
+  common::Result<Transaction> BeginReadTransaction() const;
   common::Result<DeviceState> StateUnderConnectionLease() const;
   common::Result<AuthenticationContext> ReadAuthenticationContext(
       Transaction& transaction,
@@ -144,7 +191,9 @@ class SecurityStore {
       std::string_view outcome,
       std::optional<std::int64_t> actor_user_id,
       std::string_view normalized_peer_ip,
-      std::string_view detail_code);
+      std::string_view detail_code,
+      std::string_view subject_type = {},
+      std::string_view subject_identity = {});
   common::Result<void> CoalesceFirmwareLogOutbox(
       Transaction& transaction,
       std::int64_t now_seconds,
@@ -165,13 +214,19 @@ class SecurityStore {
       std::int64_t outbox_id,
       std::span<const unsigned char> lease_owner,
       std::span<const unsigned char> lease_token);
-  common::Result<void> DeleteExpiredSessions(Transaction& transaction,
-                                              std::int64_t now_seconds);
-  common::Result<std::optional<StoredSession>> ReadAdministratorSession(
+  common::Result<std::vector<SessionIdentity>> DeleteExpiredSessions(
+      Transaction& transaction,
+      std::int64_t now_seconds);
+  common::Result<std::optional<std::int64_t>> ReadNextSessionExpiry(
       Transaction& transaction) const;
+  common::Result<std::optional<StoredSession>> ReadSessionByUserId(
+      Transaction& transaction,
+      std::int64_t user_id) const;
   common::Result<std::optional<StoredSession>> ReadSessionByTokenHash(
       Transaction& transaction,
-      std::span<const unsigned char> token_hash) const;
+      std::span<const unsigned char> token_hash,
+      std::string_view normalized_peer_ip,
+      std::int64_t now_seconds) const;
   common::Result<bool> SessionTokenHashExists(
       Transaction& transaction,
       std::span<const unsigned char> token_hash) const;
@@ -189,6 +244,47 @@ class SecurityStore {
                                       std::int64_t expires_at_seconds);
   common::Result<void> DeleteSession(Transaction& transaction,
                                      std::int64_t session_id);
+  common::Result<std::vector<StoredManagedUser>> ReadManagedUsers() const;
+  common::Result<StoredManagedUser> InsertViewer(
+      std::string canonical_username,
+      std::string display_username,
+      PasswordRecord password,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<CommittedRevocation> SetViewerEnabled(
+      std::int64_t user_id,
+      bool enabled,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<PasswordMutationSnapshot> ReadPasswordMutationSnapshot(
+      std::int64_t user_id) const;
+  common::Result<CommittedRevocation> ReplacePasswordIfCurrent(
+      const PasswordMutationSnapshot& expected,
+      PasswordRecord replacement,
+      PasswordMutationKind kind,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<CommittedRevocation> DeleteViewer(
+      std::int64_t user_id,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<std::vector<StoredManagementIp>> ReadManagementIps() const;
+  common::Result<StoredManagementIp> InsertManagementIp(
+      UserRole role,
+      std::string normalized_ip,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<CommittedRevocation> UpdateManagementIp(
+      std::int64_t management_ip_id,
+      UserRole role,
+      std::string normalized_replacement,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
+  common::Result<CommittedRevocation> DeleteManagementIp(
+      std::int64_t management_ip_id,
+      UserRole role,
+      std::int64_t now_seconds,
+      const SecurityMutationContext& context);
   common::Result<void> InstallBootstrapRtspCredential(
       const std::filesystem::path& configured_path,
       std::string_view username,

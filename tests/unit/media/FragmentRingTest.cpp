@@ -5,6 +5,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -134,10 +135,14 @@ TEST(FragmentRingTest, InvalidateWakesBlockedReader) {
   auto reader = std::move(opened).value();
   (void)ReadRequired(reader);
 
-  auto blocked = std::async(std::launch::async, [&reader] {
+  std::promise<void> wait_next_starting;
+  auto wait_next_starting_future = wait_next_starting.get_future();
+  auto blocked = std::async(std::launch::async, [&] {
+    wait_next_starting.set_value();
     return reader.WaitNext(std::chrono::seconds(5));
   });
-  ASSERT_EQ(blocked.wait_for(30ms), std::future_status::timeout);
+  ASSERT_EQ(wait_next_starting_future.wait_for(1s),
+            std::future_status::ready);
 
   ring.Invalidate();
 
@@ -145,6 +150,43 @@ TEST(FragmentRingTest, InvalidateWakesBlockedReader) {
   const auto result = blocked.get();
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_LIVE_GENERATION");
+}
+
+TEST(FragmentRingTest, CancelWakesBlockedReaderWithoutInvalidatingGeneration) {
+  media::FragmentRing ring(
+      {.max_fragments = 2U, .max_bytes = 1024U, .max_readers = 1U});
+  ASSERT_TRUE(ring.BeginGeneration(Bytes(8U, 0x62U)).ok());
+  auto opened = ring.OpenReader();
+  ASSERT_TRUE(opened.ok());
+  auto reader = std::move(opened).value();
+  (void)ReadRequired(reader);
+
+  auto blocked = std::async(std::launch::async, [&] {
+    return reader.WaitNext(std::chrono::seconds(5));
+  });
+  const auto wait_deadline = media::FragmentRing::Clock::now() + 1s;
+  while (ring.waiting_readers() != 1U &&
+         media::FragmentRing::Clock::now() < wait_deadline) {
+    std::this_thread::yield();
+  }
+  ASSERT_EQ(ring.waiting_readers(), 1U);
+
+  reader.Cancel();
+
+  ASSERT_EQ(blocked.wait_for(200ms), std::future_status::ready);
+  const auto result = blocked.get();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_LIVE_CANCELLED");
+  EXPECT_FALSE(reader.valid());
+  EXPECT_EQ(ring.active_readers(), 0U);
+
+  reader.Cancel();
+  EXPECT_EQ(ring.active_readers(), 0U);
+
+  auto replacement = ring.OpenReader();
+  ASSERT_TRUE(replacement.ok()) << replacement.error().message;
+  EXPECT_EQ(ReadRequired(replacement.value()).kind,
+            media::FragmentedMp4ChunkKind::kInitialization);
 }
 
 TEST(FragmentRingTest, OversizedFragmentInvalidatesGeneration) {

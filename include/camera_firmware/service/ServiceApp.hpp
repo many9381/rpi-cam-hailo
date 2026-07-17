@@ -26,6 +26,7 @@
 #include "camera_firmware/security/DeviceTlsManager.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/BoundedWorker.hpp"
+#include "camera_firmware/service/SessionStreamRegistry.hpp"
 #include "camera_firmware/settings/RuntimeSettingsService.hpp"
 
 namespace trantor {
@@ -60,8 +61,15 @@ using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
     std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
 using LiveMp4StreamCallback = std::function<std::size_t(char*, std::size_t)>;
+using LiveMp4CancelCallback = std::function<void()>;
+struct LiveMp4StreamHandle {
+  LiveMp4StreamCallback read;
+  LiveMp4CancelCallback cancel;
+};
 using LiveMp4OpenCallback = std::function<
     common::Result<LiveMp4StreamCallback>(const std::string&)>;
+using CancellableLiveMp4OpenCallback = std::function<
+    common::Result<LiveMp4StreamHandle>(const std::string&)>;
 
 struct AiRunnerServiceStatus {
   std::string camera_id;
@@ -124,6 +132,8 @@ using DetectionSnapshotProvider =
     std::function<std::vector<ai::DetectionEvent>()>;
 using DetectionEventSubscriber =
     std::function<ai::DetectionBus::Subscription(ai::DetectionBus::Handler)>;
+using AuthServiceDependenciesProvider =
+    std::function<security::AuthServiceDependencies()>;
 
 struct ServiceListenerConfig {
   std::string bind_address{"0.0.0.0"};
@@ -157,7 +167,9 @@ struct ServiceInitArgs {
   RuntimeSettingsDiscardCallback runtime_settings_discard_callback;
   std::shared_ptr<security::SecurityStore> security_store;
   std::shared_ptr<security::BootstrapService> bootstrap_service;
-  std::shared_ptr<security::AuthService> auth_service;
+  AuthServiceDependenciesProvider auth_service_dependencies_provider;
+  std::shared_ptr<SessionStreamRegistry> stream_registry;
+  CancellableLiveMp4OpenCallback cancellable_live_stream_callback;
 };
 
 Json::Value BuildHealthJson(const std::string& status);
@@ -183,6 +195,7 @@ std::string BuildDetectionSseEvent(
     const std::vector<ai::DetectionEvent>& events);
 drogon::HttpResponsePtr BuildDetectionSseResponse(
     const std::vector<ai::DetectionEvent>& events);
+
 Json::Value BuildStreamJson(
     std::string_view public_base_url,
     const config::SecureRtspConfig& secure_rtsp,
@@ -195,12 +208,21 @@ common::Result<void> ValidateHttpTlsConfigFiles(
 drogon::HttpResponsePtr BuildSnapshotResponse(
     const SnapshotCallback& snapshot_callback,
     const std::string& camera_id);
+drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
+    const CancellableLiveMp4OpenCallback& live_stream_callback,
+    const std::string& camera_id,
+    std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit,
+    std::shared_ptr<SessionStreamLease> stream_lease = {});
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id,
-    std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit);
+    std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit,
+    std::shared_ptr<SessionStreamLease> stream_lease = {});
 
 namespace internal {
+
+class LiveMp4PumpManager;
+class RuntimeCallbackLifecycle;
 
 std::thread StartServiceThreadWithTlsOwner(
     std::optional<security::ResolvedTlsMaterial> tls_material,
@@ -217,6 +239,9 @@ common::Result<void> StopServiceThreadWithin(
 class ServiceApp {
  public:
   ServiceApp() = default;
+  // Callbacks supplied to Init may call Stop(), but ServiceApp must outlive
+  // those callbacks and a subsequent non-callback Stop() join. Destroying the
+  // object from one of its runtime or media callbacks terminates the process.
   ~ServiceApp();
 
   ServiceApp(const ServiceApp&) = delete;
@@ -237,6 +262,9 @@ class ServiceApp {
   bool running_{false};
   std::shared_ptr<BoundedWorker> security_worker_;
   std::shared_ptr<BoundedWorker> runtime_settings_worker_;
+  std::shared_ptr<SessionStreamRegistry> stream_registry_;
+  std::shared_ptr<internal::LiveMp4PumpManager> live_pump_manager_;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle_;
   std::optional<security::ResolvedTlsMaterial> tls_material_;
   std::thread server_thread_;
   std::shared_future<void> server_thread_done_;

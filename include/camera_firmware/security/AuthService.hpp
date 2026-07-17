@@ -11,13 +11,18 @@
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/common/SecureBytes.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/SecurityTypes.hpp"
+
+namespace camera_firmware::service {
+class ServiceApp;
+}
 
 namespace camera_firmware::security {
 
 class SecurityStore;
 class AuthServiceTestAccess;
 
-enum class UserRole { kAdministrator, kViewer };
+inline constexpr std::int64_t kDefaultSessionIdleTimeoutSeconds = 10 * 60;
 
 struct LoginRequest {
   std::string username;
@@ -35,6 +40,7 @@ struct Principal {
   std::int64_t user_id{0};
   std::string username;
   UserRole role{UserRole::kAdministrator};
+  SessionIdentity session_identity;
 };
 
 using AuthClockCallback = std::function<std::int64_t()>;
@@ -53,11 +59,19 @@ struct AuthServiceDependencies {
   AuthPasswordVerifyCallback verify_password;
   AuthHighSeverityLogCallback high_severity_log;
   AuthRandomCallback firmware_log_random_bytes;
+  std::int64_t session_idle_timeout_seconds{
+      kDefaultSessionIdleTimeoutSeconds};
+};
+
+struct AuthServiceRuntimeHooks {
+  SessionRevocationCallback revoke_sessions;
+  GlobalStreamRevocationCallback revoke_all_streams;
 };
 
 class AuthService {
  public:
-  explicit AuthService(SecurityStore& store);
+  explicit AuthService(SecurityStore& store,
+                       AuthServiceRuntimeHooks hooks = {});
   ~AuthService();
 
   common::Result<LoginResult> Login(LoginRequest request);
@@ -68,18 +82,36 @@ class AuthService {
 
  private:
   friend class AuthServiceTestAccess;
+  friend class camera_firmware::service::ServiceApp;
 
   class FirmwareLogWorker;
+  class SessionExpiryWorker;
   using FirmwareLogBeforeAckCallback = std::function<void()>;
+  using LoginRoleValidatorCallback = std::function<bool(UserRole)>;
 
   AuthService(SecurityStore& store, AuthServiceDependencies dependencies);
   AuthService(SecurityStore& store,
               AuthServiceDependencies dependencies,
               FirmwareLogBeforeAckCallback firmware_log_before_ack);
+  AuthService(SecurityStore& store,
+              AuthServiceDependencies dependencies,
+              AuthServiceRuntimeHooks hooks);
+  AuthService(SecurityStore& store,
+              AuthServiceDependencies dependencies,
+              AuthServiceRuntimeHooks hooks,
+              FirmwareLogBeforeAckCallback firmware_log_before_ack);
+  AuthService(SecurityStore& store,
+              AuthServiceDependencies dependencies,
+              AuthServiceRuntimeHooks hooks,
+              FirmwareLogBeforeAckCallback firmware_log_before_ack,
+              LoginRoleValidatorCallback login_role_validator);
 
   SecurityStore& store_;
   AuthServiceDependencies dependencies_;
+  AuthServiceRuntimeHooks hooks_;
+  LoginRoleValidatorCallback login_role_validator_;
   std::unique_ptr<FirmwareLogWorker> firmware_log_worker_;
+  std::unique_ptr<SessionExpiryWorker> session_expiry_worker_;
 };
 
 }  // namespace camera_firmware::security

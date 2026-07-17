@@ -76,6 +76,7 @@ add_executable(camera_firmware_security_tests
     unit/security/PasswordHasherTest.cpp
     unit/security/PasswordPolicyTest.cpp
     unit/security/SecurityStoreTest.cpp
+    unit/security/UserManagementServiceTest.cpp
 )
 
 target_link_libraries(camera_firmware_security_tests
@@ -342,17 +343,28 @@ gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
 
 add_executable(camera_firmware_service_tests
     unit/service/SecurityRequestGateTest.cpp
+    unit/service/SessionStreamRegistryTest.cpp
     unit/service/ServiceResponseTest.cpp
     unit/service/ServiceStartupTest.cpp
+    unit/service/UserManagementHttpTest.cpp
 )
 
 target_link_libraries(camera_firmware_service_tests
     PRIVATE
-        camera_firmware_service
+        camera_firmware_service_testing
         GTest::gtest_main
 )
 
 gtest_discover_tests(camera_firmware_service_tests)
+
+add_test(
+    NAME ServiceProductionSurfaceTest.NoTestHooks
+    COMMAND ${CMAKE_COMMAND}
+        -DSERVICE_LIBRARY=$<TARGET_FILE:camera_firmware_service>
+        -DSERVICE_REGISTRY_HEADER=${PROJECT_SOURCE_DIR}/include/camera_firmware/service/SessionStreamRegistry.hpp
+        -DNM_EXECUTABLE=${CMAKE_NM}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ServiceProductionSurfaceTest.cmake
+)
 
 add_executable(camera_firmware_https_auth_integration
     integration/HttpsAuthIntegrationTest.cpp
@@ -372,13 +384,22 @@ target_compile_definitions(camera_firmware_https_auth_integration
 target_link_libraries(camera_firmware_https_auth_integration
     PRIVATE
         camera_firmware_boot
-        camera_firmware_service
+        camera_firmware_service_testing
         GTest::gtest_main
         OpenSSL::SSL
 )
 
 gtest_discover_tests(camera_firmware_https_auth_integration
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TEST_FILTER HttpsAuthIntegrationTest.*
+    TEST_SUFFIX .ServiceSecurityIntegrationTest
+    PROPERTIES
+        TIMEOUT 90
+)
+
+gtest_discover_tests(camera_firmware_https_auth_integration
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TEST_FILTER "-HttpsAuthIntegrationTest.*"
     PROPERTIES
         TIMEOUT 90
 )

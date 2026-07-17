@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cctype>
 #include <csignal>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +24,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -39,22 +41,39 @@
 #include <openssl/ssl.h>
 
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/UserManagementService.hpp"
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
+#include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/settings/RuntimeSettingsStore.hpp"
 
-namespace camera_firmware::security {
-
-class AuthServiceTestAccess {
- public:
-  static std::unique_ptr<AuthService> Create(
-      SecurityStore& store,
-      AuthServiceDependencies dependencies) {
-    return std::unique_ptr<AuthService>(
-        new AuthService(store, std::move(dependencies)));
-  }
-};
-
-}  // namespace camera_firmware::security
+namespace camera_firmware::service::internal {
+void SetLiveMp4StartPublicationPauseForTesting(
+    std::promise<void>* published,
+    std::shared_future<void> release_publication) noexcept;
+std::size_t LiveMp4StopCallsDuringStartForTesting() noexcept;
+void FailNextDetectionSseEventMergeForTesting() noexcept;
+void FailNextRuntimeCallbackLeaseAllocationForTesting() noexcept;
+void SetSessionStreamBatchMarkPauseForTesting(
+    std::promise<void>* first_marked,
+    std::shared_future<void> release_marking) noexcept;
+bool HasRetainedUserManagementServiceForTesting() noexcept;
+common::Result<std::vector<security::ManagedUser>>
+ListRetainedUsersForTesting();
+void ForceNextLoginRoleInvalidForTesting() noexcept;
+using UserManagementRequestBodyCleanupObserverForTesting = void (*)(
+    std::size_t source_size,
+    bool source_cleansed,
+    bool copied_to_secure_owner) noexcept;
+void SetUserManagementRequestBodyCleanupObserverForTesting(
+    UserManagementRequestBodyCleanupObserverForTesting observer) noexcept;
+void ResetUserManagementRequestBodyCleanupObserverForTesting() noexcept;
+void FailNextUserManagementPreSubmitForTesting() noexcept;
+void ResetUserManagementPreSubmitFailureForTesting() noexcept;
+void FailNextAuthorizationDispatchQueueForTesting() noexcept;
+void ResetAuthorizationDispatchQueueFailureForTesting() noexcept;
+void FailNextTerminalResponseQueueForTesting() noexcept;
+void ResetTerminalResponseQueueFailureForTesting() noexcept;
+}  // namespace camera_firmware::service::internal
 
 namespace {
 
@@ -139,6 +158,67 @@ struct HttpResult {
   drogon::HttpResponsePtr response;
 };
 
+struct UserManagementBodyCleanupState {
+  std::atomic_size_t calls{0U};
+  std::atomic_size_t over_limit_without_copy{0U};
+  std::atomic_size_t copied_to_secure_owner{0U};
+  std::atomic_bool source_cleansed{true};
+};
+
+UserManagementBodyCleanupState& UserManagementBodyCleanupForTesting() {
+  static UserManagementBodyCleanupState state;
+  return state;
+}
+
+void ResetUserManagementBodyCleanupForTesting() noexcept {
+  auto& state = UserManagementBodyCleanupForTesting();
+  state.calls.store(0U, std::memory_order_relaxed);
+  state.over_limit_without_copy.store(0U, std::memory_order_relaxed);
+  state.copied_to_secure_owner.store(0U, std::memory_order_relaxed);
+  state.source_cleansed.store(true, std::memory_order_relaxed);
+}
+
+void RecordUserManagementBodyCleanupForTesting(
+    std::size_t source_size,
+    bool source_cleansed,
+    bool copied_to_secure_owner) noexcept {
+  auto& state = UserManagementBodyCleanupForTesting();
+  state.calls.fetch_add(1U, std::memory_order_relaxed);
+  if (source_size > camera_firmware::service::kMaximumSecurityBodyBytes &&
+      !copied_to_secure_owner) {
+    state.over_limit_without_copy.fetch_add(1U, std::memory_order_relaxed);
+  }
+  if (copied_to_secure_owner) {
+    state.copied_to_secure_owner.fetch_add(1U, std::memory_order_relaxed);
+  }
+  if (!source_cleansed) {
+    state.source_cleansed.store(false, std::memory_order_relaxed);
+  }
+}
+
+class UserManagementPreSubmitFailureScope {
+ public:
+  UserManagementPreSubmitFailureScope() noexcept {
+    ResetUserManagementBodyCleanupForTesting();
+    camera_firmware::service::internal::
+        SetUserManagementRequestBodyCleanupObserverForTesting(
+            RecordUserManagementBodyCleanupForTesting);
+    camera_firmware::service::internal::FailNextUserManagementPreSubmitForTesting();
+  }
+
+  ~UserManagementPreSubmitFailureScope() {
+    camera_firmware::service::internal::
+        ResetUserManagementPreSubmitFailureForTesting();
+    camera_firmware::service::internal::
+        ResetUserManagementRequestBodyCleanupObserverForTesting();
+  }
+
+  UserManagementPreSubmitFailureScope(
+      const UserManagementPreSubmitFailureScope&) = delete;
+  UserManagementPreSubmitFailureScope& operator=(
+      const UserManagementPreSubmitFailureScope&) = delete;
+};
+
 drogon::HttpClientPtr NewClient(std::uint16_t port,
                                 std::string source_ip = {}) {
   auto client = drogon::HttpClient::newHttpClient(
@@ -164,7 +244,8 @@ HttpResult Send(const drogon::HttpClientPtr& client,
                 std::string body = {},
                 std::string origin = {},
                 std::string cookie = {},
-                bool management_header = false) {
+                bool management_header = false,
+                double timeout_seconds = 15.0) {
   auto request = drogon::HttpRequest::newHttpRequest();
   request->setMethod(method);
   request->setPath(std::move(path));
@@ -181,7 +262,7 @@ HttpResult Send(const drogon::HttpClientPtr& client,
   if (management_header) {
     request->addHeader("X-Camera-Request", "management");
   }
-  auto [result, response] = client->sendRequest(request, 15.0);
+  auto [result, response] = client->sendRequest(request, timeout_seconds);
   return {result, std::move(response)};
 }
 
@@ -770,7 +851,6 @@ camera_firmware::config::AppConfig MakePersistenceConfig(
   config.secure_rtsp.client_auth.algorithms = {"sha-256"};
   config.secure_rtsp.client_auth.credential_file =
       (state_directory / "rtsp.credentials").string();
-
   config.camera.video.width = 1920U;
   config.camera.video.height = 1080U;
   config.camera.video.fps = 50U;
@@ -1607,6 +1687,1566 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
+TEST(HttpsAuthIntegrationTest,
+     ProductionInvalidRoleLoginRejectsBeforeSessionCommit) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    const std::uint16_t port = ReserveLoopbackPort();
+    const std::string origin =
+        "https://127.0.0.1:" + std::to_string(port);
+    camera_firmware::config::AppConfig config;
+    config.security.enabled = true;
+    config.security.state_directory = directory.path().string();
+    config.http.enabled = true;
+    config.http.bind_ip = "127.0.0.1";
+    config.http.port = port;
+    config.http.public_base_url = origin;
+    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+    config.http.tls.enabled = true;
+    config.http.tls.allow_development_self_signed_tls = true;
+    config.secure_rtsp.client_auth.enabled = true;
+    config.secure_rtsp.client_auth.realm = "camera-test";
+    config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+    config.secure_rtsp.client_auth.credential_file =
+        (directory.path() / "rtsp.credentials").string();
+
+    camera_firmware::service::ServiceInitArgs args;
+    args.app_config = &config;
+    args.document_root = config.http.web_root;
+    args.public_base_url = origin;
+    args.runtime_start_callback = [] {
+      return camera_firmware::common::Result<void>::Ok();
+    };
+    camera_firmware::service::ServiceApp service;
+    if (!service.Init(args).ok()) {
+      _exit(2);
+    }
+    const auto fail = [&service](int code) {
+      service.Stop();
+      _exit(code);
+    };
+    auto client = NewClient(port);
+    const auto setup = Send(
+        client, drogon::Post, "/api/v1/setup/initialize",
+        R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+        origin, {}, true);
+    if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
+      fail(3);
+    }
+
+    camera_firmware::service::internal::ForceNextLoginRoleInvalidForTesting();
+    const auto rejected = Send(
+        client, drogon::Post, "/api/v1/auth/login",
+        R"({"username":"owner1","password":"StrongPass9!"})", origin,
+        {}, true);
+    if (!rejected.response ||
+        rejected.response->statusCode() != drogon::k503ServiceUnavailable ||
+        rejected.response->getJsonObject() == nullptr ||
+        !rejected.response->getCookie("camera_session").value().empty()) {
+      fail(4);
+    }
+    const auto& error = *rejected.response->getJsonObject();
+    if (!error.isObject() || error.size() != 2U ||
+        error["code"].asString() != "E_SECURITY_UNAVAILABLE" ||
+        error["message"].asString() != "security service unavailable") {
+      fail(5);
+    }
+
+    const auto retried = Send(
+        client, drogon::Post, "/api/v1/auth/login",
+        R"({"username":"owner1","password":"StrongPass9!"})", origin,
+        {}, true);
+    if (!retried.response ||
+        retried.response->statusCode() != drogon::k200OK ||
+        retried.response->getJsonObject() == nullptr ||
+        (*retried.response->getJsonObject())["role"].asString() !=
+            "administrator" ||
+        retried.response->getCookie("camera_session").value().empty()) {
+      fail(6);
+    }
+    service.Stop();
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ProductionUserManagementWiringReturnsRealRolesAndExactPrincipalFields) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    const std::uint16_t port = ReserveLoopbackPort();
+    const std::string origin =
+        "https://127.0.0.1:" + std::to_string(port);
+    camera_firmware::config::AppConfig config;
+    config.security.enabled = true;
+    config.security.state_directory = directory.path().string();
+    config.http.enabled = true;
+    config.http.bind_ip = "127.0.0.1";
+    config.http.port = port;
+    config.http.public_base_url = origin;
+    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+    config.http.tls.enabled = true;
+    config.http.tls.allow_development_self_signed_tls = true;
+    config.secure_rtsp.client_auth.enabled = true;
+    config.secure_rtsp.client_auth.realm = "camera-test";
+    config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+    config.secure_rtsp.client_auth.credential_file =
+        (directory.path() / "rtsp.credentials").string();
+
+    auto opened = camera_firmware::security::SecurityStore::Open(
+        {config.security.state_directory});
+    if (!opened.ok()) {
+      _exit(2);
+    }
+    auto store = std::shared_ptr<camera_firmware::security::SecurityStore>(
+        std::move(opened).value());
+    camera_firmware::service::ServiceInitArgs args;
+    args.app_config = &config;
+    args.document_root = config.http.web_root;
+    args.public_base_url = origin;
+    args.security_store = store;
+    args.runtime_start_callback = [] {
+      return camera_firmware::common::Result<void>::Ok();
+    };
+
+    camera_firmware::service::ServiceApp service;
+    if (!service.Init(args).ok()) {
+      _exit(3);
+    }
+    if (!camera_firmware::service::internal::
+            HasRetainedUserManagementServiceForTesting()) {
+      service.Stop();
+      _exit(4);
+    }
+    const auto fail = [&service](int code) {
+      service.Stop();
+      _exit(code);
+    };
+    auto client = NewClient(port);
+    const auto setup = Send(
+        client, drogon::Post, "/api/v1/setup/initialize",
+        R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+        origin, {}, true);
+    if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
+      fail(5);
+    }
+
+    camera_firmware::security::UserManagementService users(
+        *store, camera_firmware::security::BuildReservedIdentities(config));
+    const auto managed = users.ListUsers();
+    if (!managed.ok() || managed.value().size() != 1U) {
+      fail(6);
+    }
+    camera_firmware::security::UserMutationContext administrator;
+    administrator.actor.user_id = managed.value().front().id;
+    administrator.actor.username = "owner1";
+    administrator.actor.role =
+        camera_firmware::security::UserRole::kAdministrator;
+    administrator.normalized_peer_ip = "127.0.0.1";
+    camera_firmware::common::SecureBytes viewer_password;
+    constexpr std::string_view kViewerPassword = "ViewerPass9!";
+    viewer_password.assign(
+        reinterpret_cast<const unsigned char*>(kViewerPassword.data()),
+        kViewerPassword.size());
+    const auto created = users.CreateViewer("viewer1", std::move(viewer_password),
+                                            administrator);
+    if (!created.ok()) {
+      fail(7);
+    }
+    const auto viewer_management_ip = users.AddManagementIp(
+        camera_firmware::security::UserRole::kViewer, "127.0.0.2",
+        administrator);
+    if (!viewer_management_ip.ok()) {
+      fail(8);
+    }
+    const auto retained_users = camera_firmware::service::internal::
+        ListRetainedUsersForTesting();
+    if (!retained_users.ok() || retained_users.value().size() != 2U) {
+      fail(9);
+    }
+    const auto has_user = [&retained_users](
+                              std::string_view username,
+                              camera_firmware::security::UserRole role) {
+      return std::any_of(
+          retained_users.value().begin(), retained_users.value().end(),
+          [username, role](const camera_firmware::security::ManagedUser& user) {
+            return user.username == username && user.role == role;
+          });
+    };
+    if (!has_user("owner1",
+                  camera_firmware::security::UserRole::kAdministrator) ||
+        !has_user("viewer1", camera_firmware::security::UserRole::kViewer)) {
+      fail(10);
+    }
+
+    const auto assert_login_and_me =
+        [&origin](const drogon::HttpClientPtr& login_client,
+                  std::string_view username,
+                  std::string_view password,
+                  std::string_view expected_role) -> bool {
+      const auto login = Send(
+          login_client, drogon::Post, "/api/v1/auth/login",
+          "{\"username\":\"" + std::string(username) +
+              "\",\"password\":\"" + std::string(password) + "\"}",
+          origin, {}, true);
+      if (!login.response || login.response->statusCode() != drogon::k200OK ||
+          login.response->getJsonObject() == nullptr ||
+          (*login.response->getJsonObject())["role"].asString() !=
+              expected_role) {
+        return false;
+      }
+      const auto& session_cookie = login.response->getCookie("camera_session");
+      if (session_cookie.value().empty()) {
+        return false;
+      }
+      const auto me =
+          Send(login_client, drogon::Get, "/api/v1/auth/me", {}, {},
+               "camera_session=" + session_cookie.value());
+      if (!me.response || me.response->statusCode() != drogon::k200OK ||
+          me.response->getJsonObject() == nullptr) {
+        return false;
+      }
+      const auto& principal = *me.response->getJsonObject();
+      return principal.isObject() && principal.size() == 2U &&
+             principal.isMember("username") && principal.isMember("role") &&
+             principal["username"].asString() == username &&
+             principal["role"].asString() == expected_role;
+    };
+
+    if (!assert_login_and_me(client, "owner1", "StrongPass9!",
+                             "administrator")) {
+      fail(11);
+    }
+    auto viewer_client = NewClient(port, "127.0.0.2");
+    if (!assert_login_and_me(viewer_client, "viewer1", "ViewerPass9!",
+                             "viewer")) {
+      fail(12);
+    }
+    service.Stop();
+    if (camera_firmware::service::internal::
+            HasRetainedUserManagementServiceForTesting()) {
+      _exit(13);
+    }
+    if (camera_firmware::service::internal::ListRetainedUsersForTesting().ok()) {
+      _exit(14);
+    }
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunAdministratorUserLifecycleScenario(
+    const std::filesystem::path& state_directory,
+    bool force_pre_submit_failure = false) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = state_directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (state_directory / "rtsp.credentials").string();
+  auto opened_store = camera_firmware::security::SecurityStore::Open(
+      {config.security.state_directory});
+  ASSERT_TRUE(opened_store.ok()) << opened_store.error().message;
+  auto store = std::shared_ptr<camera_firmware::security::SecurityStore>(
+      std::move(opened_store).value());
+
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool live_read_started{false};
+    bool live_cancelled{false};
+    std::size_t live_cancel_calls{0U};
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  std::promise<void> sse_subscribed;
+  auto sse_subscribed_future = sse_subscribed.get_future();
+  std::atomic_bool sse_subscription_published{false};
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.security_store = store;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.cancellable_live_stream_callback = [stream_state](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [stream_state](char*, std::size_t) {
+          std::unique_lock lock(stream_state->mutex);
+          stream_state->live_read_started = true;
+          stream_state->changed.notify_all();
+          stream_state->changed.wait(
+              lock, [&] { return stream_state->live_cancelled; });
+          return std::size_t{0U};
+        },
+        .cancel = [stream_state] {
+          std::lock_guard lock(stream_state->mutex);
+          ++stream_state->live_cancel_calls;
+          stream_state->live_cancelled = true;
+          stream_state->changed.notify_all();
+        },
+    });
+  };
+  args.detection_event_subscriber =
+      [&sse_subscribed, &sse_subscription_published](
+          camera_firmware::ai::DetectionBus::Handler) {
+        if (!sse_subscription_published.exchange(true)) {
+          sse_subscribed.set_value();
+        }
+        return camera_firmware::ai::DetectionBus::Subscription{};
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  const auto stop_service = [&service] { service.Stop(); };
+  auto client = NewClient(port);
+
+  const auto expect_fields = [](const Json::Value& value,
+                                std::vector<std::string> expected) {
+    ASSERT_TRUE(value.isObject());
+    auto actual = value.getMemberNames();
+    std::sort(actual.begin(), actual.end());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(actual, expected);
+  };
+  const auto expect_error = [&expect_fields](const HttpResult& result,
+                                             drogon::HttpStatusCode status,
+                                             std::string_view code) {
+    ExpectStatus(result, status);
+    ASSERT_NE(result.response->getJsonObject(), nullptr);
+    expect_fields(*result.response->getJsonObject(), {"code", "message"});
+    EXPECT_EQ((*result.response->getJsonObject())["code"].asString(), code);
+  };
+  const auto user_fields = std::vector<std::string>{
+      "created_at_seconds", "enabled", "id", "last_login_at_seconds",
+      "lock_until_seconds", "password_changed_at_seconds", "role",
+      "username"};
+
+  auto setup = Send(
+      client, drogon::Post, "/api/v1/setup/initialize",
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+      origin, {}, true);
+  ExpectStatus(setup, drogon::k200OK);
+
+  auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+
+  camera_firmware::service::internal::
+      FailNextAuthorizationDispatchQueueForTesting();
+  const auto authorization_dispatch_failure =
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+           administrator_cookie, false, 1.0);
+  camera_firmware::service::internal::
+      ResetAuthorizationDispatchQueueFailureForTesting();
+  expect_error(authorization_dispatch_failure,
+               drogon::k503ServiceUnavailable, "E_SECURITY_UNAVAILABLE");
+
+  camera_firmware::service::internal::
+      FailNextTerminalResponseQueueForTesting();
+  const auto terminal_queue_failure =
+      Send(client, drogon::Get, "/api/v1/security/users", {}, {},
+           administrator_cookie, false, 1.0);
+  camera_firmware::service::internal::
+      ResetTerminalResponseQueueFailureForTesting();
+  expect_error(terminal_queue_failure, drogon::k503ServiceUnavailable,
+               "E_USER_MANAGEMENT_UNAVAILABLE");
+
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
+  const std::string denied_create_secret = "DeniedCreatePass9!";
+  const auto denied_create = Send(
+      client, drogon::Post, "/api/v1/security/users",
+      "{\"username\":\"denied-viewer\",\"password\":\"" +
+          denied_create_secret + "\"}",
+      origin, {}, true);
+  expect_error(denied_create, drogon::k401Unauthorized,
+               "E_AUTHENTICATION_REQUIRED");
+  const std::string denied_reset_secret = "DeniedResetPass9!";
+  const auto denied_reset = Send(
+      client, drogon::Put, "/api/v1/security/users/1/password",
+      "{\"password\":\"" + denied_reset_secret + "\"}", origin, {}, true);
+  expect_error(denied_reset, drogon::k401Unauthorized,
+               "E_AUTHENTICATION_REQUIRED");
+  ASSERT_NE(denied_create.response, nullptr);
+  ASSERT_NE(denied_reset.response, nullptr);
+  EXPECT_EQ(denied_create.response->getBody().find(denied_create_secret),
+            std::string::npos);
+  EXPECT_EQ(denied_reset.response->getBody().find(denied_reset_secret),
+            std::string::npos);
+  const auto& denied_cleanup = UserManagementBodyCleanupForTesting();
+  EXPECT_EQ(denied_cleanup.calls.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(denied_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            2U);
+  EXPECT_TRUE(
+      denied_cleanup.source_cleansed.load(std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
+
+  expect_error(Send(client, drogon::Get, "/api/v1/security/users"),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+
+  const std::string viewer_body =
+      R"({"username":"viewer1","password":"ViewerPass9!"})";
+  if (force_pre_submit_failure) {
+    UserManagementPreSubmitFailureScope failure_scope;
+    const auto failed = Send(client, drogon::Post, "/api/v1/security/users",
+                             viewer_body, origin, administrator_cookie, true);
+    expect_error(failed, drogon::k503ServiceUnavailable,
+                 "E_USER_MANAGEMENT_UNAVAILABLE");
+    if (failed.response) {
+      EXPECT_TRUE(failed.response->getHeader("Set-Cookie").empty());
+      EXPECT_EQ(failed.response->getBody().find("ViewerPass9!"),
+                std::string::npos);
+    }
+    const auto& failure_cleanup = UserManagementBodyCleanupForTesting();
+    EXPECT_EQ(failure_cleanup.calls.load(std::memory_order_relaxed), 1U);
+    EXPECT_EQ(failure_cleanup.copied_to_secure_owner.load(
+                  std::memory_order_relaxed),
+              1U);
+    EXPECT_TRUE(
+        failure_cleanup.source_cleansed.load(std::memory_order_relaxed));
+  }
+
+  auto created = Send(
+      client, drogon::Post, "/api/v1/security/users", viewer_body, origin,
+      administrator_cookie, true);
+  ExpectStatus(created, drogon::k201Created);
+  ASSERT_NE(created.response->getJsonObject(), nullptr);
+  expect_fields(*created.response->getJsonObject(), {"user"});
+  const auto& created_user = (*created.response->getJsonObject())["user"];
+  expect_fields(created_user, user_fields);
+  EXPECT_EQ(created_user["username"].asString(), "viewer1");
+  EXPECT_EQ(created_user["role"].asString(), "viewer");
+  const std::int64_t viewer_id = created_user["id"].asInt64();
+
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
+  const std::string oversized_user_body(
+      camera_firmware::service::kMaximumSecurityBodyBytes + 1U, 'x');
+  expect_error(Send(client, drogon::Post, "/api/v1/security/users",
+                    oversized_user_body, origin, administrator_cookie, true),
+               drogon::k413RequestEntityTooLarge, "E_REQUEST_TOO_LARGE");
+  expect_error(Send(client, drogon::Put,
+                    "/api/v1/security/users/" + std::to_string(viewer_id) +
+                        "/password",
+                    oversized_user_body, origin, administrator_cookie, true),
+               drogon::k413RequestEntityTooLarge, "E_REQUEST_TOO_LARGE");
+  const auto& body_cleanup = UserManagementBodyCleanupForTesting();
+  EXPECT_EQ(body_cleanup.calls.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(body_cleanup.over_limit_without_copy.load(
+                std::memory_order_relaxed),
+            2U);
+  EXPECT_TRUE(body_cleanup.source_cleansed.load(std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
+
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
+  for (const auto& [method, path] :
+       std::array<std::pair<drogon::HttpMethod, std::string>, 5>{{
+           {drogon::Put, "/api/v1/security/users/0/enabled"},
+           {drogon::Put, "/api/v1/security/users/+7/password"},
+           {drogon::Delete, "/api/v1/security/users/07"},
+           {drogon::Delete,
+            "/api/v1/security/users/9223372036854775808"},
+           {drogon::Delete, "/api/v1/security/users/7x"},
+       }}) {
+    const std::string body = path.ends_with("/enabled")
+                                 ? R"({"enabled":false})"
+                                 : (method == drogon::Put
+                                        ? R"({"password":"ViewerPass9!"})"
+                                        : std::string{});
+    expect_error(Send(client, method, path, body, origin,
+                      administrator_cookie, true),
+                 drogon::k400BadRequest, "E_INVALID_REQUEST");
+  }
+  EXPECT_EQ(body_cleanup.calls.load(std::memory_order_relaxed), 1U);
+  EXPECT_EQ(body_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            1U);
+  EXPECT_TRUE(body_cleanup.source_cleansed.load(std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
+  expect_error(Send(client, drogon::Put,
+                    "/api/v1/security/users/7/enabled/extra",
+                    R"({"enabled":false})", origin, administrator_cookie,
+                    true),
+               drogon::k404NotFound, "E_NOT_FOUND");
+  const auto malformed_list = Send(client, drogon::Get,
+                                   "/api/v1/security/users", {}, {},
+                                   administrator_cookie);
+  ExpectStatus(malformed_list, drogon::k200OK);
+  ASSERT_NE(malformed_list.response->getJsonObject(), nullptr);
+  ASSERT_EQ((*malformed_list.response->getJsonObject())["users"].size(),
+            2U);
+
+  expect_error(
+      Send(client, drogon::Post, "/api/v1/security/users",
+           R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+           administrator_cookie, true),
+      drogon::k409Conflict, "E_USER_DUPLICATE");
+
+  auto listed = Send(client, drogon::Get, "/api/v1/security/users", {}, {},
+                     administrator_cookie);
+  ExpectStatus(listed, drogon::k200OK);
+  ASSERT_NE(listed.response->getJsonObject(), nullptr);
+  expect_fields(*listed.response->getJsonObject(), {"users"});
+  const auto& users = (*listed.response->getJsonObject())["users"];
+  ASSERT_TRUE(users.isArray());
+  ASSERT_EQ(users.size(), 2U);
+  expect_fields(users[0U], user_fields);
+  expect_fields(users[1U], user_fields);
+  EXPECT_EQ(users[0U]["username"].asString(), "owner1");
+  EXPECT_EQ(users[1U]["username"].asString(), "viewer1");
+  const auto repeated_list = Send(client, drogon::Get,
+                                  "/api/v1/security/users", {}, {},
+                                  administrator_cookie);
+  ExpectStatus(repeated_list, drogon::k200OK);
+  ASSERT_NE(repeated_list.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*repeated_list.response->getJsonObject())["users"], users);
+
+  camera_firmware::security::UserManagementService user_management(
+      *store, camera_firmware::security::BuildReservedIdentities(config));
+  camera_firmware::security::UserMutationContext administrator_context;
+  administrator_context.actor.user_id = users[0U]["id"].asInt64();
+  administrator_context.actor.username = "owner1";
+  administrator_context.actor.role =
+      camera_firmware::security::UserRole::kAdministrator;
+  administrator_context.normalized_peer_ip = "127.0.0.1";
+  const auto viewer_management_ip = user_management.AddManagementIp(
+      camera_firmware::security::UserRole::kViewer, "127.0.0.1",
+      administrator_context);
+  ASSERT_TRUE(viewer_management_ip.ok())
+      << viewer_management_ip.error().message;
+
+  auto viewer_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(viewer_login, drogon::k200OK);
+  const std::string viewer_cookie =
+      "camera_session=" + viewer_login.response->getCookie("camera_session").value();
+  expect_error(Send(client, drogon::Get, "/api/v1/security/users", {}, {},
+                    viewer_cookie),
+               drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
+
+  auto live_request = std::async(std::launch::async, [port, viewer_cookie] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4",
+                       {viewer_cookie});
+  });
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(5),
+        [&] { return stream_state->live_read_started; }));
+  }
+  auto sse_request = std::async(std::launch::async, [port, viewer_cookie] {
+    return RawHttpsGet(port, "/api/v1/ai/detections/stream", {viewer_cookie});
+  });
+  ASSERT_EQ(sse_subscribed_future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+
+  auto disabled = Send(client, drogon::Put,
+                       "/api/v1/security/users/" +
+                           std::to_string(viewer_id) + "/enabled",
+                       R"({"enabled":false})", origin, administrator_cookie,
+                       true);
+  ExpectStatus(disabled, drogon::k200OK);
+  ASSERT_NE(disabled.response->getJsonObject(), nullptr);
+  expect_fields(*disabled.response->getJsonObject(), {"updated"});
+  EXPECT_TRUE((*disabled.response->getJsonObject())["updated"].asBool());
+  ASSERT_EQ(live_request.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(live_request.get().status, 200);
+  ASSERT_EQ(sse_request.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(sse_request.get().status, 200);
+  {
+    std::lock_guard lock(stream_state->mutex);
+    EXPECT_EQ(stream_state->live_cancel_calls, 1U);
+  }
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    viewer_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  expect_error(Send(client, drogon::Post, "/api/v1/auth/login",
+                    R"({"username":"viewer1","password":"ViewerPass9!"})",
+                    origin, {}, true),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_FAILED");
+
+  auto enabled = Send(client, drogon::Put,
+                      "/api/v1/security/users/" +
+                          std::to_string(viewer_id) + "/enabled",
+                      R"({"enabled":true})", origin, administrator_cookie,
+                      true);
+  ExpectStatus(enabled, drogon::k200OK);
+  ASSERT_NE(enabled.response->getJsonObject(), nullptr);
+  expect_fields(*enabled.response->getJsonObject(), {"updated"});
+  EXPECT_TRUE((*enabled.response->getJsonObject())["updated"].asBool());
+
+  auto reenabled_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(reenabled_login, drogon::k200OK);
+  const std::string reenabled_cookie =
+      "camera_session=" +
+      reenabled_login.response->getCookie("camera_session").value();
+  auto reset = Send(client, drogon::Put,
+                    "/api/v1/security/users/" + std::to_string(viewer_id) +
+                        "/password",
+                    R"({"password":"ChangedPass9!"})", origin,
+                    administrator_cookie, true);
+  ExpectStatus(reset, drogon::k200OK);
+  ASSERT_NE(reset.response->getJsonObject(), nullptr);
+  expect_fields(*reset.response->getJsonObject(), {"password_reset"});
+  EXPECT_TRUE((*reset.response->getJsonObject())["password_reset"].asBool());
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    reenabled_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  expect_error(Send(client, drogon::Post, "/api/v1/auth/login",
+                    R"({"username":"viewer1","password":"ViewerPass9!"})",
+                    origin, {}, true),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_FAILED");
+  auto replacement_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ChangedPass9!"})", origin,
+      {}, true);
+  ExpectStatus(replacement_login, drogon::k200OK);
+  const std::string replacement_cookie =
+      "camera_session=" +
+      replacement_login.response->getCookie("camera_session").value();
+
+  for (std::size_t index = 2U;
+       index <= camera_firmware::security::kMaximumViewerUsers; ++index) {
+    const auto created_viewer = Send(
+        client, drogon::Post, "/api/v1/security/users",
+        "{\"username\":\"viewer" + std::to_string(index) +
+            "\",\"password\":\"ViewerPass9!\"}",
+        origin, administrator_cookie, true);
+    ExpectStatus(created_viewer, drogon::k201Created);
+  }
+  expect_error(
+      Send(client, drogon::Post, "/api/v1/security/users",
+           R"({"username":"viewer-over-limit","password":"ViewerPass9!"})",
+           origin, administrator_cookie, true),
+      drogon::k409Conflict, "E_VIEWER_LIMIT");
+  expect_error(
+      Send(client, drogon::Delete,
+           "/api/v1/security/users/" + std::to_string(users[0U]["id"].asInt64()),
+           {}, origin, administrator_cookie, true),
+      drogon::k409Conflict, "E_USER_PROTECTED");
+
+  auto deleted = Send(client, drogon::Delete,
+                      "/api/v1/security/users/" +
+                          std::to_string(viewer_id),
+                      {}, origin, administrator_cookie, true);
+  ExpectStatus(deleted, drogon::k200OK);
+  ASSERT_NE(deleted.response->getJsonObject(), nullptr);
+  expect_fields(*deleted.response->getJsonObject(), {"deleted"});
+  EXPECT_TRUE((*deleted.response->getJsonObject())["deleted"].asBool());
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    replacement_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  expect_error(Send(client, drogon::Delete,
+                    "/api/v1/security/users/" + std::to_string(viewer_id),
+                    {}, origin, administrator_cookie, true),
+               drogon::k404NotFound, "E_USER_NOT_FOUND");
+
+  stop_service();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AdministratorUserLifecycleUsesExactContractsAndRevokesViewerLeases) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(90U);
+    RunAdministratorUserLifecycleScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AdministratorUserPreSubmitFailureIsSanitizedAndDoesNotCreateUser) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(90U);
+    RunAdministratorUserLifecycleScenario(directory.path(), true);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunAdministratorManagementIpLifecycleScenario(
+    const std::filesystem::path& state_directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = state_directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (state_directory / "rtsp.credentials").string();
+
+  struct LiveHandleState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancelled{false};
+    std::size_t cancel_calls{0U};
+  };
+  struct LiveStreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<std::pair<std::string, std::shared_ptr<LiveHandleState>>>
+        handles;
+  };
+  auto live_streams = std::make_shared<LiveStreamState>();
+  struct SseStreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t subscriptions{0U};
+  };
+  auto sse_streams = std::make_shared<SseStreamState>();
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.cancellable_live_stream_callback =
+      [live_streams](const std::string& camera_id) {
+        auto handle = std::make_shared<LiveHandleState>();
+        {
+          std::lock_guard lock(live_streams->mutex);
+          live_streams->handles.emplace_back(camera_id, handle);
+        }
+        live_streams->changed.notify_all();
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [handle](char*, std::size_t) {
+              std::unique_lock lock(handle->mutex);
+              handle->read_started = true;
+              handle->changed.notify_all();
+              handle->changed.wait(lock, [&] { return handle->cancelled; });
+              return std::size_t{0U};
+            },
+            .cancel = [handle] {
+              std::lock_guard lock(handle->mutex);
+              ++handle->cancel_calls;
+              handle->cancelled = true;
+              handle->changed.notify_all();
+            },
+        });
+      };
+  args.detection_event_subscriber =
+      [sse_streams](camera_firmware::ai::DetectionBus::Handler) {
+        {
+          std::lock_guard lock(sse_streams->mutex);
+          ++sse_streams->subscriptions;
+        }
+        sse_streams->changed.notify_all();
+        return camera_firmware::ai::DetectionBus::Subscription{};
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  const auto expect_fields = [](const Json::Value& value,
+                                std::vector<std::string> expected) {
+    ASSERT_TRUE(value.isObject());
+    auto actual = value.getMemberNames();
+    std::sort(actual.begin(), actual.end());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(actual, expected);
+  };
+  const auto expect_error = [&expect_fields](const HttpResult& result,
+                                             drogon::HttpStatusCode status,
+                                             std::string_view code) {
+    ExpectStatus(result, status);
+    ASSERT_NE(result.response->getJsonObject(), nullptr);
+    expect_fields(*result.response->getJsonObject(), {"code", "message"});
+    EXPECT_EQ((*result.response->getJsonObject())["code"].asString(), code);
+  };
+  const std::vector<std::string> management_ip_fields = {
+      "address", "created_at_seconds", "id", "role"};
+  const auto wait_for_live_start =
+      [live_streams](std::string_view camera_id) {
+        std::shared_ptr<LiveHandleState> handle;
+        {
+          std::unique_lock lock(live_streams->mutex);
+          const bool published = live_streams->changed.wait_for(
+              lock, std::chrono::seconds(5), [&] {
+                return std::any_of(
+                    live_streams->handles.begin(), live_streams->handles.end(),
+                    [camera_id](const auto& entry) {
+                      return entry.first == camera_id;
+                    });
+              });
+          EXPECT_TRUE(published);
+          if (!published) {
+            return handle;
+          }
+          handle = std::find_if(
+                       live_streams->handles.begin(),
+                       live_streams->handles.end(),
+                       [camera_id](const auto& entry) {
+                         return entry.first == camera_id;
+                       })
+                       ->second;
+        }
+        std::unique_lock lock(handle->mutex);
+        EXPECT_TRUE(handle->changed.wait_for(
+            lock, std::chrono::seconds(5),
+            [&] { return handle->read_started; }));
+        return handle;
+      };
+  const auto wait_for_sse_subscriptions =
+      [sse_streams](std::size_t expected) {
+        std::unique_lock lock(sse_streams->mutex);
+        EXPECT_TRUE(sse_streams->changed.wait_for(
+            lock, std::chrono::seconds(5),
+            [&] { return sse_streams->subscriptions >= expected; }));
+      };
+
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+
+  const auto initial_list =
+      Send(client, drogon::Get, "/api/v1/security/management-ips", {}, {},
+           administrator_cookie);
+  ExpectStatus(initial_list, drogon::k200OK);
+  ASSERT_NE(initial_list.response->getJsonObject(), nullptr);
+  expect_fields(*initial_list.response->getJsonObject(), {"management_ips"});
+  const auto& initial_entries =
+      (*initial_list.response->getJsonObject())["management_ips"];
+  ASSERT_TRUE(initial_entries.isArray());
+  ASSERT_EQ(initial_entries.size(), 1U);
+  expect_fields(initial_entries[0U], management_ip_fields);
+  EXPECT_EQ(initial_entries[0U]["address"].asString(), "127.0.0.1");
+  EXPECT_EQ(initial_entries[0U]["role"].asString(), "administrator");
+  const std::int64_t initial_administrator_ip_id =
+      initial_entries[0U]["id"].asInt64();
+  expect_error(Send(client, drogon::Get,
+                    "/api/v1/security/management-ips", "{}", {},
+                    administrator_cookie),
+               drogon::k400BadRequest, "E_INVALID_REQUEST");
+
+  for (const std::string& path : {
+           "/api/v1/security/management-ips/operator",
+           "/api/v1/security/management-ips/viewer/0",
+           "/api/v1/security/management-ips/viewer/+7",
+           "/api/v1/security/management-ips/viewer/07",
+           "/api/v1/security/management-ips/viewer/9223372036854775808",
+           "/api/v1/security/management-ips/viewer/7x",
+       }) {
+    const auto method = path.ends_with("operator") ? drogon::Post
+                                                    : drogon::Put;
+    expect_error(Send(client, method, path, R"({"address":"192.0.2.20"})",
+                      origin, administrator_cookie, true),
+                 drogon::k400BadRequest, "E_INVALID_REQUEST");
+  }
+  expect_error(
+      Send(client, drogon::Put,
+           "/api/v1/security/management-ips/viewer/7/extra",
+           R"({"address":"192.0.2.20"})", origin, administrator_cookie,
+           true),
+      drogon::k404NotFound, "E_NOT_FOUND");
+
+  const auto add_management_ip =
+      [&](std::string_view role, std::string_view address) {
+        return Send(client, drogon::Post,
+                    "/api/v1/security/management-ips/" + std::string(role),
+                    "{\"address\":\"" + std::string(address) + "\"}",
+                    origin, administrator_cookie, true);
+      };
+  const auto update_management_ip =
+      [&](std::string_view role, std::int64_t id, std::string_view address) {
+        return Send(client, drogon::Put,
+                    "/api/v1/security/management-ips/" + std::string(role) +
+                        "/" + std::to_string(id),
+                    "{\"address\":\"" + std::string(address) + "\"}",
+                    origin, administrator_cookie, true);
+      };
+  const auto delete_management_ip =
+      [&](std::string_view role, std::int64_t id, std::string body = {}) {
+        return Send(client, drogon::Delete,
+                    "/api/v1/security/management-ips/" + std::string(role) +
+                        "/" + std::to_string(id),
+                    std::move(body), origin, administrator_cookie, true);
+      };
+
+  const auto viewer_ipv4 = add_management_ip("viewer", "127.0.0.1");
+  ExpectStatus(viewer_ipv4, drogon::k201Created);
+  ASSERT_NE(viewer_ipv4.response->getJsonObject(), nullptr);
+  expect_fields(*viewer_ipv4.response->getJsonObject(), {"management_ip"});
+  const auto& viewer_ipv4_entry =
+      (*viewer_ipv4.response->getJsonObject())["management_ip"];
+  expect_fields(viewer_ipv4_entry, management_ip_fields);
+  EXPECT_EQ(viewer_ipv4_entry["address"].asString(), "127.0.0.1");
+  EXPECT_EQ(viewer_ipv4_entry["role"].asString(), "viewer");
+  const std::int64_t viewer_ipv4_id = viewer_ipv4_entry["id"].asInt64();
+
+  const auto viewer_ipv6 =
+      add_management_ip("viewer", "2001:0db8:0:0:0:0:0:20");
+  ExpectStatus(viewer_ipv6, drogon::k201Created);
+  ASSERT_NE(viewer_ipv6.response->getJsonObject(), nullptr);
+  const auto& viewer_ipv6_entry =
+      (*viewer_ipv6.response->getJsonObject())["management_ip"];
+  expect_fields(viewer_ipv6_entry, management_ip_fields);
+  EXPECT_EQ(viewer_ipv6_entry["address"].asString(), "2001:db8::20");
+  const std::int64_t viewer_ipv6_id = viewer_ipv6_entry["id"].asInt64();
+
+  expect_error(add_management_ip("viewer", "2001:db8::20"),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_DUPLICATE");
+  for (const std::string& invalid : {"not-an-ip", "0.0.0.0", "::"}) {
+    expect_error(add_management_ip("viewer", invalid),
+                 drogon::k400BadRequest, "E_MANAGEMENT_IP_INVALID");
+  }
+  expect_error(update_management_ip("administrator", viewer_ipv6_id,
+                                    "2001:db8::21"),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_ROLE_MISMATCH");
+  expect_error(delete_management_ip("administrator", viewer_ipv6_id),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_ROLE_MISMATCH");
+  expect_error(delete_management_ip("viewer", viewer_ipv6_id, "{}"),
+               drogon::k400BadRequest, "E_INVALID_REQUEST");
+
+  expect_error(update_management_ip("administrator",
+                                    initial_administrator_ip_id,
+                                    "192.0.2.10"),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_PROTECTED");
+  expect_error(delete_management_ip("administrator",
+                                    initial_administrator_ip_id),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_PROTECTED");
+  const auto second_administrator =
+      add_management_ip("administrator", "192.0.2.10");
+  ExpectStatus(second_administrator, drogon::k201Created);
+  ASSERT_NE(second_administrator.response->getJsonObject(), nullptr);
+  const std::int64_t second_administrator_id =
+      (*second_administrator.response->getJsonObject())["management_ip"]["id"]
+          .asInt64();
+  expect_error(delete_management_ip("administrator",
+                                    initial_administrator_ip_id),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_PROTECTED");
+  ExpectStatus(delete_management_ip("administrator", second_administrator_id),
+               drogon::k200OK);
+
+  const auto viewer_user = Send(
+      client, drogon::Post, "/api/v1/security/users",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      administrator_cookie, true);
+  ExpectStatus(viewer_user, drogon::k201Created);
+  const auto viewer_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(viewer_login, drogon::k200OK);
+  const std::string viewer_cookie =
+      "camera_session=" +
+      viewer_login.response->getCookie("camera_session").value();
+
+  const auto canonical_no_op = update_management_ip(
+      "viewer", viewer_ipv6_id, "2001:0db8:0:0:0:0:0:20");
+  ExpectStatus(canonical_no_op, drogon::k200OK);
+  const auto no_op =
+      update_management_ip("viewer", viewer_ipv4_id, "127.0.0.1");
+  ExpectStatus(no_op, drogon::k200OK);
+  ASSERT_NE(no_op.response->getJsonObject(), nullptr);
+  expect_fields(*no_op.response->getJsonObject(), {"updated"});
+  EXPECT_TRUE((*no_op.response->getJsonObject())["updated"].asBool());
+  ExpectStatus(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    viewer_cookie),
+               drogon::k200OK);
+
+  auto viewer_update_live =
+      std::async(std::launch::async, [port, viewer_cookie] {
+        return RawHttpsGet(port, "/api/v1/cameras/viewer-update/live.mp4",
+                           {viewer_cookie});
+      });
+  const auto viewer_update_live_state =
+      wait_for_live_start("viewer-update");
+  ASSERT_NE(viewer_update_live_state, nullptr);
+  auto administrator_live =
+      std::async(std::launch::async, [port, administrator_cookie] {
+        return RawHttpsGet(port,
+                           "/api/v1/cameras/administrator-retained/live.mp4",
+                           {administrator_cookie});
+      });
+  const auto administrator_live_state =
+      wait_for_live_start("administrator-retained");
+  ASSERT_NE(administrator_live_state, nullptr);
+  auto viewer_update_sse =
+      std::async(std::launch::async, [port, viewer_cookie] {
+        return RawHttpsGet(port, "/api/v1/ai/detections/stream",
+                           {viewer_cookie});
+      });
+  wait_for_sse_subscriptions(1U);
+  auto administrator_sse =
+      std::async(std::launch::async, [port, administrator_cookie] {
+        return RawHttpsGet(port, "/api/v1/ai/detections/stream",
+                           {administrator_cookie});
+      });
+  wait_for_sse_subscriptions(2U);
+
+  ExpectStatus(update_management_ip("viewer", viewer_ipv4_id,
+                                    "198.51.100.250"),
+               drogon::k200OK);
+  ASSERT_EQ(viewer_update_live.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(viewer_update_live.get().status, 200);
+  ASSERT_EQ(viewer_update_sse.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(viewer_update_sse.get().status, 200);
+  {
+    std::lock_guard lock(viewer_update_live_state->mutex);
+    EXPECT_TRUE(viewer_update_live_state->cancelled);
+    EXPECT_EQ(viewer_update_live_state->cancel_calls, 1U);
+  }
+  EXPECT_EQ(administrator_live.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(administrator_sse.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(administrator_live_state->mutex);
+    EXPECT_FALSE(administrator_live_state->cancelled);
+    EXPECT_EQ(administrator_live_state->cancel_calls, 0U);
+  }
+  ExpectStatus(update_management_ip("viewer", viewer_ipv4_id, "127.0.0.1"),
+               drogon::k200OK);
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    viewer_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  ExpectStatus(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    administrator_cookie),
+               drogon::k200OK);
+
+  const auto second_viewer_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(second_viewer_login, drogon::k200OK);
+  const std::string second_viewer_cookie =
+      "camera_session=" +
+      second_viewer_login.response->getCookie("camera_session").value();
+  auto viewer_delete_live =
+      std::async(std::launch::async, [port, second_viewer_cookie] {
+        return RawHttpsGet(port, "/api/v1/cameras/viewer-delete/live.mp4",
+                           {second_viewer_cookie});
+      });
+  const auto viewer_delete_live_state = wait_for_live_start("viewer-delete");
+  ASSERT_NE(viewer_delete_live_state, nullptr);
+  auto viewer_delete_sse =
+      std::async(std::launch::async, [port, second_viewer_cookie] {
+        return RawHttpsGet(port, "/api/v1/ai/detections/stream",
+                           {second_viewer_cookie});
+      });
+  wait_for_sse_subscriptions(3U);
+  const auto deleted_viewer_ip =
+      delete_management_ip("viewer", viewer_ipv4_id);
+  ExpectStatus(deleted_viewer_ip, drogon::k200OK);
+  ASSERT_NE(deleted_viewer_ip.response->getJsonObject(), nullptr);
+  expect_fields(*deleted_viewer_ip.response->getJsonObject(), {"deleted"});
+  EXPECT_TRUE(
+      (*deleted_viewer_ip.response->getJsonObject())["deleted"].asBool());
+  ASSERT_EQ(viewer_delete_live.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(viewer_delete_live.get().status, 200);
+  ASSERT_EQ(viewer_delete_sse.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(viewer_delete_sse.get().status, 200);
+  {
+    std::lock_guard lock(viewer_delete_live_state->mutex);
+    EXPECT_TRUE(viewer_delete_live_state->cancelled);
+    EXPECT_EQ(viewer_delete_live_state->cancel_calls, 1U);
+  }
+  EXPECT_EQ(administrator_live.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(administrator_sse.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  const auto replacement_viewer_ip =
+      add_management_ip("viewer", "127.0.0.1");
+  ExpectStatus(replacement_viewer_ip, drogon::k201Created);
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    second_viewer_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+
+  for (std::size_t index = 1U;
+       index < camera_firmware::security::kMaximumManagementIpsPerRole - 1U;
+       ++index) {
+    ExpectStatus(add_management_ip(
+                     "viewer", "198.51.100." + std::to_string(index)),
+                 drogon::k201Created);
+  }
+  expect_error(add_management_ip("viewer", "198.51.100.200"),
+               drogon::k409Conflict, "E_MANAGEMENT_IP_LIMIT");
+
+  const auto final_list =
+      Send(client, drogon::Get, "/api/v1/security/management-ips", {}, {},
+           administrator_cookie);
+  ExpectStatus(final_list, drogon::k200OK);
+  ASSERT_NE(final_list.response->getJsonObject(), nullptr);
+  const auto& final_entries =
+      (*final_list.response->getJsonObject())["management_ips"];
+  ASSERT_TRUE(final_entries.isArray());
+  ASSERT_EQ(final_entries.size(),
+            camera_firmware::security::kMaximumManagementIpsPerRole + 1U);
+  std::int64_t previous_id = 0;
+  for (const auto& entry : final_entries) {
+    expect_fields(entry, management_ip_fields);
+    EXPECT_GT(entry["id"].asInt64(), previous_id);
+    previous_id = entry["id"].asInt64();
+  }
+
+  service.Stop();
+  ASSERT_EQ(administrator_live.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(administrator_live.get().status, 200);
+  ASSERT_EQ(administrator_sse.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(administrator_sse.get().status, 200);
+  {
+    std::lock_guard lock(administrator_live_state->mutex);
+    EXPECT_TRUE(administrator_live_state->cancelled);
+    EXPECT_EQ(administrator_live_state->cancel_calls, 1U);
+  }
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AdministratorManagementIpLifecycleIsRoleScopedAndRevokesSessions) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(90U);
+    RunAdministratorManagementIpLifecycleScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunViewerOwnPasswordLifecycleScenario(
+    const std::filesystem::path& state_directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = state_directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (state_directory / "rtsp.credentials").string();
+
+  struct LiveState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancelled{false};
+    std::size_t cancel_calls{0U};
+  };
+  auto live_state = std::make_shared<LiveState>();
+  std::promise<void> sse_subscribed;
+  auto sse_subscribed_future = sse_subscribed.get_future();
+  std::atomic_bool sse_published{false};
+  std::atomic_int ai_restart_calls{0};
+  std::atomic_int runtime_restart_calls{0};
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [&runtime_restart_calls] {
+    runtime_restart_calls.fetch_add(1);
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.camera_status_provider = [] {
+    return std::vector<camera_firmware::service::CameraStatus>{};
+  };
+  args.ai_status_provider = [] {
+    return camera_firmware::service::AiServiceStatus{};
+  };
+  args.ai_restart_callback = [&ai_restart_calls] {
+    ai_restart_calls.fetch_add(1);
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.snapshot_callback = [](const std::string&) {
+    return std::optional<std::vector<std::uint8_t>>{
+        std::vector<std::uint8_t>{0xffU, 0xd8U, 0xffU, 0xd9U}};
+  };
+  args.secure_stream_diagnostics_provider = [] {
+    return camera_firmware::service::SecureStreamDiagnostics{};
+  };
+  args.detection_snapshot_provider = [] {
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&sse_subscribed, &sse_published](
+          camera_firmware::ai::DetectionBus::Handler) {
+        if (!sse_published.exchange(true)) {
+          sse_subscribed.set_value();
+        }
+        return camera_firmware::ai::DetectionBus::Subscription{};
+      };
+  args.cancellable_live_stream_callback =
+      [live_state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [live_state](char*, std::size_t) {
+              std::unique_lock lock(live_state->mutex);
+              live_state->read_started = true;
+              live_state->changed.notify_all();
+              live_state->changed.wait(
+                  lock, [&] { return live_state->cancelled; });
+              return std::size_t{0U};
+            },
+            .cancel = [live_state] {
+              std::lock_guard lock(live_state->mutex);
+              ++live_state->cancel_calls;
+              live_state->cancelled = true;
+              live_state->changed.notify_all();
+            },
+        });
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  const auto expect_fields = [](const Json::Value& value,
+                                std::vector<std::string> expected) {
+    ASSERT_TRUE(value.isObject());
+    auto actual = value.getMemberNames();
+    std::sort(actual.begin(), actual.end());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(actual, expected);
+  };
+  const auto expect_error = [&expect_fields](const HttpResult& result,
+                                             drogon::HttpStatusCode status,
+                                             std::string_view code) {
+    ExpectStatus(result, status);
+    ASSERT_NE(result.response->getJsonObject(), nullptr);
+    expect_fields(*result.response->getJsonObject(), {"code", "message"});
+    EXPECT_EQ((*result.response->getJsonObject())["code"].asString(), code);
+  };
+
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/security/users",
+           R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+           administrator_cookie, true),
+      drogon::k201Created);
+  ExpectStatus(
+      Send(client, drogon::Post,
+           "/api/v1/security/management-ips/viewer",
+           R"({"address":"127.0.0.1"})", origin, administrator_cookie,
+           true),
+      drogon::k201Created);
+
+  const auto viewer_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(viewer_login, drogon::k200OK);
+  ASSERT_NE(viewer_login.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*viewer_login.response->getJsonObject())["role"].asString(),
+            "viewer");
+  const std::string viewer_cookie =
+      "camera_session=" +
+      viewer_login.response->getCookie("camera_session").value();
+
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
+  const auto missing_session_password = Send(
+      client, drogon::Put, "/api/v1/auth/password",
+      R"({"current_password":"ViewerPass9!","replacement_password":"ChangedPass9!"})",
+      origin, {}, true);
+  expect_error(missing_session_password, drogon::k401Unauthorized,
+               "E_AUTHENTICATION_REQUIRED");
+  const auto& authorization_cleanup =
+      UserManagementBodyCleanupForTesting();
+  EXPECT_EQ(authorization_cleanup.calls.load(std::memory_order_relaxed), 1U);
+  EXPECT_EQ(authorization_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            1U);
+  EXPECT_TRUE(authorization_cleanup.source_cleansed.load(
+      std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
+
+  const auto me =
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, viewer_cookie);
+  ExpectStatus(me, drogon::k200OK);
+  ASSERT_NE(me.response->getJsonObject(), nullptr);
+  expect_fields(*me.response->getJsonObject(), {"role", "username"});
+  EXPECT_EQ((*me.response->getJsonObject())["username"].asString(), "viewer1");
+  EXPECT_EQ((*me.response->getJsonObject())["role"].asString(), "viewer");
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", "{}", {},
+                    viewer_cookie),
+               drogon::k400BadRequest, "E_INVALID_REQUEST");
+
+  for (const std::string& path : {
+           "/api/v1/health", "/api/v1/cameras",
+           "/api/v1/cameras/imx708-main/snapshot.jpg",
+           "/api/v1/ai/detections", "/api/v1/stream",
+       }) {
+    ExpectStatus(Send(client, drogon::Get, path, {}, {}, viewer_cookie),
+                 drogon::k200OK);
+  }
+
+  expect_error(Send(client, drogon::Get, "/api/v1/security/users", {}, {},
+                    viewer_cookie),
+               drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
+  expect_error(Send(client, drogon::Get,
+                    "/api/v1/security/management-ips", {}, {},
+                    viewer_cookie),
+               drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
+  expect_error(Send(client, drogon::Get, "/api/v1/settings/runtime", {}, {},
+                    viewer_cookie),
+               drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
+  for (const auto& [method, path, body] :
+       std::array<std::tuple<drogon::HttpMethod, const char*, const char*>,
+                  12>{
+           {{drogon::Post, "/api/v1/security/users",
+             R"({"username":"viewer2","password":"ViewerPass9!"})"},
+            {drogon::Put, "/api/v1/security/users/1/enabled",
+             R"({"enabled":false})"},
+            {drogon::Put, "/api/v1/security/users/1/password",
+             R"({"password":"ViewerPass9!"})"},
+            {drogon::Delete, "/api/v1/security/users/1", ""},
+            {drogon::Post, "/api/v1/security/management-ips/viewer",
+             R"({"address":"192.0.2.20"})"},
+            {drogon::Put, "/api/v1/security/management-ips/viewer/1",
+             R"({"address":"192.0.2.20"})"},
+            {drogon::Delete, "/api/v1/security/management-ips/viewer/1", ""},
+            {drogon::Post, "/api/v1/ai/restart", ""},
+            {drogon::Post, "/api/v1/runtime/restart", "{}"},
+            {drogon::Put, "/api/v1/settings/runtime", "{}"},
+            {drogon::Post, "/api/v1/settings/runtime/apply",
+             R"({"revision":1})"},
+            {drogon::Post, "/api/v1/settings/runtime/discard",
+             R"({"revision":1})"}}}) {
+    expect_error(Send(client, method, path, body, origin, viewer_cookie, true),
+                 drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED");
+  }
+  EXPECT_EQ(ai_restart_calls.load(), 0);
+  EXPECT_EQ(runtime_restart_calls.load(), 1);
+
+  const auto wrong_current = Send(
+      client, drogon::Put, "/api/v1/auth/password",
+      R"({"current_password":"WrongPass9!","replacement_password":"ChangedPass9!"})",
+      origin, viewer_cookie, true);
+  ASSERT_NE(wrong_current.response, nullptr);
+  ASSERT_EQ(wrong_current.response->statusCode(), drogon::k400BadRequest)
+      << wrong_current.response->getBody();
+  expect_error(wrong_current, drogon::k400BadRequest, "E_CURRENT_PASSWORD");
+  EXPECT_EQ(wrong_current.response->getBody().find("WrongPass9!"),
+            std::string::npos);
+  EXPECT_EQ(wrong_current.response->getBody().find("ChangedPass9!"),
+            std::string::npos);
+  ExpectStatus(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    viewer_cookie),
+               drogon::k200OK);
+
+  auto live_request = std::async(std::launch::async, [port, viewer_cookie] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4",
+                       {viewer_cookie});
+  });
+  {
+    std::unique_lock lock(live_state->mutex);
+    ASSERT_TRUE(live_state->changed.wait_for(
+        lock, std::chrono::seconds(5),
+        [&] { return live_state->read_started; }));
+  }
+  auto sse_request = std::async(std::launch::async, [port, viewer_cookie] {
+    return RawHttpsGet(port, "/api/v1/ai/detections/stream",
+                       {viewer_cookie});
+  });
+  ASSERT_EQ(sse_subscribed_future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+
+  const auto changed = Send(
+      client, drogon::Put, "/api/v1/auth/password",
+      R"({"current_password":"ViewerPass9!","replacement_password":"ChangedPass9!"})",
+      origin, viewer_cookie, true);
+  ExpectStatus(changed, drogon::k200OK);
+  ASSERT_NE(changed.response->getJsonObject(), nullptr);
+  expect_fields(*changed.response->getJsonObject(),
+                {"logged_out", "password_changed"});
+  EXPECT_TRUE((*changed.response->getJsonObject())["password_changed"].asBool());
+  EXPECT_TRUE((*changed.response->getJsonObject())["logged_out"].asBool());
+  EXPECT_EQ(changed.response->getBody().find("ViewerPass9!"),
+            std::string::npos);
+  EXPECT_EQ(changed.response->getBody().find("ChangedPass9!"),
+            std::string::npos);
+  const auto& cleared = changed.response->getCookie("camera_session");
+  EXPECT_EQ(cleared.value(), "");
+  ASSERT_TRUE(cleared.maxAge().has_value());
+  EXPECT_EQ(*cleared.maxAge(), 0);
+  EXPECT_TRUE(cleared.isSecure());
+  EXPECT_TRUE(cleared.isHttpOnly());
+  EXPECT_EQ(cleared.sameSite(), drogon::Cookie::SameSite::kStrict);
+  EXPECT_EQ(cleared.path(), "/");
+
+  ASSERT_EQ(live_request.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(live_request.get().status, 200);
+  ASSERT_EQ(sse_request.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  EXPECT_EQ(sse_request.get().status, 200);
+  {
+    std::lock_guard lock(live_state->mutex);
+    EXPECT_TRUE(live_state->cancelled);
+    EXPECT_EQ(live_state->cancel_calls, 1U);
+  }
+  expect_error(Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                    viewer_cookie),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_REQUIRED");
+  expect_error(Send(client, drogon::Post, "/api/v1/auth/login",
+                    R"({"username":"viewer1","password":"ViewerPass9!"})",
+                    origin, {}, true),
+               drogon::k401Unauthorized, "E_AUTHENTICATION_FAILED");
+  const auto replacement_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ChangedPass9!"})", origin,
+      {}, true);
+  ExpectStatus(replacement_login, drogon::k200OK);
+  ASSERT_NE(replacement_login.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*replacement_login.response->getJsonObject())["role"].asString(),
+            "viewer");
+  const std::string replacement_cookie =
+      "camera_session=" +
+      replacement_login.response->getCookie("camera_session").value();
+  const auto viewer_logout =
+      Send(client, drogon::Post, "/api/v1/auth/logout", {}, origin,
+           replacement_cookie, true);
+  ExpectStatus(viewer_logout, drogon::k200OK);
+  ASSERT_NE(viewer_logout.response->getJsonObject(), nullptr);
+  expect_fields(*viewer_logout.response->getJsonObject(), {"logged_out"});
+  EXPECT_TRUE((*viewer_logout.response->getJsonObject())["logged_out"].asBool());
+
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ViewerMonitoringAndOwnPasswordChangeRevokesSessionAndStreams) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(90U);
+    RunViewerOwnPasswordLifecycleScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
 TEST(HttpsAuthIntegrationTest, DefaultWebRootServesProductionArtifacts) {
   TemporaryDirectory directory;
   const pid_t child = ::fork();
@@ -1746,8 +3386,1848 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-void RunAuthenticatedLiveMp4Scenario(
+void RunQueuedAuthorizationShutdownScenario(
     const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin =
+      "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  std::atomic_bool block_verification{false};
+  std::atomic_bool block_reported{false};
+  std::promise<void> verification_blocked;
+  std::promise<void> release_verification;
+  PromiseReleaseGuard release_guard(release_verification);
+  auto release_verification_future =
+      release_verification.get_future().share();
+  std::atomic<unsigned int> random_counter{0U};
+  camera_firmware::security::AuthServiceDependencies auth_dependencies;
+  auth_dependencies.now_seconds = [] {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  };
+  auth_dependencies.random_bytes = [&](std::size_t size) {
+    camera_firmware::common::SecureBytes bytes;
+    bytes.resize(size);
+    const auto seed = static_cast<unsigned char>(
+        0x40U + random_counter.fetch_add(1U));
+    std::fill(bytes.data(), bytes.data() + bytes.size(), seed);
+    return camera_firmware::common::Result<
+        camera_firmware::common::SecureBytes>::Ok(std::move(bytes));
+  };
+  auth_dependencies.firmware_log_random_bytes =
+      auth_dependencies.random_bytes;
+  auth_dependencies.verify_password =
+      [&](const camera_firmware::common::SecureBytes& password,
+          const camera_firmware::security::PasswordRecord& record) {
+        if (block_verification.load()) {
+          if (!block_reported.exchange(true)) {
+            verification_blocked.set_value();
+          }
+          release_verification_future.wait();
+          return camera_firmware::common::Result<bool>::Ok(false);
+        }
+        return camera_firmware::security::VerifyPassword(password, record);
+      };
+  auth_dependencies.high_severity_log = [](std::string_view,
+                                           std::string_view) {};
+
+  struct LiveState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool cancelled{false};
+    std::size_t opened{0U};
+    std::size_t read_started{0U};
+    std::size_t read_finished{0U};
+    std::size_t cancel_calls{0U};
+  };
+  auto live_state = std::make_shared<LiveState>();
+  auto registry =
+      std::make_shared<camera_firmware::service::SessionStreamRegistry>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.stream_registry = registry;
+  args.auth_service_dependencies_provider =
+      [auth_dependencies = std::move(auth_dependencies)] {
+        return auth_dependencies;
+      };
+  args.cancellable_live_stream_callback = [live_state](const std::string&) {
+    {
+      std::lock_guard lock(live_state->mutex);
+      ++live_state->opened;
+      live_state->changed.notify_all();
+    }
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [live_state](char* output, std::size_t capacity) {
+          std::unique_lock lock(live_state->mutex);
+          ++live_state->read_started;
+          live_state->changed.notify_all();
+          live_state->changed.wait(
+              lock, [&] { return live_state->cancelled; });
+          ++live_state->read_finished;
+          live_state->changed.notify_all();
+          const auto count = std::min(capacity, std::size_t{4U});
+          std::fill_n(output, count, 'x');
+          return count;
+        },
+        .cancel = [live_state] {
+          std::lock_guard lock(live_state->mutex);
+          ++live_state->cancel_calls;
+          live_state->cancelled = true;
+          live_state->changed.notify_all();
+        },
+    });
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+  const std::string setup_body =
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
+  ExpectStatus(Send(client, drogon::Post, "/api/v1/setup/initialize",
+                    setup_body, origin, {}, true),
+               drogon::k200OK);
+  auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {},
+      true);
+  ExpectStatus(login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" + login.response->getCookie("camera_session").value();
+
+  block_verification.store(true);
+  auto blocked_login = std::async(std::launch::async, [&] {
+    return Send(NewClient(port), drogon::Post, "/api/v1/auth/login",
+                R"({"username":"missing","password":"StrongPass9!"})",
+                origin, {}, true);
+  });
+  ASSERT_EQ(verification_blocked.get_future().wait_for(
+                std::chrono::seconds(2)),
+            std::future_status::ready);
+
+  constexpr std::size_t kLiveRequests = 20U;
+  std::vector<std::future<RawHttpsResponse>> live_requests;
+  live_requests.reserve(kLiveRequests);
+  for (std::size_t index = 0U; index < kLiveRequests; ++index) {
+    live_requests.push_back(std::async(std::launch::async, [&, index] {
+      return RawHttpsGet(
+          port,
+          "/api/v1/cameras/imx708-main/live.mp4?request=" +
+              std::to_string(index),
+          {cookie});
+    }));
+  }
+  bool queue_saturated = false;
+  const auto saturation_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!queue_saturated &&
+         std::chrono::steady_clock::now() < saturation_deadline) {
+    for (auto& request : live_requests) {
+      if (request.valid() &&
+          request.wait_for(std::chrono::milliseconds(0)) ==
+              std::future_status::ready) {
+        const auto response = request.get();
+        queue_saturated = response.status == 503;
+      }
+    }
+    if (!queue_saturated) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+  ASSERT_TRUE(queue_saturated);
+
+  auto shutting_down =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  EXPECT_EQ(shutting_down.wait_for(std::chrono::milliseconds(30)),
+            std::future_status::timeout);
+  release_guard.Release();
+  ASSERT_EQ(shutting_down.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  shutting_down.get();
+  ExpectStatus(blocked_login.get(), drogon::k401Unauthorized);
+
+  for (auto& request : live_requests) {
+    if (!request.valid()) {
+      continue;
+    }
+    ASSERT_EQ(request.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready);
+    const auto response = request.get();
+    EXPECT_TRUE(response.status == 200 || response.status == 503)
+        << response.status;
+  }
+  {
+    std::unique_lock lock(live_state->mutex);
+    ASSERT_TRUE(live_state->changed.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return live_state->cancel_calls == live_state->opened;
+        }));
+    EXPECT_EQ(live_state->opened, 0U);
+    EXPECT_EQ(live_state->read_finished, live_state->read_started);
+  }
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     BeginShutdownRevokesLeasesAcquiredByDrainedAuthorizationTasks) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    RunQueuedAuthorizationShutdownScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunNoLeaseLiveShutdownScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancelled{false};
+    bool read_finished{false};
+    std::size_t cancel_calls{0U};
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback = [stream_state](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [stream_state](char* output, std::size_t capacity) {
+          std::unique_lock lock(stream_state->mutex);
+          stream_state->read_started = true;
+          stream_state->changed.notify_all();
+          stream_state->changed.wait(
+              lock, [&] { return stream_state->cancelled; });
+          stream_state->read_finished = true;
+          stream_state->changed.notify_all();
+          const auto count = std::min(capacity, std::size_t{4U});
+          std::fill_n(output, count, 'x');
+          return count;
+        },
+        .cancel = [stream_state] {
+          std::lock_guard lock(stream_state->mutex);
+          ++stream_state->cancel_calls;
+          stream_state->cancelled = true;
+          stream_state->changed.notify_all();
+        },
+    });
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto blocked_live = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return stream_state->read_started; }));
+  }
+
+  service.BeginShutdown();
+
+  {
+    std::lock_guard lock(stream_state->mutex);
+    EXPECT_TRUE(stream_state->read_finished);
+    EXPECT_EQ(stream_state->cancel_calls, 1U);
+  }
+  ASSERT_EQ(blocked_live.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(blocked_live.get().status, 200);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     BeginShutdownReclaimsBlockedLiveReadWithoutSecurityLease) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunNoLeaseLiveShutdownScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunConcurrentLiveShutdownBarrierScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancel_called{false};
+    bool release_read{false};
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback = [stream_state](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [stream_state](char*, std::size_t) {
+          std::unique_lock lock(stream_state->mutex);
+          stream_state->read_started = true;
+          stream_state->changed.notify_all();
+          stream_state->changed.wait(
+              lock, [&] { return stream_state->release_read; });
+          return std::size_t{0U};
+        },
+        .cancel = [stream_state] {
+          std::lock_guard lock(stream_state->mutex);
+          stream_state->cancel_called = true;
+          stream_state->changed.notify_all();
+        },
+    });
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto blocked_live = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return stream_state->read_started; }));
+  }
+
+  auto first_shutdown =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return stream_state->cancel_called; }));
+  }
+  auto second_shutdown =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  EXPECT_EQ(second_shutdown.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(stream_state->mutex);
+    stream_state->release_read = true;
+    stream_state->changed.notify_all();
+  }
+  ASSERT_EQ(first_shutdown.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  ASSERT_EQ(second_shutdown.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  first_shutdown.get();
+  second_shutdown.get();
+  ASSERT_EQ(blocked_live.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(blocked_live.get().status, 200);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest, ConcurrentBeginShutdownWaitsForLivePumpJoin) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunConcurrentLiveShutdownBarrierScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunConcurrentShutdownDuringLiveStartPublicationScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancel_called{false};
+    bool release_read{false};
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback = [stream_state](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [stream_state](char*, std::size_t) {
+          std::unique_lock lock(stream_state->mutex);
+          stream_state->read_started = true;
+          stream_state->changed.notify_all();
+          stream_state->changed.wait(
+              lock, [&] { return stream_state->release_read; });
+          return std::size_t{0U};
+        },
+        .cancel = [stream_state] {
+          std::lock_guard lock(stream_state->mutex);
+          stream_state->cancel_called = true;
+          stream_state->changed.notify_all();
+        },
+    });
+  };
+
+  std::promise<void> start_published;
+  auto start_published_future = start_published.get_future();
+  std::promise<void> release_publication;
+  PromiseReleaseGuard release_publication_guard(release_publication);
+  camera_firmware::service::internal::
+      SetLiveMp4StartPublicationPauseForTesting(
+          &start_published, release_publication.get_future().share());
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto blocked_live = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  ASSERT_EQ(start_published_future.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return stream_state->read_started; }));
+  }
+
+  auto first_shutdown =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  auto second_shutdown =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  const auto stop_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (camera_firmware::service::internal::
+             LiveMp4StopCallsDuringStartForTesting() < 2U &&
+         std::chrono::steady_clock::now() < stop_deadline) {
+    std::this_thread::yield();
+  }
+  ASSERT_EQ(camera_firmware::service::internal::
+                LiveMp4StopCallsDuringStartForTesting(),
+            2U);
+
+  release_publication_guard.Release();
+  {
+    std::unique_lock lock(stream_state->mutex);
+    ASSERT_TRUE(stream_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return stream_state->cancel_called; }));
+  }
+  EXPECT_EQ(first_shutdown.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(second_shutdown.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+
+  {
+    std::lock_guard lock(stream_state->mutex);
+    stream_state->release_read = true;
+    stream_state->changed.notify_all();
+  }
+  ASSERT_EQ(first_shutdown.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  ASSERT_EQ(second_shutdown.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  first_shutdown.get();
+  second_shutdown.get();
+  ASSERT_EQ(blocked_live.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(blocked_live.get().status, 200);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ConcurrentBeginShutdownDuringStartPublicationWaitsForPumpJoin) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunConcurrentShutdownDuringLiveStartPublicationScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunBlockedLiveOpenShutdownScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct OpenState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered{false};
+    bool release{false};
+    bool returned{false};
+    std::size_t cancel_calls{0U};
+  };
+  auto open_state = std::make_shared<OpenState>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback = [open_state](const std::string&) {
+    {
+      std::unique_lock lock(open_state->mutex);
+      open_state->entered = true;
+      open_state->changed.notify_all();
+      open_state->changed.wait(lock, [&] { return open_state->release; });
+      open_state->returned = true;
+      open_state->changed.notify_all();
+    }
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [](char*, std::size_t) { return std::size_t{0U}; },
+        .cancel = [open_state] {
+          std::lock_guard lock(open_state->mutex);
+          ++open_state->cancel_calls;
+          open_state->changed.notify_all();
+        },
+    });
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto request = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  {
+    std::unique_lock lock(open_state->mutex);
+    ASSERT_TRUE(open_state->changed.wait_for(
+        lock, std::chrono::seconds(2), [&] { return open_state->entered; }));
+  }
+
+  auto shutting_down =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  EXPECT_EQ(shutting_down.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(open_state->mutex);
+    open_state->release = true;
+    open_state->changed.notify_all();
+  }
+  ASSERT_EQ(shutting_down.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  shutting_down.get();
+  {
+    std::unique_lock lock(open_state->mutex);
+    EXPECT_TRUE(open_state->returned);
+    EXPECT_TRUE(open_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return open_state->cancel_calls == 1U; }));
+  }
+  ASSERT_EQ(request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(request.get().status, 200);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest, BeginShutdownWaitsForAdmittedLiveOpen) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunBlockedLiveOpenShutdownScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunLiveOpenStopsServiceScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct CallbackState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool stop_returned{false};
+  };
+  auto callback_state = std::make_shared<CallbackState>();
+  camera_firmware::service::ServiceApp service;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback =
+      [&service, callback_state](const std::string&) {
+        service.Stop();
+        {
+          std::lock_guard lock(callback_state->mutex);
+          callback_state->stop_returned = true;
+          callback_state->changed.notify_all();
+        }
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [](char*, std::size_t) { return std::size_t{0U}; },
+            .cancel = [] {},
+        });
+      };
+
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  std::thread request([port] {
+    (void)RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  bool stop_returned = false;
+  {
+    std::unique_lock lock(callback_state->mutex);
+    stop_returned = callback_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return callback_state->stop_returned; });
+  }
+  if (!stop_returned) {
+    ADD_FAILURE() << "Stop did not return from the live open callback";
+    _exit(1);
+  }
+  service.Stop();
+  request.join();
+}
+
+TEST(HttpsAuthIntegrationTest, LiveOpenCallbackMayStopService) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(10U);
+    RunLiveOpenStopsServiceScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunRuntimeCallbackLeaseAllocationFailureScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  camera_firmware::service::ServiceApp service;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback = [](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [](char*, std::size_t) { return std::size_t{0U}; },
+        .cancel = [] {},
+    });
+  };
+
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  camera_firmware::service::internal::
+      FailNextRuntimeCallbackLeaseAllocationForTesting();
+  auto response = Send(NewClient(port), drogon::Get,
+                       "/api/v1/cameras/imx708-main/live.mp4");
+  ExpectStatus(response, drogon::k503ServiceUnavailable);
+
+  const auto before_shutdown = std::chrono::steady_clock::now();
+  service.BeginShutdown();
+  EXPECT_LT(std::chrono::steady_clock::now() - before_shutdown,
+            std::chrono::seconds(1));
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     RuntimeCallbackLeaseAllocationFailureDoesNotChargeLifecycle) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(10U);
+    RunRuntimeCallbackLeaseAllocationFailureScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunLiveReadStopsServiceScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct ReadState {
+    ReadState()
+        : peer_read_entered_signal(peer_read_entered.get_future().share()) {}
+
+    std::mutex callback_mutex;
+    std::promise<void> read_entered;
+    std::promise<void> stop_returned;
+    std::promise<void> peer_read_entered;
+    std::shared_future<void> peer_read_entered_signal;
+    std::mutex peer_mutex;
+    std::condition_variable peer_changed;
+    bool release_peer_read{false};
+    std::atomic_size_t cancel_calls{0U};
+    std::atomic_size_t peer_cancel_calls{0U};
+    std::atomic_bool peer_cancel_observed_before_stop_return{false};
+  };
+  auto read_state = std::make_shared<ReadState>();
+  auto read_entered = read_state->read_entered.get_future();
+  auto stop_returned = read_state->stop_returned.get_future();
+  camera_firmware::service::ServiceApp service;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback =
+      [&service, read_state](const std::string& camera_id) {
+    if (camera_id == "peer") {
+      return camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamHandle>::Ok({
+          .read = [read_state](char*, std::size_t) {
+            read_state->peer_read_entered.set_value();
+            std::unique_lock lock(read_state->peer_mutex);
+            read_state->peer_changed.wait(
+                lock, [&] { return read_state->release_peer_read; });
+            return std::size_t{0U};
+          },
+          .cancel = [read_state] {
+            read_state->peer_cancel_calls.fetch_add(
+                1U, std::memory_order_relaxed);
+            {
+              std::lock_guard lock(read_state->peer_mutex);
+              read_state->release_peer_read = true;
+            }
+            read_state->peer_changed.notify_all();
+          },
+      });
+    }
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [&service, read_state](char*, std::size_t) {
+          std::lock_guard callback_lock(read_state->callback_mutex);
+          read_state->read_entered.set_value();
+          read_state->peer_read_entered_signal.wait();
+          service.Stop();
+          read_state->peer_cancel_observed_before_stop_return.store(
+              read_state->peer_cancel_calls.load(std::memory_order_relaxed) !=
+                  0U,
+              std::memory_order_release);
+          read_state->stop_returned.set_value();
+          return std::size_t{0U};
+        },
+        .cancel = [read_state] {
+          std::lock_guard callback_lock(read_state->callback_mutex);
+          read_state->cancel_calls.fetch_add(1U,
+                                             std::memory_order_relaxed);
+        },
+    });
+  };
+
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto peer_request = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/peer/live.mp4", {});
+  });
+  auto request = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  ASSERT_EQ(read_entered.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  if (stop_returned.wait_for(std::chrono::seconds(2)) !=
+      std::future_status::ready) {
+    ADD_FAILURE() << "Stop did not return from the locked read callback";
+    _exit(1);
+  }
+  service.Stop();
+  EXPECT_EQ(read_state->cancel_calls.load(std::memory_order_relaxed), 1U);
+  EXPECT_EQ(read_state->peer_cancel_calls.load(std::memory_order_relaxed),
+            1U);
+  EXPECT_TRUE(read_state->peer_cancel_observed_before_stop_return.load(
+      std::memory_order_acquire));
+  ASSERT_EQ(request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  ASSERT_EQ(peer_request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+}
+
+TEST(HttpsAuthIntegrationTest, LiveReadMayStopServiceWithoutSelfJoin) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunLiveReadStopsServiceScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunLiveCancelStopsBeforeUnblockingReadScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct StreamState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::promise<void> read_entered;
+    bool release_read{false};
+    std::atomic_size_t cancel_calls{0U};
+    std::atomic_bool nested_stop_returned{false};
+  };
+  auto stream_state = std::make_shared<StreamState>();
+  auto read_entered = stream_state->read_entered.get_future();
+  camera_firmware::service::ServiceApp service;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.cancellable_live_stream_callback =
+      [&service, stream_state](const std::string&) {
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok({
+        .read = [stream_state](char*, std::size_t) {
+          stream_state->read_entered.set_value();
+          std::unique_lock lock(stream_state->mutex);
+          stream_state->changed.wait(
+              lock, [&] { return stream_state->release_read; });
+          return std::size_t{0U};
+        },
+        .cancel = [&service, stream_state] {
+          stream_state->cancel_calls.fetch_add(1U,
+                                               std::memory_order_relaxed);
+          service.Stop();
+          stream_state->nested_stop_returned.store(
+              true, std::memory_order_release);
+          {
+            std::lock_guard lock(stream_state->mutex);
+            stream_state->release_read = true;
+          }
+          stream_state->changed.notify_all();
+        },
+    });
+  };
+
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto request = std::async(std::launch::async, [port] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4", {});
+  });
+  ASSERT_EQ(read_entered.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+
+  const auto before_shutdown = std::chrono::steady_clock::now();
+  service.BeginShutdown();
+  EXPECT_LT(std::chrono::steady_clock::now() - before_shutdown,
+            std::chrono::seconds(1));
+  EXPECT_TRUE(stream_state->nested_stop_returned.load(
+      std::memory_order_acquire));
+  EXPECT_EQ(stream_state->cancel_calls.load(std::memory_order_relaxed), 1U);
+  service.Stop();
+  ASSERT_EQ(request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     LiveCancelCallbackMayStopServiceBeforeUnblockingRead) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunLiveCancelStopsBeforeUnblockingReadScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunServiceInitLiveCallbackSelectionScenario(
+    const std::filesystem::path& directory,
+    bool configure_cancellable) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  std::atomic<unsigned int> legacy_opens{0U};
+  std::atomic<unsigned int> legacy_cancels{0U};
+  std::atomic<unsigned int> cancellable_opens{0U};
+  std::atomic<unsigned int> cancellable_cancels{0U};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  camera_firmware::service::LiveMp4OpenCallback legacy =
+      [&](const std::string&) {
+        legacy_opens.fetch_add(1U);
+        auto sent = std::make_shared<bool>(false);
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [sent, &legacy_cancels](char* output, std::size_t capacity) {
+              if (output == nullptr) {
+                legacy_cancels.fetch_add(1U);
+                return std::size_t{0U};
+              }
+              if (*sent) {
+                return std::size_t{0U};
+              }
+              *sent = true;
+              constexpr std::string_view bytes{"legacy"};
+              const auto count = std::min(capacity, bytes.size());
+              std::copy_n(bytes.data(), count, output);
+              return count;
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      };
+  args.live_stream_callback = legacy;
+  if (configure_cancellable) {
+    args.cancellable_live_stream_callback = [&](const std::string&) {
+      cancellable_opens.fetch_add(1U);
+      auto sent = std::make_shared<bool>(false);
+      return camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamHandle>::Ok({
+          .read = [sent](char* output, std::size_t capacity) {
+            if (*sent) {
+              return std::size_t{0U};
+            }
+            *sent = true;
+            constexpr std::string_view bytes{"cancellable"};
+            const auto count = std::min(capacity, bytes.size());
+            std::copy_n(bytes.data(), count, output);
+            return count;
+          },
+          .cancel = [&cancellable_cancels] {
+            cancellable_cancels.fetch_add(1U);
+          },
+      });
+    };
+  }
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto response = Send(NewClient(port), drogon::Get,
+                       "/api/v1/cameras/imx708-main/live.mp4");
+  ExpectStatus(response, drogon::k200OK);
+  EXPECT_EQ(response.response->body(),
+            configure_cancellable ? "cancellable" : "legacy");
+  service.Stop();
+  EXPECT_EQ(legacy_opens.load(), configure_cancellable ? 0U : 1U);
+  EXPECT_EQ(legacy_cancels.load(), configure_cancellable ? 0U : 1U);
+  EXPECT_EQ(cancellable_opens.load(), configure_cancellable ? 1U : 0U);
+  EXPECT_EQ(cancellable_cancels.load(), configure_cancellable ? 1U : 0U);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ServiceInitLiveRoutePrefersCancellableAndFallsBackToLegacy) {
+  for (const bool configure_cancellable : {false, true}) {
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+      (void)::alarm(15U);
+      TemporaryDirectory directory;
+      RunServiceInitLiveCallbackSelectionScenario(
+          directory.path(), configure_cancellable);
+      _exit(::testing::Test::HasFailure() ? 1 : 0);
+    }
+
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+  }
+}
+
+void RunSecurityDisabledSseShutdownScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  camera_firmware::ai::DetectionBus detection_bus;
+  struct SubscriptionState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool snapshot_after_attach{false};
+    bool released{false};
+  };
+  struct ReleaseProbe {
+    std::shared_ptr<SubscriptionState> state;
+    ~ReleaseProbe() {
+      std::lock_guard lock(state->mutex);
+      state->released = true;
+      state->changed.notify_all();
+    }
+  };
+  auto subscription_state = std::make_shared<SubscriptionState>();
+  std::atomic<unsigned int> delivered_events{0U};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.detection_snapshot_provider = [subscription_state] {
+    std::lock_guard lock(subscription_state->mutex);
+    subscription_state->snapshot_after_attach = true;
+    subscription_state->changed.notify_all();
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&](camera_firmware::ai::DetectionBus::Handler handler) {
+        auto release_probe = std::make_shared<ReleaseProbe>();
+        release_probe->state = subscription_state;
+        auto subscription = detection_bus.Subscribe(
+            [handler = std::move(handler), &delivered_events,
+             release_probe = std::move(release_probe)](
+                const camera_firmware::ai::DetectionEvent& event) {
+              delivered_events.fetch_add(1U);
+              handler(event);
+            });
+        return subscription;
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto pending = std::async(std::launch::async, [port] {
+    return RawHttpsExchange(
+        port,
+        "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\n"
+        "Connection: close\r\n\r\n");
+  });
+  {
+    std::unique_lock lock(subscription_state->mutex);
+    ASSERT_TRUE(subscription_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return subscription_state->snapshot_after_attach; }));
+  }
+
+  const auto shutdown_started = std::chrono::steady_clock::now();
+  service.BeginShutdown();
+  const auto completion_deadline = shutdown_started + std::chrono::seconds(1);
+  const bool completed =
+      pending.wait_until(completion_deadline) == std::future_status::ready;
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    detection_bus.Publish({});
+  }
+  ASSERT_EQ(pending.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(pending.get().status, 200);
+  {
+    std::unique_lock lock(subscription_state->mutex);
+    EXPECT_TRUE(subscription_state->changed.wait_until(
+        lock, completion_deadline,
+        [&] { return subscription_state->released; }));
+  }
+  if (completed) {
+    EXPECT_LT(std::chrono::steady_clock::now() - shutdown_started,
+              std::chrono::seconds(1));
+  }
+
+  const auto delivered_after_shutdown = delivered_events.load();
+  detection_bus.Publish({});
+  EXPECT_EQ(delivered_events.load(), delivered_after_shutdown);
+  auto client = NewClient(port);
+  ExpectStatus(Send(client, drogon::Get, "/api/v1/health"),
+               drogon::k503ServiceUnavailable);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     SecurityDisabledDetectionSseStopsAtBeginShutdown) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunSecurityDisabledSseShutdownScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     DetectionSseRetriesTerminalResponseAfterQueueFailure) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    const std::uint16_t port = ReserveLoopbackPort();
+    camera_firmware::config::AppConfig config;
+    config.security.enabled = false;
+    config.security.state_directory = directory.path().string();
+    config.http.enabled = true;
+    config.http.bind_ip = "127.0.0.1";
+    config.http.port = port;
+    config.http.public_base_url =
+        "https://127.0.0.1:" + std::to_string(port);
+    config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+    config.http.tls.enabled = true;
+    config.http.tls.allow_development_self_signed_tls = true;
+
+    camera_firmware::service::ServiceInitArgs args;
+    args.app_config = &config;
+    args.document_root = config.http.web_root;
+    args.public_base_url = config.http.public_base_url;
+    args.detection_snapshot_provider = [] {
+      camera_firmware::ai::DetectionEvent event;
+      event.camera_id = "imx708-main";
+      event.model_id = "objects";
+      event.result_state = "decoded";
+      event.frame_sequence = 42U;
+      return std::vector<camera_firmware::ai::DetectionEvent>{
+          std::move(event)};
+    };
+
+    camera_firmware::service::ServiceApp service;
+    if (!service.Init(args).ok()) {
+      _exit(2);
+    }
+    camera_firmware::service::internal::
+        FailNextTerminalResponseQueueForTesting();
+    const auto response =
+        Send(NewClient(port), drogon::Get,
+             "/api/v1/ai/detections/stream", {}, {}, {}, false, 1.0);
+    camera_firmware::service::internal::
+        ResetTerminalResponseQueueFailureForTesting();
+    service.Stop();
+    if (response.result != drogon::ReqResult::Ok || !response.response ||
+        response.response->statusCode() != drogon::k200OK ||
+        response.response->getHeader("Content-Type").find(
+            "text/event-stream") == std::string::npos ||
+        response.response->body().find("\"frame_sequence\":42") ==
+            std::string::npos) {
+      _exit(3);
+    }
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunDetectionSseMarkedRevokeWinsEventScenario(
+    const std::filesystem::path& directory,
+    bool publish_event) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  camera_firmware::ai::DetectionBus detection_bus;
+  auto registry =
+      std::make_shared<camera_firmware::service::SessionStreamRegistry>();
+  std::promise<void> initial_snapshot_called;
+  auto initial_snapshot = initial_snapshot_called.get_future();
+  std::atomic_size_t provider_calls{0U};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.stream_registry = registry;
+  args.detection_snapshot_provider = [&] {
+    if (provider_calls.fetch_add(1U, std::memory_order_relaxed) == 0U) {
+      initial_snapshot_called.set_value();
+    }
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&](camera_firmware::ai::DetectionBus::Handler handler) {
+        return detection_bus.Subscribe(std::move(handler));
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto pending = std::async(std::launch::async, [port] {
+    return RawHttpsExchange(
+        port,
+        "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\n"
+        "Connection: close\r\n\r\n",
+        std::numeric_limits<std::size_t>::max(),
+        std::chrono::seconds(22));
+  });
+  ASSERT_EQ(initial_snapshot.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+
+  std::promise<void> first_marked;
+  auto first_marked_future = first_marked.get_future();
+  std::promise<void> release_marking;
+  auto release_marking_future = release_marking.get_future().share();
+  camera_firmware::service::internal::
+      SetSessionStreamBatchMarkPauseForTesting(
+          &first_marked, release_marking_future);
+  auto revoking =
+      std::async(std::launch::async, [&] { registry->RevokeAll(); });
+  ASSERT_EQ(first_marked_future.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+
+  if (publish_event) {
+    camera_firmware::ai::DetectionEvent event;
+    event.camera_id = "imx708-main";
+    event.model_id = "objects";
+    event.result_state = "decoded";
+    event.frame_sequence = 88U;
+    detection_bus.Publish(event);
+  } else {
+    EXPECT_EQ(pending.wait_for(std::chrono::milliseconds(15500)),
+              std::future_status::ready);
+  }
+  EXPECT_EQ(provider_calls.load(std::memory_order_relaxed), 1U);
+
+  release_marking.set_value();
+  ASSERT_EQ(revoking.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  revoking.get();
+  ASSERT_EQ(pending.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  const auto response = pending.get();
+  EXPECT_EQ(response.status, 200);
+  EXPECT_EQ(response.bytes.find("\"frame_sequence\":88"),
+            std::string::npos);
+  camera_firmware::service::internal::
+      SetSessionStreamBatchMarkPauseForTesting(nullptr, {});
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     DetectionSseMarkedRevokeWinsBeforeHandlerDispatch) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunDetectionSseMarkedRevokeWinsEventScenario(directory.path(), true);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     DetectionSseMarkedRevokeWinsBeforeTimeoutCompletion) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(25U);
+    RunDetectionSseMarkedRevokeWinsEventScenario(directory.path(), false);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunDetectionSseShutdownBarrierScenario(
+    const std::filesystem::path& directory,
+    bool block_subscriber) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct CallbackState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool subscriber_entered{false};
+    bool subscriber_attached{false};
+    bool provider_entered{false};
+    bool release_callback{false};
+    unsigned int provider_calls{0U};
+  };
+  auto callback_state = std::make_shared<CallbackState>();
+  camera_firmware::ai::DetectionBus detection_bus;
+  auto registry =
+      std::make_shared<camera_firmware::service::SessionStreamRegistry>();
+  std::atomic<unsigned int> delivered_events{0U};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.stream_registry = registry;
+  args.detection_snapshot_provider = [callback_state, block_subscriber] {
+    std::unique_lock lock(callback_state->mutex);
+    ++callback_state->provider_calls;
+    if (!block_subscriber && callback_state->provider_calls == 2U) {
+      callback_state->provider_entered = true;
+      callback_state->changed.notify_all();
+      callback_state->changed.wait(
+          lock, [&] { return callback_state->release_callback; });
+    }
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&, callback_state, block_subscriber](
+          camera_firmware::ai::DetectionBus::Handler handler) {
+        if (block_subscriber) {
+          std::unique_lock lock(callback_state->mutex);
+          callback_state->subscriber_entered = true;
+          callback_state->changed.notify_all();
+          callback_state->changed.wait(
+              lock, [&] { return callback_state->release_callback; });
+        }
+        auto subscription = detection_bus.Subscribe(
+            [handler = std::move(handler), &delivered_events](
+                const camera_firmware::ai::DetectionEvent& event) {
+              delivered_events.fetch_add(1U);
+              handler(event);
+            });
+        {
+          std::lock_guard lock(callback_state->mutex);
+          callback_state->subscriber_attached = true;
+        }
+        callback_state->changed.notify_all();
+        return subscription;
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto pending = std::async(std::launch::async, [port] {
+    return RawHttpsExchange(
+        port,
+        "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\n"
+        "Connection: close\r\n\r\n");
+  });
+
+  std::future<void> publishing;
+  if (block_subscriber) {
+    std::unique_lock lock(callback_state->mutex);
+    ASSERT_TRUE(callback_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return callback_state->subscriber_entered; }));
+  } else {
+    {
+      std::unique_lock lock(callback_state->mutex);
+      ASSERT_TRUE(callback_state->changed.wait_for(
+          lock, std::chrono::seconds(2),
+          [&] { return callback_state->subscriber_attached; }));
+    }
+    publishing = std::async(std::launch::async, [&] {
+      camera_firmware::ai::DetectionEvent event;
+      event.camera_id = "imx708-main";
+      event.model_id = "objects";
+      event.result_state = "decoded";
+      event.frame_sequence = 77U;
+      detection_bus.Publish(event);
+    });
+    std::unique_lock lock(callback_state->mutex);
+    ASSERT_TRUE(callback_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return callback_state->provider_entered; }));
+  }
+
+  camera_firmware::security::SessionIdentity later_identity;
+  later_identity.bytes.fill(0xffU);
+  auto later_lease = registry->Acquire(later_identity);
+  std::promise<void> later_signalled;
+  auto later_signalled_future = later_signalled.get_future();
+  later_lease->SetRevocationHandler(
+      [&later_signalled] { later_signalled.set_value(); });
+  auto revoking =
+      std::async(std::launch::async, [&] { registry->RevokeAll(); });
+  const auto later_status =
+      later_signalled_future.wait_for(std::chrono::milliseconds(100));
+  EXPECT_EQ(later_status, std::future_status::ready);
+  EXPECT_TRUE(later_lease->revoked());
+  EXPECT_EQ(revoking.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::ready);
+
+  auto shutting_down =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  EXPECT_EQ(shutting_down.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(callback_state->mutex);
+    callback_state->release_callback = true;
+    callback_state->changed.notify_all();
+  }
+  if (publishing.valid()) {
+    ASSERT_EQ(publishing.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    publishing.get();
+  }
+  ASSERT_EQ(revoking.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  revoking.get();
+  ASSERT_EQ(shutting_down.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  shutting_down.get();
+  ASSERT_EQ(pending.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  const auto response = pending.get();
+  EXPECT_EQ(response.status, 200);
+  if (!block_subscriber) {
+    EXPECT_NE(response.bytes.find("\"frame_sequence\":77"),
+              std::string::npos);
+  }
+  const auto delivered_after_shutdown = delivered_events.load();
+  detection_bus.Publish({});
+  EXPECT_EQ(delivered_events.load(), delivered_after_shutdown);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     BeginShutdownWaitsForDetectionSubscriberCallback) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunDetectionSseShutdownBarrierScenario(directory.path(), true);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     BeginShutdownWaitsForWinningDetectionProvider) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunDetectionSseShutdownBarrierScenario(directory.path(), false);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+enum class DetectionSseStopReentryPoint {
+  kSubscriber,
+  kProvider,
+};
+
+void RunDetectionSseStopsServiceScenario(
+    const std::filesystem::path& directory,
+    DetectionSseStopReentryPoint reentry_point) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct CallbackState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool stop_returned{false};
+  };
+  auto callback_state = std::make_shared<CallbackState>();
+  camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::service::ServiceApp service;
+  const auto stop_from_callback = [&] {
+    service.Stop();
+    std::lock_guard lock(callback_state->mutex);
+    callback_state->stop_returned = true;
+    callback_state->changed.notify_all();
+  };
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.detection_snapshot_provider = [&, reentry_point] {
+    if (reentry_point == DetectionSseStopReentryPoint::kProvider) {
+      stop_from_callback();
+    }
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&, reentry_point](camera_firmware::ai::DetectionBus::Handler handler) {
+        if (reentry_point == DetectionSseStopReentryPoint::kSubscriber) {
+          stop_from_callback();
+        }
+        return detection_bus.Subscribe(std::move(handler));
+      };
+
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  std::thread request([port] {
+    (void)RawHttpsExchange(
+        port,
+        "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\n"
+        "Connection: close\r\n\r\n");
+  });
+  bool stop_returned = false;
+  {
+    std::unique_lock lock(callback_state->mutex);
+    stop_returned = callback_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return callback_state->stop_returned; });
+  }
+  if (!stop_returned) {
+    ADD_FAILURE() << "Stop did not return from the detection SSE callback";
+    _exit(1);
+  }
+  service.Stop();
+  request.join();
+}
+
+TEST(HttpsAuthIntegrationTest, DetectionSseSubscriberMayStopService) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(10U);
+    RunDetectionSseStopsServiceScenario(
+        directory.path(), DetectionSseStopReentryPoint::kSubscriber);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest, DetectionSseProviderMayStopService) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(10U);
+    RunDetectionSseStopsServiceScenario(
+        directory.path(), DetectionSseStopReentryPoint::kProvider);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunDetectionSseMergeFailureScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = false;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url =
+      "https://127.0.0.1:" + std::to_string(port);
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+
+  struct CallbackState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t provider_calls{0U};
+    std::atomic_size_t delivered_events{0U};
+  };
+  auto callback_state = std::make_shared<CallbackState>();
+  camera_firmware::ai::DetectionBus detection_bus;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.detection_snapshot_provider = [callback_state] {
+    std::lock_guard lock(callback_state->mutex);
+    ++callback_state->provider_calls;
+    callback_state->changed.notify_all();
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&](camera_firmware::ai::DetectionBus::Handler handler) {
+        return detection_bus.Subscribe(
+            [handler = std::move(handler), callback_state](
+                const camera_firmware::ai::DetectionEvent& event) {
+              callback_state->delivered_events.fetch_add(
+                  1U, std::memory_order_relaxed);
+              handler(event);
+            });
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto pending = std::async(std::launch::async, [port] {
+    return RawHttpsExchange(
+        port,
+        "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\n"
+        "Connection: close\r\n\r\n");
+  });
+  {
+    std::unique_lock lock(callback_state->mutex);
+    ASSERT_TRUE(callback_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return callback_state->provider_calls == 1U; }));
+  }
+
+  camera_firmware::service::internal::
+      FailNextDetectionSseEventMergeForTesting();
+  camera_firmware::ai::DetectionEvent event;
+  event.camera_id = "imx708-main";
+  event.model_id = "objects";
+  event.result_state = "decoded";
+  event.frame_sequence = 99U;
+  EXPECT_NO_THROW(detection_bus.Publish(event));
+  if (pending.wait_for(std::chrono::seconds(1)) !=
+      std::future_status::ready) {
+    ADD_FAILURE() << "merge failure did not complete the pending SSE";
+    _exit(1);
+  }
+  EXPECT_EQ(pending.get().status, 200);
+
+  auto shutting_down =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  if (shutting_down.wait_for(std::chrono::seconds(1)) !=
+      std::future_status::ready) {
+    ADD_FAILURE() << "merge failure leaked the runtime callback lease";
+    _exit(1);
+  }
+  shutting_down.get();
+  const auto delivered = callback_state->delivered_events.load(
+      std::memory_order_relaxed);
+  detection_bus.Publish(event);
+  EXPECT_EQ(callback_state->delivered_events.load(std::memory_order_relaxed),
+            delivered);
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     DetectionSseMergeFailureCompletesAndReleasesLifecycle) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(10U);
+    RunDetectionSseMergeFailureScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunAuthenticatedLiveMp4Scenario(
+    const std::filesystem::path& directory,
+    bool use_custom_auth_dependencies,
+    bool stop_from_cancel = false) {
   const std::uint16_t port = ReserveLoopbackPort();
   const std::string origin = "https://127.0.0.1:" + std::to_string(port);
 
@@ -1768,8 +5248,41 @@ void RunAuthenticatedLiveMp4Scenario(
       (directory / "rtsp.credentials").string();
 
   const std::string fmp4_payload{"ftyp-moov-moof-mdat"};
+  struct BlockingLiveState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t reads_started{0U};
+    bool cancelled{false};
+    std::size_t reads_finished{0U};
+    std::size_t cancel_calls{0U};
+  };
   std::atomic<unsigned int> provider_calls{0U};
   std::atomic<unsigned int> release_calls{0U};
+  std::atomic_bool block_live_read{false};
+  auto blocking_live = std::make_shared<BlockingLiveState>();
+  auto registry =
+      std::make_shared<camera_firmware::service::SessionStreamRegistry>();
+  std::atomic<unsigned int> dependencies_provider_calls{0U};
+  camera_firmware::ai::DetectionBus detection_bus;
+  std::mutex subscription_mutex;
+  std::condition_variable subscription_changed;
+  bool subscribed = false;
+  std::size_t snapshots_after_attach{0U};
+  std::size_t released_subscriptions{0U};
+  struct SubscriptionReleaseProbe {
+    std::mutex* mutex{nullptr};
+    std::condition_variable* changed{nullptr};
+    std::size_t* released{nullptr};
+    ~SubscriptionReleaseProbe() {
+      std::lock_guard lock(*mutex);
+      ++*released;
+      changed->notify_all();
+    }
+  };
+  std::atomic_bool revoke_before_subscription_attach{false};
+  std::atomic<unsigned int> delivered_events{0U};
+  std::atomic<unsigned int> detection_snapshot_calls{0U};
+  camera_firmware::service::ServiceApp* service_for_cancel = nullptr;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
   args.document_root = config.http.web_root;
@@ -1777,21 +5290,83 @@ void RunAuthenticatedLiveMp4Scenario(
   args.runtime_start_callback = [] {
     return camera_firmware::common::Result<void>::Ok();
   };
-  args.live_stream_callback = [&](const std::string& camera_id) {
+  args.stream_registry = registry;
+  if (use_custom_auth_dependencies) {
+    args.auth_service_dependencies_provider =
+        [&dependencies_provider_calls] {
+          dependencies_provider_calls.fetch_add(1U);
+          return camera_firmware::security::AuthServiceDependencies{};
+        };
+  }
+  args.detection_snapshot_provider = [&] {
+    detection_snapshot_calls.fetch_add(1U);
+    {
+      std::lock_guard lock(subscription_mutex);
+      ++snapshots_after_attach;
+      subscription_changed.notify_all();
+    }
+    return std::vector<camera_firmware::ai::DetectionEvent>{};
+  };
+  args.detection_event_subscriber =
+      [&](camera_firmware::ai::DetectionBus::Handler handler) {
+        auto release_probe = std::make_shared<SubscriptionReleaseProbe>();
+        release_probe->mutex = &subscription_mutex;
+        release_probe->changed = &subscription_changed;
+        release_probe->released = &released_subscriptions;
+        auto subscription = detection_bus.Subscribe(
+            [handler = std::move(handler), &delivered_events,
+             release_probe = std::move(release_probe)](
+                const camera_firmware::ai::DetectionEvent& event) {
+              delivered_events.fetch_add(1U);
+              handler(event);
+            });
+        if (revoke_before_subscription_attach.exchange(false)) {
+          registry->RevokeAll();
+        }
+        {
+          std::lock_guard lock(subscription_mutex);
+          subscribed = true;
+          subscription_changed.notify_all();
+        }
+        return subscription;
+      };
+  args.cancellable_live_stream_callback = [&](const std::string& camera_id) {
     ++provider_calls;
     if (camera_id != "imx708-main") {
       return camera_firmware::common::Result<
-          camera_firmware::service::LiveMp4StreamCallback>::Err(
+          camera_firmware::service::LiveMp4StreamHandle>::Err(
           {"E_LIVE_NOT_FOUND", "private camera detail"});
     }
+    if (block_live_read.load()) {
+      return camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamHandle>::Ok({
+          .read = [blocking_live](char* output, std::size_t capacity) {
+            std::unique_lock lock(blocking_live->mutex);
+            ++blocking_live->reads_started;
+            blocking_live->changed.notify_all();
+            blocking_live->changed.wait(
+                lock, [&] { return blocking_live->cancelled; });
+            ++blocking_live->reads_finished;
+            blocking_live->changed.notify_all();
+            const auto count = std::min(capacity, std::size_t{4U});
+            std::fill_n(output, count, 'x');
+            return count;
+          },
+          .cancel = [blocking_live, &service_for_cancel, stop_from_cancel] {
+            if (stop_from_cancel && service_for_cancel != nullptr) {
+              service_for_cancel->Stop();
+            }
+            std::lock_guard lock(blocking_live->mutex);
+            ++blocking_live->cancel_calls;
+            blocking_live->cancelled = true;
+            blocking_live->changed.notify_all();
+          },
+      });
+    }
     auto offset = std::make_shared<std::size_t>(0U);
-    camera_firmware::service::LiveMp4StreamCallback stream =
-        [offset, &fmp4_payload, &release_calls](char* output,
-                                               std::size_t capacity) {
-          if (output == nullptr) {
-            ++release_calls;
-            return std::size_t{0};
-          }
+    camera_firmware::service::LiveMp4StreamHandle stream{
+        .read = [offset, &fmp4_payload](char* output,
+                                       std::size_t capacity) {
           if (*offset >= fmp4_payload.size()) {
             return std::size_t{0};
           }
@@ -1800,15 +5375,20 @@ void RunAuthenticatedLiveMp4Scenario(
           std::copy_n(fmp4_payload.data() + *offset, count, output);
           *offset += count;
           return count;
-        };
+        },
+        .cancel = [&release_calls] { ++release_calls; },
+    };
     return camera_firmware::common::Result<
-        camera_firmware::service::LiveMp4StreamCallback>::Ok(
+        camera_firmware::service::LiveMp4StreamHandle>::Ok(
         std::move(stream));
   };
 
   camera_firmware::service::ServiceApp service;
+  service_for_cancel = &service;
   const auto started = service.Init(args);
   ASSERT_TRUE(started.ok()) << started.error().message;
+  EXPECT_EQ(dependencies_provider_calls.load(),
+            use_custom_auth_dependencies ? 1U : 0U);
   auto client = NewClient(port);
 
   auto denied = Send(client, drogon::Get,
@@ -1828,7 +5408,7 @@ void RunAuthenticatedLiveMp4Scenario(
   ExpectStatus(login, drogon::k200OK);
   const auto& session_cookie = login.response->getCookie("camera_session");
   ASSERT_FALSE(session_cookie.value().empty());
-  const std::string cookie = "camera_session=" + session_cookie.value();
+  std::string cookie = "camera_session=" + session_cookie.value();
 
   auto live = Send(client, drogon::Get,
                    "/api/v1/cameras/imx708-main/live.mp4", {}, {}, cookie);
@@ -1849,8 +5429,321 @@ void RunAuthenticatedLiveMp4Scenario(
             "live preview is unavailable");
   EXPECT_EQ(provider_calls.load(), 2U);
 
+  if (!use_custom_auth_dependencies) {
+    block_live_read.store(true);
+    const std::size_t blocked_stream_count = stop_from_cancel ? 2U : 1U;
+    std::vector<std::future<RawHttpsResponse>> blocked_streams;
+    blocked_streams.reserve(blocked_stream_count);
+    for (std::size_t index = 0U; index < blocked_stream_count; ++index) {
+      blocked_streams.push_back(std::async(std::launch::async, [&] {
+        return RawHttpsGet(port,
+                           "/api/v1/cameras/imx708-main/live.mp4",
+                           {cookie});
+      }));
+    }
+    {
+      std::unique_lock lock(blocking_live->mutex);
+      ASSERT_TRUE(blocking_live->changed.wait_for(
+          lock, std::chrono::seconds(2),
+          [&] {
+            return blocking_live->reads_started == blocked_stream_count;
+          }));
+    }
+
+    const auto logout_started = std::chrono::steady_clock::now();
+    const auto logout_deadline = logout_started + std::chrono::seconds(1);
+    auto logout = Send(client, drogon::Post, "/api/v1/auth/logout", {},
+                       origin, cookie, true);
+    ExpectStatus(logout, drogon::k200OK);
+    bool completed_promptly = true;
+    for (auto& blocked_stream : blocked_streams) {
+      completed_promptly =
+          blocked_stream.wait_until(logout_deadline) ==
+              std::future_status::ready &&
+          completed_promptly;
+    }
+    EXPECT_TRUE(completed_promptly);
+    for (auto& blocked_stream : blocked_streams) {
+      if (!completed_promptly) {
+        ASSERT_EQ(blocked_stream.wait_for(std::chrono::seconds(2)),
+                  std::future_status::ready);
+      }
+      EXPECT_EQ(blocked_stream.get().status, 200);
+    }
+    if (completed_promptly) {
+      EXPECT_LT(std::chrono::steady_clock::now() - logout_started,
+                std::chrono::seconds(1));
+    }
+    std::lock_guard lock(blocking_live->mutex);
+    EXPECT_EQ(blocking_live->reads_finished, blocked_stream_count);
+    EXPECT_EQ(blocking_live->cancel_calls, blocked_stream_count);
+  } else {
+    const auto build_sse_request = [&cookie] {
+      return "GET /api/v1/ai/detections/stream HTTP/1.1\r\n"
+             "Host: 127.0.0.1\r\nLast-Event-ID: empty\r\nCookie: " +
+             cookie + "\r\nConnection: close\r\n\r\n";
+    };
+    const auto wait_for_subscription = [&] {
+      std::unique_lock lock(subscription_mutex);
+      return subscription_changed.wait_for(
+          lock, std::chrono::seconds(2), [&] { return subscribed; });
+    };
+    const auto snapshot_target = [&] {
+      std::lock_guard lock(subscription_mutex);
+      return snapshots_after_attach + 1U;
+    };
+    const auto release_target = [&] {
+      std::lock_guard lock(subscription_mutex);
+      return released_subscriptions + 1U;
+    };
+    const auto wait_for_snapshot_after_attach = [&](std::size_t target) {
+      std::unique_lock lock(subscription_mutex);
+      return subscription_changed.wait_for(
+          lock, std::chrono::seconds(2),
+          [&] { return snapshots_after_attach >= target; });
+    };
+    const auto wait_for_release_until =
+        [&](std::size_t target,
+            std::chrono::steady_clock::time_point deadline) {
+          std::unique_lock lock(subscription_mutex);
+          return subscription_changed.wait_until(
+              lock, deadline,
+              [&] { return released_subscriptions >= target; });
+        };
+
+    const auto late_release_target = release_target();
+    revoke_before_subscription_attach.store(true);
+    auto revoke_before_attach = std::async(std::launch::async, [&] {
+      return RawHttpsExchange(port, build_sse_request());
+    });
+    ASSERT_TRUE(wait_for_subscription());
+    ASSERT_EQ(revoke_before_attach.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    EXPECT_EQ(revoke_before_attach.get().status, 200);
+    EXPECT_TRUE(wait_for_release_until(
+        late_release_target,
+        std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+    const auto delivered_before_late = delivered_events.load();
+    detection_bus.Publish({});
+    EXPECT_EQ(delivered_events.load(), delivered_before_late);
+
+    const auto logout_snapshot_target = snapshot_target();
+    const auto logout_release_target = release_target();
+    auto logout_pending = std::async(std::launch::async, [&] {
+      return RawHttpsExchange(port, build_sse_request());
+    });
+    ASSERT_TRUE(wait_for_snapshot_after_attach(logout_snapshot_target));
+    const auto logout_started = std::chrono::steady_clock::now();
+    const auto logout_deadline = logout_started + std::chrono::seconds(1);
+    auto logout = Send(client, drogon::Post, "/api/v1/auth/logout", {},
+                       origin, cookie, true);
+    ExpectStatus(logout, drogon::k200OK);
+    const bool completed_promptly =
+        logout_pending.wait_until(logout_deadline) == std::future_status::ready;
+    EXPECT_TRUE(completed_promptly);
+    if (!completed_promptly) {
+      ASSERT_EQ(logout_pending.wait_for(std::chrono::seconds(2)),
+                std::future_status::ready);
+    }
+    EXPECT_EQ(logout_pending.get().status, 200);
+    if (completed_promptly) {
+      EXPECT_LT(std::chrono::steady_clock::now() - logout_started,
+                std::chrono::seconds(1));
+    }
+    EXPECT_TRUE(
+        wait_for_release_until(logout_release_target, logout_deadline));
+    const auto delivered_after_logout = delivered_events.load();
+    detection_bus.Publish({});
+    EXPECT_EQ(delivered_events.load(), delivered_after_logout);
+
+    auto second_login = Send(
+        client, drogon::Post, "/api/v1/auth/login",
+        R"({"username":"owner1","password":"StrongPass9!"})", origin,
+        {}, true);
+    ExpectStatus(second_login, drogon::k200OK);
+    cookie = "camera_session=" +
+             second_login.response->getCookie("camera_session").value();
+
+    const auto competition_snapshot_target = snapshot_target();
+    auto competing_pending = std::async(std::launch::async, [&] {
+      return RawHttpsExchange(port, build_sse_request());
+    });
+    ASSERT_TRUE(
+        wait_for_snapshot_after_attach(competition_snapshot_target));
+    std::promise<void> compete;
+    auto compete_now = compete.get_future().share();
+    auto revoke = std::async(std::launch::async, [&] {
+      compete_now.wait();
+      registry->RevokeAll();
+    });
+    auto event = std::async(std::launch::async, [&] {
+      compete_now.wait();
+      camera_firmware::ai::DetectionEvent detection;
+      detection.camera_id = "imx708-main";
+      detection.model_id = "objects";
+      detection.result_state = "decoded";
+      detection.frame_sequence = 101U;
+      detection_bus.Publish(detection);
+    });
+    compete.set_value();
+    event.get();
+    revoke.get();
+    ASSERT_EQ(competing_pending.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    EXPECT_EQ(competing_pending.get().status, 200);
+    const auto delivered_after_competition = delivered_events.load();
+    detection_bus.Publish({});
+    EXPECT_EQ(delivered_events.load(), delivered_after_competition);
+
+    const auto timeout_snapshot_target = snapshot_target();
+    const auto snapshots_before_timeout = detection_snapshot_calls.load();
+    auto timeout_pending = std::async(std::launch::async, [&] {
+      return RawHttpsExchange(port, build_sse_request());
+    });
+    ASSERT_TRUE(wait_for_snapshot_after_attach(timeout_snapshot_target));
+    ASSERT_EQ(timeout_pending.wait_for(std::chrono::seconds(18)),
+              std::future_status::ready);
+    EXPECT_EQ(timeout_pending.get().status, 200);
+    EXPECT_GE(detection_snapshot_calls.load(), snapshots_before_timeout + 2U);
+    const auto delivered_after_timeout = delivered_events.load();
+    detection_bus.Publish({});
+    EXPECT_EQ(delivered_events.load(), delivered_after_timeout);
+  }
+
   service.Stop();
   EXPECT_GE(release_calls.load(), 1U);
+}
+
+void RunSessionExpiryRevokesBlockedLiveStreamScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  struct BlockingLiveState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool read_started{false};
+    bool cancelled{false};
+    std::size_t cancel_calls{0U};
+  };
+  auto live_state = std::make_shared<BlockingLiveState>();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.auth_service_dependencies_provider = [] {
+    camera_firmware::security::AuthServiceDependencies dependencies;
+    dependencies.session_idle_timeout_seconds = 1;
+    return dependencies;
+  };
+  args.cancellable_live_stream_callback =
+      [live_state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [live_state](char*, std::size_t) {
+              std::unique_lock lock(live_state->mutex);
+              live_state->read_started = true;
+              live_state->changed.notify_all();
+              live_state->changed.wait(
+                  lock, [&] { return live_state->cancelled; });
+              return std::size_t{0U};
+            },
+            .cancel = [live_state] {
+              std::lock_guard lock(live_state->mutex);
+              ++live_state->cancel_calls;
+              live_state->cancelled = true;
+              live_state->changed.notify_all();
+            },
+        });
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" +
+      login.response->getCookie("camera_session").value();
+
+  auto live = std::async(std::launch::async, [port, cookie] {
+    return RawHttpsGet(port, "/api/v1/cameras/imx708-main/live.mp4",
+                       {cookie});
+  });
+  {
+    std::unique_lock lock(live_state->mutex);
+    ASSERT_TRUE(live_state->changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return live_state->read_started; }));
+  }
+
+  const bool expired_without_request =
+      live.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+  if (!expired_without_request) {
+    service.BeginShutdown();
+  }
+  ASSERT_EQ(live.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  EXPECT_EQ(live.get().status, 200);
+  EXPECT_TRUE(expired_without_request);
+  {
+    std::lock_guard lock(live_state->mutex);
+    EXPECT_TRUE(live_state->cancelled);
+    EXPECT_EQ(live_state->cancel_calls, 1U);
+  }
+  if (expired_without_request) {
+    const auto me =
+        Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, cookie);
+    ExpectStatus(me, drogon::k401Unauthorized);
+    ASSERT_NE(me.response->getJsonObject(), nullptr);
+    EXPECT_EQ((*me.response->getJsonObject())["code"].asString(),
+              "E_AUTHENTICATION_REQUIRED");
+  }
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     SessionExpiryRevokesBlockedLiveStreamWithoutAnotherRequest) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunSessionExpiryRevokesBlockedLiveStreamScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
 TEST(HttpsAuthIntegrationTest,
@@ -1860,7 +5753,41 @@ TEST(HttpsAuthIntegrationTest,
   ASSERT_GE(child, 0);
   if (child == 0) {
     (void)::alarm(15U);
-    RunAuthenticatedLiveMp4Scenario(directory.path());
+    RunAuthenticatedLiveMp4Scenario(directory.path(), false);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     MultiLeaseLogoutCancelCallbacksMayStopService) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunAuthenticatedLiveMp4Scenario(directory.path(), false, true);
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     CustomAuthDependenciesRevokeDetectionSseThroughInjectedRegistry) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(30U);
+    RunAuthenticatedLiveMp4Scenario(directory.path(), true);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
 
@@ -1959,10 +5886,6 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
       };
   auth_dependencies.high_severity_log = [](std::string_view,
                                            std::string_view) {};
-  auto auth = std::shared_ptr<camera_firmware::security::AuthService>(
-      camera_firmware::security::AuthServiceTestAccess::Create(
-          *store, std::move(auth_dependencies)));
-
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
   args.document_root = config.http.web_root;
@@ -2020,7 +5943,10 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   };
   args.security_store = store;
   args.bootstrap_service = bootstrap;
-  args.auth_service = auth;
+  args.auth_service_dependencies_provider =
+      [auth_dependencies = std::move(auth_dependencies)] {
+        return auth_dependencies;
+      };
 
   camera_firmware::service::ServiceApp service;
   auto started = service.Init(args);
@@ -2133,10 +6059,16 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   EXPECT_FALSE(
       operational_status.response->getJsonObject()->isMember("phase"));
 
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
   auto repeated_setup = Send(client, drogon::Post,
                              "/api/v1/setup/initialize", setup_body, origin,
                              {}, true);
   ExpectStatus(repeated_setup, drogon::k403Forbidden);
+  EXPECT_EQ(repeated_setup.response->getBody().find("StrongPass9!"),
+            std::string::npos);
   EXPECT_EQ(runtime_start_calls.load(), 2);
 
   auto unauthenticated = Send(client, drogon::Get, "/api/v1/cameras");
@@ -2169,6 +6101,15 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
                                  login_body, "https://attacker.example", {},
                                  true);
   ExpectStatus(cross_origin_login, drogon::k403Forbidden);
+  EXPECT_EQ(cross_origin_login.response->getBody().find("StrongPass9!"),
+            std::string::npos);
+  const auto& denied_secret_cleanup = UserManagementBodyCleanupForTesting();
+  EXPECT_EQ(denied_secret_cleanup.calls.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(denied_secret_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            2U);
+  EXPECT_TRUE(denied_secret_cleanup.source_cleansed.load(
+      std::memory_order_relaxed));
 
   std::atomic<int> unavailable{0};
   std::vector<std::thread> flood;
@@ -2200,6 +6141,15 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   }
   flood_mode.store(false);
   EXPECT_GT(unavailable.load(), 0);
+  EXPECT_GE(denied_secret_cleanup.calls.load(std::memory_order_relaxed),
+            2U + static_cast<std::size_t>(unavailable.load()));
+  EXPECT_EQ(denied_secret_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            denied_secret_cleanup.calls.load(std::memory_order_relaxed));
+  EXPECT_TRUE(denied_secret_cleanup.source_cleansed.load(
+      std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
 
   const std::string wrong_password = "LeakProbe9!";
   auto wrong_login = Send(
@@ -2332,6 +6282,10 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   auto replay = Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, cookie);
   ExpectStatus(replay, drogon::k401Unauthorized);
 
+  ResetUserManagementBodyCleanupForTesting();
+  camera_firmware::service::internal::
+      SetUserManagementRequestBodyCleanupObserverForTesting(
+          RecordUserManagementBodyCleanupForTesting);
   shutdown_block_mode.store(true);
   HttpResult shutdown_login;
   std::thread pending_login([&] {
@@ -2350,6 +6304,15 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   ExpectStatus(shutdown_login, drogon::k401Unauthorized);
   EXPECT_EQ(stopping.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
+  const auto& shutdown_cleanup = UserManagementBodyCleanupForTesting();
+  EXPECT_EQ(shutdown_cleanup.calls.load(std::memory_order_relaxed), 1U);
+  EXPECT_EQ(shutdown_cleanup.copied_to_secure_owner.load(
+                std::memory_order_relaxed),
+            1U);
+  EXPECT_TRUE(
+      shutdown_cleanup.source_cleansed.load(std::memory_order_relaxed));
+  camera_firmware::service::internal::
+      ResetUserManagementRequestBodyCleanupObserverForTesting();
 }
 
 TEST(HttpsAuthIntegrationTest, RuntimeSettingsAreUnavailableWithoutSecurity) {
@@ -2408,6 +6371,22 @@ TEST(HttpsAuthIntegrationTest, RuntimeSettingsAreUnavailableWithoutSecurity) {
     if (!started.ok()) {
       _exit(2);
     }
+    camera_firmware::service::internal::
+        FailNextAuthorizationDispatchQueueForTesting();
+    const auto queue_failure =
+        Send(NewClient(port), drogon::Get, "/api/v1/settings/runtime", {}, {},
+             {}, false, 1.0);
+    camera_firmware::service::internal::
+        ResetAuthorizationDispatchQueueFailureForTesting();
+    if (queue_failure.result != drogon::ReqResult::Ok ||
+        !queue_failure.response ||
+        queue_failure.response->statusCode() !=
+            drogon::k503ServiceUnavailable ||
+        queue_failure.response->getJsonObject() == nullptr ||
+        (*queue_failure.response->getJsonObject())["code"].asString() !=
+            "E_SECURITY_UNAVAILABLE") {
+      _exit(3);
+    }
     const auto response = Send(NewClient(port), drogon::Get,
                                "/api/v1/settings/runtime");
     if (response.result != drogon::ReqResult::Ok || !response.response ||
@@ -2415,7 +6394,7 @@ TEST(HttpsAuthIntegrationTest, RuntimeSettingsAreUnavailableWithoutSecurity) {
         response.response->getJsonObject() == nullptr ||
         (*response.response->getJsonObject())["code"].asString() !=
             "E_SETTINGS_UNAVAILABLE") {
-      _exit(3);
+      _exit(4);
     }
     service.Stop();
     _exit(0);

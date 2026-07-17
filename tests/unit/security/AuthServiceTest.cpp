@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -31,6 +32,7 @@
 
 #include "camera_firmware/common/SecureBytes.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/SecurityTypes.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
@@ -54,16 +56,58 @@ class AuthServiceTestAccess {
     return std::unique_ptr<AuthService>(new AuthService(
         store, std::move(dependencies), std::move(before_ack)));
   }
+
+  static std::unique_ptr<AuthService> CreateWithHooks(
+      SecurityStore& store,
+      AuthServiceDependencies dependencies,
+      AuthServiceRuntimeHooks hooks) {
+    return std::unique_ptr<AuthService>(new AuthService(
+        store, std::move(dependencies), std::move(hooks)));
+  }
+
+  static std::unique_ptr<AuthService> CreateWithLoginRoleValidator(
+      SecurityStore& store,
+      AuthServiceDependencies dependencies,
+      std::function<bool(UserRole)> login_role_validator) {
+    return std::unique_ptr<AuthService>(new AuthService(
+        store, std::move(dependencies), AuthServiceRuntimeHooks{}, {},
+        std::move(login_role_validator)));
+  }
 };
 
 namespace {
 
 using common::SecureBytes;
 
+constexpr int kFailClosedIdentityClearedExitCode = 73;
+constexpr int kFailClosedIdentityDirtyExitCode = 74;
+constexpr int kFailClosedIdentityMissingExitCode = 75;
+constexpr int kFailClosedLogoutReturnedExitCode = 76;
+std::span<const SessionIdentity> fail_closed_identities;
+
+[[noreturn]] void ExitAfterCheckingFailClosedIdentities() noexcept {
+  if (fail_closed_identities.empty()) {
+    ::_exit(kFailClosedIdentityMissingExitCode);
+  }
+  const bool cleared =
+      std::all_of(fail_closed_identities.begin(),
+                  fail_closed_identities.end(), [](const auto& identity) {
+                    return std::all_of(
+                        identity.bytes.begin(), identity.bytes.end(),
+                        [](unsigned char value) { return value == 0U; });
+                  });
+  ::_exit(cleared ? kFailClosedIdentityClearedExitCode
+                  : kFailClosedIdentityDirtyExitCode);
+}
+
 static_assert(std::is_constructible_v<AuthService, SecurityStore&>);
+static_assert(std::is_constructible_v<AuthService, SecurityStore&,
+                                      AuthServiceRuntimeHooks>);
 static_assert(
     !std::is_constructible_v<AuthService, SecurityStore&,
                              AuthServiceDependencies>);
+static_assert(kSessionIdentityBytes == 32U);
+static_assert(sizeof(SessionIdentity) == kSessionIdentityBytes);
 
 class TemporaryDirectory {
  public:
@@ -184,6 +228,40 @@ std::string QueryText(const std::filesystem::path& database_path,
   const auto* raw = ::sqlite3_column_text(statement, 0);
   const std::string value =
       raw == nullptr ? "" : reinterpret_cast<const char*>(raw);
+  (void)::sqlite3_finalize(statement);
+  (void)::sqlite3_close_v2(database);
+  return value;
+}
+
+std::vector<unsigned char> QueryBlob(
+    const std::filesystem::path& database_path,
+    const char* sql) {
+  sqlite3* database = nullptr;
+  if (::sqlite3_open_v2(database_path.c_str(), &database,
+                        SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW,
+                        nullptr) != SQLITE_OK) {
+    throw std::runtime_error("failed to open test database");
+  }
+  (void)::sqlite3_busy_timeout(database, 1000);
+  sqlite3_stmt* statement = nullptr;
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+          SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_ROW) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    (void)::sqlite3_close_v2(database);
+    throw std::runtime_error("failed to query test database");
+  }
+  const auto* bytes = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(statement, 0));
+  const int size = ::sqlite3_column_bytes(statement, 0);
+  if (bytes == nullptr || size < 0) {
+    (void)::sqlite3_finalize(statement);
+    (void)::sqlite3_close_v2(database);
+    throw std::runtime_error("failed to read test blob");
+  }
+  std::vector<unsigned char> value(bytes, bytes + size);
   (void)::sqlite3_finalize(statement);
   (void)::sqlite3_close_v2(database);
   return value;
@@ -365,6 +443,10 @@ class AuthServiceTest : public ::testing::Test {
   }
 
   void RecreateService() {
+    service_ = AuthServiceTestAccess::Create(*store_, Dependencies());
+  }
+
+  AuthServiceDependencies Dependencies() {
     AuthServiceDependencies dependencies;
     dependencies.now_seconds = [this] { return now_seconds_; };
     dependencies.random_bytes = [this](std::size_t size) {
@@ -386,8 +468,7 @@ class AuthServiceTest : public ::testing::Test {
         [this](std::string_view category, std::string_view normalized_peer) {
           RecordHighSeverityLog(category, normalized_peer);
         };
-    service_ = AuthServiceTestAccess::Create(*store_,
-                                             std::move(dependencies));
+    return dependencies;
   }
 
   std::unique_ptr<AuthService> DecisionFailureService(
@@ -581,6 +662,10 @@ TEST_F(AuthServiceTest, ViewerLoginAndVerificationUseStoredRole) {
       "('viewer.one', 'Viewer.One', 'viewer', 1, "
       "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
       "1720000000, 0, 1720000000);");
+  ExecuteSql(store_->database_path(),
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) "
+             "VALUES ('192.0.2.10', 'viewer', 1, 1720000000);");
 
   auto viewer = service_->Login(Login("Viewer.One"));
 
@@ -607,6 +692,146 @@ TEST_F(AuthServiceTest, ViewerLoginAndVerificationUseStoredRole) {
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT COUNT(*) FROM sessions WHERE role = "
                      "'administrator';"),
+            1);
+}
+
+TEST_F(AuthServiceTest,
+       UnsupportedLoginRoleIsRejectedBeforeSessionCommitAndRetrySucceeds) {
+  int validation_calls = 0;
+  auto validating_service =
+      AuthServiceTestAccess::CreateWithLoginRoleValidator(
+          *store_, Dependencies(),
+          [&validation_calls](UserRole role) {
+            ++validation_calls;
+            return role == UserRole::kAdministrator && validation_calls > 1;
+          });
+
+  const auto rejected = validating_service->Login(Login());
+
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, "E_AUTHENTICATION_UNAVAILABLE");
+  EXPECT_EQ(validation_calls, 1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'authentication_succeeded';"),
+            0);
+
+  const auto retried = validating_service->Login(Login());
+
+  ASSERT_TRUE(retried.ok()) << retried.error().message;
+  EXPECT_EQ(validation_calls, 2);
+  EXPECT_EQ(retried.value().role, UserRole::kAdministrator);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+}
+
+TEST_F(AuthServiceTest,
+       ViewerLoginRequiresViewerScopedPeerWithGenericFailures) {
+  ExecuteSql(
+      store_->database_path(),
+      "INSERT INTO users "
+      "(canonical_username, display_username, role, enabled, "
+      "password_algorithm, password_iterations, password_salt, "
+      "password_derived, password_changed_at_seconds, failed_login_count, "
+      "created_at_seconds) VALUES "
+      "('monitor.east', 'Monitor.East', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000); "
+      "INSERT INTO management_ips "
+      "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+      "('192.0.2.22', 'viewer', 1, 1720000000);");
+
+  const auto unknown =
+      service_->Login(Login("missing.user", "NorthStar!9", "192.0.2.22"));
+  const auto wrong_password =
+      service_->Login(Login("Monitor.East", "BadSecret!9", "192.0.2.22"));
+  const auto wrong_role_ip =
+      service_->Login(Login("Monitor.East", "NorthStar!9", "192.0.2.10"));
+
+  ExpectAuthenticationFailure(unknown);
+  ExpectAuthenticationFailure(wrong_password);
+  ExpectAuthenticationFailure(wrong_role_ip);
+  EXPECT_EQ(kdf_calls_, 3);
+  EXPECT_TRUE(service_
+                  ->Login(Login("Monitor.East", "NorthStar!9",
+                                "192.0.2.22"))
+                  .ok());
+
+  ExecuteSql(store_->database_path(),
+             "DELETE FROM sessions; UPDATE users SET enabled = 0 "
+             "WHERE canonical_username = 'monitor.east';");
+  ExpectAuthenticationFailure(service_->Login(
+      Login("Monitor.East", "NorthStar!9", "192.0.2.22")));
+}
+
+TEST_F(AuthServiceTest, SamePeerCanAuthorizeAdministratorAndViewerRoles) {
+  ExecuteSql(
+      store_->database_path(),
+      "INSERT INTO users "
+      "(canonical_username, display_username, role, enabled, "
+      "password_algorithm, password_iterations, password_salt, "
+      "password_derived, password_changed_at_seconds, failed_login_count, "
+      "created_at_seconds) VALUES "
+      "('monitor.shared', 'Monitor.Shared', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000); "
+      "INSERT INTO management_ips "
+      "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+      "('192.0.2.10', 'viewer', 1, 1720000000);");
+
+  auto viewer = service_->Login(Login("Monitor.Shared"));
+  auto administrator = service_->Login(Login());
+
+  ASSERT_TRUE(viewer.ok()) << viewer.error().message;
+  ASSERT_TRUE(administrator.ok()) << administrator.error().message;
+  EXPECT_EQ(viewer.value().role, UserRole::kViewer);
+  EXPECT_EQ(administrator.value().role, UserRole::kAdministrator);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            2);
+}
+
+TEST_F(AuthServiceTest,
+       RejectsSecondViewerSessionButAllowsDifferentViewerAccounts) {
+  ExecuteSql(
+      store_->database_path(),
+      "INSERT INTO users "
+      "(canonical_username, display_username, role, enabled, "
+      "password_algorithm, password_iterations, password_salt, "
+      "password_derived, password_changed_at_seconds, failed_login_count, "
+      "created_at_seconds) VALUES "
+      "('monitor.east', 'Monitor.East', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000), "
+      "('monitor.west', 'Monitor.West', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000); "
+      "INSERT INTO management_ips "
+      "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+      "('192.0.2.22', 'viewer', 1, 1720000000), "
+      "('192.0.2.23', 'viewer', 1, 1720000000);");
+
+  ASSERT_TRUE(service_
+                  ->Login(Login("Monitor.East", "NorthStar!9",
+                                "192.0.2.22"))
+                  .ok());
+  const auto duplicate = service_->Login(
+      Login("Monitor.East", "NorthStar!9", "192.0.2.22"));
+  ExpectAuthenticationFailure(duplicate);
+  EXPECT_TRUE(service_
+                  ->Login(Login("Monitor.West", "NorthStar!9",
+                                "192.0.2.23"))
+                  .ok());
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            2);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE detail_code = "
+                     "'active_viewer_session';"),
             1);
 }
 
@@ -756,6 +981,201 @@ TEST_F(AuthServiceTest, VerifyIsPeerBoundAndRefreshesSlidingIdleDeadline) {
             1);
 }
 
+TEST_F(AuthServiceTest,
+       VerifyReturnsStoredIdentityAndRequiresCurrentUserRoleAndPeer) {
+  ExecuteSql(
+      store_->database_path(),
+      "INSERT INTO users "
+      "(canonical_username, display_username, role, enabled, "
+      "password_algorithm, password_iterations, password_salt, "
+      "password_derived, password_changed_at_seconds, failed_login_count, "
+      "created_at_seconds) VALUES "
+      "('monitor.current', 'Monitor.Current', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000); "
+      "INSERT INTO management_ips "
+      "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+      "('192.0.2.22', 'viewer', 1, 1720000000);");
+  auto login = service_->Login(
+      Login("Monitor.Current", "NorthStar!9", "192.0.2.22"));
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+  const auto stored_hash =
+      QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
+
+  auto principal = service_->Verify(token, "192.0.2.22");
+
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  ASSERT_EQ(stored_hash.size(), kSessionIdentityBytes);
+  EXPECT_TRUE(std::equal(stored_hash.begin(), stored_hash.end(),
+                         principal.value().session_identity.bytes.begin()));
+
+  ExecuteSql(store_->database_path(),
+             "DELETE FROM management_ips WHERE role_scope = 'viewer';");
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+
+  ExecuteSql(store_->database_path(),
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+             "('192.0.2.22', 'viewer', 1, 1720000000); "
+             "UPDATE users SET enabled = 0 WHERE role = 'viewer';");
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+
+  ExecuteSql(store_->database_path(),
+             "UPDATE users SET enabled = 1 WHERE role = 'viewer'; "
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+             "('192.0.2.22', 'administrator', 1, 1720000000); "
+             "UPDATE sessions SET role = 'administrator';");
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+}
+
+TEST_F(AuthServiceTest,
+       LogoutRevokesExactIdentityOnlyAfterCommit) {
+  int callback_session_count = -1;
+  int fallback_calls = 0;
+  std::vector<SessionIdentity> revoked;
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions =
+      [this, &callback_session_count,
+       &revoked](std::span<const SessionIdentity> identities) {
+        callback_session_count = QueryInt(store_->database_path(),
+                                          "SELECT COUNT(*) FROM sessions;");
+        revoked.assign(identities.begin(), identities.end());
+      };
+  hooks.revoke_all_streams = [&fallback_calls] { ++fallback_calls; };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto stored_hash =
+      QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
+
+  auto logout = hooked->Logout(
+      {login.value().session_token.data(), login.value().session_token.size()},
+      "192.0.2.10");
+
+  ASSERT_TRUE(logout.ok()) << logout.error().message;
+  EXPECT_EQ(callback_session_count, 0);
+  EXPECT_EQ(fallback_calls, 0);
+  ASSERT_EQ(revoked.size(), 1U);
+  EXPECT_TRUE(std::equal(stored_hash.begin(), stored_hash.end(),
+                         revoked.front().bytes.begin()));
+}
+
+TEST_F(AuthServiceTest,
+       LogoutExactRevocationThrowUsesGlobalFallbackAndReturnsSuccess) {
+  int exact_calls = 0;
+  int fallback_calls = 0;
+  int fallback_session_count = -1;
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions = [&exact_calls](std::span<const SessionIdentity>) {
+    ++exact_calls;
+    throw std::runtime_error("exact revocation failed");
+  };
+  hooks.revoke_all_streams =
+      [this, &fallback_calls, &fallback_session_count] {
+        ++fallback_calls;
+        fallback_session_count = QueryInt(
+            store_->database_path(), "SELECT COUNT(*) FROM sessions;");
+      };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+
+  auto logout = hooked->Logout(
+      {login.value().session_token.data(), login.value().session_token.size()},
+      "192.0.2.10");
+
+  ASSERT_TRUE(logout.ok()) << logout.error().message;
+  EXPECT_EQ(exact_calls, 1);
+  EXPECT_EQ(fallback_calls, 1);
+  EXPECT_EQ(fallback_session_count, 0);
+}
+
+TEST_F(AuthServiceTest,
+       LogoutExactRevocationThrowWithoutFallbackTerminates) {
+  fail_closed_identities = {};
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions = [](std::span<const SessionIdentity> identities) {
+    fail_closed_identities = identities;
+    throw std::runtime_error("exact revocation failed");
+  };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+
+  EXPECT_EXIT(
+      {
+        std::set_terminate(ExitAfterCheckingFailClosedIdentities);
+        (void)hooked->Logout(
+            {login.value().session_token.data(),
+             login.value().session_token.size()},
+            "192.0.2.10");
+        ::_exit(kFailClosedLogoutReturnedExitCode);
+      },
+      ::testing::ExitedWithCode(kFailClosedIdentityClearedExitCode),
+      "");
+}
+
+TEST_F(AuthServiceTest,
+       LogoutExactAndGlobalRevocationThrowsTerminates) {
+  fail_closed_identities = {};
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions = [](std::span<const SessionIdentity> identities) {
+    fail_closed_identities = identities;
+    throw std::runtime_error("exact revocation failed");
+  };
+  hooks.revoke_all_streams = [] {
+    throw std::runtime_error("global revocation failed");
+  };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+
+  EXPECT_EXIT(
+      {
+        std::set_terminate(ExitAfterCheckingFailClosedIdentities);
+        (void)hooked->Logout(
+            {login.value().session_token.data(),
+             login.value().session_token.size()},
+            "192.0.2.10");
+        ::_exit(kFailClosedLogoutReturnedExitCode);
+      },
+      ::testing::ExitedWithCode(kFailClosedIdentityClearedExitCode),
+      "");
+}
+
+TEST_F(AuthServiceTest, LogoutRollbackNeverPublishesRevocation) {
+  int callback_calls = 0;
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions =
+      [&callback_calls](std::span<const SessionIdentity>) { ++callback_calls; };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  ScopedTransactionFailureReset reset_failures;
+  ConfigureSecurityStoreTransactionFailuresForTest(true, false);
+
+  auto logout = hooked->Logout(
+      {login.value().session_token.data(), login.value().session_token.size()},
+      "192.0.2.10");
+
+  ASSERT_FALSE(logout.ok());
+  EXPECT_EQ(logout.error().code, "E_AUTHENTICATION_UNAVAILABLE");
+  EXPECT_EQ(callback_calls, 0);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+}
+
 TEST_F(AuthServiceTest, LogoutRequiresExactPeerAndInvalidatesAtomically) {
   auto login = service_->Login(Login());
   ASSERT_TRUE(login.ok()) << login.error().message;
@@ -778,12 +1198,29 @@ TEST_F(AuthServiceTest, LogoutRequiresExactPeerAndInvalidatesAtomically) {
 }
 
 TEST_F(AuthServiceTest, ExpiredSessionIsRemovedBeforeNextLogin) {
-  auto first = service_->Login(Login());
+  service_.reset();
+  int callback_session_count = -1;
+  int fallback_calls = 0;
+  std::vector<SessionIdentity> revoked;
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions =
+      [this, &callback_session_count,
+       &revoked](std::span<const SessionIdentity> identities) {
+        callback_session_count = QueryInt(store_->database_path(),
+                                          "SELECT COUNT(*) FROM sessions;");
+        revoked.assign(identities.begin(), identities.end());
+      };
+  hooks.revoke_all_streams = [&fallback_calls] { ++fallback_calls; };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, Dependencies(), std::move(hooks));
+  auto first = hooked->Login(Login());
   ASSERT_TRUE(first.ok()) << first.error().message;
   const std::string first_token = StringFromBytes(first.value().session_token);
+  const auto first_hash =
+      QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
 
   now_seconds_ += 600;
-  auto second = service_->Login(Login());
+  auto second = hooked->Login(Login());
 
   ASSERT_TRUE(second.ok()) << second.error().message;
   EXPECT_NE(StringFromBytes(second.value().session_token), first_token);
@@ -794,6 +1231,99 @@ TEST_F(AuthServiceTest, ExpiredSessionIsRemovedBeforeNextLogin) {
                      "SELECT COUNT(*) FROM audit_events WHERE event_type = "
                      "'session_expired';"),
             1);
+  EXPECT_EQ(callback_session_count, 1);
+  EXPECT_EQ(fallback_calls, 0);
+  ASSERT_EQ(revoked.size(), 1U);
+  EXPECT_TRUE(std::equal(first_hash.begin(), first_hash.end(),
+                         revoked.front().bytes.begin()));
+}
+
+TEST_F(AuthServiceTest,
+       ExpiryWorkerRevokesCommittedSessionWithoutAnotherAuthRequest) {
+  service_.reset();
+  auto dependencies = Dependencies();
+  dependencies.now_seconds = [] {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  };
+  dependencies.session_idle_timeout_seconds = 1;
+  std::promise<SessionIdentity> revoked_promise;
+  auto revoked_future = revoked_promise.get_future();
+  std::atomic_bool published{false};
+  int callback_session_count = -1;
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions =
+      [this, &published, &revoked_promise,
+       &callback_session_count](std::span<const SessionIdentity> identities) {
+        if (identities.size() != 1U || published.exchange(true)) {
+          return;
+        }
+        callback_session_count = QueryInt(store_->database_path(),
+                                          "SELECT COUNT(*) FROM sessions;");
+        revoked_promise.set_value(identities.front());
+      };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, std::move(dependencies), std::move(hooks));
+
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto stored_hash =
+      QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
+
+  ASSERT_EQ(revoked_future.wait_for(std::chrono::seconds(3)),
+            std::future_status::ready);
+  const auto revoked = revoked_future.get();
+  EXPECT_EQ(callback_session_count, 0);
+  EXPECT_TRUE(std::equal(stored_hash.begin(), stored_hash.end(),
+                         revoked.bytes.begin()));
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'session_expired';"),
+            1);
+}
+
+TEST_F(AuthServiceTest,
+       ExpiryWorkerHonorsCommittedSlidingSessionRefresh) {
+  service_.reset();
+  std::atomic<std::int64_t> clock_seconds{now_seconds_};
+  auto dependencies = Dependencies();
+  dependencies.now_seconds = [&clock_seconds] {
+    return clock_seconds.load(std::memory_order_relaxed);
+  };
+  dependencies.session_idle_timeout_seconds = 2;
+  std::promise<void> revoked_promise;
+  auto revoked_future = revoked_promise.get_future();
+  std::atomic_uint revocation_calls{0U};
+  AuthServiceRuntimeHooks hooks;
+  hooks.revoke_sessions =
+      [&revocation_calls,
+       &revoked_promise](std::span<const SessionIdentity> identities) {
+        if (identities.size() == 1U &&
+            revocation_calls.fetch_add(1U, std::memory_order_relaxed) == 0U) {
+          revoked_promise.set_value();
+        }
+      };
+  auto hooked = AuthServiceTestAccess::CreateWithHooks(
+      *store_, std::move(dependencies), std::move(hooks));
+  auto login = hooked->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  clock_seconds.store(now_seconds_ + 1, std::memory_order_relaxed);
+  ASSERT_TRUE(hooked->Verify(token, "192.0.2.10").ok());
+  EXPECT_EQ(revoked_future.wait_for(std::chrono::milliseconds(1200)),
+            std::future_status::timeout);
+
+  clock_seconds.store(now_seconds_ + 3, std::memory_order_relaxed);
+  ASSERT_EQ(revoked_future.wait_for(std::chrono::milliseconds(1200)),
+            std::future_status::ready);
+  EXPECT_EQ(revocation_calls.load(std::memory_order_relaxed), 1U);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
 }
 
 TEST_F(AuthServiceTest, TokenCollisionRetriesThenCreatesUniqueSession) {
@@ -807,6 +1337,10 @@ TEST_F(AuthServiceTest, TokenCollisionRetriesThenCreatesUniqueSession) {
       "('viewer.one', 'Viewer.One', 'viewer', 1, "
       "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
       "1720000000, 0, 1720000000);");
+  ExecuteSql(store_->database_path(),
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) "
+             "VALUES ('192.0.2.10', 'viewer', 1, 1720000000);");
   auto viewer = service_->Login(Login("Viewer.One"));
   ASSERT_TRUE(viewer.ok()) << viewer.error().message;
   random_calls_ = 0;
@@ -832,6 +1366,10 @@ TEST_F(AuthServiceTest,
       "('viewer.one', 'Viewer.One', 'viewer', 1, "
       "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
       "1720000000, 0, 1720000000);");
+  ExecuteSql(store_->database_path(),
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) "
+             "VALUES ('192.0.2.10', 'viewer', 1, 1720000000);");
   auto viewer = service_->Login(Login("Viewer.One"));
   ASSERT_TRUE(viewer.ok()) << viewer.error().message;
   const int audit_count_before = QueryInt(
@@ -1016,6 +1554,77 @@ TEST_F(AuthServiceTest,
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT COUNT(*) FROM sessions WHERE role = "
                      "'administrator';"),
+            1);
+}
+
+TEST_F(AuthServiceTest,
+       IndependentStoresSameViewerRaceHasOneGenericAuditedLoser) {
+  ExecuteSql(
+      store_->database_path(),
+      "INSERT INTO users "
+      "(canonical_username, display_username, role, enabled, "
+      "password_algorithm, password_iterations, password_salt, "
+      "password_derived, password_changed_at_seconds, failed_login_count, "
+      "created_at_seconds) VALUES "
+      "('monitor.race', 'Monitor.Race', 'viewer', 1, "
+      "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000); "
+      "INSERT INTO management_ips "
+      "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
+      "('192.0.2.22', 'viewer', 1, 1720000000);");
+  auto second_store =
+      SecurityStore::Open({temporary_.path() / "security"});
+  ASSERT_TRUE(second_store.ok()) << second_store.error().message;
+  TimedBarrier kdf_barrier(2);
+  std::atomic<int> barrier_timeouts{0};
+  const auto dependencies = [&](unsigned char token_byte) {
+    AuthServiceDependencies value;
+    value.now_seconds = [this] { return now_seconds_; };
+    value.random_bytes = [token_byte](std::size_t size) {
+      return common::Result<SecureBytes>::Ok(FilledBytes(size, token_byte));
+    };
+    value.verify_password = [&](const SecureBytes&, const PasswordRecord&) {
+      if (!kdf_barrier.ArriveAndWait(std::chrono::milliseconds(1500))) {
+        ++barrier_timeouts;
+      }
+      return common::Result<bool>::Ok(true);
+    };
+    return value;
+  };
+  auto first_service =
+      AuthServiceTestAccess::Create(*store_, dependencies(0x91U));
+  auto second_service = AuthServiceTestAccess::Create(
+      *second_store.value(), dependencies(0x92U));
+  std::barrier start(3);
+  std::array<std::optional<common::Result<LoginResult>>, 2> results;
+  std::thread first([&] {
+    start.arrive_and_wait();
+    results[0].emplace(first_service->Login(
+        Login("Monitor.Race", "NorthStar!9", "192.0.2.22")));
+  });
+  std::thread second([&] {
+    start.arrive_and_wait();
+    results[1].emplace(second_service->Login(
+        Login("Monitor.Race", "NorthStar!9", "192.0.2.22")));
+  });
+  start.arrive_and_wait();
+  first.join();
+  second.join();
+
+  EXPECT_EQ(barrier_timeouts.load(), 0);
+  const int winners = static_cast<int>(results[0]->ok()) +
+                      static_cast<int>(results[1]->ok());
+  EXPECT_EQ(winners, 1);
+  const auto& rejected = results[0]->ok() ? *results[1] : *results[0];
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, "E_AUTHENTICATION_FAILED");
+  EXPECT_EQ(rejected.error().message, "authentication failed");
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions WHERE role = 'viewer';"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE detail_code = "
+                     "'active_viewer_session';"),
             1);
 }
 

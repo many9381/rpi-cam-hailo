@@ -37,6 +37,7 @@ struct FragmentRing::SharedState {
   std::uint64_t overrun_total{0U};
   std::size_t retained_bytes{0U};
   std::size_t active_readers{0U};
+  std::size_t waiting_readers{0U};
   std::optional<Clock::time_point> last_publication_at;
   bool available{false};
 };
@@ -47,8 +48,11 @@ struct FragmentRing::Reader::CursorState {
       return;
     }
     std::lock_guard lock(state->mutex);
-    assert(state->active_readers > 0U);
-    --state->active_readers;
+    if (!reader_slot_released) {
+      assert(state->active_readers > 0U);
+      --state->active_readers;
+      reader_slot_released = true;
+    }
     state->changed.notify_all();
   }
 
@@ -56,6 +60,8 @@ struct FragmentRing::Reader::CursorState {
   std::uint64_t generation{0U};
   std::uint64_t next_fragment_sequence{1U};
   bool initialization_pending{true};
+  bool cancelled{false};
+  bool reader_slot_released{false};
 };
 
 FragmentRing::Reader::Reader(std::shared_ptr<CursorState> cursor)
@@ -73,6 +79,10 @@ FragmentRing::Reader::WaitNext(std::chrono::milliseconds timeout) {
   const auto generation_valid = [&] {
     return state->available && state->generation == cursor_->generation;
   };
+  if (cursor_->cancelled) {
+    return Result::Err(
+        {"E_LIVE_CANCELLED", "live stream reader was cancelled"});
+  }
   if (!generation_valid()) {
     return Result::Err(
         {"E_LIVE_GENERATION", "live stream generation is no longer active"});
@@ -89,10 +99,23 @@ FragmentRing::Reader::WaitNext(std::chrono::milliseconds timeout) {
     });
   }
 
-  state->changed.wait_for(lock, timeout, [&] {
-    return !generation_valid() ||
-           state->next_fragment_sequence > cursor_->next_fragment_sequence;
-  });
+  ++state->waiting_readers;
+  try {
+    state->changed.wait_for(lock, timeout, [&] {
+      return cursor_->cancelled || !generation_valid() ||
+             state->next_fragment_sequence > cursor_->next_fragment_sequence;
+    });
+  } catch (...) {
+    assert(state->waiting_readers > 0U);
+    --state->waiting_readers;
+    throw;
+  }
+  assert(state->waiting_readers > 0U);
+  --state->waiting_readers;
+  if (cursor_->cancelled) {
+    return Result::Err(
+        {"E_LIVE_CANCELLED", "live stream reader was cancelled"});
+  }
   if (!generation_valid()) {
     return Result::Err(
         {"E_LIVE_GENERATION", "live stream generation is no longer active"});
@@ -132,8 +155,29 @@ FragmentRing::Reader::WaitNext(std::chrono::milliseconds timeout) {
   });
 }
 
+void FragmentRing::Reader::Cancel() noexcept {
+  const auto cursor = cursor_;
+  if (!cursor || !cursor->state) {
+    return;
+  }
+  const auto state = cursor->state;
+  std::lock_guard lock(state->mutex);
+  cursor->cancelled = true;
+  if (!cursor->reader_slot_released) {
+    assert(state->active_readers > 0U);
+    --state->active_readers;
+    cursor->reader_slot_released = true;
+  }
+  state->changed.notify_all();
+}
+
 bool FragmentRing::Reader::valid() const noexcept {
-  return static_cast<bool>(cursor_);
+  const auto cursor = cursor_;
+  if (!cursor || !cursor->state) {
+    return false;
+  }
+  std::lock_guard lock(cursor->state->mutex);
+  return !cursor->cancelled;
 }
 
 FragmentRing::FragmentRing(FragmentRingLimits limits)
@@ -306,6 +350,11 @@ std::size_t FragmentRing::retained_bytes() const noexcept {
 std::size_t FragmentRing::active_readers() const noexcept {
   std::lock_guard lock(state_->mutex);
   return state_->active_readers;
+}
+
+std::size_t FragmentRing::waiting_readers() const noexcept {
+  std::lock_guard lock(state_->mutex);
+  return state_->waiting_readers;
 }
 
 }  // namespace camera_firmware::media

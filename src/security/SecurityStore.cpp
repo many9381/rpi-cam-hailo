@@ -1,5 +1,6 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <sqlite3.h>
 #include <sys/stat.h>
@@ -25,6 +27,9 @@ namespace {
 constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kDatabaseMode = 0600;
 constexpr int kBusyTimeoutMilliseconds = 1000;
+constexpr int kPreviousSecuritySchemaRevision = 2;
+constexpr int kMaximumViewerUsers = 32;
+constexpr int kMaximumManagementIpsPerRole = 32;
 
 class UniqueFd {
  public:
@@ -168,6 +173,233 @@ common::Result<T> StoreError(std::string code, std::string message) {
 
 common::Result<void> StoreError(std::string code, std::string message) {
   return common::Result<void>::Err({std::move(code), std::move(message)});
+}
+
+class PreparedStatement {
+ public:
+  PreparedStatement(sqlite3* database, const char* sql) {
+    if (::sqlite3_prepare_v2(database, sql, -1, &statement_, nullptr) !=
+        SQLITE_OK) {
+      statement_ = nullptr;
+    }
+  }
+  ~PreparedStatement() {
+    if (statement_ != nullptr) {
+      (void)::sqlite3_finalize(statement_);
+    }
+  }
+
+  PreparedStatement(const PreparedStatement&) = delete;
+  PreparedStatement& operator=(const PreparedStatement&) = delete;
+
+  [[nodiscard]] sqlite3_stmt* get() const noexcept { return statement_; }
+  [[nodiscard]] bool valid() const noexcept { return statement_ != nullptr; }
+
+ private:
+  sqlite3_stmt* statement_{nullptr};
+};
+
+std::optional<UserRole> ReadUserRole(sqlite3_stmt* statement, int column) {
+  const auto* value = ::sqlite3_column_text(statement, column);
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  const std::string_view role(reinterpret_cast<const char*>(value));
+  if (role == "administrator") {
+    return UserRole::kAdministrator;
+  }
+  if (role == "viewer") {
+    return UserRole::kViewer;
+  }
+  return std::nullopt;
+}
+
+std::string_view RoleText(UserRole role) {
+  return role == UserRole::kAdministrator ? "administrator" : "viewer";
+}
+
+common::Result<common::SecureBytes> ReadSecureBlob(sqlite3_stmt* statement,
+                                                   int column) {
+  const auto* data = static_cast<const unsigned char*>(
+      ::sqlite3_column_blob(statement, column));
+  const int size = ::sqlite3_column_bytes(statement, column);
+  if (size < 0 || (size != 0 && data == nullptr)) {
+    return StoreError<common::SecureBytes>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  common::SecureBytes bytes;
+  try {
+    bytes.assign(data, static_cast<std::size_t>(size));
+  } catch (...) {
+    return StoreError<common::SecureBytes>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  return common::Result<common::SecureBytes>::Ok(std::move(bytes));
+}
+
+bool BindPasswordRecord(sqlite3_stmt* statement,
+                        int first_parameter,
+                        const PasswordRecord& password) {
+  return ::sqlite3_bind_text(statement, first_parameter,
+                             password.algorithm.data(),
+                             static_cast<int>(password.algorithm.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK &&
+         ::sqlite3_bind_int64(statement, first_parameter + 1,
+                              password.iterations) == SQLITE_OK &&
+         ::sqlite3_bind_blob(statement, first_parameter + 2,
+                             password.salt.data(),
+                             static_cast<int>(password.salt.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK &&
+         ::sqlite3_bind_blob(statement, first_parameter + 3,
+                             password.derived.data(),
+                             static_cast<int>(password.derived.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK;
+}
+
+common::Result<PasswordRecord> ReadPasswordRecord(sqlite3_stmt* statement,
+                                                   int first_column) {
+  const auto* algorithm = ::sqlite3_column_text(statement, first_column);
+  if (algorithm == nullptr) {
+    return StoreError<PasswordRecord>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto salt = ReadSecureBlob(statement, first_column + 2);
+  auto derived = ReadSecureBlob(statement, first_column + 3);
+  if (!salt.ok() || !derived.ok()) {
+    return StoreError<PasswordRecord>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  PasswordRecord record;
+  record.algorithm = reinterpret_cast<const char*>(algorithm);
+  record.iterations = static_cast<std::uint32_t>(
+      ::sqlite3_column_int64(statement, first_column + 1));
+  record.salt = std::move(salt).value();
+  record.derived = std::move(derived).value();
+  return common::Result<PasswordRecord>::Ok(std::move(record));
+}
+
+bool SameSecureBytes(const common::SecureBytes& first,
+                     const common::SecureBytes& second) noexcept {
+  return first.size() == second.size() &&
+         (first.size() == 0U ||
+          ::CRYPTO_memcmp(first.data(), second.data(), first.size()) == 0);
+}
+
+bool SamePasswordRecord(const PasswordRecord& first,
+                        const PasswordRecord& second) noexcept {
+  return first.algorithm == second.algorithm &&
+         first.iterations == second.iterations &&
+         SameSecureBytes(first.salt, second.salt) &&
+         SameSecureBytes(first.derived, second.derived);
+}
+
+common::Result<std::vector<SessionIdentity>> ReadSessionIdentities(
+    sqlite3* database,
+    std::int64_t user_id) {
+  PreparedStatement statement(
+      database,
+      "SELECT token_hash FROM sessions WHERE user_id = ?1 ORDER BY id;");
+  if (!statement.valid() ||
+      ::sqlite3_bind_int64(statement.get(), 1, user_id) != SQLITE_OK) {
+    return StoreError<std::vector<SessionIdentity>>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  std::vector<SessionIdentity> identities;
+  int step = SQLITE_ROW;
+  while ((step = ::sqlite3_step(statement.get())) == SQLITE_ROW) {
+    const auto* bytes = static_cast<const unsigned char*>(
+        ::sqlite3_column_blob(statement.get(), 0));
+    const int size = ::sqlite3_column_bytes(statement.get(), 0);
+    if (bytes == nullptr ||
+        size != static_cast<int>(kSessionIdentityBytes)) {
+      return StoreError<std::vector<SessionIdentity>>(
+          "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+    }
+    SessionIdentity identity;
+    std::copy_n(bytes, kSessionIdentityBytes, identity.bytes.begin());
+    identities.emplace_back(std::move(identity));
+  }
+  if (step != SQLITE_DONE) {
+    return StoreError<std::vector<SessionIdentity>>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  return common::Result<std::vector<SessionIdentity>>::Ok(
+      std::move(identities));
+}
+
+bool DeleteSessionsForUser(sqlite3* database, std::int64_t user_id) {
+  PreparedStatement statement(database,
+                              "DELETE FROM sessions WHERE user_id = ?1;");
+  return statement.valid() &&
+         ::sqlite3_bind_int64(statement.get(), 1, user_id) == SQLITE_OK &&
+         ::sqlite3_step(statement.get()) == SQLITE_DONE;
+}
+
+common::Result<std::vector<SessionIdentity>> ReadManagementIpSessionIdentities(
+    sqlite3* database,
+    UserRole role,
+    std::string_view normalized_ip) {
+  PreparedStatement statement(
+      database,
+      "SELECT token_hash FROM sessions WHERE role = ?1 AND peer_ip = ?2 "
+      "ORDER BY id;");
+  const std::string_view role_text = RoleText(role);
+  if (!statement.valid() ||
+      ::sqlite3_bind_text(statement.get(), 1, role_text.data(),
+                          static_cast<int>(role_text.size()), SQLITE_TRANSIENT) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_text(statement.get(), 2, normalized_ip.data(),
+                          static_cast<int>(normalized_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK) {
+    return StoreError<std::vector<SessionIdentity>>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  std::vector<SessionIdentity> identities;
+  int step = SQLITE_ROW;
+  while ((step = ::sqlite3_step(statement.get())) == SQLITE_ROW) {
+    const auto* bytes = static_cast<const unsigned char*>(
+        ::sqlite3_column_blob(statement.get(), 0));
+    const int size = ::sqlite3_column_bytes(statement.get(), 0);
+    if (bytes == nullptr || size != static_cast<int>(kSessionIdentityBytes)) {
+      return StoreError<std::vector<SessionIdentity>>(
+          "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+    }
+    SessionIdentity identity;
+    std::copy_n(bytes, kSessionIdentityBytes, identity.bytes.begin());
+    identities.emplace_back(std::move(identity));
+  }
+  if (step != SQLITE_DONE) {
+    return StoreError<std::vector<SessionIdentity>>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  return common::Result<std::vector<SessionIdentity>>::Ok(
+      std::move(identities));
+}
+
+bool DeleteManagementIpSessions(sqlite3* database,
+                                UserRole role,
+                                std::string_view normalized_ip) {
+  PreparedStatement statement(
+      database, "DELETE FROM sessions WHERE role = ?1 AND peer_ip = ?2;");
+  const std::string_view role_text = RoleText(role);
+  return statement.valid() &&
+         ::sqlite3_bind_text(statement.get(), 1, role_text.data(),
+                             static_cast<int>(role_text.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK &&
+         ::sqlite3_bind_text(statement.get(), 2, normalized_ip.data(),
+                             static_cast<int>(normalized_ip.size()),
+                             SQLITE_TRANSIENT) == SQLITE_OK &&
+         ::sqlite3_step(statement.get()) == SQLITE_DONE;
+}
+
+template <typename T>
+common::Result<T> UserMutationUnavailable(
+    SecurityStore::Transaction& transaction) {
+  if (transaction.active()) {
+    (void)transaction.Rollback();
+  }
+  return StoreError<T>("E_USER_MANAGEMENT_STORE",
+                       "user management transaction failed");
 }
 
 bool HasExactMode(const struct stat& status, mode_t expected) {
@@ -613,12 +845,12 @@ bool ReadForeignKeys(sqlite3* database,
   return step == SQLITE_DONE && ::sqlite3_finalize(statement) == SQLITE_OK;
 }
 
-bool HasExactSchemaObjectInventory(sqlite3* database) {
+bool HasExactSchemaObjectInventory(sqlite3* database, int schema_revision) {
   int value = 0;
-  // Revision 2 has no SQLite-generated autoindexes: all approved uniqueness is
+  // Approved schemas have no SQLite-generated autoindexes: all uniqueness is
   // represented by the named indexes below. Requiring the complete inventory
   // rejects internal autoindexes as well as application triggers and views.
-  constexpr const char* kUnexpectedObjectCount = R"sql(
+  constexpr const char* kRevisionTwoUnexpectedObjectCount = R"sql(
 SELECT COUNT(*)
 FROM sqlite_schema
 WHERE NOT (
@@ -648,12 +880,52 @@ WHERE NOT (
   ))
 );
 )sql";
-  return QuerySingleInt(database, kUnexpectedObjectCount, value) && value == 0 &&
+  constexpr const char* kRevisionThreeUnexpectedObjectCount = R"sql(
+SELECT COUNT(*)
+FROM sqlite_schema
+WHERE NOT (
+  (type = 'table' AND (
+    (name = 'schema_version' AND tbl_name = 'schema_version') OR
+    (name = 'device_state' AND tbl_name = 'device_state') OR
+    (name = 'users' AND tbl_name = 'users') OR
+    (name = 'password_history' AND tbl_name = 'password_history') OR
+    (name = 'management_ips' AND tbl_name = 'management_ips') OR
+    (name = 'sessions' AND tbl_name = 'sessions') OR
+    (name = 'audit_events' AND tbl_name = 'audit_events') OR
+    (name = 'firmware_log_outbox' AND tbl_name = 'firmware_log_outbox')
+  )) OR
+  (type = 'index' AND (
+    (name = 'users_canonical_username_unique' AND tbl_name = 'users') OR
+    (name = 'users_single_administrator_unique' AND tbl_name = 'users') OR
+    (name = 'password_history_user_id_unique' AND
+     tbl_name = 'password_history') OR
+    (name = 'management_ips_role_ip_unique' AND
+     tbl_name = 'management_ips') OR
+    (name = 'sessions_token_hash_unique' AND tbl_name = 'sessions') OR
+    (name = 'sessions_single_administrator_unique' AND
+     tbl_name = 'sessions') OR
+    (name = 'sessions_user_id_unique' AND tbl_name = 'sessions') OR
+    (name = 'sessions_expiry_index' AND tbl_name = 'sessions') OR
+    (name = 'audit_events_timestamp_index' AND tbl_name = 'audit_events') OR
+    (name = 'firmware_log_outbox_category_peer_unique' AND
+     tbl_name = 'firmware_log_outbox') OR
+    (name = 'firmware_log_outbox_lease_expiry_index' AND
+     tbl_name = 'firmware_log_outbox')
+  ))
+);
+)sql";
+  const char* unexpected_object_count =
+      schema_revision == kSecuritySchemaRevision
+          ? kRevisionThreeUnexpectedObjectCount
+          : kRevisionTwoUnexpectedObjectCount;
+  const int expected_count =
+      schema_revision == kSecuritySchemaRevision ? 19 : 16;
+  return QuerySingleInt(database, unexpected_object_count, value) && value == 0 &&
          QuerySingleInt(database, "SELECT COUNT(*) FROM sqlite_schema;", value) &&
-         value == 16;
+         value == expected_count;
 }
 
-bool HasValidCommittedState(sqlite3* database) {
+bool HasValidCommittedState(sqlite3* database, int schema_revision) {
   int value = 0;
   if (!QuerySingleInt(database,
                       "SELECT COUNT(*) FROM pragma_foreign_key_check;", value) ||
@@ -663,7 +935,18 @@ bool HasValidCommittedState(sqlite3* database) {
           "SELECT COUNT(*) FROM users WHERE failed_login_count < 0 OR "
           "failed_login_count > 5;",
           value) ||
-      value != 0) {
+      value != 0 ||
+      (schema_revision == kSecuritySchemaRevision &&
+       (!QuerySingleInt(database,
+                        "SELECT COUNT(*) FROM users WHERE role = 'viewer';",
+                        value) ||
+        value > kMaximumViewerUsers ||
+        !QuerySingleInt(
+            database,
+            "SELECT COUNT(*) FROM (SELECT role_scope FROM management_ips "
+            "GROUP BY role_scope HAVING COUNT(*) > 32);",
+            value) ||
+        value != 0))) {
     return false;
   }
 
@@ -702,11 +985,19 @@ WHERE id = 1;
   return QuerySingleInt(database, kStateInvariant, value) && value == 1;
 }
 
-common::Result<void> ValidateSchema(sqlite3* database) {
+common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
+  if (schema_revision != kPreviousSecuritySchemaRevision &&
+      schema_revision != kSecuritySchemaRevision) {
+    return StoreError("E_SECURITY_DB_SCHEMA",
+                      "security database schema is invalid");
+  }
   int value = 0;
   // The complete object inventory is read before any validation DML so an
   // unapproved trigger cannot run from the destructive constraint probes.
-  if (!HasExactSchemaObjectInventory(database) ||
+  const bool revision_three = schema_revision == kSecuritySchemaRevision;
+  const int expected_table_count = revision_three ? 8 : 7;
+  const int expected_index_count = revision_three ? 11 : 9;
+  if (!HasExactSchemaObjectInventory(database, schema_revision) ||
       !QuerySingleInt(database, "PRAGMA foreign_keys;", value) || value != 1 ||
       !QuerySingleInt(database, "PRAGMA secure_delete;", value) || value != 1 ||
       !QuerySingleInt(
@@ -714,35 +1005,38 @@ common::Result<void> ValidateSchema(sqlite3* database) {
           "SELECT COUNT(*) FROM sqlite_schema "
           "WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
           value) ||
-      value != 7 ||
+      value != expected_table_count ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema "
           "WHERE type = 'table' "
           "AND name IN ('schema_version', 'device_state', 'users', "
-          "'management_ips', 'sessions', 'audit_events', "
+          "'management_ips', 'password_history', 'sessions', 'audit_events', "
           "'firmware_log_outbox');",
           value) ||
-      value != 7 ||
+      value != expected_table_count ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' "
           "AND name NOT LIKE 'sqlite_%';",
           value) ||
-      value != 9 ||
+      value != expected_index_count ||
       !QuerySingleInt(
           database,
           "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name IN "
           "('users_canonical_username_unique', "
           "'users_single_administrator_unique', "
           "'management_ips_normalized_ip_unique', "
+          "'management_ips_role_ip_unique', "
+          "'password_history_user_id_unique', "
           "'sessions_token_hash_unique', "
           "'sessions_single_administrator_unique', "
-          "'sessions_expiry_index', 'audit_events_timestamp_index', "
+          "'sessions_user_id_unique', 'sessions_expiry_index', "
+          "'audit_events_timestamp_index', "
           "'firmware_log_outbox_category_peer_unique', "
           "'firmware_log_outbox_lease_expiry_index');",
           value) ||
-      value != 9) {
+      value != expected_index_count) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -756,11 +1050,23 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                      "BINARY",
                      "CREATE UNIQUE INDEX users_single_administrator_unique "
                      "ON users(role) WHERE role = 'administrator'") ||
-      !ValidateIndex(database, "management_ips",
-                     "management_ips_normalized_ip_unique", true, false,
-                     "normalized_ip", "BINARY",
-                     "CREATE UNIQUE INDEX management_ips_normalized_ip_unique "
-                     "ON management_ips(normalized_ip)") ||
+      (!revision_three &&
+       !ValidateIndex(database, "management_ips",
+                      "management_ips_normalized_ip_unique", true, false,
+                      "normalized_ip", "BINARY",
+                      "CREATE UNIQUE INDEX management_ips_normalized_ip_unique "
+                      "ON management_ips(normalized_ip)")) ||
+      (revision_three &&
+       (!ValidateTwoColumnIndex(
+            database, "management_ips", "management_ips_role_ip_unique", true,
+            {"role_scope", "normalized_ip"},
+            "CREATE UNIQUE INDEX management_ips_role_ip_unique "
+            "ON management_ips(role_scope, normalized_ip)") ||
+        !ValidateIndex(database, "password_history",
+                       "password_history_user_id_unique", true, false,
+                       "user_id", "BINARY",
+                       "CREATE UNIQUE INDEX password_history_user_id_unique "
+                       "ON password_history(user_id)"))) ||
       !ValidateIndex(database, "sessions", "sessions_token_hash_unique", true,
                      false, "token_hash", "BINARY",
                      "CREATE UNIQUE INDEX sessions_token_hash_unique "
@@ -770,6 +1076,11 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                      "role", "BINARY",
                      "CREATE UNIQUE INDEX sessions_single_administrator_unique "
                      "ON sessions(role) WHERE role = 'administrator'") ||
+      (revision_three &&
+       !ValidateIndex(database, "sessions", "sessions_user_id_unique", true,
+                      false, "user_id", "BINARY",
+                      "CREATE UNIQUE INDEX sessions_user_id_unique "
+                      "ON sessions(user_id)")) ||
       !ValidateIndex(database, "sessions", "sessions_expiry_index", false,
                      false, "expires_at_seconds", "BINARY",
                      "CREATE INDEX sessions_expiry_index "
@@ -796,6 +1107,7 @@ common::Result<void> ValidateSchema(sqlite3* database) {
   std::vector<ForeignKeyInfo> schema_version_foreign_keys;
   std::vector<ForeignKeyInfo> state_foreign_keys;
   std::vector<ForeignKeyInfo> user_foreign_keys;
+  std::vector<ForeignKeyInfo> password_history_foreign_keys;
   std::vector<ForeignKeyInfo> management_foreign_keys;
   std::vector<ForeignKeyInfo> session_foreign_keys;
   std::vector<ForeignKeyInfo> audit_foreign_keys;
@@ -807,6 +1119,12 @@ common::Result<void> ValidateSchema(sqlite3* database) {
       !state_foreign_keys.empty() ||
       !ReadForeignKeys(database, "users", user_foreign_keys) ||
       !user_foreign_keys.empty() ||
+      (revision_three &&
+       (!ReadForeignKeys(database, "password_history",
+                         password_history_foreign_keys) ||
+        password_history_foreign_keys !=
+            std::vector<ForeignKeyInfo>{{"users", "user_id", "id",
+                                         "NO ACTION", "CASCADE", "NONE"}})) ||
       !ReadForeignKeys(database, "management_ips", management_foreign_keys) ||
       !management_foreign_keys.empty() ||
       !ReadForeignKeys(database, "sessions", session_foreign_keys) ||
@@ -827,6 +1145,7 @@ common::Result<void> ValidateSchema(sqlite3* database) {
   std::vector<ColumnInfo> schema_version_columns;
   std::vector<ColumnInfo> device_state_columns;
   std::vector<ColumnInfo> users_columns;
+  std::vector<ColumnInfo> password_history_columns;
   std::vector<ColumnInfo> management_ip_columns;
   std::vector<ColumnInfo> sessions_columns;
   std::vector<ColumnInfo> audit_columns;
@@ -858,6 +1177,17 @@ common::Result<void> ValidateSchema(sqlite3* database) {
               {"lock_until_seconds", "INTEGER", 0, 0},
               {"created_at_seconds", "INTEGER", 1, 0},
               {"last_login_at_seconds", "INTEGER", 0, 0}} ||
+      (revision_three &&
+       (!ReadColumns(database, "password_history", password_history_columns) ||
+        password_history_columns !=
+            std::vector<ColumnInfo>{
+                {"id", "INTEGER", 0, 1},
+                {"user_id", "INTEGER", 1, 0},
+                {"password_algorithm", "TEXT", 1, 0},
+                {"password_iterations", "INTEGER", 1, 0},
+                {"password_salt", "BLOB", 1, 0},
+                {"password_derived", "BLOB", 1, 0},
+                {"replaced_at_seconds", "INTEGER", 1, 0}})) ||
       !ReadColumns(database, "management_ips", management_ip_columns) ||
       management_ip_columns !=
           std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
@@ -878,14 +1208,25 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                                   {"peer_ip", "TEXT", 1, 0}} ||
       !ReadColumns(database, "audit_events", audit_columns) ||
       audit_columns !=
-          std::vector<ColumnInfo>{{"sequence", "INTEGER", 0, 1},
-                                  {"server_timestamp_seconds", "INTEGER", 1,
-                                   0},
-                                  {"event_type", "TEXT", 1, 0},
-                                  {"outcome", "TEXT", 1, 0},
-                                  {"actor_user_id", "INTEGER", 0, 0},
-                                  {"peer_ip", "TEXT", 1, 0},
-                                  {"detail_code", "TEXT", 1, 0}} ||
+          (revision_three
+               ? std::vector<ColumnInfo>{
+                     {"sequence", "INTEGER", 0, 1},
+                     {"server_timestamp_seconds", "INTEGER", 1, 0},
+                     {"event_type", "TEXT", 1, 0},
+                     {"outcome", "TEXT", 1, 0},
+                     {"actor_user_id", "INTEGER", 0, 0},
+                     {"peer_ip", "TEXT", 1, 0},
+                     {"detail_code", "TEXT", 1, 0},
+                     {"subject_type", "TEXT", 1, 0},
+                     {"subject_identity", "TEXT", 1, 0}}
+               : std::vector<ColumnInfo>{
+                     {"sequence", "INTEGER", 0, 1},
+                     {"server_timestamp_seconds", "INTEGER", 1, 0},
+                     {"event_type", "TEXT", 1, 0},
+                     {"outcome", "TEXT", 1, 0},
+                     {"actor_user_id", "INTEGER", 0, 0},
+                     {"peer_ip", "TEXT", 1, 0},
+                     {"detail_code", "TEXT", 1, 0}}) ||
       !ReadColumns(database, "firmware_log_outbox", outbox_columns) ||
       outbox_columns !=
           std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
@@ -898,17 +1239,28 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                                   {"lease_expires_at_seconds", "INTEGER", 0,
                                    0}} ||
       !QuerySingleInt(database,
-                      "SELECT COUNT(*) FROM schema_version WHERE version = 2;",
+                      revision_three
+                          ? "SELECT COUNT(*) FROM schema_version "
+                            "WHERE version = 3;"
+                          : "SELECT COUNT(*) FROM schema_version "
+                            "WHERE version = 2;",
                       value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM schema_version;", value) ||
       value != 1 ||
       !QuerySingleInt(
           database,
-          "SELECT COUNT(*) FROM device_state "
-          "WHERE id = 1 AND schema_revision = 2 AND "
-          "((state = 'default' AND setup_completed_at_seconds IS NULL) OR "
-          "(state = 'operational' AND setup_completed_at_seconds >= 0));",
+          revision_three
+              ? "SELECT COUNT(*) FROM device_state "
+                "WHERE id = 1 AND schema_revision = 3 AND "
+                "((state = 'default' AND setup_completed_at_seconds IS NULL) "
+                "OR (state = 'operational' AND "
+                "setup_completed_at_seconds >= 0));"
+              : "SELECT COUNT(*) FROM device_state "
+                "WHERE id = 1 AND schema_revision = 2 AND "
+                "((state = 'default' AND setup_completed_at_seconds IS NULL) "
+                "OR (state = 'operational' AND "
+                "setup_completed_at_seconds >= 0));",
           value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM device_state;", value) ||
@@ -917,13 +1269,15 @@ common::Result<void> ValidateSchema(sqlite3* database) {
                       "security database schema is invalid");
   }
 
-  const std::array<std::pair<const char*, std::string_view>, 7>
-      expected_table_definitions = {{
-          {"schema_version", R"sql(
+  constexpr std::string_view kRevisionTwoSchemaVersionSql = R"sql(
 CREATE TABLE schema_version (
   version INTEGER NOT NULL CHECK (version = 2)
-))sql"},
-          {"device_state", R"sql(
+))sql";
+  constexpr std::string_view kRevisionThreeSchemaVersionSql = R"sql(
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 3)
+))sql";
+  constexpr std::string_view kRevisionTwoDeviceStateSql = R"sql(
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
@@ -934,7 +1288,81 @@ CREATE TABLE device_state (
     (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
      setup_completed_at_seconds >= 0)
   )
-))sql"},
+))sql";
+  constexpr std::string_view kRevisionThreeDeviceStateSql = R"sql(
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+))sql";
+  constexpr std::string_view kRevisionTwoManagementIpsSql = R"sql(
+CREATE TABLE management_ips (
+  id INTEGER PRIMARY KEY,
+  normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
+  role_scope TEXT NOT NULL CHECK (role_scope IN ('administrator')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
+))sql";
+  constexpr std::string_view kRevisionThreeManagementIpsSql = R"sql(
+CREATE TABLE management_ips (
+  id INTEGER PRIMARY KEY,
+  normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
+  role_scope TEXT NOT NULL
+    CHECK (role_scope IN ('administrator', 'viewer')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
+))sql";
+  constexpr std::string_view kRevisionTwoAuditEventsSql = R"sql(
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64)
+))sql";
+  constexpr std::string_view kRevisionThreeAuditEventsSql = R"sql(
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+))sql";
+  constexpr std::string_view kPasswordHistorySql = R"sql(
+CREATE TABLE password_history (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  password_algorithm TEXT NOT NULL
+    CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
+  password_iterations INTEGER NOT NULL
+    CHECK (password_iterations BETWEEN 1000 AND 2000000),
+  password_salt BLOB NOT NULL CHECK (length(password_salt) = 16),
+  password_derived BLOB NOT NULL CHECK (length(password_derived) = 32),
+  replaced_at_seconds INTEGER NOT NULL CHECK (replaced_at_seconds >= 0)
+))sql";
+
+  const std::array<std::pair<const char*, std::string_view>, 7>
+      expected_table_definitions = {{
+          {"schema_version", revision_three ? kRevisionThreeSchemaVersionSql
+                                              : kRevisionTwoSchemaVersionSql},
+          {"device_state", revision_three ? kRevisionThreeDeviceStateSql
+                                            : kRevisionTwoDeviceStateSql},
           {"users", R"sql(
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -959,14 +1387,8 @@ CREATE TABLE users (
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_login_at_seconds INTEGER CHECK (last_login_at_seconds >= 0)
 ))sql"},
-          {"management_ips", R"sql(
-CREATE TABLE management_ips (
-  id INTEGER PRIMARY KEY,
-  normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
-  role_scope TEXT NOT NULL CHECK (role_scope IN ('administrator')),
-  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
-  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
-))sql"},
+          {"management_ips", revision_three ? kRevisionThreeManagementIpsSql
+                                              : kRevisionTwoManagementIpsSql},
           {"sessions", R"sql(
 CREATE TABLE sessions (
   id INTEGER PRIMARY KEY,
@@ -980,17 +1402,8 @@ CREATE TABLE sessions (
     CHECK (expires_at_seconds >= last_activity_at_seconds),
   peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
 ))sql"},
-          {"audit_events", R"sql(
-CREATE TABLE audit_events (
-  sequence INTEGER PRIMARY KEY,
-  server_timestamp_seconds INTEGER NOT NULL
-    CHECK (server_timestamp_seconds >= 0),
-  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
-  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
-  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
-  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64)
-))sql"},
+          {"audit_events", revision_three ? kRevisionThreeAuditEventsSql
+                                            : kRevisionTwoAuditEventsSql},
           {"firmware_log_outbox", R"sql(
 CREATE TABLE firmware_log_outbox (
   id INTEGER PRIMARY KEY,
@@ -1018,7 +1431,14 @@ CREATE TABLE firmware_log_outbox (
     }
   }
 
-  if (!HasValidCommittedState(database)) {
+  if (revision_three &&
+      !ValidateSchemaObjectSql(database, "password_history",
+                               kPasswordHistorySql)) {
+    return StoreError("E_SECURITY_DB_SCHEMA",
+                      "security database schema is invalid");
+  }
+
+  if (!HasValidCommittedState(database, schema_revision)) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -1029,13 +1449,19 @@ CREATE TABLE firmware_log_outbox (
   if (!savepoint.ok()) {
     return savepoint;
   }
+  const char* preparation_sql =
+      revision_three
+          ? "DELETE FROM firmware_log_outbox; DELETE FROM audit_events; "
+            "DELETE FROM sessions; DELETE FROM password_history; "
+            "DELETE FROM management_ips; DELETE FROM users; "
+            "UPDATE device_state SET state = 'default', "
+            "setup_completed_at_seconds = NULL WHERE id = 1;"
+          : "DELETE FROM firmware_log_outbox; DELETE FROM audit_events; "
+            "DELETE FROM sessions; DELETE FROM management_ips; "
+            "DELETE FROM users; UPDATE device_state SET state = 'default', "
+            "setup_completed_at_seconds = NULL WHERE id = 1;";
   const auto preparation = Execute(
-      database,
-      "DELETE FROM firmware_log_outbox; DELETE FROM audit_events; "
-      "DELETE FROM sessions; "
-      "DELETE FROM management_ips; DELETE FROM users; "
-      "UPDATE device_state SET state = 'default', "
-      "setup_completed_at_seconds = NULL WHERE id = 1;",
+      database, preparation_sql,
       "E_SECURITY_DB_SCHEMA", "failed to validate security database schema");
   const bool prepared = preparation.ok();
   const bool constraints_valid =
@@ -1045,10 +1471,16 @@ CREATE TABLE firmware_log_outbox (
           "INSERT INTO schema_version (version) VALUES (NULL);") &&
       StatementIsRejectedByConstraint(
           database,
-          "INSERT INTO schema_version (version) VALUES (3);") &&
+          revision_three
+              ? "INSERT INTO schema_version (version) VALUES (2);"
+              : "INSERT INTO schema_version (version) VALUES (3);") &&
       StatementIsRejectedByConstraint(
-          database, "INSERT INTO device_state "
-                    "(id, state, schema_revision) VALUES (2, 'default', 2);") &&
+          database,
+          revision_three
+              ? "INSERT INTO device_state "
+                "(id, state, schema_revision) VALUES (2, 'default', 3);"
+              : "INSERT INTO device_state "
+                "(id, state, schema_revision) VALUES (2, 'default', 2);") &&
       StatementIsRejectedByConstraint(
           database,
           "UPDATE device_state SET state = 'invalid' WHERE id = 1;") &&
@@ -1120,6 +1552,38 @@ CREATE TABLE firmware_log_outbox (
           "INSERT INTO management_ips "
           "(normalized_ip, role_scope, enabled, created_at_seconds) "
           "VALUES ('192.0.2.1', 'administrator', 1, 1);") &&
+      (!revision_three ||
+       (StatementSucceeds(
+            database,
+            "INSERT INTO management_ips "
+            "(normalized_ip, role_scope, enabled, created_at_seconds) "
+            "VALUES ('192.0.2.1', 'viewer', 1, 1);") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO management_ips "
+            "(normalized_ip, role_scope, enabled, created_at_seconds) "
+            "VALUES ('192.0.2.1', 'viewer', 1, 1);") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO password_history "
+            "(user_id, password_algorithm, password_iterations, "
+            "password_salt, password_derived, replaced_at_seconds) "
+            "VALUES ((SELECT id FROM users WHERE role = 'viewer'), "
+            "'pbkdf2-hmac-sha256', 600000, zeroblob(15), zeroblob(32), 1);") &&
+        StatementSucceeds(
+            database,
+            "INSERT INTO password_history "
+            "(user_id, password_algorithm, password_iterations, "
+            "password_salt, password_derived, replaced_at_seconds) "
+            "VALUES ((SELECT id FROM users WHERE role = 'viewer'), "
+            "'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 1);") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO password_history "
+            "(user_id, password_algorithm, password_iterations, "
+            "password_salt, password_derived, replaced_at_seconds) "
+            "VALUES ((SELECT id FROM users WHERE role = 'viewer'), "
+            "'pbkdf2-hmac-sha256', 600000, randomblob(16), randomblob(32), 2);"))) &&
       StatementIsRejectedByConstraint(
           database,
           "INSERT INTO sessions "
@@ -1148,6 +1612,23 @@ CREATE TABLE firmware_log_outbox (
           "last_activity_at_seconds, expires_at_seconds, peer_ip) "
           "VALUES (randomblob(32), (SELECT id FROM users LIMIT 1), "
           "'administrator', 1, 1, 2, '192.0.2.1');") &&
+      (!revision_three ||
+       (StatementSucceeds(
+            database,
+            "INSERT INTO sessions "
+            "(token_hash, user_id, role, created_at_seconds, "
+            "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+            "VALUES (randomblob(32), "
+            "(SELECT id FROM users WHERE role = 'viewer'), "
+            "'viewer', 1, 1, 2, '192.0.2.1');") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO sessions "
+            "(token_hash, user_id, role, created_at_seconds, "
+            "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+            "VALUES (randomblob(32), "
+            "(SELECT id FROM users WHERE role = 'viewer'), "
+            "'viewer', 1, 1, 2, '192.0.2.1');"))) &&
       StatementIsRejectedByConstraint(
           database,
           "INSERT INTO audit_events "
@@ -1161,6 +1642,14 @@ CREATE TABLE firmware_log_outbox (
           "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
           "peer_ip, detail_code) "
           "VALUES (1, 'event', 'success', 999999, '192.0.2.1', 'detail');") &&
+      (!revision_three ||
+       StatementIsRejectedByConstraint(
+           database,
+           "INSERT INTO audit_events "
+           "(server_timestamp_seconds, event_type, outcome, peer_ip, "
+           "detail_code, subject_type, subject_identity) "
+           "VALUES (1, 'event', 'success', '192.0.2.1', 'detail', "
+           "printf('%065d', 0), 'viewer.one');")) &&
       StatementSucceeds(
           database,
           "INSERT INTO firmware_log_outbox "
@@ -1205,6 +1694,85 @@ CREATE TABLE firmware_log_outbox (
   }
   return common::Result<void>::Ok();
 }
+
+constexpr const char* kRevisionThreeMigrationStatements[] = {
+    "ALTER TABLE schema_version RENAME TO schema_version_revision_two;",
+    R"sql(CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 3)
+);)sql",
+    "INSERT INTO schema_version (version) VALUES (3);",
+    "DROP TABLE schema_version_revision_two;",
+    "ALTER TABLE device_state RENAME TO device_state_revision_two;",
+    R"sql(CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);)sql",
+    "INSERT INTO device_state "
+    "(id, state, schema_revision, setup_completed_at_seconds) "
+    "SELECT id, state, 3, setup_completed_at_seconds "
+    "FROM device_state_revision_two;",
+    "DROP TABLE device_state_revision_two;",
+    "ALTER TABLE management_ips RENAME TO management_ips_revision_two;",
+    R"sql(CREATE TABLE management_ips (
+  id INTEGER PRIMARY KEY,
+  normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
+  role_scope TEXT NOT NULL
+    CHECK (role_scope IN ('administrator', 'viewer')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
+);)sql",
+    "INSERT INTO management_ips "
+    "(id, normalized_ip, role_scope, enabled, created_at_seconds) "
+    "SELECT id, normalized_ip, role_scope, enabled, created_at_seconds "
+    "FROM management_ips_revision_two;",
+    "DROP TABLE management_ips_revision_two;",
+    R"sql(CREATE UNIQUE INDEX management_ips_role_ip_unique
+  ON management_ips(role_scope, normalized_ip);)sql",
+    R"sql(CREATE TABLE password_history (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  password_algorithm TEXT NOT NULL
+    CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
+  password_iterations INTEGER NOT NULL
+    CHECK (password_iterations BETWEEN 1000 AND 2000000),
+  password_salt BLOB NOT NULL CHECK (length(password_salt) = 16),
+  password_derived BLOB NOT NULL CHECK (length(password_derived) = 32),
+  replaced_at_seconds INTEGER NOT NULL CHECK (replaced_at_seconds >= 0)
+);)sql",
+    R"sql(CREATE UNIQUE INDEX password_history_user_id_unique
+  ON password_history(user_id);)sql",
+    "CREATE UNIQUE INDEX sessions_user_id_unique ON sessions(user_id);",
+    "ALTER TABLE audit_events RENAME TO audit_events_revision_two;",
+    R"sql(CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+);)sql",
+    "INSERT INTO audit_events "
+    "(sequence, server_timestamp_seconds, event_type, outcome, actor_user_id, "
+    "peer_ip, detail_code, subject_type, subject_identity) "
+    "SELECT sequence, server_timestamp_seconds, event_type, outcome, "
+    "actor_user_id, peer_ip, detail_code, '', '' "
+    "FROM audit_events_revision_two;",
+    "DROP TABLE audit_events_revision_two;",
+    R"sql(CREATE INDEX audit_events_timestamp_index
+  ON audit_events(server_timestamp_seconds);)sql"};
 
 }  // namespace
 
@@ -1387,18 +1955,32 @@ common::Result<void> SecurityStore::InitializeSchema() {
                       "failed to inspect security database schema");
   }
   if (schema_object_count != 0) {
-    return ValidateSchema(impl_->database.get());
+    auto revision_three =
+        ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
+    if (revision_three.ok()) {
+      return revision_three;
+    }
+    int revision_two_rows = 0;
+    if (!QuerySingleInt(
+            impl_->database.get(),
+            "SELECT COUNT(*) FROM schema_version WHERE version = 2;",
+            revision_two_rows) ||
+        revision_two_rows != 1) {
+      return StoreError("E_SECURITY_DB_SCHEMA",
+                        "security database schema is invalid");
+    }
+    return MigrateRevisionTwoToThree();
   }
 
   constexpr const char* kSchema = R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 2)
+  version INTEGER NOT NULL CHECK (version = 3)
 );
-INSERT INTO schema_version (version) VALUES (2);
+INSERT INTO schema_version (version) VALUES (3);
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 2),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -1407,7 +1989,7 @@ CREATE TABLE device_state (
   )
 );
 INSERT INTO device_state (id, state, schema_revision)
-VALUES (1, 'default', 2);
+VALUES (1, 'default', 3);
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -1437,15 +2019,30 @@ CREATE UNIQUE INDEX users_canonical_username_unique
 CREATE UNIQUE INDEX users_single_administrator_unique
   ON users(role) WHERE role = 'administrator';
 
+CREATE TABLE password_history (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  password_algorithm TEXT NOT NULL
+    CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
+  password_iterations INTEGER NOT NULL
+    CHECK (password_iterations BETWEEN 1000 AND 2000000),
+  password_salt BLOB NOT NULL CHECK (length(password_salt) = 16),
+  password_derived BLOB NOT NULL CHECK (length(password_derived) = 32),
+  replaced_at_seconds INTEGER NOT NULL CHECK (replaced_at_seconds >= 0)
+);
+CREATE UNIQUE INDEX password_history_user_id_unique
+  ON password_history(user_id);
+
 CREATE TABLE management_ips (
   id INTEGER PRIMARY KEY,
   normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
-  role_scope TEXT NOT NULL CHECK (role_scope IN ('administrator')),
+  role_scope TEXT NOT NULL
+    CHECK (role_scope IN ('administrator', 'viewer')),
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
 );
-CREATE UNIQUE INDEX management_ips_normalized_ip_unique
-  ON management_ips(normalized_ip);
+CREATE UNIQUE INDEX management_ips_role_ip_unique
+  ON management_ips(role_scope, normalized_ip);
 
 CREATE TABLE sessions (
   id INTEGER PRIMARY KEY,
@@ -1462,6 +2059,7 @@ CREATE TABLE sessions (
 CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
 CREATE UNIQUE INDEX sessions_single_administrator_unique
   ON sessions(role) WHERE role = 'administrator';
+CREATE UNIQUE INDEX sessions_user_id_unique ON sessions(user_id);
 CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);
 
 CREATE TABLE audit_events (
@@ -1472,7 +2070,11 @@ CREATE TABLE audit_events (
   outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
   actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
-  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64)
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
 );
 CREATE INDEX audit_events_timestamp_index
   ON audit_events(server_timestamp_seconds);
@@ -1509,18 +2111,87 @@ CREATE INDEX firmware_log_outbox_lease_expiry_index
   auto create = Execute(impl_->database.get(), kSchema, "E_SECURITY_DB_SCHEMA",
                         "failed to initialize security database");
   if (!create.ok()) {
-    (void)Execute(impl_->database.get(), "ROLLBACK;", "E_SECURITY_DB_SCHEMA",
-                  "failed to roll back security database initialization");
+    (void)RollbackSchemaTransaction();
     return create;
+  }
+  auto validation =
+      ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
+  if (!validation.ok()) {
+    (void)RollbackSchemaTransaction();
+    return validation;
   }
   auto commit = Execute(impl_->database.get(), "COMMIT;", "E_SECURITY_DB_SCHEMA",
                         "failed to initialize security database");
   if (!commit.ok()) {
-    (void)Execute(impl_->database.get(), "ROLLBACK;", "E_SECURITY_DB_SCHEMA",
-                  "failed to roll back security database initialization");
+    (void)RollbackSchemaTransaction();
     return commit;
   }
-  return ValidateSchema(impl_->database.get());
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> SecurityStore::RollbackSchemaTransaction() {
+  auto rollback = Execute(impl_->database.get(), "ROLLBACK;",
+                          "E_SECURITY_DB_SCHEMA",
+                          "failed to roll back security database schema");
+  if (!rollback.ok()) {
+    impl_->poisoned = true;
+    impl_->database.reset();
+  }
+  return rollback;
+}
+
+common::Result<void> SecurityStore::MigrateRevisionTwoToThree() {
+  auto begin = Execute(impl_->database.get(), "BEGIN IMMEDIATE;",
+                       "E_SECURITY_DB_SCHEMA",
+                       "failed to migrate security database");
+  if (!begin.ok()) {
+    return begin;
+  }
+
+  auto revision_two =
+      ValidateSchema(impl_->database.get(), kPreviousSecuritySchemaRevision);
+  if (!revision_two.ok()) {
+    (void)RollbackSchemaTransaction();
+    return revision_two;
+  }
+
+  int duplicate_session_users = 0;
+  if (!QuerySingleInt(
+          impl_->database.get(),
+          "SELECT COUNT(*) FROM (SELECT user_id FROM sessions "
+          "GROUP BY user_id HAVING COUNT(*) > 1);",
+          duplicate_session_users) ||
+      duplicate_session_users != 0) {
+    (void)RollbackSchemaTransaction();
+    return StoreError("E_SECURITY_DB_SCHEMA",
+                      "security database schema is invalid");
+  }
+
+  for (const char* statement : kRevisionThreeMigrationStatements) {
+    auto migrated = Execute(impl_->database.get(), statement,
+                            "E_SECURITY_DB_SCHEMA",
+                            "failed to migrate security database");
+    if (!migrated.ok()) {
+      (void)RollbackSchemaTransaction();
+      return migrated;
+    }
+  }
+
+  auto revision_three =
+      ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
+  if (!revision_three.ok()) {
+    (void)RollbackSchemaTransaction();
+    return revision_three;
+  }
+
+  auto commit = Execute(impl_->database.get(), "COMMIT;",
+                        "E_SECURITY_DB_SCHEMA",
+                        "failed to commit security database migration");
+  if (!commit.ok()) {
+    (void)RollbackSchemaTransaction();
+    return commit;
+  }
+  return common::Result<void>::Ok();
 }
 
 common::Result<SecurityStore::Transaction> SecurityStore::BeginTransaction() {
@@ -1546,7 +2217,7 @@ common::Result<SecurityStore::Transaction> SecurityStore::BeginTransaction() {
 }
 
 common::Result<SecurityStore::Transaction>
-SecurityStore::BeginReadTransaction() {
+SecurityStore::BeginReadTransaction() const {
   std::unique_lock<std::mutex> connection_lease;
   try {
     connection_lease = std::unique_lock(impl_->connection_mutex);
@@ -1756,32 +2427,38 @@ SecurityStore::ReadAuthenticationContext(
   }
   context.state = state.value();
 
-  sqlite3_stmt* raw_peer = nullptr;
-  constexpr const char* kReadPeer =
-      "SELECT EXISTS(SELECT 1 FROM management_ips "
-      "WHERE normalized_ip = ?1 AND role_scope = 'administrator' "
-      "AND enabled = 1);";
-  if (::sqlite3_prepare_v2(impl_->database.get(), kReadPeer, -1, &raw_peer,
-                           nullptr) != SQLITE_OK) {
-    return failure();
-  }
   const auto finalize = [](sqlite3_stmt* statement) {
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
     }
   };
-  std::unique_ptr<sqlite3_stmt, decltype(finalize)> peer(raw_peer, finalize);
-  if (::sqlite3_bind_text(peer.get(), 1, normalized_peer_ip.data(),
-                          static_cast<int>(normalized_peer_ip.size()),
-                          SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_step(peer.get()) != SQLITE_ROW) {
-    return failure();
-  }
-  context.peer_registered = ::sqlite3_column_int(peer.get(), 0) == 1;
-  if (::sqlite3_step(peer.get()) != SQLITE_DONE) {
-    return failure();
-  }
-  peer.reset();
+  const auto read_peer_for_role =
+      [this, normalized_peer_ip, &failure, &finalize](
+          std::string_view role_scope) -> common::Result<bool> {
+    sqlite3_stmt* raw_peer = nullptr;
+    constexpr const char* kReadPeer =
+        "SELECT EXISTS(SELECT 1 FROM management_ips "
+        "WHERE normalized_ip = ?1 AND role_scope = ?2 AND enabled = 1);";
+    if (::sqlite3_prepare_v2(impl_->database.get(), kReadPeer, -1, &raw_peer,
+                             nullptr) != SQLITE_OK) {
+      return common::Result<bool>::Err(failure().error());
+    }
+    std::unique_ptr<sqlite3_stmt, decltype(finalize)> peer(raw_peer, finalize);
+    if (::sqlite3_bind_text(peer.get(), 1, normalized_peer_ip.data(),
+                            static_cast<int>(normalized_peer_ip.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_text(peer.get(), 2, role_scope.data(),
+                            static_cast<int>(role_scope.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_step(peer.get()) != SQLITE_ROW) {
+      return common::Result<bool>::Err(failure().error());
+    }
+    const bool registered = ::sqlite3_column_int(peer.get(), 0) == 1;
+    if (::sqlite3_step(peer.get()) != SQLITE_DONE) {
+      return common::Result<bool>::Err(failure().error());
+    }
+    return common::Result<bool>::Ok(registered);
+  };
 
   sqlite3_stmt* raw_user = nullptr;
   constexpr const char* kReadUser =
@@ -1802,6 +2479,12 @@ SecurityStore::ReadAuthenticationContext(
   }
   const int user_step = ::sqlite3_step(user.get());
   if (user_step == SQLITE_DONE) {
+    user.reset();
+    auto peer_registered = read_peer_for_role("administrator");
+    if (!peer_registered.ok()) {
+      return failure();
+    }
+    context.peer_registered = peer_registered.value();
     return common::Result<AuthenticationContext>::Ok(std::move(context));
   }
   if (user_step != SQLITE_ROW) {
@@ -1846,6 +2529,12 @@ SecurityStore::ReadAuthenticationContext(
   if (::sqlite3_step(user.get()) != SQLITE_DONE) {
     return failure();
   }
+  user.reset();
+  auto peer_registered = read_peer_for_role(loaded.role);
+  if (!peer_registered.ok()) {
+    return failure();
+  }
+  context.peer_registered = peer_registered.value();
   context.user.emplace(std::move(loaded));
   return common::Result<AuthenticationContext>::Ok(std::move(context));
 }
@@ -1864,8 +2553,7 @@ common::Result<bool> SecurityStore::IsManagementPeer(
   sqlite3_stmt* raw_peer = nullptr;
   constexpr const char* kReadPeer =
       "SELECT EXISTS(SELECT 1 FROM management_ips "
-      "WHERE normalized_ip = ?1 AND role_scope = 'administrator' "
-      "AND enabled = 1);";
+      "WHERE normalized_ip = ?1 AND enabled = 1);";
   if (::sqlite3_prepare_v2(impl_->database.get(), kReadPeer, -1, &raw_peer,
                            nullptr) != SQLITE_OK) {
     (void)transaction.Rollback();
@@ -1969,7 +2657,9 @@ common::Result<void> SecurityStore::InsertAuditEvent(
     std::string_view outcome,
     std::optional<std::int64_t> actor_user_id,
     std::string_view normalized_peer_ip,
-    std::string_view detail_code) {
+    std::string_view detail_code,
+    std::string_view subject_type,
+    std::string_view subject_identity) {
   if (!transaction.active_ || transaction.impl_ != impl_ ||
       impl_->database == nullptr) {
     return StoreError("E_AUTHENTICATION_STORE",
@@ -1979,7 +2669,8 @@ common::Result<void> SecurityStore::InsertAuditEvent(
   constexpr const char* kSql =
       "INSERT INTO audit_events "
       "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
-      "peer_ip, detail_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6);";
+      "peer_ip, detail_code, subject_type, subject_identity) "
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
@@ -1997,6 +2688,15 @@ common::Result<void> SecurityStore::InsertAuditEvent(
                           SQLITE_TRANSIENT) != SQLITE_OK ||
       ::sqlite3_bind_text(statement, 6, detail_code.data(),
                           static_cast<int>(detail_code.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 7,
+                          subject_type.empty() ? "" : subject_type.data(),
+                          static_cast<int>(subject_type.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 8,
+                          subject_identity.empty() ? ""
+                                                   : subject_identity.data(),
+                          static_cast<int>(subject_identity.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
       ::sqlite3_step(statement) != SQLITE_DONE) {
     if (statement != nullptr) {
@@ -2322,22 +3022,27 @@ common::Result<void> SecurityStore::ReleaseFirmwareLogOutbox(
   return common::Result<void>::Ok();
 }
 
-common::Result<void> SecurityStore::DeleteExpiredSessions(
+common::Result<std::vector<SessionIdentity>>
+SecurityStore::DeleteExpiredSessions(
     Transaction& transaction,
     std::int64_t now_seconds) {
+  const auto failure = [] {
+    return StoreError<std::vector<SessionIdentity>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
   if (!transaction.active_ || transaction.impl_ != impl_ ||
       impl_->database == nullptr) {
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return failure();
   }
   struct ExpiredSession {
     std::int64_t user_id;
     std::string peer_ip;
   };
   std::vector<ExpiredSession> expired;
+  std::vector<SessionIdentity> identities;
   sqlite3_stmt* statement = nullptr;
   constexpr const char* kRead =
-      "SELECT user_id, peer_ip FROM sessions "
+      "SELECT token_hash, user_id, peer_ip FROM sessions "
       "WHERE expires_at_seconds <= ?1 ORDER BY id;";
   if (::sqlite3_prepare_v2(impl_->database.get(), kRead, -1, &statement,
                            nullptr) != SQLITE_OK ||
@@ -2345,23 +3050,28 @@ common::Result<void> SecurityStore::DeleteExpiredSessions(
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
     }
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return failure();
   }
   int step;
   while ((step = ::sqlite3_step(statement)) == SQLITE_ROW) {
-    const auto* peer = ::sqlite3_column_text(statement, 1);
-    if (peer == nullptr) {
+    const auto* token_hash = static_cast<const unsigned char*>(
+        ::sqlite3_column_blob(statement, 0));
+    const int token_hash_size = ::sqlite3_column_bytes(statement, 0);
+    const auto* peer = ::sqlite3_column_text(statement, 2);
+    if (token_hash == nullptr ||
+        token_hash_size != static_cast<int>(kSessionIdentityBytes) ||
+        peer == nullptr) {
       (void)::sqlite3_finalize(statement);
-      return StoreError("E_AUTHENTICATION_STORE",
-                        "authentication transaction failed");
+      return failure();
     }
-    expired.push_back({::sqlite3_column_int64(statement, 0),
+    expired.push_back({::sqlite3_column_int64(statement, 1),
                        reinterpret_cast<const char*>(peer)});
+    SessionIdentity identity;
+    std::copy_n(token_hash, kSessionIdentityBytes, identity.bytes.begin());
+    identities.emplace_back(std::move(identity));
   }
   if (step != SQLITE_DONE || ::sqlite3_finalize(statement) != SQLITE_OK) {
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return failure();
   }
 
   sqlite3_stmt* remove = nullptr;
@@ -2374,26 +3084,62 @@ common::Result<void> SecurityStore::DeleteExpiredSessions(
     if (remove != nullptr) {
       (void)::sqlite3_finalize(remove);
     }
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return failure();
   }
   if (::sqlite3_finalize(remove) != SQLITE_OK) {
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return failure();
   }
   for (const auto& session : expired) {
     auto audit = InsertAuditEvent(
         transaction, now_seconds, "session_expired", "success",
         session.user_id, session.peer_ip, "idle_timeout");
     if (!audit.ok()) {
-      return audit;
+      return failure();
     }
   }
-  return common::Result<void>::Ok();
+  return common::Result<std::vector<SessionIdentity>>::Ok(
+      std::move(identities));
+}
+
+common::Result<std::optional<std::int64_t>>
+SecurityStore::ReadNextSessionExpiry(Transaction& transaction) const {
+  const auto failure = [] {
+    return StoreError<std::optional<std::int64_t>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return failure();
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kRead =
+      "SELECT MIN(expires_at_seconds) FROM sessions;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kRead, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_ROW) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return failure();
+  }
+  std::optional<std::int64_t> next_expiry;
+  if (::sqlite3_column_type(statement, 0) != SQLITE_NULL) {
+    if (::sqlite3_column_type(statement, 0) != SQLITE_INTEGER) {
+      (void)::sqlite3_finalize(statement);
+      return failure();
+    }
+    next_expiry = ::sqlite3_column_int64(statement, 0);
+  }
+  if (::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_finalize(statement) != SQLITE_OK) {
+    return failure();
+  }
+  return common::Result<std::optional<std::int64_t>>::Ok(next_expiry);
 }
 
 common::Result<std::optional<SecurityStore::StoredSession>>
-SecurityStore::ReadAdministratorSession(Transaction& transaction) const {
+SecurityStore::ReadSessionByUserId(Transaction& transaction,
+                                   std::int64_t user_id) const {
   const auto failure = [] {
     return StoreError<std::optional<StoredSession>>(
         "E_AUTHENTICATION_STORE", "authentication transaction failed");
@@ -2408,9 +3154,13 @@ SecurityStore::ReadAdministratorSession(Transaction& transaction) const {
       "users.display_username, sessions.role, sessions.created_at_seconds, "
       "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
       "sessions.peer_ip FROM sessions JOIN users ON users.id = "
-      "sessions.user_id WHERE sessions.role = 'administrator';";
+      "sessions.user_id WHERE sessions.user_id = ?1;";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
-                           nullptr) != SQLITE_OK) {
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, user_id) != SQLITE_OK) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
     return failure();
   }
   const int step = ::sqlite3_step(statement);
@@ -2455,7 +3205,9 @@ SecurityStore::ReadAdministratorSession(Transaction& transaction) const {
 common::Result<std::optional<SecurityStore::StoredSession>>
 SecurityStore::ReadSessionByTokenHash(
     Transaction& transaction,
-    std::span<const unsigned char> token_hash) const {
+    std::span<const unsigned char> token_hash,
+    std::string_view normalized_peer_ip,
+    std::int64_t now_seconds) const {
   const auto failure = [] {
     return StoreError<std::optional<StoredSession>>(
         "E_AUTHENTICATION_STORE", "authentication transaction failed");
@@ -2470,12 +3222,21 @@ SecurityStore::ReadSessionByTokenHash(
       "users.display_username, sessions.role, sessions.created_at_seconds, "
       "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
       "sessions.peer_ip FROM sessions JOIN users ON users.id = "
-      "sessions.user_id WHERE sessions.token_hash = ?1;";
+      "sessions.user_id JOIN management_ips ON "
+      "management_ips.normalized_ip = ?2 AND "
+      "management_ips.role_scope = sessions.role AND "
+      "management_ips.enabled = 1 WHERE sessions.token_hash = ?1 AND "
+      "sessions.peer_ip = ?2 AND sessions.expires_at_seconds > ?3 AND "
+      "users.enabled = 1 AND users.role = sessions.role;";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_blob(statement, 1, token_hash.data(),
                           static_cast<int>(token_hash.size()),
-                          SQLITE_TRANSIENT) != SQLITE_OK) {
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 2, normalized_peer_ip.data(),
+                          static_cast<int>(normalized_peer_ip.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 3, now_seconds) != SQLITE_OK) {
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
     }
@@ -2658,6 +3419,990 @@ common::Result<void> SecurityStore::DeleteSession(Transaction& transaction,
              ? common::Result<void>::Ok()
              : StoreError("E_AUTHENTICATION_STORE",
                           "authentication transaction failed");
+}
+
+common::Result<std::vector<StoredManagedUser>>
+SecurityStore::ReadManagedUsers() const {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return StoreError<std::vector<StoredManagedUser>>(
+        "E_USER_MANAGEMENT_STORE", "failed to read managed users");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    PreparedStatement statement(
+        impl_->database.get(),
+        "SELECT id, canonical_username, display_username, role, enabled, "
+        "lock_until_seconds, created_at_seconds, "
+        "password_changed_at_seconds, last_login_at_seconds FROM users "
+        "ORDER BY id;");
+    if (!statement.valid()) {
+      return UserMutationUnavailable<std::vector<StoredManagedUser>>(
+          transaction);
+    }
+    std::vector<StoredManagedUser> users;
+    int step = SQLITE_ROW;
+    while ((step = ::sqlite3_step(statement.get())) == SQLITE_ROW) {
+      const auto* canonical = ::sqlite3_column_text(statement.get(), 1);
+      const auto* display = ::sqlite3_column_text(statement.get(), 2);
+      const auto role = ReadUserRole(statement.get(), 3);
+      if (canonical == nullptr || display == nullptr || !role.has_value()) {
+        return UserMutationUnavailable<std::vector<StoredManagedUser>>(
+            transaction);
+      }
+      StoredManagedUser user;
+      user.id = ::sqlite3_column_int64(statement.get(), 0);
+      user.canonical_username = reinterpret_cast<const char*>(canonical);
+      user.display_username = reinterpret_cast<const char*>(display);
+      user.role = *role;
+      user.enabled = ::sqlite3_column_int(statement.get(), 4) == 1;
+      if (::sqlite3_column_type(statement.get(), 5) != SQLITE_NULL) {
+        user.lock_until_seconds =
+            ::sqlite3_column_int64(statement.get(), 5);
+      }
+      user.created_at_seconds = ::sqlite3_column_int64(statement.get(), 6);
+      user.password_changed_at_seconds =
+          ::sqlite3_column_int64(statement.get(), 7);
+      if (::sqlite3_column_type(statement.get(), 8) != SQLITE_NULL) {
+        user.last_login_at_seconds =
+            ::sqlite3_column_int64(statement.get(), 8);
+      }
+      users.emplace_back(std::move(user));
+    }
+    if (step != SQLITE_DONE) {
+      return UserMutationUnavailable<std::vector<StoredManagedUser>>(
+          transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<std::vector<StoredManagedUser>>(
+          transaction);
+    }
+    return common::Result<std::vector<StoredManagedUser>>::Ok(
+        std::move(users));
+  } catch (...) {
+    return UserMutationUnavailable<std::vector<StoredManagedUser>>(
+        transaction);
+  }
+}
+
+common::Result<StoredManagedUser> SecurityStore::InsertViewer(
+    std::string canonical_username,
+    std::string display_username,
+    PasswordRecord password,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<StoredManagedUser>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  const auto reject = [&](std::string code, std::string detail) {
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "viewer_created", "failure",
+        context.actor_user_id, context.normalized_peer_ip, detail, "user",
+        canonical_username);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    return StoreError<StoredManagedUser>(std::move(code),
+                                         "viewer creation was rejected");
+  };
+  try {
+    PreparedStatement checks(
+        impl_->database.get(),
+        "SELECT EXISTS(SELECT 1 FROM users WHERE canonical_username = ?1 "
+        "COLLATE NOCASE), (SELECT COUNT(*) FROM users WHERE role = 'viewer');");
+    if (!checks.valid() ||
+        ::sqlite3_bind_text(checks.get(), 1, canonical_username.data(),
+                            static_cast<int>(canonical_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_step(checks.get()) != SQLITE_ROW) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    if (::sqlite3_column_int(checks.get(), 0) != 0) {
+      return reject("E_USER_DUPLICATE", "duplicate_username");
+    }
+    if (::sqlite3_column_int64(checks.get(), 1) >=
+        static_cast<sqlite3_int64>(kMaximumViewerUsers)) {
+      return reject("E_VIEWER_LIMIT", "viewer_limit");
+    }
+
+    PreparedStatement insert(
+        impl_->database.get(),
+        "INSERT INTO users (canonical_username, display_username, role, "
+        "enabled, password_algorithm, password_iterations, password_salt, "
+        "password_derived, password_changed_at_seconds, failed_login_count, "
+        "created_at_seconds) VALUES (?1, ?2, 'viewer', 1, ?3, ?4, ?5, ?6, "
+        "?7, 0, ?7);");
+    if (!insert.valid() ||
+        ::sqlite3_bind_text(insert.get(), 1, canonical_username.data(),
+                            static_cast<int>(canonical_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_text(insert.get(), 2, display_username.data(),
+                            static_cast<int>(display_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        !BindPasswordRecord(insert.get(), 3, password) ||
+        ::sqlite3_bind_int64(insert.get(), 7, now_seconds) != SQLITE_OK ||
+        ::sqlite3_step(insert.get()) != SQLITE_DONE) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    const std::int64_t user_id =
+        ::sqlite3_last_insert_rowid(impl_->database.get());
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "viewer_created", "success",
+        context.actor_user_id, context.normalized_peer_ip, "created", "user",
+        canonical_username);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<StoredManagedUser>(transaction);
+    }
+    StoredManagedUser user;
+    user.id = user_id;
+    user.canonical_username = std::move(canonical_username);
+    user.display_username = std::move(display_username);
+    user.role = UserRole::kViewer;
+    user.enabled = true;
+    user.created_at_seconds = now_seconds;
+    user.password_changed_at_seconds = now_seconds;
+    return common::Result<StoredManagedUser>::Ok(std::move(user));
+  } catch (...) {
+    return UserMutationUnavailable<StoredManagedUser>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation> SecurityStore::SetViewerEnabled(
+    std::int64_t user_id,
+    bool enabled,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    PreparedStatement read(
+        impl_->database.get(),
+        "SELECT canonical_username, role FROM users WHERE id = ?1;");
+    if (!read.valid() ||
+        ::sqlite3_bind_int64(read.get(), 1, user_id) != SQLITE_OK) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const int row = ::sqlite3_step(read.get());
+    std::string subject = std::to_string(user_id);
+    std::optional<UserRole> role;
+    if (row == SQLITE_ROW) {
+      const auto* canonical = ::sqlite3_column_text(read.get(), 0);
+      role = ReadUserRole(read.get(), 1);
+      if (canonical == nullptr || !role.has_value()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      subject = reinterpret_cast<const char*>(canonical);
+    } else if (row != SQLITE_DONE) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const std::string_view event = enabled ? "viewer_enabled" : "viewer_disabled";
+    const auto reject = [&](std::string code, std::string detail) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, event, "failure", context.actor_user_id,
+          context.normalized_peer_ip, detail, "user", subject);
+      if (!audited.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return StoreError<CommittedRevocation>(std::move(code),
+                                               "viewer update was rejected");
+    };
+    if (!role.has_value()) {
+      return reject("E_USER_NOT_FOUND", "user_not_found");
+    }
+    if (*role != UserRole::kViewer) {
+      return reject("E_USER_PROTECTED", "protected_administrator");
+    }
+
+    PreparedStatement update(impl_->database.get(),
+                             "UPDATE users SET enabled = ?1 WHERE id = ?2 "
+                             "AND role = 'viewer';");
+    if (!update.valid() ||
+        ::sqlite3_bind_int(update.get(), 1, enabled ? 1 : 0) != SQLITE_OK ||
+        ::sqlite3_bind_int64(update.get(), 2, user_id) != SQLITE_OK ||
+        ::sqlite3_step(update.get()) != SQLITE_DONE ||
+        ::sqlite3_changes(impl_->database.get()) != 1) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    std::vector<SessionIdentity> identities;
+    if (!enabled) {
+      auto collected = ReadSessionIdentities(impl_->database.get(), user_id);
+      if (!collected.ok() ||
+          !DeleteSessionsForUser(impl_->database.get(), user_id)) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      identities = std::move(collected).value();
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, event, "success", context.actor_user_id,
+        context.normalized_peer_ip, enabled ? "enabled" : "disabled", "user",
+        subject);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok(
+        {std::move(identities)});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
+}
+
+common::Result<PasswordMutationSnapshot>
+SecurityStore::ReadPasswordMutationSnapshot(std::int64_t user_id) const {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return StoreError<PasswordMutationSnapshot>(
+        "E_USER_MANAGEMENT_STORE", "failed to read password state");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    PreparedStatement read(
+        impl_->database.get(),
+        "SELECT users.id, users.canonical_username, "
+        "users.password_algorithm, users.password_iterations, "
+        "users.password_salt, users.password_derived, "
+        "users.password_changed_at_seconds, history.password_algorithm, "
+        "history.password_iterations, history.password_salt, "
+        "history.password_derived FROM users LEFT JOIN password_history AS "
+        "history ON history.user_id = users.id WHERE users.id = ?1;");
+    if (!read.valid() ||
+        ::sqlite3_bind_int64(read.get(), 1, user_id) != SQLITE_OK) {
+      return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+    }
+    const int row = ::sqlite3_step(read.get());
+    if (row == SQLITE_DONE) {
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+      }
+      return StoreError<PasswordMutationSnapshot>("E_USER_NOT_FOUND",
+                                                   "user was not found");
+    }
+    const auto* canonical = ::sqlite3_column_text(read.get(), 1);
+    if (row != SQLITE_ROW || canonical == nullptr) {
+      return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+    }
+    auto current = ReadPasswordRecord(read.get(), 2);
+    if (!current.ok()) {
+      return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+    }
+    PasswordMutationSnapshot snapshot;
+    snapshot.user_id = ::sqlite3_column_int64(read.get(), 0);
+    snapshot.canonical_username = reinterpret_cast<const char*>(canonical);
+    snapshot.current = std::move(current).value();
+    snapshot.password_changed_at_seconds =
+        ::sqlite3_column_int64(read.get(), 6);
+    if (::sqlite3_column_type(read.get(), 7) != SQLITE_NULL) {
+      auto previous = ReadPasswordRecord(read.get(), 7);
+      if (!previous.ok()) {
+        return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+      }
+      snapshot.previous.emplace(std::move(previous).value());
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+    }
+    return common::Result<PasswordMutationSnapshot>::Ok(std::move(snapshot));
+  } catch (...) {
+    return UserMutationUnavailable<PasswordMutationSnapshot>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation>
+SecurityStore::ReplacePasswordIfCurrent(
+    const PasswordMutationSnapshot& expected,
+    PasswordRecord replacement,
+    PasswordMutationKind kind,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  const std::string_view event =
+      kind == PasswordMutationKind::kAdministratorReset
+          ? "viewer_password_reset"
+          : "password_changed";
+  const auto reject = [&](std::string code, std::string detail) {
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, event, "failure", context.actor_user_id,
+        context.normalized_peer_ip, detail, "user",
+        expected.canonical_username);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return StoreError<CommittedRevocation>(std::move(code),
+                                             "password update was rejected");
+  };
+  try {
+    PreparedStatement target(
+        impl_->database.get(),
+        "SELECT canonical_username, role FROM users WHERE id = ?1;");
+    if (!target.valid() ||
+        ::sqlite3_bind_int64(target.get(), 1, expected.user_id) != SQLITE_OK) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const int target_row = ::sqlite3_step(target.get());
+    if (target_row != SQLITE_ROW) {
+      if (target_row == SQLITE_DONE) {
+        return reject("E_USER_CONFLICT", "optimistic_conflict");
+      }
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const auto* current_canonical = ::sqlite3_column_text(target.get(), 0);
+    const auto role = ReadUserRole(target.get(), 1);
+    if (current_canonical == nullptr || !role.has_value()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    if (kind == PasswordMutationKind::kAdministratorReset &&
+        *role != UserRole::kViewer) {
+      return reject("E_USER_PROTECTED", "protected_administrator");
+    }
+    if ((kind == PasswordMutationKind::kSelfChange &&
+         (context.actor_user_id != expected.user_id ||
+          context.actor_role != *role)) ||
+        expected.canonical_username !=
+            reinterpret_cast<const char*>(current_canonical)) {
+      return reject("E_USER_CONFLICT", "optimistic_conflict");
+    }
+
+    bool history_matches = false;
+    {
+      PreparedStatement history_check(
+          impl_->database.get(),
+          "SELECT password_algorithm, password_iterations, password_salt, "
+          "password_derived FROM password_history WHERE user_id = ?1;");
+      if (!history_check.valid() ||
+          ::sqlite3_bind_int64(history_check.get(), 1, expected.user_id) !=
+              SQLITE_OK) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      const int history_row = ::sqlite3_step(history_check.get());
+      if (history_row == SQLITE_DONE) {
+        history_matches = !expected.previous.has_value();
+      } else if (history_row == SQLITE_ROW) {
+        auto actual_previous = ReadPasswordRecord(history_check.get(), 0);
+        if (!actual_previous.ok()) {
+          return UserMutationUnavailable<CommittedRevocation>(transaction);
+        }
+        history_matches =
+            expected.previous.has_value() &&
+            SamePasswordRecord(*expected.previous, actual_previous.value());
+      } else {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+    }
+    if (!history_matches) {
+      return reject("E_USER_CONFLICT", "optimistic_conflict");
+    }
+
+    PreparedStatement update(
+        impl_->database.get(),
+        "UPDATE users SET password_algorithm = ?1, password_iterations = ?2, "
+        "password_salt = ?3, password_derived = ?4, "
+        "password_changed_at_seconds = ?5, failed_login_count = 0, "
+        "lock_until_seconds = NULL WHERE id = ?6 AND canonical_username = ?7 "
+        "AND password_algorithm = ?8 AND password_iterations = ?9 AND "
+        "password_salt = ?10 AND password_derived = ?11 AND "
+        "password_changed_at_seconds = ?12;");
+    if (!update.valid() || !BindPasswordRecord(update.get(), 1, replacement) ||
+        ::sqlite3_bind_int64(update.get(), 5, now_seconds) != SQLITE_OK ||
+        ::sqlite3_bind_int64(update.get(), 6, expected.user_id) != SQLITE_OK ||
+        ::sqlite3_bind_text(update.get(), 7, expected.canonical_username.data(),
+                            static_cast<int>(expected.canonical_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        !BindPasswordRecord(update.get(), 8, expected.current) ||
+        ::sqlite3_bind_int64(update.get(), 12,
+                             expected.password_changed_at_seconds) != SQLITE_OK ||
+        ::sqlite3_step(update.get()) != SQLITE_DONE) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    if (::sqlite3_changes(impl_->database.get()) != 1) {
+      return reject("E_USER_CONFLICT", "optimistic_conflict");
+    }
+
+    PreparedStatement history(
+        impl_->database.get(),
+        "INSERT INTO password_history (user_id, password_algorithm, "
+        "password_iterations, password_salt, password_derived, "
+        "replaced_at_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT "
+        "(user_id) DO UPDATE SET password_algorithm = excluded.password_algorithm, "
+        "password_iterations = excluded.password_iterations, password_salt = "
+        "excluded.password_salt, password_derived = excluded.password_derived, "
+        "replaced_at_seconds = excluded.replaced_at_seconds;");
+    if (!history.valid() ||
+        ::sqlite3_bind_int64(history.get(), 1, expected.user_id) != SQLITE_OK ||
+        !BindPasswordRecord(history.get(), 2, expected.current) ||
+        ::sqlite3_bind_int64(history.get(), 6, now_seconds) != SQLITE_OK ||
+        ::sqlite3_step(history.get()) != SQLITE_DONE) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto collected =
+        ReadSessionIdentities(impl_->database.get(), expected.user_id);
+    if (!collected.ok() ||
+        !DeleteSessionsForUser(impl_->database.get(), expected.user_id)) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, event, "success", context.actor_user_id,
+        context.normalized_peer_ip,
+        kind == PasswordMutationKind::kAdministratorReset ? "password_reset"
+                                                           : "password_changed",
+        "user", expected.canonical_username);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok(
+        {std::move(collected).value()});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation> SecurityStore::DeleteViewer(
+    std::int64_t user_id,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    PreparedStatement read(
+        impl_->database.get(),
+        "SELECT canonical_username, role FROM users WHERE id = ?1;");
+    if (!read.valid() ||
+        ::sqlite3_bind_int64(read.get(), 1, user_id) != SQLITE_OK) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const int row = ::sqlite3_step(read.get());
+    std::string subject = std::to_string(user_id);
+    std::optional<UserRole> role;
+    if (row == SQLITE_ROW) {
+      const auto* canonical = ::sqlite3_column_text(read.get(), 0);
+      role = ReadUserRole(read.get(), 1);
+      if (canonical == nullptr || !role.has_value()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      subject = reinterpret_cast<const char*>(canonical);
+    } else if (row != SQLITE_DONE) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    const auto reject = [&](std::string code, std::string detail) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, "viewer_deleted", "failure",
+          context.actor_user_id, context.normalized_peer_ip, detail, "user",
+          subject);
+      if (!audited.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return StoreError<CommittedRevocation>(std::move(code),
+                                               "viewer deletion was rejected");
+    };
+    if (!role.has_value()) {
+      return reject("E_USER_NOT_FOUND", "user_not_found");
+    }
+    if (*role != UserRole::kViewer) {
+      return reject("E_USER_PROTECTED", "protected_administrator");
+    }
+    auto collected = ReadSessionIdentities(impl_->database.get(), user_id);
+    if (!collected.ok() ||
+        !DeleteSessionsForUser(impl_->database.get(), user_id)) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    PreparedStatement remove(
+        impl_->database.get(),
+        "DELETE FROM users WHERE id = ?1 AND role = 'viewer';");
+    if (!remove.valid() ||
+        ::sqlite3_bind_int64(remove.get(), 1, user_id) != SQLITE_OK ||
+        ::sqlite3_step(remove.get()) != SQLITE_DONE ||
+        ::sqlite3_changes(impl_->database.get()) != 1) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "viewer_deleted", "success",
+        context.actor_user_id, context.normalized_peer_ip, "deleted", "user",
+        subject);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok(
+        {std::move(collected).value()});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
+}
+
+common::Result<std::vector<StoredManagementIp>>
+SecurityStore::ReadManagementIps() const {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return StoreError<std::vector<StoredManagementIp>>(
+        "E_USER_MANAGEMENT_STORE", "failed to read management IPs");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    PreparedStatement statement(
+        impl_->database.get(),
+        "SELECT id, normalized_ip, role_scope, created_at_seconds FROM "
+        "management_ips ORDER BY id;");
+    if (!statement.valid()) {
+      return UserMutationUnavailable<std::vector<StoredManagementIp>>(
+          transaction);
+    }
+    std::vector<StoredManagementIp> entries;
+    int step = SQLITE_ROW;
+    while ((step = ::sqlite3_step(statement.get())) == SQLITE_ROW) {
+      const auto* normalized_ip = ::sqlite3_column_text(statement.get(), 1);
+      const auto role = ReadUserRole(statement.get(), 2);
+      if (normalized_ip == nullptr || !role.has_value()) {
+        return UserMutationUnavailable<std::vector<StoredManagementIp>>(
+            transaction);
+      }
+      entries.push_back(
+          {::sqlite3_column_int64(statement.get(), 0),
+           reinterpret_cast<const char*>(normalized_ip), *role,
+           ::sqlite3_column_int64(statement.get(), 3)});
+    }
+    if (step != SQLITE_DONE) {
+      return UserMutationUnavailable<std::vector<StoredManagementIp>>(
+          transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<std::vector<StoredManagementIp>>(
+          transaction);
+    }
+    return common::Result<std::vector<StoredManagementIp>>::Ok(
+        std::move(entries));
+  } catch (...) {
+    return UserMutationUnavailable<std::vector<StoredManagementIp>>(
+        transaction);
+  }
+}
+
+common::Result<StoredManagementIp> SecurityStore::InsertManagementIp(
+    UserRole role,
+    std::string normalized_ip,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<StoredManagementIp>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  const auto reject = [&](std::string code, std::string detail) {
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "management_ip_created", "failure",
+        context.actor_user_id, context.normalized_peer_ip, detail,
+        "management_ip", normalized_ip);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<StoredManagementIp>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<StoredManagementIp>(transaction);
+    }
+    return StoreError<StoredManagementIp>(std::move(code),
+                                          "management IP creation was rejected");
+  };
+  try {
+    if (context.actor_role != UserRole::kAdministrator) {
+      return reject("E_MANAGEMENT_IP_FORBIDDEN", "role_forbidden");
+    }
+    const std::string_view role_text = RoleText(role);
+    sqlite3_int64 count = 0;
+    bool duplicate = false;
+    {
+      PreparedStatement checks(
+          impl_->database.get(),
+          "SELECT (SELECT COUNT(*) FROM management_ips WHERE role_scope = ?1), "
+          "EXISTS(SELECT 1 FROM management_ips WHERE role_scope = ?1 AND "
+          "normalized_ip = ?2);");
+      if (!checks.valid() ||
+          ::sqlite3_bind_text(checks.get(), 1, role_text.data(),
+                              static_cast<int>(role_text.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_bind_text(checks.get(), 2, normalized_ip.data(),
+                              static_cast<int>(normalized_ip.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_step(checks.get()) != SQLITE_ROW) {
+        return UserMutationUnavailable<StoredManagementIp>(transaction);
+      }
+      count = ::sqlite3_column_int64(checks.get(), 0);
+      duplicate = ::sqlite3_column_int(checks.get(), 1) != 0;
+    }
+    if (duplicate) {
+      return reject("E_MANAGEMENT_IP_DUPLICATE", "duplicate_ip");
+    }
+    if (count >= kMaximumManagementIpsPerRole) {
+      return reject("E_MANAGEMENT_IP_LIMIT", "role_limit");
+    }
+    PreparedStatement insert(
+        impl_->database.get(),
+        "INSERT INTO management_ips (normalized_ip, role_scope, enabled, "
+        "created_at_seconds) VALUES (?1, ?2, 1, ?3);");
+    if (!insert.valid() ||
+        ::sqlite3_bind_text(insert.get(), 1, normalized_ip.data(),
+                            static_cast<int>(normalized_ip.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_text(insert.get(), 2, role_text.data(),
+                            static_cast<int>(role_text.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_int64(insert.get(), 3, now_seconds) != SQLITE_OK ||
+        ::sqlite3_step(insert.get()) != SQLITE_DONE) {
+      return UserMutationUnavailable<StoredManagementIp>(transaction);
+    }
+    const std::int64_t management_ip_id =
+        ::sqlite3_last_insert_rowid(impl_->database.get());
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "management_ip_created", "success",
+        context.actor_user_id, context.normalized_peer_ip, "created",
+        "management_ip", normalized_ip);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<StoredManagementIp>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<StoredManagementIp>(transaction);
+    }
+    return common::Result<StoredManagementIp>::Ok(
+        {management_ip_id, std::move(normalized_ip), role, now_seconds});
+  } catch (...) {
+    return UserMutationUnavailable<StoredManagementIp>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation> SecurityStore::UpdateManagementIp(
+    std::int64_t management_ip_id,
+    UserRole role,
+    std::string normalized_replacement,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    std::optional<UserRole> stored_role;
+    std::string old_normalized_ip;
+    {
+      PreparedStatement target(
+          impl_->database.get(),
+          "SELECT normalized_ip, role_scope FROM management_ips WHERE id = ?1;");
+      if (!target.valid() ||
+          ::sqlite3_bind_int64(target.get(), 1, management_ip_id) != SQLITE_OK) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      const int row = ::sqlite3_step(target.get());
+      if (row == SQLITE_ROW) {
+        const auto* normalized_ip = ::sqlite3_column_text(target.get(), 0);
+        stored_role = ReadUserRole(target.get(), 1);
+        if (normalized_ip == nullptr || !stored_role.has_value()) {
+          return UserMutationUnavailable<CommittedRevocation>(transaction);
+        }
+        old_normalized_ip = reinterpret_cast<const char*>(normalized_ip);
+      } else if (row != SQLITE_DONE) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+    }
+    std::string audit_subject = stored_role.has_value()
+                                    ? old_normalized_ip
+                                    : std::to_string(management_ip_id);
+    const auto reject = [&](std::string code, std::string detail,
+                            std::string_view subject) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, "management_ip_updated", "failure",
+          context.actor_user_id, context.normalized_peer_ip, detail,
+          "management_ip", subject);
+      if (!audited.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return StoreError<CommittedRevocation>(
+          std::move(code), "management IP update was rejected");
+    };
+    if (context.actor_role != UserRole::kAdministrator) {
+      return reject("E_MANAGEMENT_IP_FORBIDDEN", "role_forbidden",
+                    audit_subject);
+    }
+    if (!stored_role.has_value()) {
+      return reject("E_MANAGEMENT_IP_NOT_FOUND", "ip_not_found",
+                    audit_subject);
+    }
+    if (*stored_role != role) {
+      return reject("E_MANAGEMENT_IP_ROLE_MISMATCH", "role_mismatch",
+                    audit_subject);
+    }
+
+    const std::string_view role_text = RoleText(role);
+    sqlite3_int64 count = 0;
+    bool duplicate = false;
+    {
+      PreparedStatement checks(
+          impl_->database.get(),
+          "SELECT (SELECT COUNT(*) FROM management_ips WHERE role_scope = ?1), "
+          "EXISTS(SELECT 1 FROM management_ips WHERE role_scope = ?1 AND "
+          "normalized_ip = ?2 AND id <> ?3);");
+      if (!checks.valid() ||
+          ::sqlite3_bind_text(checks.get(), 1, role_text.data(),
+                              static_cast<int>(role_text.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_bind_text(checks.get(), 2, normalized_replacement.data(),
+                              static_cast<int>(normalized_replacement.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_bind_int64(checks.get(), 3, management_ip_id) != SQLITE_OK ||
+          ::sqlite3_step(checks.get()) != SQLITE_ROW) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      count = ::sqlite3_column_int64(checks.get(), 0);
+      duplicate = ::sqlite3_column_int(checks.get(), 1) != 0;
+    }
+    if (count > kMaximumManagementIpsPerRole) {
+      return reject("E_MANAGEMENT_IP_LIMIT", "role_limit",
+                    normalized_replacement);
+    }
+    if (duplicate) {
+      return reject("E_MANAGEMENT_IP_DUPLICATE", "duplicate_ip",
+                    normalized_replacement);
+    }
+    if (role == UserRole::kAdministrator &&
+        old_normalized_ip == context.normalized_peer_ip) {
+      return reject("E_MANAGEMENT_IP_PROTECTED", "current_peer",
+                    old_normalized_ip);
+    }
+    if (role == UserRole::kAdministrator && count <= 1) {
+      return reject("E_MANAGEMENT_IP_PROTECTED", "final_administrator_ip",
+                    old_normalized_ip);
+    }
+    if (old_normalized_ip == normalized_replacement) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, "management_ip_updated", "success",
+          context.actor_user_id, context.normalized_peer_ip, "unchanged",
+          "management_ip", old_normalized_ip);
+      if (!audited.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return common::Result<CommittedRevocation>::Ok({});
+    }
+
+    auto collected = ReadManagementIpSessionIdentities(
+        impl_->database.get(), role, old_normalized_ip);
+    if (!collected.ok() ||
+        !DeleteManagementIpSessions(impl_->database.get(), role,
+                                    old_normalized_ip)) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    PreparedStatement update(
+        impl_->database.get(),
+        "UPDATE management_ips SET normalized_ip = ?1 WHERE id = ?2 AND "
+        "role_scope = ?3;");
+    if (!update.valid() ||
+        ::sqlite3_bind_text(update.get(), 1, normalized_replacement.data(),
+                            static_cast<int>(normalized_replacement.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_int64(update.get(), 2, management_ip_id) != SQLITE_OK ||
+        ::sqlite3_bind_text(update.get(), 3, role_text.data(),
+                            static_cast<int>(role_text.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_step(update.get()) != SQLITE_DONE ||
+        ::sqlite3_changes(impl_->database.get()) != 1) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "management_ip_updated", "success",
+        context.actor_user_id, context.normalized_peer_ip, "updated",
+        "management_ip", normalized_replacement);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok(
+        {std::move(collected).value()});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation> SecurityStore::DeleteManagementIp(
+    std::int64_t management_ip_id,
+    UserRole role,
+    std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    std::optional<UserRole> stored_role;
+    std::string old_normalized_ip;
+    {
+      PreparedStatement target(
+          impl_->database.get(),
+          "SELECT normalized_ip, role_scope FROM management_ips WHERE id = ?1;");
+      if (!target.valid() ||
+          ::sqlite3_bind_int64(target.get(), 1, management_ip_id) != SQLITE_OK) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      const int row = ::sqlite3_step(target.get());
+      if (row == SQLITE_ROW) {
+        const auto* normalized_ip = ::sqlite3_column_text(target.get(), 0);
+        stored_role = ReadUserRole(target.get(), 1);
+        if (normalized_ip == nullptr || !stored_role.has_value()) {
+          return UserMutationUnavailable<CommittedRevocation>(transaction);
+        }
+        old_normalized_ip = reinterpret_cast<const char*>(normalized_ip);
+      } else if (row != SQLITE_DONE) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+    }
+    const std::string audit_subject = stored_role.has_value()
+                                          ? old_normalized_ip
+                                          : std::to_string(management_ip_id);
+    const auto reject = [&](std::string code, std::string detail) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, "management_ip_deleted", "failure",
+          context.actor_user_id, context.normalized_peer_ip, detail,
+          "management_ip", audit_subject);
+      if (!audited.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      auto committed = transaction.Commit();
+      if (!committed.ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return StoreError<CommittedRevocation>(
+          std::move(code), "management IP deletion was rejected");
+    };
+    if (context.actor_role != UserRole::kAdministrator) {
+      return reject("E_MANAGEMENT_IP_FORBIDDEN", "role_forbidden");
+    }
+    if (!stored_role.has_value()) {
+      return reject("E_MANAGEMENT_IP_NOT_FOUND", "ip_not_found");
+    }
+    if (*stored_role != role) {
+      return reject("E_MANAGEMENT_IP_ROLE_MISMATCH", "role_mismatch");
+    }
+    const std::string_view role_text = RoleText(role);
+    sqlite3_int64 count = 0;
+    {
+      PreparedStatement count_statement(
+          impl_->database.get(),
+          "SELECT COUNT(*) FROM management_ips WHERE role_scope = ?1;");
+      if (!count_statement.valid() ||
+          ::sqlite3_bind_text(count_statement.get(), 1, role_text.data(),
+                              static_cast<int>(role_text.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_step(count_statement.get()) != SQLITE_ROW) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      count = ::sqlite3_column_int64(count_statement.get(), 0);
+    }
+    if (count > kMaximumManagementIpsPerRole) {
+      return reject("E_MANAGEMENT_IP_LIMIT", "role_limit");
+    }
+    if (role == UserRole::kAdministrator &&
+        old_normalized_ip == context.normalized_peer_ip) {
+      return reject("E_MANAGEMENT_IP_PROTECTED", "current_peer");
+    }
+    if (role == UserRole::kAdministrator && count <= 1) {
+      return reject("E_MANAGEMENT_IP_PROTECTED", "final_administrator_ip");
+    }
+
+    auto collected = ReadManagementIpSessionIdentities(
+        impl_->database.get(), role, old_normalized_ip);
+    if (!collected.ok() ||
+        !DeleteManagementIpSessions(impl_->database.get(), role,
+                                    old_normalized_ip)) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    PreparedStatement remove(
+        impl_->database.get(),
+        "DELETE FROM management_ips WHERE id = ?1 AND role_scope = ?2;");
+    if (!remove.valid() ||
+        ::sqlite3_bind_int64(remove.get(), 1, management_ip_id) != SQLITE_OK ||
+        ::sqlite3_bind_text(remove.get(), 2, role_text.data(),
+                            static_cast<int>(role_text.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_step(remove.get()) != SQLITE_DONE ||
+        ::sqlite3_changes(impl_->database.get()) != 1) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "management_ip_deleted", "success",
+        context.actor_user_id, context.normalized_peer_ip, "deleted",
+        "management_ip", old_normalized_ip);
+    if (!audited.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok(
+        {std::move(collected).value()});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
 }
 
 common::Result<void> SecurityStore::InstallBootstrapRtspCredential(
