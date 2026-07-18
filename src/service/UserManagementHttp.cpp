@@ -721,6 +721,19 @@ Json::Value BuildManagementIpJson(const security::ManagementIpEntry& entry) {
   return json;
 }
 
+Json::Value BuildManagementIpListJson(
+    const std::vector<security::ManagementIpEntry>& entries,
+    std::string_view current_peer_ip) {
+  Json::Value serialized(Json::arrayValue);
+  for (const auto& entry : entries) {
+    serialized.append(BuildManagementIpJson(entry));
+  }
+  Json::Value body(Json::objectValue);
+  body["management_ips"] = std::move(serialized);
+  body["current_peer_ip"] = std::string(current_peer_ip);
+  return body;
+}
+
 drogon::HttpResponsePtr BuildUserManagementErrorResponse(
     const common::Error& error) {
   const auto mapped = MapPublicError(error.code);

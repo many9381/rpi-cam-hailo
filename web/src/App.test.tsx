@@ -12,6 +12,7 @@ const administratorHooks = vi.hoisted(() => ({
   throwOnConstruction: false,
   operationalConstructed: 0,
   runtimeConstructed: 0,
+  userManagementConstructed: 0,
 }));
 
 vi.mock('./hooks/useOperationalData', async (importOriginal) => {
@@ -38,6 +39,20 @@ vi.mock('./features/settings/useRuntimeSettings', async (importOriginal) => {
         throw new Error('Viewer session must not construct useRuntimeSettings');
       }
       return actual.useRuntimeSettings(...args);
+    },
+  };
+});
+
+vi.mock('./features/users/useUserManagement', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./features/users/useUserManagement')>();
+  return {
+    ...actual,
+    useUserManagement: (...args: Parameters<typeof actual.useUserManagement>) => {
+      administratorHooks.userManagementConstructed += 1;
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useUserManagement');
+      }
+      return actual.useUserManagement(...args);
     },
   };
 });
@@ -83,6 +98,7 @@ afterEach(() => {
   administratorHooks.throwOnConstruction = false;
   administratorHooks.operationalConstructed = 0;
   administratorHooks.runtimeConstructed = 0;
+  administratorHooks.userManagementConstructed = 0;
 });
 
 describe('App bootstrap gate', () => {
@@ -687,6 +703,7 @@ describe('App role-specific route trees', () => {
     expect(await screen.findByText('Injected operational child')).toBeVisible();
     expect(administratorHooks.operationalConstructed).toBe(0);
     expect(administratorHooks.runtimeConstructed).toBe(0);
+    expect(administratorHooks.userManagementConstructed).toBe(0);
   });
 
   it.each(['/dashboard', '/cameras', '/ai', '/system', '/users', '/monitor'])(
@@ -719,6 +736,80 @@ describe('App role-specific route trees', () => {
     await waitFor(() => expect(window.location.hash).toBe(`#${expectedPath}`));
   });
 
+  it('loads administrator users with only the two management resources', async () => {
+    const client = renderRecoveredSession('administrator', '/users', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': {
+        management_ips: [{
+          id: 1,
+          address: '192.0.2.44',
+          role: 'administrator',
+          created_at_seconds: 100,
+        }],
+        current_peer_ip: '192.0.2.44',
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Users & access' }))
+      .toBeVisible();
+    await waitFor(() => {
+      const securityPaths = vi.mocked(client.getJson).mock.calls
+        .map(([path]) => path)
+        .filter((path) => path.startsWith('/api/v1/security/'));
+      expect(securityPaths).toEqual([
+        '/api/v1/security/users',
+        '/api/v1/security/management-ips',
+      ]);
+    });
+
+    expect(administratorHooks.userManagementConstructed).toBeGreaterThan(0);
+    expect(administratorHooks.operationalConstructed).toBe(0);
+    expect(administratorHooks.runtimeConstructed).toBe(0);
+    const getJsonPaths = vi.mocked(client.getJson).mock.calls.map(([path]) => path);
+    for (const path of [
+      '/api/v1/health',
+      '/api/v1/cameras',
+      '/api/v1/stream',
+      '/api/v1/settings/runtime',
+      '/api/v1/ai/detections',
+    ]) {
+      expect(getJsonPaths).not.toContain(path);
+    }
+  });
+
+  it('refreshes both management resources and catches refresh failures on users', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/users', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': {
+        management_ips: [],
+        current_peer_ip: '192.0.2.44',
+      },
+    });
+
+    await screen.findByRole('heading', { name: 'Users & access' });
+    await waitFor(() => {
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/security/users',
+      )).toHaveLength(1);
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/security/management-ips',
+      )).toHaveLength(1);
+    });
+    vi.mocked(client.getJson).mockRejectedValue(new Error('offline'));
+
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+
+    await waitFor(() => {
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/security/users',
+      )).toHaveLength(2);
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/security/management-ips',
+      )).toHaveLength(2);
+    });
+  });
+
   it.each([
     ['/login', '/monitor'],
     ['/dashboard', '/monitor'],
@@ -738,6 +829,7 @@ describe('App role-specific route trees', () => {
     await waitFor(() => expect(window.location.hash).toBe(`#${expectedPath}`));
     expect(administratorHooks.operationalConstructed).toBe(0);
     expect(administratorHooks.runtimeConstructed).toBe(0);
+    expect(administratorHooks.userManagementConstructed).toBe(0);
     const getJsonPaths = vi.mocked(client.getJson).mock.calls.map(([path]) => path);
     expect(getJsonPaths).toEqual(expect.arrayContaining([
       '/api/v1/setup/status',

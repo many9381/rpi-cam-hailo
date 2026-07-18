@@ -382,6 +382,361 @@ select:focus-visible {
   color: #8a3030;
 }
 
+.users-page {
+  width: min(100%, 1180px);
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.users-page .users-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.users-page .users-heading h1 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.users-page .users-create-button,
+.users-page .user-management-resource-state button,
+.users-page .user-management-dialog-actions button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid #147c78;
+  border-radius: 6px;
+  background: #147c78;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.users-page .users-create-button {
+  flex: 0 0 auto;
+  min-width: 108px;
+}
+
+.users-page .users-create-button:hover:not(:disabled),
+.users-page .user-management-resource-state button:hover:not(:disabled),
+.users-page .user-management-dialog-actions button:hover:not(:disabled) {
+  border-color: #0f6966;
+  background: #0f6966;
+}
+
+.users-page .users-create-button:disabled,
+.users-page .user-management-resource-state button:disabled,
+.users-page .user-management-dialog-actions button:disabled,
+.users-page .account-actions .icon-button:disabled,
+.users-page .access-ip-actions .icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.users-page .users-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  border-bottom: 1px solid #c9d1cc;
+}
+
+.users-page .users-tabs button {
+  min-width: 112px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: #53615a;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.users-page .users-tabs button:hover {
+  background: #e9eeeb;
+  color: #26343a;
+}
+
+.users-page .users-tabs button[aria-selected="true"] {
+  border-bottom-color: #16857f;
+  background: #ffffff;
+  color: #17212b;
+}
+
+.users-page [role="tabpanel"] {
+  min-width: 0;
+  padding-top: 16px;
+}
+
+.users-page .user-management-resource-warning {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-left: 3px solid #b97524;
+  background: #fff8e9;
+  color: #774d19;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.users-page .user-management-resource-warning[role="alert"] {
+  border-left-color: #b84545;
+  background: #fff1f1;
+  color: #8a3030;
+}
+
+.users-page .user-management-resource-state {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid #ccd3ce;
+  color: #657169;
+  font-size: 13px;
+}
+
+.users-page .user-management-resource-state p {
+  margin: 0;
+}
+
+.users-page .accounts-tab,
+.users-page .access-ips-tab {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.users-page .user-management-table {
+  width: 100%;
+  min-width: 760px;
+  border: 1px solid #c9d1cc;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.users-page .user-management-table th,
+.users-page .user-management-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #d9dedb;
+  overflow-wrap: anywhere;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.users-page .user-management-table th {
+  background: #eef1ee;
+  color: #53615a;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.users-page .user-management-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.users-page .user-management-table tbody tr:hover {
+  background: #f8faf8;
+}
+
+.users-page .user-management-table td[data-label="Status"] {
+  color: #4f5d56;
+  font-weight: 650;
+}
+
+.users-page .user-management-table td[data-label="Protection state"] {
+  color: #59665f;
+  font-weight: 650;
+}
+
+.users-page .account-actions-column,
+.users-page .account-actions-cell {
+  width: 152px;
+}
+
+.users-page .access-ip-actions-column,
+.users-page .access-ip-actions-cell {
+  width: 100px;
+}
+
+.users-page .account-actions,
+.users-page .access-ip-actions {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.users-page .account-actions .switch-control {
+  flex: 0 0 38px;
+  margin: 0 3px;
+}
+
+.users-page .switch-control span {
+  border-radius: 8px;
+}
+
+.users-page .account-actions .icon-button,
+.users-page .access-ip-actions .icon-button {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+}
+
+.users-page .switch-control input:disabled + span {
+  cursor: not-allowed;
+}
+
+.users-page .user-management-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+}
+
+.users-page .user-management-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: rgb(14 22 24 / 62%);
+}
+
+.users-page .user-management-dialog {
+  position: relative;
+  width: min(100% - 32px, 460px);
+  max-height: min(680px, calc(100vh - 32px));
+  max-height: min(680px, calc(100dvh - 32px));
+  padding: 20px 22px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #bfc8c2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 22%);
+}
+
+.users-page .user-management-dialog:focus-visible {
+  outline: 2px solid #16857f;
+  outline-offset: 2px;
+}
+
+.users-page .user-management-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.users-page .user-management-dialog-header h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.users-page .user-management-dialog > p {
+  margin: 0 0 18px;
+  color: #53615a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.users-page .user-management-dialog-form {
+  display: grid;
+  gap: 14px;
+}
+
+.users-page .user-management-dialog-form .field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.users-page .user-management-dialog-form label,
+.users-page .user-management-dialog-form .field > span {
+  color: #53615a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.users-page .user-management-dialog-form input,
+.users-page .user-management-dialog-form select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid #aeb8b2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #26343a;
+}
+
+.users-page .user-management-dialog-form input:hover:not(:disabled),
+.users-page .user-management-dialog-form select:hover:not(:disabled) {
+  border-color: #6f7f77;
+}
+
+.users-page .user-management-dialog-form input:disabled,
+.users-page .user-management-dialog-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.users-page .user-management-dialog .form-error {
+  margin: 0;
+  color: #a63535;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.users-page .user-management-dialog-actions {
+  display: flex;
+  min-height: 36px;
+  justify-content: flex-end;
+}
+
+.users-page .user-management-dialog-actions button {
+  width: auto;
+  min-width: 120px;
+  margin: 0;
+}
+
+.users-page .user-management-dialog-actions .danger-button {
+  border-color: #a63535;
+  background: #a63535;
+}
+
+.users-page .user-management-dialog-actions .danger-button:hover:not(:disabled) {
+  border-color: #842929;
+  background: #842929;
+}
+
 .dashboard-page {
   width: min(100%, 1180px);
   margin: 0 auto;
@@ -1223,6 +1578,80 @@ select:focus-visible {
     align-items: flex-start;
   }
 
+  .users-page .user-management-table,
+  .users-page .user-management-table tbody,
+  .users-page .user-management-table tr,
+  .users-page .user-management-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .users-page .user-management-table {
+    min-width: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .users-page .user-management-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .users-page .user-management-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .users-page .user-management-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    border: 1px solid #c9d1cc;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  .users-page .user-management-table tbody tr:hover {
+    background: #ffffff;
+  }
+
+  .users-page .user-management-table td {
+    display: grid;
+    grid-template-columns: minmax(120px, 36%) minmax(0, 1fr);
+    min-width: 0;
+    min-height: 40px;
+    align-items: start;
+    gap: 12px;
+    padding: 10px 12px;
+  }
+
+  .users-page .user-management-table td::before {
+    color: #68756e;
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+  }
+
+  .users-page .account-actions-cell,
+  .users-page .access-ip-actions-cell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    gap: 8px;
+  }
+
+  .users-page .account-actions,
+  .users-page .access-ip-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .detail-grid .detail-wide { grid-column: auto; }
 
   .drawer-layer {
@@ -1311,6 +1740,30 @@ select:focus-visible {
     grid-template-columns: minmax(0, 1fr);
     width: 100%;
   }
+
+  .users-page .users-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .users-page .users-create-button {
+    width: 100%;
+  }
+
+  .users-page .users-tabs button {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .users-page .user-management-resource-state {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .users-page .user-management-resource-state button,
+  .users-page .user-management-dialog-actions button {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1318,5 +1771,9 @@ select:focus-visible {
   *::before,
   *::after {
     scroll-behavior: auto !important;
+  }
+
+  .users-page .switch-control span::after {
+    transition: none;
   }
 }

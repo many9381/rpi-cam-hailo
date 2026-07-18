@@ -2677,8 +2677,17 @@ void RegisterHandlers() {
                        "user management unavailable"}));
                   return;
                 }
+                auto peer = NormalizePeerIp(request->peerAddr().toIp());
+                if (!peer.ok()) {
+                  callback(BuildUserManagementErrorResponse(
+                      {"E_USER_MANAGEMENT_UNAVAILABLE",
+                       "user management unavailable"}));
+                  return;
+                }
+                std::string current_peer_ip = std::move(peer).value();
                 auto submitted = dependencies.worker->Submit(
-                    [service = dependencies.service, callback,
+                    [service = dependencies.service,
+                     current_peer_ip = std::move(current_peer_ip), callback,
                      event_loop = app().getLoop()]() mutable {
                       try {
                         auto listed = service->ListManagementIps();
@@ -2688,14 +2697,9 @@ void RegisterHandlers() {
                                             listed.error()));
                           return;
                         }
-                        Json::Value entries(Json::arrayValue);
-                        for (const auto& entry : listed.value()) {
-                          entries.append(BuildManagementIpJson(entry));
-                        }
-                        Json::Value body(Json::objectValue);
-                        body["management_ips"] = std::move(entries);
                         QueueResponse(event_loop, std::move(callback),
-                                      JsonResponse(std::move(body)));
+                                      JsonResponse(BuildManagementIpListJson(
+                                          listed.value(), current_peer_ip)));
                       } catch (...) {
                         QueueResponse(event_loop, std::move(callback),
                                       BuildUserManagementErrorResponse(

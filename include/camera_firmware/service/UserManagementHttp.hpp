@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <drogon/HttpResponse.h>
 #include <drogon/HttpTypes.h>
@@ -59,6 +60,9 @@ ParseSetViewerEnabledJson(std::string_view body, std::string_view content_type);
     std::string_view value);
 Json::Value BuildManagedUserJson(const security::ManagedUser& user);
 Json::Value BuildManagementIpJson(const security::ManagementIpEntry& entry);
+Json::Value BuildManagementIpListJson(
+    const std::vector<security::ManagementIpEntry>& entries,
+    std::string_view current_peer_ip);
 [[nodiscard]] drogon::HttpResponsePtr BuildUserManagementErrorResponse(
     const common::Error& error);
 [[nodiscard]] drogon::HttpStatusCode UserManagementErrorStatus(
