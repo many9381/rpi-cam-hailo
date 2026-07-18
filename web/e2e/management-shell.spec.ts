@@ -1,11 +1,20 @@
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
 import {
   expect,
   type Locator,
   type Page,
   type Request,
   test,
+  type TestInfo,
 } from '@playwright/test';
 
+import type {
+  AuditEvent,
+  AuditEventPage,
+  AuditStatus,
+} from '../src/features/audit/contracts';
 import type { RuntimeSettingsSnapshot } from '../src/features/settings/contracts';
 import type {
   ManagedUser,
@@ -69,6 +78,111 @@ const operationalPayloads: Record<string, unknown> = {
   '/api/v1/ai/detections': { events: [] },
 };
 
+const AUDIT_DEFAULT_SEARCH = '?sort_by=timestamp&sort_direction=desc&limit=50';
+const AUDIT_FILTERED_SEARCH = '?from_seconds=1784246400&to_seconds=1784332800' +
+  '&event_type=viewer+disabled%2Fsecurity&outcome=failure' +
+  '&actor_identity=camera+owner%2Fadmin&peer_ip=2001%3Adb8%3A%3A20' +
+  '&subject_type=user+account&subject_identity=viewer%2Fone' +
+  '&sort_by=timestamp&sort_direction=desc&limit=50';
+const AUDIT_EVENT_TYPE_ASC_SEARCH =
+  '?sort_by=event_type&sort_direction=asc&limit=50';
+const AUDIT_PAGE_TWO_CURSOR = 'ZXZlbnRfdHlwZV9hc2NfcGFnZV8y';
+const AUDIT_EVENT_TYPE_ASC_PAGE_TWO_SEARCH =
+  `${AUDIT_EVENT_TYPE_ASC_SEARCH}&cursor=${AUDIT_PAGE_TWO_CURSOR}`;
+const AUDIT_MUTATION_CONTROL_NAME = new RegExp([
+  String.raw`\b(?:delete|edit|export|remove|download|csv|purge|erase|destroy|truncate|prune|archive|rotate|rotation|retention)\b`,
+  String.raw`\b(?:clear|save|update|modify|change|configure|set)\s+(?:all\s+)?(?:(?:audit\s+)?(?:records?|logs?)|retention|storage|capacity)\b`,
+  String.raw`\b(?:maximum|max(?:imum)?)\s*[- ]?\s*(?:audit\s+)?(?:events?|records?|logs?)\b`,
+  String.raw`\b(?:audit\s+)?(?:events?|records?|logs?|storage|capacity|retention)\s*[- ]?\s*(?:limit|cap|maximum|settings?|policy)\b`,
+].join('|'), 'i');
+
+const makeAuditStatus = (warning: boolean): AuditStatus => warning ? {
+  current_events: 45_000,
+  max_events: 50_000,
+  usage_percent: 90,
+  warning: true,
+  rotated_event_count: 120,
+  last_rotation_at_seconds: 1_784_300_000,
+  last_rotated_sequence: 120,
+} : {
+  current_events: 20_000,
+  max_events: 50_000,
+  usage_percent: 40,
+  warning: false,
+  rotated_event_count: 120,
+  last_rotation_at_seconds: 1_784_300_000,
+  last_rotated_sequence: 120,
+};
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+const createDeferred = <T,>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+};
+
+const makeAuditEvent = (
+  sequence: number,
+  overrides: Partial<AuditEvent> = {},
+): AuditEvent => ({
+  sequence,
+  server_timestamp_seconds: 1_784_300_000 - sequence,
+  event_type: 'session_login',
+  outcome: 'success',
+  actor_identity: `operator.${sequence % 5}`,
+  peer_ip: `192.0.2.${(sequence % 200) + 1}`,
+  detail_code: '',
+  subject_type: 'session',
+  subject_identity: `session-${sequence}`,
+  ...overrides,
+});
+
+const initialAuditPage: AuditEventPage = {
+  events: Array.from({ length: 50 }, (_, index) => makeAuditEvent(500 - index)),
+  next_cursor: null,
+};
+
+const filteredAuditPage: AuditEventPage = {
+  events: [2, 1].map((sequence) => makeAuditEvent(sequence, {
+    server_timestamp_seconds: 1_784_300_000 + sequence,
+    event_type: 'viewer disabled/security',
+    outcome: 'failure',
+    actor_identity: 'camera owner/admin',
+    peer_ip: '2001:db8::20',
+    detail_code: 'E_VIEWER_DISABLED',
+    subject_type: 'user account',
+    subject_identity: 'viewer/one',
+  })),
+  next_cursor: null,
+};
+
+const duplicateSortPageOne: AuditEventPage = {
+  events: Array.from({ length: 50 }, (_, index) => makeAuditEvent(250 - index, {
+    event_type: 'duplicate_event',
+  })),
+  next_cursor: AUDIT_PAGE_TWO_CURSOR,
+};
+
+const duplicateSortPageTwo: AuditEventPage = {
+  events: [200, 199].map((sequence) => makeAuditEvent(sequence, {
+    event_type: 'duplicate_event',
+  })),
+  next_cursor: null,
+};
+
+const auditEventPages = new Map<string, AuditEventPage>([
+  [AUDIT_DEFAULT_SEARCH, initialAuditPage],
+  [AUDIT_FILTERED_SEARCH, filteredAuditPage],
+  [AUDIT_EVENT_TYPE_ASC_SEARCH, duplicateSortPageOne],
+  [AUDIT_EVENT_TYPE_ASC_PAGE_TWO_SEARCH, duplicateSortPageTwo],
+]);
+
 const detectionSnapshot = {
   events: [{
     camera_id: 'imx708',
@@ -108,6 +222,8 @@ const administratorOnlyPaths = new Set([
   '/api/v1/settings/runtime/discard',
   '/api/v1/security/users',
   '/api/v1/security/management-ips',
+  '/api/v1/audit/status',
+  '/api/v1/audit/events',
 ]);
 
 const makeRuntimeSettingsSnapshot = (
@@ -155,6 +271,7 @@ interface ApiMockOptions {
   settingsRevisionConflictOnce?: boolean;
   settingsApplyFailureOnce?: boolean;
   settingsRecoveryRequired?: boolean;
+  auditStatusResponses?: ReadonlyArray<AuditStatus | Promise<AuditStatus>>;
 }
 
 interface ApiMockControls {
@@ -167,8 +284,11 @@ interface ApiMockControls {
   snapshotRequests: Request[];
   authMeRequests: Request[];
   userManagementRequests: Request[];
+  auditRequests: Request[];
+  auditProtocolViolations: string[];
   unhandledPaths: string[];
   requestedAdministratorPaths: string[];
+  waitForAuditStatusRequests(count: number): Promise<void>;
   emitDetection(): void;
 }
 
@@ -184,6 +304,8 @@ async function installApiMocks(
   let runtimeFailed = options.runtimeFailed ?? false;
   let settingsRevisionConflictOnce = options.settingsRevisionConflictOnce ?? false;
   let settingsApplyFailureOnce = options.settingsApplyFailureOnce ?? false;
+  const auditStatus = makeAuditStatus(false);
+  const auditStatusResponses = [...(options.auditStatusResponses ?? [])];
   let runtimeSettings = makeRuntimeSettingsSnapshot(
     options.settingsRecoveryRequired ? 'recovery_required' : 'clean',
   );
@@ -218,6 +340,13 @@ async function installApiMocks(
   const snapshotRequests: Request[] = [];
   const authMeRequests: Request[] = [];
   const userManagementRequests: Request[] = [];
+  const auditRequests: Request[] = [];
+  const auditProtocolViolations: string[] = [];
+  let auditStatusRequestCount = 0;
+  const auditStatusRequestWaiters: Array<{
+    count: number;
+    resolve(): void;
+  }> = [];
   const unhandledPaths: string[] = [];
   const requestedAdministratorPaths: string[] = [];
 
@@ -249,10 +378,73 @@ async function installApiMocks(
 
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
 
     if (administratorOnlyPaths.has(path)) {
       requestedAdministratorPaths.push(`${request.method()} ${path}`);
+    }
+
+    if (path.startsWith('/api/v1/audit/')) {
+      auditRequests.push(request);
+      const rejectAuditRequest = async (reason: string) => {
+        auditProtocolViolations.push(
+          `${request.method()} ${path}${url.search}: ${reason}`,
+        );
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_UNEXPECTED_AUDIT_TEST_REQUEST' }),
+        });
+      };
+      if (role === 'viewer') {
+        await rejectAuditRequest('viewer request');
+        return;
+      }
+      if (request.method() !== 'GET') {
+        await rejectAuditRequest('unexpected method');
+        return;
+      }
+      if (request.postData() !== null) {
+        await rejectAuditRequest('unexpected request body');
+        return;
+      }
+      if (/^\/api\/v1\/audit\/status$/.test(path)) {
+        if (url.search !== '') {
+          await rejectAuditRequest('unexpected status query');
+          return;
+        }
+        auditStatusRequestCount += 1;
+        for (let index = auditStatusRequestWaiters.length - 1; index >= 0; index -= 1) {
+          const waiter = auditStatusRequestWaiters[index];
+          if (auditStatusRequestCount >= waiter.count) {
+            auditStatusRequestWaiters.splice(index, 1);
+            waiter.resolve();
+          }
+        }
+        const response = auditStatusResponses.length === 0
+          ? auditStatus
+          : await auditStatusResponses.shift()!;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(response),
+        });
+        return;
+      }
+      if (/^\/api\/v1\/audit\/events$/.test(path)) {
+        const response = auditEventPages.get(url.search);
+        if (response === undefined) {
+          await rejectAuditRequest('unexpected or duplicate event query');
+          return;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(response),
+        });
+        return;
+      }
+      await rejectAuditRequest('unexpected audit path');
+      return;
     }
 
     if (path === '/api/v1/setup/status' && request.method() === 'GET') {
@@ -681,7 +873,17 @@ async function installApiMocks(
 
   return { initializeRequests, runtimeRequests, runtimeRestartRequests,
     liveRequests, settingsRequests, passwordRequests, snapshotRequests, authMeRequests,
-    userManagementRequests, unhandledPaths, requestedAdministratorPaths, emitDetection };
+    userManagementRequests, auditRequests, auditProtocolViolations, unhandledPaths,
+    requestedAdministratorPaths,
+    waitForAuditStatusRequests: (count: number) => {
+      if (auditStatusRequestCount >= count) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        auditStatusRequestWaiters.push({ count, resolve });
+      });
+    },
+    emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -689,6 +891,37 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
     document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     body: document.body.scrollWidth - document.body.clientWidth,
   }))).toEqual({ document: 0, body: 0 });
+}
+
+async function expectNoInternalOverflow(locator: Locator): Promise<void> {
+  await expect(locator).toBeVisible();
+  const geometry = await locator.evaluateAll((elements) => elements.map((element) => ({
+    boundingWidth: element.getBoundingClientRect().width,
+    boundingHeight: element.getBoundingClientRect().height,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+  })));
+  expect(geometry.length).toBeGreaterThan(0);
+  for (const dimensions of geometry) {
+    expect(dimensions.boundingWidth).toBeGreaterThan(0);
+    expect(dimensions.boundingHeight).toBeGreaterThan(0);
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+    expect(dimensions.scrollHeight).toBeLessThanOrEqual(dimensions.clientHeight);
+  }
+}
+
+async function auditScreenshotPath(testInfo: TestInfo, filename: string): Promise<string> {
+  const directory = resolve(
+    testInfo.config.rootDir,
+    '..',
+    '..',
+    'build-current',
+    'audit-task-8-e2e',
+  );
+  await mkdir(directory, { recursive: true });
+  return resolve(directory, filename);
 }
 
 async function expectNoOverlap(a: Locator, b: Locator): Promise<void> {
@@ -1350,6 +1583,208 @@ test('recovery settings are replaced through save and apply', async ({ page }) =
     .toBeVisible();
   await expect(page.getByText('Runtime settings need recovery.')).toHaveCount(0);
   expect(api.unhandledPaths).toEqual([]);
+});
+
+test('audit records load 50 rows, encode every filter, and paginate duplicate values', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/system');
+  const section = page.getByRole('region', { name: 'Audit records' });
+  const table = page.getByRole('table', { name: 'Audit records' });
+  const filters = page.getByRole('form', { name: 'Audit record filters' });
+  await expect(section).toBeVisible();
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+
+  await filters.getByLabel('From (UTC)').fill('2026-07-17T00:00');
+  await filters.getByLabel('To (UTC)').fill('2026-07-18T00:00');
+  await filters.getByLabel('Event type').fill('viewer disabled/security');
+  await filters.getByLabel('Outcome').selectOption('failure');
+  await filters.getByLabel('Actor').fill('camera owner/admin');
+  await filters.getByLabel('IP address').fill('2001:db8::20');
+  await filters.getByLabel('Subject type').fill('user account');
+  await filters.getByLabel('Subject identity').fill('viewer/one');
+  await filters.getByRole('button', { name: 'Apply filters' }).click();
+  await expect(table.locator('tbody tr')).toHaveCount(2);
+  await expect(table).toContainText('viewer disabled/security');
+
+  await filters.getByRole('button', { name: 'Reset filters' }).click();
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  await page.getByRole('button', { name: 'Sort by Event type' }).click();
+  const eventTypeHeader = page.getByRole('columnheader', { name: 'Sort by Event type' });
+  await expect(eventTypeHeader).toHaveAttribute('aria-sort', 'ascending');
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  const visibleSequences = table.locator(
+    'tbody td[data-label="Event type"] .audit-event-value > span',
+  );
+  await expect(visibleSequences.first()).toHaveText('#250');
+  await expect(visibleSequences.last()).toHaveText('#201');
+
+  const nextPage = page.getByRole('button', { name: 'Next audit page' });
+  const previousPage = page.getByRole('button', { name: 'Previous audit page' });
+  await nextPage.click();
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+  await expect(table.locator('tbody tr')).toHaveCount(2);
+  await expect(visibleSequences).toHaveText(['#200', '#199']);
+  await previousPage.click();
+  await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  await expect(visibleSequences.first()).toHaveText('#250');
+  await expect(visibleSequences.last()).toHaveText('#201');
+
+  const eventSearches = api.auditRequests
+    .filter((request) => new URL(request.url()).pathname === '/api/v1/audit/events')
+    .map((request) => new URL(request.url()).search);
+  expect(eventSearches).toEqual([
+    AUDIT_DEFAULT_SEARCH,
+    AUDIT_FILTERED_SEARCH,
+    AUDIT_DEFAULT_SEARCH,
+    AUDIT_EVENT_TYPE_ASC_SEARCH,
+    AUDIT_EVENT_TYPE_ASC_PAGE_TWO_SEARCH,
+    AUDIT_EVENT_TYPE_ASC_SEARCH,
+  ]);
+  const interactiveDescendants = section.locator([
+    'button',
+    'a[href]',
+    'input',
+    'select',
+    'textarea',
+    'summary',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="menuitemcheckbox"]',
+    '[role="menuitemradio"]',
+    '[role="switch"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="tab"]',
+  ].join(', '));
+  const interactiveCount = await interactiveDescendants.count();
+  expect(interactiveCount).toBeGreaterThan(0);
+  for (let index = 0; index < interactiveCount; index += 1) {
+    await expect(interactiveDescendants.nth(index))
+      .not.toHaveAccessibleName(AUDIT_MUTATION_CONTROL_NAME);
+  }
+
+  await page.screenshot({
+    path: await auditScreenshotPath(testInfo, 'desktop-audit-records.png'),
+    fullPage: true,
+  });
+  expect(api.auditProtocolViolations).toEqual([]);
+  expect(api.unhandledPaths).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
+test('audit capacity warning follows, focuses, clears, and stays bounded on mobile', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const clockTime = new Date('2026-07-18T00:00:00Z');
+  await page.clock.install({ time: clockTime });
+  await page.clock.pauseAt(clockTime);
+  const polledAuditStatus = createDeferred<AuditStatus>();
+  const api = await installApiMocks(page, {
+    auditStatusResponses: [makeAuditStatus(true), polledAuditStatus.promise],
+  });
+
+  await page.goto('/#/dashboard');
+  const warning = page.getByRole('alert').filter({ hasText: 'Audit storage is at 90%' });
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText('45000 of 50000 audit records are retained.');
+  await expectNoInternalOverflow(warning);
+  await page.screenshot({
+    path: await auditScreenshotPath(testInfo, 'mobile-audit-warning.png'),
+  });
+
+  await warning.getByRole('link', { name: 'Review audit records' }).click();
+  await expect(page).toHaveURL(/#\/system#audit-records$/);
+  const section = page.getByRole('region', { name: 'Audit records' });
+  await expect(section).toBeFocused();
+  const focusAppearance = await section.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d');
+    let outlineAlpha = 0;
+    if (context !== null) {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = style.outlineColor;
+      context.fillRect(0, 0, 1, 1);
+      outlineAlpha = context.getImageData(0, 0, 1, 1).data[3];
+    }
+    return {
+      active: document.activeElement === element,
+      outlineWidth: Number.parseFloat(style.outlineWidth),
+      outlineColor: style.outlineColor,
+      outlineAlpha,
+    };
+  });
+  expect(focusAppearance.active).toBe(true);
+  expect(focusAppearance.outlineWidth).toBeGreaterThan(0);
+  expect(focusAppearance.outlineColor).not.toBe('transparent');
+  expect(focusAppearance.outlineAlpha).toBeGreaterThan(0);
+  const filters = page.getByRole('form', { name: 'Audit record filters' });
+  const records = page.locator('.audit-records-table-wrap');
+  const table = page.getByRole('table', { name: 'Audit records' });
+  const paging = page.getByLabel('Audit record pages');
+  await expect(table.locator('tbody tr')).toHaveCount(50);
+  for (const surface of [warning, filters, records, table, paging]) {
+    await expectNoInternalOverflow(surface);
+  }
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: await auditScreenshotPath(testInfo, 'mobile-audit-filters-focus.png'),
+  });
+  await table.locator('tbody tr').first().scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: await auditScreenshotPath(testInfo, 'mobile-audit-record.png'),
+  });
+  await paging.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: await auditScreenshotPath(testInfo, 'mobile-audit-paging.png'),
+  });
+
+  const statusRequests = () => api.auditRequests.filter((request) =>
+    new URL(request.url()).pathname === '/api/v1/audit/status');
+  expect(await page.evaluate(() => document.visibilityState)).toBe('visible');
+  expect(statusRequests()).toHaveLength(1);
+  await page.clock.fastForward(29_999);
+  expect(statusRequests()).toHaveLength(1);
+  const pollRequest = page.waitForRequest((request) =>
+    new URL(request.url()).pathname === '/api/v1/audit/status');
+  const pollRouteEntry = api.waitForAuditStatusRequests(2);
+  await page.clock.fastForward(1);
+  await Promise.all([pollRequest, pollRouteEntry]);
+  expect(statusRequests()).toHaveLength(2);
+  await expect(warning).toBeVisible();
+  await expect(page.getByLabel('Audit capacity summary')).toContainText('90% used');
+
+  polledAuditStatus.resolve(makeAuditStatus(false));
+  await expect(warning).toBeHidden();
+  await expect(page.getByLabel('Audit capacity summary')).toContainText('40% used');
+  expect(statusRequests()).toHaveLength(2);
+  expect(api.auditProtocolViolations).toEqual([]);
+  expect(api.unhandledPaths).toEqual([]);
+});
+
+test('viewer shell makes zero audit records requests', async ({ page }) => {
+  const api = await installApiMocks(page, {
+    role: 'viewer',
+    username: 'viewer.audit-check',
+  });
+
+  await page.goto('/#/system#audit-records');
+  await expect(page).toHaveURL(/#\/monitor$/);
+  await expect(page.getByRole('heading', { name: 'Live monitoring' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'System' })).toHaveCount(0);
+  expect(api.auditRequests).toEqual([]);
+  expect(api.auditProtocolViolations).toEqual([]);
+  expect(api.unhandledPaths).toEqual([]);
+  expect(api.requestedAdministratorPaths).toEqual([]);
 });
 
 test('logout remains available from the authenticated settings shell', async ({ page }) => {

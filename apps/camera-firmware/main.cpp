@@ -291,7 +291,9 @@ int RunFirmware(const std::string& config_path) {
       runtime_profiles;
   if (base_config.security.enabled) {
     auto opened = camera_firmware::security::SecurityStore::Open(
-        {base_config.security.state_directory});
+        {base_config.security.state_directory,
+         base_config.security.audit.max_events,
+         base_config.security.audit.warning_percent});
     if (!opened.ok()) {
       return PrintError(opened.error());
     }

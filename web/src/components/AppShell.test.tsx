@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HashRouter } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
+import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import {
   makeSettings,
   makeSettingsController,
@@ -18,12 +19,28 @@ const renderShell = (
   logout = vi.fn(),
   runtimeSettings?: RuntimeSettingsController,
   changePassword = vi.fn(),
+  auditStatus?: AuditStatusController,
 ) => render(
   <HashRouter>
     <AppShell principal={principal} logout={logout}
-      changePassword={changePassword} runtimeSettings={runtimeSettings}>Dashboard content</AppShell>
+      changePassword={changePassword} runtimeSettings={runtimeSettings}
+      auditStatus={auditStatus}>Dashboard content</AppShell>
   </HashRouter>,
 );
+
+const warningAuditStatus: AuditStatusController = {
+  state: 'ready',
+  data: {
+    current_events: 91,
+    max_events: 100,
+    usage_percent: 91,
+    warning: true,
+    rotated_event_count: 2,
+    last_rotation_at_seconds: 1_784_333_000,
+    last_rotated_sequence: 2,
+  },
+  refresh: vi.fn(async () => undefined),
+};
 
 afterEach(() => {
   cleanup();
@@ -44,6 +61,19 @@ describe('AppShell', () => {
     }
     expect(screen.getByText('Dashboard content')).toBeVisible();
     expect(screen.getByText('Operational')).toBeVisible();
+  });
+
+  it('places one audit capacity warning before route content without changing navigation', () => {
+    renderShell(vi.fn(), undefined, vi.fn(), warningAuditStatus);
+
+    const warning = screen.getByRole('alert');
+    expect(warning.nextSibling?.textContent).toContain('Dashboard content');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Review audit records' }))
+      .toHaveAttribute('href', '#/system#audit-records');
+    expect(within(screen.getByRole('navigation', { name: /primary/i }))
+      .getAllByRole('link').map((link) => link.textContent))
+      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
   });
 
   it('opens a modal mobile drawer and closes it on Escape with focus restored', async () => {

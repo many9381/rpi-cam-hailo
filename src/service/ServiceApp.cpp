@@ -27,7 +27,9 @@
 #include <trantor/net/EventLoop.h>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/security/AuditLogService.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
+#include "camera_firmware/service/AuditLogHttp.hpp"
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
@@ -849,6 +851,7 @@ namespace {
 struct ServiceState {
   ServiceInitArgs args;
   std::shared_ptr<security::AuthService> auth_service;
+  std::shared_ptr<security::AuditLogService> audit_log_service;
   std::shared_ptr<security::UserManagementService> user_management_service;
   std::shared_ptr<BoundedWorker> security_worker;
   std::shared_ptr<BoundedWorker> runtime_settings_worker;
@@ -883,6 +886,10 @@ std::mutex& StateMutex() {
 }
 
 bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
+  if (path == "/api/v1/audit/status" ||
+      path == "/api/v1/audit/events") {
+    return method == drogon::Get;
+  }
   if (path == "/api/v1/security/users") {
     return method == drogon::Get || method == drogon::Post;
   }
@@ -1404,6 +1411,16 @@ struct AdministratorUserDependencies {
   std::shared_ptr<BoundedWorker> worker;
 };
 
+struct AuditLogDependencies {
+  bool shutting_down{false};
+  std::shared_ptr<security::AuditLogService> service;
+  std::shared_ptr<BoundedWorker> worker;
+
+  [[nodiscard]] bool Available() const noexcept {
+    return !shutting_down && service && worker;
+  }
+};
+
 struct RuntimeSettingsDependencies {
   bool security_enabled{false};
   bool shutting_down{false};
@@ -1466,6 +1483,13 @@ AdministratorUserDependencies CopyAdministratorUserDependencies() {
   std::scoped_lock lock(StateMutex());
   const auto& state = GlobalState();
   return {state.shutting_down, state.user_management_service,
+          state.security_worker};
+}
+
+AuditLogDependencies CopyAuditLogDependencies() {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return {state.shutting_down, state.audit_log_service,
           state.security_worker};
 }
 
@@ -1712,6 +1736,158 @@ void QueueResponse(trantor::EventLoop* event_loop,
                    drogon::HttpResponsePtr response) {
   (void)event_loop;
   callback.Queue(std::move(response));
+}
+
+drogon::HttpResponsePtr AuditLogUnavailableResponse() {
+  return BuildAuditLogErrorResponse(
+      {"E_AUDIT_UNAVAILABLE", "audit records unavailable"});
+}
+
+DrogonCallback AuditRouteCallback(DrogonCallback callback) {
+  return [callback = std::move(callback)](
+             const drogon::HttpResponsePtr& response) {
+    if (response &&
+        response->statusCode() == drogon::k503ServiceUnavailable) {
+      callback(AuditLogUnavailableResponse());
+      return;
+    }
+    callback(response);
+  };
+}
+
+void QueueAuditLogResponse(trantor::EventLoop* event_loop,
+                           const HttpCallback& callback,
+                           drogon::HttpResponsePtr response) noexcept {
+  try {
+    QueueResponse(event_loop, callback, std::move(response));
+  } catch (...) {
+    try {
+      QueueResponse(event_loop, callback, AuditLogUnavailableResponse());
+    } catch (...) {
+    }
+  }
+}
+
+void SubmitAuthorizedAuditStatus(
+    security::Principal principal,
+    AuditLogDependencies dependencies,
+    const HttpCallback& callback,
+    trantor::EventLoop* event_loop) {
+  if (!dependencies.Available()) {
+    callback(AuditLogUnavailableResponse());
+    return;
+  }
+  const auto submitted = dependencies.worker->Submit(
+      [service = dependencies.service, principal = std::move(principal),
+       callback, event_loop]() mutable {
+        drogon::HttpResponsePtr response;
+        try {
+          const auto status = service->ReadStatus(principal);
+          response = status.ok()
+                         ? JsonResponse(BuildAuditStatusJson(status.value()))
+                         : BuildAuditLogErrorResponse(status.error());
+        } catch (...) {
+          response = AuditLogUnavailableResponse();
+        }
+        QueueAuditLogResponse(event_loop, callback, std::move(response));
+      });
+  if (!submitted.ok()) {
+    callback(AuditLogUnavailableResponse());
+  }
+}
+
+void SubmitAuthorizedAuditEvents(
+    security::Principal principal,
+    security::AuditQueryParameters parameters,
+    AuditLogDependencies dependencies,
+    const HttpCallback& callback,
+    trantor::EventLoop* event_loop) {
+  if (!dependencies.Available()) {
+    callback(AuditLogUnavailableResponse());
+    return;
+  }
+  const auto submitted = dependencies.worker->Submit(
+      [service = dependencies.service, principal = std::move(principal),
+       parameters = std::move(parameters), callback, event_loop]() mutable {
+        drogon::HttpResponsePtr response;
+        try {
+          const auto events = service->ListEvents(parameters, principal);
+          response = events.ok()
+                         ? JsonResponse(BuildAuditEventPageJson(events.value()))
+                         : BuildAuditLogErrorResponse(events.error());
+        } catch (...) {
+          response = AuditLogUnavailableResponse();
+        }
+        QueueAuditLogResponse(event_loop, callback, std::move(response));
+      });
+  if (!submitted.ok()) {
+    callback(AuditLogUnavailableResponse());
+  }
+}
+
+void HandleAuditStatusRequest(const drogon::HttpRequestPtr& request,
+                              AuthorizedRequest authorized_request,
+                              HttpCallback callback) {
+  try {
+    if (!authorized_request.principal.has_value() ||
+        authorized_request.principal->role !=
+            security::UserRole::kAdministrator) {
+      callback(BuildAuditLogErrorResponse(
+          {"E_AUDIT_FORBIDDEN", "administrator required"}));
+      return;
+    }
+    if (!request || !request->getBody().empty()) {
+      callback(BuildAuditLogErrorResponse(
+          {"E_AUDIT_QUERY_INVALID", "request body must be empty"}));
+      return;
+    }
+    const auto query = ValidateEmptyAuditStatusQuery(request->query());
+    if (!query.ok()) {
+      callback(BuildAuditLogErrorResponse(query.error()));
+      return;
+    }
+    security::Principal principal =
+        std::move(*authorized_request.principal);
+    SubmitAuthorizedAuditStatus(std::move(principal),
+                                CopyAuditLogDependencies(),
+                                callback,
+                                drogon::app().getLoop());
+  } catch (...) {
+    callback(AuditLogUnavailableResponse());
+  }
+}
+
+void HandleAuditEventRequest(const drogon::HttpRequestPtr& request,
+                             AuthorizedRequest authorized_request,
+                             HttpCallback callback) {
+  try {
+    if (!authorized_request.principal.has_value() ||
+        authorized_request.principal->role !=
+            security::UserRole::kAdministrator) {
+      callback(BuildAuditLogErrorResponse(
+          {"E_AUDIT_FORBIDDEN", "administrator required"}));
+      return;
+    }
+    if (!request || !request->getBody().empty()) {
+      callback(BuildAuditLogErrorResponse(
+          {"E_AUDIT_QUERY_INVALID", "request body must be empty"}));
+      return;
+    }
+    auto query = ParseAuditEventQuery(request->query());
+    if (!query.ok()) {
+      callback(BuildAuditLogErrorResponse(query.error()));
+      return;
+    }
+    security::Principal principal =
+        std::move(*authorized_request.principal);
+    auto parameters = std::move(query).value();
+    SubmitAuthorizedAuditEvents(std::move(principal), std::move(parameters),
+                                CopyAuditLogDependencies(),
+                                callback,
+                                drogon::app().getLoop());
+  } catch (...) {
+    callback(AuditLogUnavailableResponse());
+  }
 }
 
 drogon::HttpResponsePtr RuntimeSettingsUnavailableResponse() {
@@ -3150,6 +3326,34 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/audit/status",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, AuditRouteCallback(std::move(callback)),
+            [request](AuthorizedRequest authorized_request,
+                      HttpCallback callback) {
+              HandleAuditStatusRequest(request,
+                                       std::move(authorized_request),
+                                       std::move(callback));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
+      "/api/v1/audit/events",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, AuditRouteCallback(std::move(callback)),
+            [request](AuthorizedRequest authorized_request,
+                      HttpCallback callback) {
+              HandleAuditEventRequest(request,
+                                      std::move(authorized_request),
+                                      std::move(callback));
+            });
+      },
+      {Get});
+
+  app().registerHandler(
       "/api/v1/settings/runtime",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
@@ -3599,6 +3803,91 @@ void RegisterHandlers() {
 }  // namespace
 
 namespace internal {
+
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+using AuditHandlerCallbackForTesting =
+    std::function<void(const drogon::HttpResponsePtr&)>;
+
+void HandleAuthorizedAuditStatusForTesting(
+    security::Principal principal,
+    std::shared_ptr<security::AuditLogService> service,
+    std::shared_ptr<BoundedWorker> worker,
+    bool shutting_down,
+    trantor::EventLoop* event_loop,
+    AuditHandlerCallbackForTesting callback) {
+  HttpCallback terminal(std::make_shared<TerminalResponse>(
+      event_loop, std::move(callback)));
+  try {
+    SubmitAuthorizedAuditStatus(
+        std::move(principal),
+        {shutting_down, std::move(service), std::move(worker)}, terminal,
+        event_loop);
+  } catch (...) {
+    terminal(AuditLogUnavailableResponse());
+  }
+}
+
+void HandleAuthorizedAuditEventsForTesting(
+    security::Principal principal,
+    security::AuditQueryParameters parameters,
+    std::shared_ptr<security::AuditLogService> service,
+    std::shared_ptr<BoundedWorker> worker,
+    bool shutting_down,
+    trantor::EventLoop* event_loop,
+    AuditHandlerCallbackForTesting callback) {
+  HttpCallback terminal(std::make_shared<TerminalResponse>(
+      event_loop, std::move(callback)));
+  try {
+    SubmitAuthorizedAuditEvents(
+        std::move(principal), std::move(parameters),
+        {shutting_down, std::move(service), std::move(worker)}, terminal,
+        event_loop);
+  } catch (...) {
+    terminal(AuditLogUnavailableResponse());
+  }
+}
+
+void InstallAuditDependenciesForShutdownTesting(
+    std::shared_ptr<security::AuditLogService> service,
+    std::shared_ptr<BoundedWorker> worker) noexcept {
+  std::scoped_lock lock(StateMutex());
+  auto& state = GlobalState();
+  state.audit_log_service = std::move(service);
+  state.security_worker = std::move(worker);
+  state.shutting_down = false;
+}
+
+std::shared_ptr<BoundedWorker>
+ReplaceAuditAuthorizationWorkerForTesting(
+    std::shared_ptr<BoundedWorker> worker) noexcept {
+  std::scoped_lock lock(StateMutex());
+  return std::exchange(GlobalState().security_worker, std::move(worker));
+}
+
+std::shared_ptr<security::SecurityStore>
+ReplaceAuditAuthorizationStoreForTesting(
+    std::shared_ptr<security::SecurityStore> store) noexcept {
+  std::scoped_lock lock(StateMutex());
+  return std::exchange(GlobalState().args.security_store, std::move(store));
+}
+
+std::shared_ptr<security::AuthService>
+ReplaceAuditAuthorizationServiceForTesting(
+    std::shared_ptr<security::AuthService> auth_service) noexcept {
+  std::scoped_lock lock(StateMutex());
+  return std::exchange(GlobalState().auth_service, std::move(auth_service));
+}
+
+bool ReplaceAuditAuthorizationShutdownForTesting(bool shutting_down) noexcept {
+  std::scoped_lock lock(StateMutex());
+  return std::exchange(GlobalState().shutting_down, shutting_down);
+}
+
+bool AuditShutdownStartedForTesting() noexcept {
+  std::scoped_lock lock(StateMutex());
+  return GlobalState().shutting_down;
+}
+#endif
 
 struct DetectionSsePendingResponse::State {
   DetectionSnapshotProvider detection_snapshot_provider;
@@ -4428,13 +4717,16 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
     security::DeviceState initial_device_state =
         security::DeviceState::kDefault;
     std::shared_ptr<security::UserManagementService> user_management_service;
+    std::shared_ptr<security::AuditLogService> audit_log_service;
     std::shared_ptr<security::AuthService> auth_service;
     std::shared_ptr<BoundedWorker> security_worker;
     std::shared_ptr<BoundedWorker> runtime_settings_worker;
     if (args.app_config->security.enabled) {
       if (!effective_args.security_store) {
         auto opened = security::SecurityStore::Open(
-            {args.app_config->security.state_directory});
+            {args.app_config->security.state_directory,
+             args.app_config->security.audit.max_events,
+             args.app_config->security.audit.warning_percent});
         if (!opened.ok()) {
           return common::Result<void>::Err(opened.error());
         }
@@ -4489,6 +4781,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
                 return SerializeUserRole(role).has_value();
               }));
       security_worker = std::make_shared<BoundedWorker>(16U);
+      audit_log_service = std::make_shared<security::AuditLogService>(
+          *effective_args.security_store);
       security::UserManagementDependencies user_management_dependencies;
       user_management_dependencies.revoke_sessions = revoke_sessions;
       user_management_dependencies.revoke_all_streams = revoke_all_streams;
@@ -4517,6 +4811,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       std::scoped_lock lock(StateMutex());
       GlobalState().args = effective_args;
       GlobalState().auth_service = auth_service;
+      GlobalState().audit_log_service = audit_log_service;
       GlobalState().user_management_service = user_management_service;
       GlobalState().security_worker = security_worker;
       GlobalState().runtime_settings_worker = runtime_settings_worker;
@@ -4758,6 +5053,7 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
     std::scoped_lock lock(StateMutex());
     GlobalState().args = {};
     GlobalState().auth_service.reset();
+    GlobalState().audit_log_service.reset();
     GlobalState().user_management_service.reset();
     GlobalState().security_worker.reset();
     GlobalState().runtime_settings_worker.reset();

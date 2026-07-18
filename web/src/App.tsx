@@ -13,6 +13,10 @@ import { DashboardPage, type OperationalView } from './pages/DashboardPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { UsersPage } from './pages/UsersPage';
 import { useOperationalData } from './hooks/useOperationalData';
+import {
+  useAuditStatus,
+  type AuditStatusController,
+} from './features/audit/useAuditStatus';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
 import { useUserManagement } from './features/users/useUserManagement';
 
@@ -158,7 +162,13 @@ const operationalViews: Record<string, OperationalView> = {
   '/system': 'system',
 };
 
-function AdministratorOperationalShell({ client }: { client: CameraApiClient }) {
+function AdministratorOperationalShell({
+  auditStatus,
+  client,
+}: {
+  auditStatus: AuditStatusController;
+  client: CameraApiClient;
+}) {
   const auth = useAuth();
   const location = useLocation();
   const controller = useOperationalData(client);
@@ -167,17 +177,23 @@ function AdministratorOperationalShell({ client }: { client: CameraApiClient }) 
   return (
     <AppShell principal={auth.principal!} logout={auth.logout} changePassword={auth.changePassword}
       runtimeSettings={runtimeSettings}
+      auditStatus={auditStatus}
       onRefresh={() => {
         void controller.refresh().catch(() => undefined);
         void runtimeSettings.refresh().catch(() => undefined);
+        void auditStatus.refresh().catch(() => undefined);
       }}>
       <DashboardPage client={client} controller={controller}
-        runtimeSettings={runtimeSettings} view={view} />
+        runtimeSettings={runtimeSettings} auditStatus={auditStatus}
+        auditFragment={location.hash} view={view} />
     </AppShell>
   );
 }
 
-function AdministratorUsersShell({ client }: { client: CameraApiClient }) {
+function AdministratorUsersShell({ auditStatus, client }: {
+  auditStatus: AuditStatusController;
+  client: CameraApiClient;
+}) {
   const auth = useAuth();
   const controller = useUserManagement(client);
   return (
@@ -185,11 +201,23 @@ function AdministratorUsersShell({ client }: { client: CameraApiClient }) {
       principal={auth.principal!}
       logout={auth.logout}
       changePassword={auth.changePassword}
-      onRefresh={() => void controller.refreshAll().catch(() => undefined)}
+      auditStatus={auditStatus}
+      onRefresh={() => {
+        void controller.refreshAll().catch(() => undefined);
+        void auditStatus.refresh().catch(() => undefined);
+      }}
     >
       <UsersPage controller={controller} />
     </AppShell>
   );
+}
+
+function AdministratorDefaultApplication({ client }: { client: CameraApiClient }) {
+  const location = useLocation();
+  const auditStatus = useAuditStatus(client);
+  return location.pathname === '/users'
+    ? <AdministratorUsersShell client={client} auditStatus={auditStatus} />
+    : <AdministratorOperationalShell client={client} auditStatus={auditStatus} />;
 }
 
 function AdministratorApplication({ child, client }: {
@@ -207,9 +235,7 @@ function AdministratorApplication({ child, client }: {
   }, [location.pathname, navigate]);
 
   if (child === undefined) {
-    return location.pathname === '/users'
-      ? <AdministratorUsersShell client={client} />
-      : <AdministratorOperationalShell client={client} />;
+    return <AdministratorDefaultApplication client={client} />;
   }
   return (
     <AppShell principal={auth.principal!} logout={auth.logout}

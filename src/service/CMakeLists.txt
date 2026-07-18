@@ -1,4 +1,5 @@
 set(CAMERA_FIRMWARE_SERVICE_SOURCES
+    AuditLogHttp.cpp
     BoundedWorker.cpp
     RuntimeSettingsHttp.cpp
     SecurityRequestGate.cpp

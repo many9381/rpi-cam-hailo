@@ -19,6 +19,8 @@ import { useLocation } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
 import type { AuthContextValue } from '../auth/AuthContext';
+import { AuditCapacityNotice } from '../features/audit/AuditCapacityNotice';
+import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
@@ -30,6 +32,7 @@ interface AppShellProps {
   children: ReactNode;
   onRefresh?: () => void;
   runtimeSettings?: RuntimeSettingsController;
+  auditStatus?: AuditStatusController;
 }
 
 const navigation = [
@@ -125,6 +128,7 @@ export function AppShell({
   children,
   onRefresh = () => undefined,
   runtimeSettings,
+  auditStatus,
 }: AppShellProps) {
   const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -207,6 +211,7 @@ export function AppShell({
       </header>
 
       <main className="shell-content">
+        <AuditCapacityNotice controller={auditStatus} />
         <RuntimeSettingsNotice controller={runtimeSettings} />
         {children}
       </main>

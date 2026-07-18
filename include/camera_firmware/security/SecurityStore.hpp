@@ -19,14 +19,18 @@ namespace camera_firmware::security {
 
 class BootstrapService;
 class AuthService;
+class AuditLogService;
+class AuditLogServiceTestAccess;
 class UserManagementService;
 
-inline constexpr int kSecuritySchemaRevision = 3;
+inline constexpr int kSecuritySchemaRevision = 4;
 
 enum class DeviceState { kDefault, kOperational };
 
 struct SecurityStoreConfig {
   std::filesystem::path state_directory;
+  std::uint64_t max_audit_events{50000U};
+  std::uint32_t audit_warning_percent{90U};
 };
 
 struct BootstrapRecord {
@@ -128,6 +132,8 @@ class SecurityStore {
  private:
   friend class BootstrapService;
   friend class AuthService;
+  friend class AuditLogService;
+  friend class AuditLogServiceTestAccess;
   friend class UserManagementService;
 
   struct AuthenticationUser {
@@ -166,11 +172,74 @@ class SecurityStore {
     std::string peer_ip;
   };
 
+  struct AuditStatusSnapshot {
+    std::uint64_t current_events{0U};
+    std::uint64_t max_events{0U};
+    std::uint32_t usage_percent{0U};
+    bool warning{false};
+    std::uint64_t rotated_event_count{0U};
+    std::optional<std::int64_t> last_rotation_at_seconds;
+    std::optional<std::int64_t> last_rotated_sequence;
+  };
+
+  enum class AuditEventSortField {
+    kTimestamp,
+    kEventType,
+    kOutcome,
+    kActor,
+    kPeerIp,
+    kSubject
+  };
+
+  enum class AuditEventSortDirection { kAscending, kDescending };
+
+  struct AuditEventCursor {
+    std::int64_t sequence{0};
+    std::optional<std::int64_t> integer_key;
+    std::optional<std::string> text_key;
+  };
+
+  struct AuditEventQuery {
+    std::optional<std::int64_t> from_seconds;
+    std::optional<std::int64_t> to_seconds;
+    std::optional<std::string> event_type;
+    std::optional<std::string> outcome;
+    std::optional<std::string> actor_identity;
+    std::optional<std::string> peer_ip;
+    std::optional<std::string> subject_type;
+    std::optional<std::string> subject_identity;
+    AuditEventSortField sort_field{AuditEventSortField::kTimestamp};
+    AuditEventSortDirection sort_direction{
+        AuditEventSortDirection::kDescending};
+    std::uint32_t limit{50U};
+    std::optional<AuditEventCursor> cursor;
+  };
+
+  struct AuditEventRecord {
+    std::int64_t sequence{0};
+    std::int64_t server_timestamp_seconds{0};
+    std::string event_type;
+    std::string outcome;
+    std::string actor_identity;
+    std::string peer_ip;
+    std::string detail_code;
+    std::string subject_type;
+    std::string subject_identity;
+  };
+
+  struct AuditEventQueryResult {
+    std::vector<AuditEventRecord> events;
+    bool has_more{false};
+  };
+
   explicit SecurityStore(std::shared_ptr<Impl> impl) noexcept;
   common::Result<void> InitializeSchema();
-  common::Result<void> MigrateRevisionTwoToThree();
+  common::Result<void> MigrateToRevisionFour(int source_revision);
   common::Result<void> RollbackSchemaTransaction();
   common::Result<Transaction> BeginReadTransaction() const;
+  common::Result<AuditStatusSnapshot> ReadAuditStatus() const;
+  common::Result<AuditEventQueryResult> ReadAuditEvents(
+      const AuditEventQuery& query) const;
   common::Result<DeviceState> StateUnderConnectionLease() const;
   common::Result<AuthenticationContext> ReadAuthenticationContext(
       Transaction& transaction,

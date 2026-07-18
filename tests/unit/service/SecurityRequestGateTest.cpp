@@ -278,6 +278,60 @@ TEST(SecurityRequestGateTest, RuntimeSettingsRouteMethodsAreExact) {
   }
 }
 
+TEST(SecurityRequestGateTest, AuditReadsRequireAdministratorWithoutCsrf) {
+  for (const std::string path : {"/api/v1/audit/status",
+                                 "/api/v1/audit/events"}) {
+    auto unauthenticated = Operational(path);
+    const auto missing = AuthorizeSecurityRequest(unauthenticated);
+    ASSERT_FALSE(missing.ok()) << path;
+    EXPECT_EQ(missing.error().code, "E_AUTHENTICATION_REQUIRED") << path;
+
+    auto administrator = Operational(path);
+    administrator.principal = Administrator();
+    EXPECT_TRUE(AuthorizeSecurityRequest(administrator).ok()) << path;
+
+    auto viewer = Operational(path);
+    viewer.principal = Viewer();
+    const auto denied = AuthorizeSecurityRequest(viewer);
+    ASSERT_FALSE(denied.ok()) << path;
+    EXPECT_EQ(denied.error().code, "E_AUTHORIZATION_REQUIRED") << path;
+  }
+}
+
+TEST(SecurityRequestGateTest, AuditRoutesRecognizeOnlyExactGetPaths) {
+  struct Route {
+    const char* method;
+    const char* path;
+  };
+  constexpr std::array<Route, 8> kUnknownRoutes = {{
+      {"POST", "/api/v1/audit/status"},
+      {"PUT", "/api/v1/audit/status"},
+      {"DELETE", "/api/v1/audit/events"},
+      {"PATCH", "/api/v1/audit/events"},
+      {"GET", "/api/v1/audit/status/"},
+      {"GET", "/api/v1/audit/status/extra"},
+      {"GET", "/api/v1/audit/events/"},
+      {"GET", "/api/v1/audit/events/extra"},
+  }};
+
+  for (const auto& route : kUnknownRoutes) {
+    const auto denied = AuthorizeSecurityRequest(
+        ValidManagementRequest(route.path, route.method));
+    ASSERT_FALSE(denied.ok()) << route.method << ' ' << route.path;
+    EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED")
+        << route.method << ' ' << route.path;
+  }
+}
+
+TEST(SecurityRequestGateTest, DefaultStateCannotAccessAuditReads) {
+  for (const std::string path : {"/api/v1/audit/status",
+                                 "/api/v1/audit/events"}) {
+    const auto denied = AuthorizeSecurityRequest(Request(path));
+    ASSERT_FALSE(denied.ok()) << path;
+    EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED") << path;
+  }
+}
+
 TEST(SecurityRequestGateTest, DefaultStateCannotAccessRuntimeSettings) {
   for (const auto& [path, method] :
        std::vector<std::pair<std::string, std::string>>{

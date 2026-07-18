@@ -7,6 +7,8 @@ import { CameraPreview } from '../components/CameraPreview';
 import { StatusPanel } from '../components/StatusPanel';
 import { StreamPanel } from '../components/StreamPanel';
 import type { CameraApiClient, DetectionSnapshot } from '../api/types';
+import { AuditRecordsPanel } from '../features/audit/AuditRecordsPanel';
+import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
 import { CameraSettingsPanel } from '../features/settings/CameraSettingsPanel';
 import { SettingsActionBar } from '../features/settings/SettingsActionBar';
@@ -18,6 +20,8 @@ interface DashboardPageProps {
   client: CameraApiClient;
   controller: OperationalController;
   runtimeSettings?: RuntimeSettingsController;
+  auditStatus?: AuditStatusController;
+  auditFragment?: string;
   view?: OperationalView;
 }
 
@@ -46,12 +50,17 @@ export function DashboardPage({
   client,
   controller,
   runtimeSettings,
+  auditStatus,
+  auditFragment,
   view = 'dashboard',
 }: DashboardPageProps) {
   const refresh = () => {
     void controller.refresh().catch(() => undefined);
     if (runtimeSettings !== undefined) {
       void runtimeSettings.refresh().catch(() => undefined);
+    }
+    if (auditStatus !== undefined) {
+      void auditStatus.refresh().catch(() => undefined);
     }
   };
   const initialDetections: DetectionSnapshot = controller.data?.detections ?? { events: [] };
@@ -89,19 +98,20 @@ export function DashboardPage({
     await controller.refresh();
   }, [client, controller]);
 
-  if (controller.data === null) {
+  const heading = viewHeadings[view];
+  const operationalState = controller.state === 'loading'
+    ? <p>Loading operational data...</p>
+    : <><p role="alert">Operational data is unavailable.</p>
+      <button type="button" onClick={refresh}>Retry</button></>;
+  if (controller.data === null && view !== 'system') {
     return (
       <section className="dashboard-page dashboard-state">
-        {controller.state === 'loading'
-          ? <p>Loading operational data...</p>
-          : <><p role="alert">Operational data is unavailable.</p>
-            <button type="button" onClick={refresh}>Retry</button></>}
+        {operationalState}
       </section>
     );
   }
 
-  const { data } = controller;
-  const heading = viewHeadings[view];
+  const data = controller.data;
   const showPreview = view === 'dashboard' || view === 'cameras' || view === 'ai';
   const showStatus = view === 'dashboard' || view === 'cameras' || view === 'system';
   const showStream = view === 'dashboard' || view === 'system';
@@ -123,30 +133,37 @@ export function DashboardPage({
       {controller.state === 'stale' && (
         <p className="stale-notice" role="status">Showing the last available status.</p>
       )}
-      {showPreview && (
+      {data === null && (
+        <section className="dashboard-state">{operationalState}</section>
+      )}
+      {data !== null && showPreview && (
         <CameraPreview cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
           onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot} />
       )}
-      {showStatus && (
+      {data !== null && showStatus && (
         <StatusPanel health={data.health} cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
           onSelectCamera={controller.selectCamera}
           onRestartRuntime={restartRuntime} />
       )}
-      {showStream && <StreamPanel stream={data.stream} />}
-      {showAi && (
+      {data !== null && showStream && <StreamPanel stream={data.stream} />}
+      {data !== null && showAi && (
         <AiPanel ai={data.ai} detections={detectionStream.snapshot}
           streamStatus={detectionStream.status} onRestart={restartAi} />
       )}
-      {view === 'cameras' && runtimeSettings !== undefined && (
+      {view === 'system' && (
+        <AuditRecordsPanel client={client} auditStatus={auditStatus}
+          routeFragment={auditFragment} />
+      )}
+      {data !== null && view === 'cameras' && runtimeSettings !== undefined && (
         <>
           <CameraSettingsPanel controller={runtimeSettings} />
           <SettingsActionBar controller={runtimeSettings}
             onApplySettled={() => void controller.refresh().catch(() => undefined)} />
         </>
       )}
-      {view === 'ai' && runtimeSettings !== undefined && (
+      {data !== null && view === 'ai' && runtimeSettings !== undefined && (
         <>
           <AiSettingsPanel controller={runtimeSettings} />
           <SettingsActionBar controller={runtimeSettings}

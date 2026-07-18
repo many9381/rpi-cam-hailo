@@ -3,12 +3,22 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient } from '../api/types';
+import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import type { OperationalController } from '../hooks/useOperationalData';
 import {
   makeSettingsController,
   makeSettingsSnapshot,
 } from '../features/settings/testSupport';
 import { DashboardPage } from './DashboardPage';
+
+vi.mock('../features/audit/AuditRecordsPanel', () => ({
+  AuditRecordsPanel: ({ auditStatus }: { auditStatus?: AuditStatusController }) => (
+    <section data-testid="audit-records-panel"
+      data-has-status={auditStatus === undefined ? 'false' : 'true'}>
+      <h2>Audit records</h2>
+    </section>
+  ),
+}));
 
 let client: CameraApiClient;
 
@@ -66,6 +76,20 @@ const controller: OperationalController = {
   },
 };
 
+const auditStatus: AuditStatusController = {
+  state: 'ready',
+  data: {
+    current_events: 1,
+    max_events: 100,
+    usage_percent: 1,
+    warning: false,
+    rotated_event_count: 0,
+    last_rotation_at_seconds: null,
+    last_rotated_sequence: null,
+  },
+  refresh: vi.fn(async () => undefined),
+};
+
 beforeEach(() => {
   client = makeClient();
   FakeEventSource.instances = [];
@@ -83,7 +107,7 @@ describe('DashboardPage', () => {
       ['Stream connection', 'Hailo AI runtime']],
     ['ai', 'AI inference', ['Camera preview', 'Hailo AI runtime'],
       ['System and cameras', 'Stream connection']],
-    ['system', 'System', ['System and cameras', 'Stream connection'],
+    ['system', 'System', ['System and cameras', 'Stream connection', 'Audit records'],
       ['Camera preview', 'Hailo AI runtime']],
   ] as const)(
     'renders the distinct %s management surface',
@@ -97,6 +121,48 @@ describe('DashboardPage', () => {
       for (const section of hiddenSections) {
         expect(screen.queryByRole('heading', { name: section })).not.toBeInTheDocument();
       }
+    },
+  );
+
+  it('mounts the audit panel with status only for the System view', () => {
+    const view = render(<DashboardPage client={client} controller={controller}
+      auditStatus={auditStatus} view="dashboard" />);
+    expect(screen.queryByTestId('audit-records-panel')).not.toBeInTheDocument();
+
+    view.rerender(<DashboardPage client={client} controller={controller}
+      auditStatus={auditStatus} view="cameras" />);
+    expect(screen.queryByTestId('audit-records-panel')).not.toBeInTheDocument();
+
+    view.rerender(<DashboardPage client={client} controller={controller}
+      auditStatus={auditStatus} view="ai" />);
+    expect(screen.queryByTestId('audit-records-panel')).not.toBeInTheDocument();
+
+    view.rerender(<DashboardPage client={client} controller={controller}
+      auditStatus={auditStatus} view="system" />);
+    expect(screen.getByTestId('audit-records-panel')).toHaveAttribute(
+      'data-has-status',
+      'true',
+    );
+  });
+
+  it.each([
+    ['loading', 'Loading operational data...'],
+    ['error', 'Operational data is unavailable.'],
+  ] as const)(
+    'keeps healthy System audit records available while operational data is %s',
+    (state, operationalMessage) => {
+      render(<DashboardPage client={client} controller={{
+        ...controller,
+        state,
+        data: null,
+      }} auditStatus={auditStatus} view="system" />);
+
+      expect(screen.getByText(operationalMessage)).toBeVisible();
+      expect(screen.getByTestId('audit-records-panel')).toHaveAttribute(
+        'data-has-status',
+        'true',
+      );
+      expect(screen.getByRole('heading', { name: 'Audit records' })).toBeVisible();
     },
   );
 
@@ -114,6 +180,20 @@ describe('DashboardPage', () => {
       .not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /refresh operational data/i }));
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes the supplied audit status from the page refresh action', async () => {
+    const user = userEvent.setup();
+    const refreshAuditStatus = vi.fn(async () => undefined);
+    render(<DashboardPage client={client} controller={{
+      ...controller,
+      refresh: vi.fn(async () => undefined),
+    }}
+      auditStatus={{ ...auditStatus, refresh: refreshAuditStatus }} />);
+
+    await user.click(screen.getByRole('button', { name: /refresh operational data/i }));
+
+    expect(refreshAuditStatus).toHaveBeenCalledOnce();
   });
 
   it('renders loading and unavailable states', () => {

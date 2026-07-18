@@ -1,10 +1,16 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 
+#include "AuditLogServiceTestAccess.hpp"
+
+#include "camera_firmware/security/AuthService.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
 #include "camera_firmware/security/SecurityTypes.hpp"
+#include "camera_firmware/security/UserManagementService.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <barrier>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -13,11 +19,14 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <poll.h>
+#include <signal.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -45,11 +54,20 @@ extern "C" int __real_sqlite3_exec(sqlite3* database,
 namespace {
 
 using camera_firmware::security::DeviceState;
+using camera_firmware::security::AuthService;
+using camera_firmware::security::AuditLogServiceTestAccess;
 using camera_firmware::security::BootstrapRecord;
+using camera_firmware::security::LoginRequest;
 using camera_firmware::security::PasswordRecord;
 using camera_firmware::security::SecurityStore;
 using camera_firmware::security::SecurityStoreConfig;
+using camera_firmware::security::SecurityMutationContext;
 using camera_firmware::security::SessionIdentity;
+using camera_firmware::security::StoredManagedUser;
+using camera_firmware::security::UserManagementDependencies;
+using camera_firmware::security::UserManagementService;
+using camera_firmware::security::UserMutationContext;
+using camera_firmware::security::UserRole;
 using camera_firmware::security::kSessionIdentityBytes;
 
 static_assert(!std::is_trivially_destructible_v<SessionIdentity>);
@@ -117,8 +135,10 @@ int fail_sqlite_exec_exact_after_matches{0};
 enum class MigrationExecPhase {
   kInactive,
   kRevisionTwoValidation,
-  kMigrationStatements,
+  kRevisionThreeMigration,
   kRevisionThreeValidation,
+  kRevisionFourMigration,
+  kRevisionFourValidation,
   kReadyToCommit,
   kComplete,
 };
@@ -134,6 +154,36 @@ int vfs_sync_calls{0};
 int vfs_sync_failures{0};
 bool vfs_sync_failed_during_migration_commit{false};
 int delegated_open_failure_close_calls{0};
+
+class SqliteTransactionBoundaryGate {
+ public:
+  SqliteTransactionBoundaryGate(std::ptrdiff_t writers,
+                                int boundary_descriptor)
+      : writers_(writers), boundary_descriptor_(boundary_descriptor) {}
+
+  void ArriveAndWait() noexcept {
+    const int arrival = arrivals_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (arrival == 1) {
+      constexpr char kBoundaryReached = 'B';
+      ssize_t written = 0;
+      do {
+        written = ::write(boundary_descriptor_, &kBoundaryReached, 1);
+      } while (written < 0 && errno == EINTR);
+    }
+    writers_.arrive_and_wait();
+  }
+
+  [[nodiscard]] int arrivals() const noexcept {
+    return arrivals_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::barrier<> writers_;
+  int boundary_descriptor_{-1};
+  std::atomic<int> arrivals_{0};
+};
+
+SqliteTransactionBoundaryGate* transaction_boundary_gate{nullptr};
 
 void ResetSqliteHooks() {
   spoofed_owner_path.reset();
@@ -158,6 +208,7 @@ void ResetSqliteHooks() {
   vfs_sync_failures = 0;
   vfs_sync_failed_during_migration_commit = false;
   delegated_open_failure_close_calls = 0;
+  transaction_boundary_gate = nullptr;
 }
 
 class TemporaryDirectory {
@@ -251,6 +302,13 @@ camera_firmware::common::SecureBytes FilledBytes(std::size_t size,
   camera_firmware::common::SecureBytes bytes;
   bytes.resize(size);
   std::fill_n(bytes.data(), size, value);
+  return bytes;
+}
+
+camera_firmware::common::SecureBytes Secret(std::string_view value) {
+  camera_firmware::common::SecureBytes bytes;
+  bytes.assign(reinterpret_cast<const unsigned char*>(value.data()),
+               value.size());
   return bytes;
 }
 
@@ -604,6 +662,144 @@ SELECT 'firmware_log_outbox|' || id || '|' || category || '|' || peer_ip ||
 FROM firmware_log_outbox
 ORDER BY 1;
 )sql");
+  }
+
+ private:
+  TemporaryDirectory root_;
+};
+
+constexpr const char* kRevisionTwoToThreeFixtureMigration = R"sql(
+BEGIN IMMEDIATE;
+ALTER TABLE schema_version RENAME TO schema_version_revision_two;
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 3)
+);
+INSERT INTO schema_version (version) VALUES (3);
+DROP TABLE schema_version_revision_two;
+ALTER TABLE device_state RENAME TO device_state_revision_two;
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);
+INSERT INTO device_state
+  (id, state, schema_revision, setup_completed_at_seconds)
+SELECT id, state, 3, setup_completed_at_seconds
+FROM device_state_revision_two;
+DROP TABLE device_state_revision_two;
+ALTER TABLE management_ips RENAME TO management_ips_revision_two;
+CREATE TABLE management_ips (
+  id INTEGER PRIMARY KEY,
+  normalized_ip TEXT NOT NULL CHECK (length(normalized_ip) BETWEEN 2 AND 45),
+  role_scope TEXT NOT NULL
+    CHECK (role_scope IN ('administrator', 'viewer')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
+);
+INSERT INTO management_ips
+  (id, normalized_ip, role_scope, enabled, created_at_seconds)
+SELECT id, normalized_ip, role_scope, enabled, created_at_seconds
+FROM management_ips_revision_two;
+DROP TABLE management_ips_revision_two;
+CREATE UNIQUE INDEX management_ips_role_ip_unique
+  ON management_ips(role_scope, normalized_ip);
+CREATE TABLE password_history (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  password_algorithm TEXT NOT NULL
+    CHECK (password_algorithm = 'pbkdf2-hmac-sha256'),
+  password_iterations INTEGER NOT NULL
+    CHECK (password_iterations BETWEEN 1000 AND 2000000),
+  password_salt BLOB NOT NULL CHECK (length(password_salt) = 16),
+  password_derived BLOB NOT NULL CHECK (length(password_derived) = 32),
+  replaced_at_seconds INTEGER NOT NULL CHECK (replaced_at_seconds >= 0)
+);
+CREATE UNIQUE INDEX password_history_user_id_unique
+  ON password_history(user_id);
+CREATE UNIQUE INDEX sessions_user_id_unique ON sessions(user_id);
+ALTER TABLE audit_events RENAME TO audit_events_revision_two;
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+);
+INSERT INTO audit_events
+  (sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code, subject_type, subject_identity)
+SELECT sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+       peer_ip, detail_code, '', ''
+FROM audit_events_revision_two;
+DROP TABLE audit_events_revision_two;
+CREATE INDEX audit_events_timestamp_index
+  ON audit_events(server_timestamp_seconds);
+UPDATE users
+SET canonical_username = 'cameraowner', display_username = 'CameraOwner'
+WHERE id = 11;
+INSERT INTO audit_events
+  (sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code, subject_type, subject_identity)
+VALUES (73, 1720000025, 'viewer_disabled', 'failure', NULL,
+        '198.51.100.11', 'legacy_deleted_actor', 'user', 'viewer.one');
+COMMIT;
+)sql";
+
+class RevisionThreeOperationalFixture {
+ public:
+  RevisionThreeOperationalFixture() {
+    MakeDirectory(state_directory());
+    CreateDatabaseWithSql(database_path(), kRevisionTwoOperationalSchema);
+    ExecuteDatabaseSql(database_path(), kRevisionTwoToThreeFixtureMigration);
+  }
+
+  [[nodiscard]] std::filesystem::path state_directory() const {
+    return root_.Path("security");
+  }
+
+  [[nodiscard]] std::filesystem::path database_path() const {
+    return state_directory() / "security.db";
+  }
+
+ private:
+  TemporaryDirectory root_;
+};
+
+class RevisionThreeOrphanedAuditActorFixture {
+ public:
+  RevisionThreeOrphanedAuditActorFixture() {
+    MakeDirectory(state_directory());
+    CreateDatabaseWithSql(database_path(), kRevisionTwoOperationalSchema);
+    ExecuteDatabaseSql(database_path(), kRevisionTwoToThreeFixtureMigration);
+    ExecuteDatabaseSql(database_path(), R"sql(
+PRAGMA foreign_keys=OFF;
+INSERT INTO audit_events
+  (sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+   peer_ip, detail_code, subject_type, subject_identity)
+VALUES (74, 1720000030, 'viewer_deleted', 'failure', 999,
+        '203.0.113.7', 'legacy_orphan_actor', 'user', 'retired.viewer');
+)sql");
+  }
+
+  [[nodiscard]] std::filesystem::path state_directory() const {
+    return root_.Path("security");
+  }
+
+  [[nodiscard]] std::filesystem::path database_path() const {
+    return state_directory() / "security.db";
   }
 
  private:
@@ -990,13 +1186,13 @@ bool ObserveMigrationExec(std::string_view sql) {
   }
   if (migration_exec_phase == MigrationExecPhase::kRevisionTwoValidation) {
     if (sql == "RELEASE schema_validation;") {
-      migration_exec_phase = MigrationExecPhase::kMigrationStatements;
+      migration_exec_phase = MigrationExecPhase::kRevisionThreeMigration;
     } else if (sql == "ROLLBACK;") {
       migration_exec_phase = MigrationExecPhase::kInactive;
     }
     return false;
   }
-  if (migration_exec_phase == MigrationExecPhase::kMigrationStatements) {
+  if (migration_exec_phase == MigrationExecPhase::kRevisionThreeMigration) {
     if (sql == "SAVEPOINT schema_validation;") {
       migration_exec_phase = MigrationExecPhase::kRevisionThreeValidation;
       return false;
@@ -1008,6 +1204,25 @@ bool ObserveMigrationExec(std::string_view sql) {
     return capture_statement();
   }
   if (migration_exec_phase == MigrationExecPhase::kRevisionThreeValidation) {
+    if (sql == "RELEASE schema_validation;") {
+      migration_exec_phase = MigrationExecPhase::kRevisionFourMigration;
+    } else if (sql == "ROLLBACK;") {
+      migration_exec_phase = MigrationExecPhase::kInactive;
+    }
+    return false;
+  }
+  if (migration_exec_phase == MigrationExecPhase::kRevisionFourMigration) {
+    if (sql == "SAVEPOINT schema_validation;") {
+      migration_exec_phase = MigrationExecPhase::kRevisionFourValidation;
+      return false;
+    }
+    if (sql == "ROLLBACK;") {
+      migration_exec_phase = MigrationExecPhase::kInactive;
+      return false;
+    }
+    return capture_statement();
+  }
+  if (migration_exec_phase == MigrationExecPhase::kRevisionFourValidation) {
     if (sql == "RELEASE schema_validation;") {
       migration_exec_phase = MigrationExecPhase::kReadyToCommit;
     } else if (sql == "ROLLBACK;") {
@@ -1110,6 +1325,277 @@ void ExpectOperationalReopenRejectsDataMutation(const char* mutation) {
   EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
 }
 
+enum class AuditRetentionFailurePoint {
+  kDatabaseTrigger,
+  kActorSnapshotLookup,
+  kCallerCommit,
+};
+
+enum class BoundedSubprocessOutcome {
+  kExited,
+  kTimedOutBeforeBoundary,
+  kTimedOutAfterBoundary,
+};
+
+struct BoundedSubprocessResult {
+  BoundedSubprocessOutcome outcome{BoundedSubprocessOutcome::kExited};
+  pid_t child{-1};
+  int status{0};
+  bool boundary_observed{false};
+};
+
+BoundedSubprocessResult RunBoundedSubprocessAtBoundary(
+    const std::function<void(int)>& scenario,
+    std::chrono::milliseconds setup_timeout,
+    std::chrono::milliseconds completion_timeout) {
+  int boundary_pipe[2] = {-1, -1};
+  if (::pipe(boundary_pipe) != 0) {
+    throw std::system_error(errno, std::generic_category(), "pipe");
+  }
+
+  const pid_t child = ::fork();
+  if (child < 0) {
+    const int error = errno;
+    (void)::close(boundary_pipe[0]);
+    (void)::close(boundary_pipe[1]);
+    throw std::system_error(error, std::generic_category(), "fork");
+  }
+  if (child == 0) {
+    (void)::close(boundary_pipe[0]);
+    try {
+      scenario(boundary_pipe[1]);
+    } catch (...) {
+      (void)::close(boundary_pipe[1]);
+      ::_exit(2);
+    }
+    (void)::close(boundary_pipe[1]);
+    ::_exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  (void)::close(boundary_pipe[1]);
+  bool boundary_observed = false;
+  auto deadline = std::chrono::steady_clock::now() + setup_timeout;
+  for (;;) {
+    int status = 0;
+    const pid_t waited = ::waitpid(child, &status, WNOHANG);
+    if (waited == child) {
+      if (!boundary_observed) {
+        char marker = 0;
+        ssize_t bytes_read = 0;
+        do {
+          bytes_read = ::read(boundary_pipe[0], &marker, 1);
+        } while (bytes_read < 0 && errno == EINTR);
+        boundary_observed = bytes_read == 1;
+      }
+      (void)::close(boundary_pipe[0]);
+      return {BoundedSubprocessOutcome::kExited, child, status,
+              boundary_observed};
+    }
+    if (waited < 0 && errno != EINTR) {
+      const int error = errno;
+      (void)::close(boundary_pipe[0]);
+      throw std::system_error(error, std::generic_category(), "waitpid");
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      (void)::kill(child, SIGKILL);
+      while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
+      }
+      (void)::close(boundary_pipe[0]);
+      return {boundary_observed
+                  ? BoundedSubprocessOutcome::kTimedOutAfterBoundary
+                  : BoundedSubprocessOutcome::kTimedOutBeforeBoundary,
+              child, status, boundary_observed};
+    }
+
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    const int poll_timeout = static_cast<int>(
+        std::clamp(remaining.count(), std::int64_t{1}, std::int64_t{10}));
+    pollfd descriptor{boundary_pipe[0], POLLIN, 0};
+    const int polled = ::poll(&descriptor, 1, poll_timeout);
+    if (polled < 0 && errno != EINTR) {
+      const int error = errno;
+      (void)::kill(child, SIGKILL);
+      while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+      }
+      (void)::close(boundary_pipe[0]);
+      throw std::system_error(error, std::generic_category(), "poll");
+    }
+    if (!boundary_observed && polled > 0 &&
+        (descriptor.revents & POLLIN) != 0) {
+      char marker = 0;
+      ssize_t bytes_read = 0;
+      do {
+        bytes_read = ::read(boundary_pipe[0], &marker, 1);
+      } while (bytes_read < 0 && errno == EINTR);
+      if (bytes_read == 1) {
+        boundary_observed = true;
+        deadline = std::chrono::steady_clock::now() + completion_timeout;
+      }
+    }
+  }
+}
+
+void ExpectAuditRetentionFailureRollsBackViewerCreation(
+    const char* retention_trigger,
+    AuditRetentionFailurePoint failure_point =
+        AuditRetentionFailurePoint::kDatabaseTrigger) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state, 5U, 80U});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+  ExecuteDatabaseSql(store.value()->database_path(), R"sql(
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   actor_identity, peer_ip, detail_code)
+VALUES
+  (1720000001, 'seed_one', 'success', NULL, 'system', '192.0.2.1', ''),
+  (1720000002, 'seed_two', 'success', NULL, 'system', '192.0.2.2', ''),
+  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', ''),
+  (1720000004, 'seed_four', 'success', NULL, 'system', '192.0.2.4', '');
+)sql");
+  if (retention_trigger[0] != '\0') {
+    ExecuteDatabaseSql(store.value()->database_path(), retention_trigger);
+  }
+
+  std::int64_t administrator_id = QueryDatabaseInt(
+      store.value()->database_path(),
+      "SELECT id FROM users WHERE role = 'administrator';");
+  if (failure_point == AuditRetentionFailurePoint::kActorSnapshotLookup) {
+    administrator_id = QueryDatabaseInt(
+        store.value()->database_path(),
+        "SELECT COALESCE(MAX(id), 0) + 2 FROM users;");
+  }
+  UserManagementDependencies dependencies;
+  dependencies.now_seconds = [] { return 1720000100; };
+  dependencies.random_bytes = [](std::size_t size) {
+    return camera_firmware::common::Result<
+        camera_firmware::common::SecureBytes>::Ok(FilledBytes(size, 0x5aU));
+  };
+  UserManagementService service(*store.value(), {}, std::move(dependencies));
+  UserMutationContext administrator{
+      {administrator_id, "operator.one", UserRole::kAdministrator, {}},
+      "2001:db8::10"};
+
+  fail_commit = failure_point == AuditRetentionFailurePoint::kCallerCommit;
+  auto created = service.CreateViewer("Monitor.West", Secret("SouthMoon!8"),
+                                      administrator);
+  fail_commit = false;
+
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().code, "E_USER_MANAGEMENT_UNAVAILABLE");
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
+  EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
+                             "SELECT COUNT(*) FROM users;"),
+            1);
+  EXPECT_EQ(QueryDatabaseInt(
+                store.value()->database_path(),
+                "SELECT COUNT(*) FROM users WHERE canonical_username = "
+                "'monitor.west';"),
+            0);
+  EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
+                             "SELECT COUNT(*) FROM audit_events;"),
+            5);
+  EXPECT_EQ(QueryDatabaseTextRows(
+                store.value()->database_path(),
+                "SELECT sequence || '|' || event_type FROM audit_events "
+                "ORDER BY sequence;"),
+            (std::vector<std::string>{"1|bootstrap_completed", "2|seed_one",
+                                      "3|seed_two", "4|seed_three",
+                                      "5|seed_four"}));
+  EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
+                             "SELECT rotated_event_count FROM audit_state;"),
+            0);
+  EXPECT_EQ(QueryDatabaseInt(
+                store.value()->database_path(),
+                "SELECT last_rotation_at_seconds IS NULL AND "
+                "last_rotated_sequence IS NULL FROM audit_state;"),
+            1);
+  EXPECT_EQ(QueryDatabaseInt(
+                store.value()->database_path(),
+                "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                "'viewer_created';"),
+            0);
+}
+
+PasswordRecord MakePrecomputedPasswordRecord(unsigned char salt_byte,
+                                             unsigned char derived_byte) {
+  PasswordRecord password;
+  password.salt =
+      FilledBytes(camera_firmware::security::kPasswordSaltBytes, salt_byte);
+  password.derived = FilledBytes(
+      camera_firmware::security::kPasswordDerivedBytes, derived_byte);
+  return password;
+}
+
+void RunAuditRetentionConcurrentStoreWriters(
+    const std::filesystem::path& state,
+    int boundary_descriptor) {
+  ResetSqliteHooks();
+  auto first_store = SecurityStore::Open({state, 5U, 80U});
+  ASSERT_TRUE(first_store.ok()) << first_store.error().message;
+  ASSERT_TRUE(first_store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+  ExecuteDatabaseSql(first_store.value()->database_path(), R"sql(
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   actor_identity, peer_ip, detail_code)
+VALUES
+  (1720000001, 'seed_one', 'success', NULL, 'system', '192.0.2.1', ''),
+  (1720000002, 'seed_two', 'success', NULL, 'system', '192.0.2.2', ''),
+  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', ''),
+  (1720000004, 'seed_four', 'success', NULL, 'system', '192.0.2.4', '');
+)sql");
+  auto second_store = SecurityStore::Open({state, 5U, 80U});
+  ASSERT_TRUE(second_store.ok()) << second_store.error().message;
+
+  const std::int64_t administrator_id = QueryDatabaseInt(
+      first_store.value()->database_path(),
+      "SELECT id FROM users WHERE role = 'administrator';");
+  const SecurityMutationContext administrator{
+      administrator_id, "operator.one", UserRole::kAdministrator,
+      "2001:db8::10"};
+  auto first_password = MakePrecomputedPasswordRecord(0x61U, 0x71U);
+  auto second_password = MakePrecomputedPasswordRecord(0x62U, 0x72U);
+  std::optional<camera_firmware::common::Result<StoredManagedUser>>
+      first_result;
+  std::optional<camera_firmware::common::Result<StoredManagedUser>>
+      second_result;
+  SqliteTransactionBoundaryGate gate(2, boundary_descriptor);
+  transaction_boundary_gate = &gate;
+  std::thread first([&] {
+    first_result.emplace(AuditLogServiceTestAccess::InsertViewer(
+        *first_store.value(), "monitor.east", "Monitor.East",
+        std::move(first_password), 1720000101, administrator));
+  });
+  std::thread second([&] {
+    second_result.emplace(AuditLogServiceTestAccess::InsertViewer(
+        *second_store.value(), "monitor.west", "Monitor.West",
+        std::move(second_password), 1720000102, administrator));
+  });
+
+  first.join();
+  second.join();
+  transaction_boundary_gate = nullptr;
+
+  ASSERT_EQ(gate.arrivals(), 2);
+  ASSERT_TRUE(first_result.has_value());
+  ASSERT_TRUE(second_result.has_value());
+  ASSERT_TRUE(first_result->ok()) << first_result->error().message;
+  ASSERT_TRUE(second_result->ok()) << second_result->error().message;
+}
+
 }  // namespace
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
@@ -1161,6 +1647,9 @@ extern "C" int __wrap_sqlite3_exec(
     void* context,
     char** error_message) {
   const std::string_view sql = statement == nullptr ? "" : statement;
+  if (sql == "BEGIN IMMEDIATE;" && transaction_boundary_gate != nullptr) {
+    transaction_boundary_gate->ArriveAndWait();
+  }
   if (sql == "ROLLBACK;") {
     ++rollback_calls;
   }
@@ -1485,7 +1974,7 @@ TEST(SecurityStoreTest, CommitFailureRetainsLeaseUntilRollback) {
   EXPECT_EQ(released_state.value(), DeviceState::kDefault);
 }
 
-TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
+TEST(SecurityStoreTest, CreatesExactRevisionFourSchemaAndConfiguresConnection) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -1497,7 +1986,8 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
                 "SELECT name FROM sqlite_schema "
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
                 "ORDER BY name;"),
-            std::vector<std::string>({"audit_events", "device_state",
+            std::vector<std::string>({"audit_events", "audit_state",
+                                      "device_state",
                                       "firmware_log_outbox",
                                       "management_ips", "password_history",
                                       "schema_version", "sessions", "users"}));
@@ -1564,9 +2054,18 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
             std::vector<std::string>({
                 "sequence:INTEGER:0:1", "server_timestamp_seconds:INTEGER:1:0",
                 "event_type:TEXT:1:0", "outcome:TEXT:1:0",
-                "actor_user_id:INTEGER:0:0", "peer_ip:TEXT:1:0",
+                "actor_user_id:INTEGER:0:0", "actor_identity:TEXT:1:0",
+                "peer_ip:TEXT:1:0",
                 "detail_code:TEXT:1:0", "subject_type:TEXT:1:0",
                 "subject_identity:TEXT:1:0"}));
+  EXPECT_EQ(QueryTextRows(
+                last_opened_database,
+                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+                "FROM pragma_table_info('audit_state') ORDER BY cid;"),
+            std::vector<std::string>({
+                "id:INTEGER:0:1", "rotated_event_count:INTEGER:1:0",
+                "last_rotation_at_seconds:INTEGER:0:0",
+                "last_rotated_sequence:INTEGER:0:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
@@ -1605,10 +2104,15 @@ TEST(SecurityStoreTest, CreatesExactSchemaAndConfiguresLiveConnection) {
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
             1);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT version FROM schema_version;"),
-            3);
+            4);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            3);
+            4);
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT id || '|' || rotated_event_count || '|' || "
+                      "COALESCE(last_rotation_at_seconds, -1) || '|' || "
+                      "COALESCE(last_rotated_sequence, -1) FROM audit_state;"),
+            "1|0|-1|-1");
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA foreign_keys;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA secure_delete;"), 1);
   EXPECT_EQ(QueryInt(last_opened_database, "PRAGMA busy_timeout;"), 1000);
@@ -1663,6 +2167,10 @@ TEST(SecurityStoreTest, BootstrapTransactionCommitsAllSecurityRows) {
                       "SELECT typeof(password_salt) || '|' || "
                       "typeof(password_derived) FROM users;"),
             "blob|blob");
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT actor_identity FROM audit_events WHERE "
+                      "event_type = 'bootstrap_completed';"),
+            "operator.one");
 }
 
 TEST(SecurityStoreTest, InstallerFailureRollsBackBootstrapRowsAndState) {
@@ -1754,7 +2262,45 @@ TEST(SecurityStoreTest, ReopensInitializedSchemaWithoutChangingState) {
             1);
 }
 
-TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionThree) {
+TEST(SecurityStoreTest,
+     ReopensOperationalSchemaAfterBootstrapAuditEvidenceRotates) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state, 1U, 80U});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_TRUE(store.value()
+                    ->InitializeDevice(MakeBootstrapRecord(), [] {
+                      return camera_firmware::common::Result<void>::Ok();
+                    })
+                    .ok());
+    AuthService auth(*store.value());
+
+    auto login = auth.Login(
+        LoginRequest{"missing.user", Secret("BadSecret!9"), "192.0.2.20"});
+
+    ASSERT_FALSE(login.ok());
+    EXPECT_EQ(QueryInt(last_opened_database,
+                       "SELECT COUNT(*) FROM audit_events;"),
+              1);
+    EXPECT_EQ(QueryInt(last_opened_database,
+                       "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                       "'bootstrap_completed' AND outcome = 'success';"),
+              0);
+    EXPECT_EQ(QueryTextRows(last_opened_database,
+                            "SELECT rotated_event_count || '|' || "
+                            "last_rotated_sequence FROM audit_state;"),
+              std::vector<std::string>({"1|1"}));
+  }
+
+  auto reopened = SecurityStore::Open({state, 1U, 80U});
+
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_EQ(reopened.value()->State().value(), DeviceState::kOperational);
+}
+
+TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFour) {
   ResetSqliteHooks();
   RevisionTwoOperationalFixture fixture;
   const auto before = fixture.evidence();
@@ -1765,11 +2311,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionThree) {
   opened.value().reset();
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT version FROM schema_version;"),
-            3);
+            4);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            3);
+            4);
   EXPECT_EQ(fixture.evidence(), before);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
@@ -1788,7 +2334,105 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionThree) {
                 "SELECT COUNT(*) FROM audit_events "
                 "WHERE subject_type = '' AND subject_identity = '';"),
             2);
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT actor_identity FROM audit_events ORDER BY sequence;"),
+            std::vector<std::string>({"operator.one", "viewer.one"}));
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFour) {
+  ResetSqliteHooks();
+  RevisionThreeOperationalFixture fixture;
+
+  auto opened = SecurityStore::Open({fixture.state_directory()});
+
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  opened.value().reset();
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT version FROM schema_version;"),
+            4);
+  EXPECT_EQ(QueryDatabaseInt(
+                fixture.database_path(),
+                "SELECT schema_revision FROM device_state WHERE id = 1;"),
+            4);
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+                "event_type || '|' || outcome || '|' || "
+                "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
+                "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
+                "subject_identity FROM audit_events ORDER BY sequence;"),
+            std::vector<std::string>({
+                "41|1720000000|bootstrap_completed|success|11|cameraowner|"
+                "2001:db8::10|initial_administrator||",
+                "42|1720000010|login_completed|success|12|viewer.one|"
+                "198.51.100.10|session_created||",
+                "73|1720000025|viewer_disabled|failure|-1|unknown|"
+                "198.51.100.11|legacy_deleted_actor|user|viewer.one"}));
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT id || '|' || rotated_event_count || '|' || "
+                "COALESCE(last_rotation_at_seconds, -1) || '|' || "
+                "COALESCE(last_rotated_sequence, -1) FROM audit_state;"),
+            std::vector<std::string>({"1|0|-1|-1"}));
+  EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest,
+     MigratesRevisionThreeOrphanedAuditActorToUnknownIdentity) {
+  ResetSqliteHooks();
+  RevisionThreeOrphanedAuditActorFixture fixture;
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT \"table\" || '|' || rowid || '|' || parent || '|' || "
+                "fkid FROM pragma_foreign_key_check;"),
+            std::vector<std::string>({"audit_events|74|users|0"}));
+
+  auto opened = SecurityStore::Open({fixture.state_directory()});
+
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  opened.value().reset();
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+                "event_type || '|' || outcome || '|' || "
+                "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
+                "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
+                "subject_identity FROM audit_events WHERE sequence = 74;"),
+            std::vector<std::string>({
+                "74|1720000030|viewer_deleted|failure|-1|unknown|"
+                "203.0.113.7|legacy_orphan_actor|user|retired.viewer"}));
+  EXPECT_EQ(QueryDatabaseTextRows(
+                fixture.database_path(),
+                "SELECT sequence || '|' || actor_user_id || '|' || "
+                "actor_identity FROM audit_events "
+                "WHERE sequence IN (41, 42) ORDER BY sequence;"),
+            (std::vector<std::string>{"41|11|cameraowner",
+                                      "42|12|viewer.one"}));
+  EXPECT_EQ(QueryDatabaseInt(
+                fixture.database_path(),
+                "SELECT COUNT(*) FROM pragma_foreign_key_check;"),
+            0);
+  EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest,
+     RevisionThreeMigrationRejectsNonAuditForeignKeyViolation) {
+  ResetSqliteHooks();
+  RevisionThreeOperationalFixture fixture;
+  ExecuteDatabaseSql(fixture.database_path(), R"sql(
+PRAGMA foreign_keys=OFF;
+UPDATE sessions SET user_id = 999 WHERE id = 32;
+)sql");
+
+  auto opened = SecurityStore::Open({fixture.state_directory()});
+
+  ASSERT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error().code, "E_SECURITY_DB_SCHEMA");
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT version FROM schema_version;"),
+            3);
 }
 
 TEST(SecurityStoreTest, RevisionThreeSchemaEnforcesUserManagementConstraints) {
@@ -1826,9 +2470,10 @@ INSERT INTO sessions
 SELECT randomblob(32), id, 'viewer', 3, 3, 4, '2001:db8::10'
 FROM users WHERE canonical_username = 'viewer.one';
 INSERT INTO audit_events
-  (server_timestamp_seconds, event_type, outcome, actor_user_id, peer_ip,
-   detail_code)
-SELECT 3, 'viewer_created', 'success', id, '2001:db8::10', 'created'
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   actor_identity, peer_ip, detail_code)
+SELECT 3, 'viewer_created', 'success', id, canonical_username,
+       '2001:db8::10', 'created'
 FROM users WHERE canonical_username = 'operator.one';
 )sql");
 
@@ -1853,16 +2498,16 @@ FROM users WHERE canonical_username = 'viewer.one';
 )sql"));
   EXPECT_TRUE(DatabaseStatementIsRejected(database, R"sql(
 INSERT INTO audit_events
-  (server_timestamp_seconds, event_type, outcome, peer_ip, detail_code,
-   subject_type, subject_identity)
-VALUES (4, 'viewer_created', 'success', '2001:db8::10', 'created',
+  (server_timestamp_seconds, event_type, outcome, actor_identity, peer_ip,
+   detail_code, subject_type, subject_identity)
+VALUES (4, 'viewer_created', 'success', 'system', '2001:db8::10', 'created',
         printf('%065d', 0), 'viewer.one');
 )sql"));
   EXPECT_TRUE(DatabaseStatementIsRejected(database, R"sql(
 INSERT INTO audit_events
-  (server_timestamp_seconds, event_type, outcome, peer_ip, detail_code,
-   subject_type, subject_identity)
-VALUES (4, 'viewer_created', 'success', '2001:db8::10', 'created',
+  (server_timestamp_seconds, event_type, outcome, actor_identity, peer_ip,
+   detail_code, subject_type, subject_identity)
+VALUES (4, 'viewer_created', 'success', 'system', '2001:db8::10', 'created',
         'user', printf('%065d', 0));
 )sql"));
   EXPECT_EQ(QueryDatabaseInt(
@@ -2013,7 +2658,7 @@ CREATE INDEX password_history_user_id_unique ON password_history(user_id);
       "DROP INDEX sessions_user_id_unique;");
 }
 
-TEST(SecurityStoreTest, FreshAndMigratedRevisionThreeUseExactSameSchema) {
+TEST(SecurityStoreTest, FreshAndMigratedRevisionFourUseExactSameSchema) {
   ResetSqliteHooks();
   TemporaryDirectory fresh_root;
   const auto fresh_state = fresh_root.Path("security");
@@ -2038,6 +2683,387 @@ TEST(SecurityStoreTest, FreshAndMigratedRevisionThreeUseExactSameSchema) {
 }
 
 TEST(SecurityStoreTest,
+     RevisionFourValidatorRejectsMutatedActorIdentityConstraint) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA foreign_keys=OFF;
+ALTER TABLE audit_events RENAME TO audit_events_old;
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_identity TEXT NOT NULL,
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT '' CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+);
+INSERT INTO audit_events SELECT * FROM audit_events_old;
+DROP TABLE audit_events_old;
+CREATE INDEX audit_events_timestamp_index
+  ON audit_events(server_timestamp_seconds);
+)sql");
+}
+
+TEST(SecurityStoreTest, RevisionFourValidatorRejectsMutatedAuditForeignKey) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA foreign_keys=OFF;
+ALTER TABLE audit_events RENAME TO audit_events_old;
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  actor_identity TEXT NOT NULL
+    CHECK (length(actor_identity) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT '' CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+);
+INSERT INTO audit_events SELECT * FROM audit_events_old;
+DROP TABLE audit_events_old;
+CREATE INDEX audit_events_timestamp_index
+  ON audit_events(server_timestamp_seconds);
+)sql");
+}
+
+TEST(SecurityStoreTest, RevisionFourValidatorRejectsOrphanedAuditActor) {
+  ExpectOperationalReopenRejectsDataMutation(R"sql(
+PRAGMA foreign_keys=OFF;
+INSERT INTO audit_events
+  (server_timestamp_seconds, event_type, outcome, actor_user_id,
+   actor_identity, peer_ip, detail_code)
+VALUES (1720000001, 'login_completed', 'success', 999, 'unknown',
+        '192.0.2.20', 'legacy_orphan_actor');
+)sql");
+}
+
+TEST(SecurityStoreTest, RevisionFourValidatorRejectsMutatedTimestampIndex) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+DROP INDEX audit_events_timestamp_index;
+CREATE INDEX audit_events_timestamp_index ON audit_events(sequence);
+)sql");
+}
+
+TEST(SecurityStoreTest, RevisionFourValidatorRejectsMutatedAuditStateCheck) {
+  ExpectReopenRejectsSchemaMutation(R"sql(
+ALTER TABLE audit_state RENAME TO audit_state_old;
+CREATE TABLE audit_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  rotated_event_count INTEGER NOT NULL DEFAULT 0
+    CHECK (rotated_event_count >= 0),
+  last_rotation_at_seconds INTEGER
+    CHECK (last_rotation_at_seconds >= 0),
+  last_rotated_sequence INTEGER
+    CHECK (last_rotated_sequence >= 0)
+);
+INSERT INTO audit_state SELECT * FROM audit_state_old;
+DROP TABLE audit_state_old;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     RevisionFourValidatorRejectsMissingExtraAndInvalidAuditStateRows) {
+  ExpectReopenRejectsSchemaMutation("DELETE FROM audit_state;");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA ignore_check_constraints=ON;
+INSERT INTO audit_state (id) VALUES (2);
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA ignore_check_constraints=ON;
+UPDATE audit_state SET rotated_event_count = -1 WHERE id = 1;
+)sql");
+  ExpectReopenRejectsSchemaMutation(R"sql(
+PRAGMA ignore_check_constraints=ON;
+UPDATE audit_state SET last_rotation_at_seconds = 1,
+                       last_rotated_sequence = NULL
+WHERE id = 1;
+)sql");
+}
+
+TEST(SecurityStoreTest, ProductionAuditWritesSnapshotActorIdentities) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+  const auto administrator_id = QueryInt(
+      last_opened_database,
+      "SELECT id FROM users WHERE canonical_username = 'operator.one';");
+  std::int64_t now_seconds = 1720000100;
+  int verification_calls = 0;
+  UserManagementDependencies dependencies;
+  dependencies.now_seconds = [&now_seconds] { return now_seconds++; };
+  dependencies.random_bytes = [](std::size_t size) {
+    return camera_firmware::common::Result<
+        camera_firmware::common::SecureBytes>::Ok(FilledBytes(size, 0x44U));
+  };
+  dependencies.verify_password =
+      [&verification_calls](const camera_firmware::common::SecureBytes&,
+                            const PasswordRecord&) {
+        return camera_firmware::common::Result<bool>::Ok(
+            ++verification_calls == 1);
+      };
+  UserManagementService service(*store.value(), {}, std::move(dependencies));
+  UserMutationContext administrator{
+      {administrator_id, "spoofed.administrator", UserRole::kAdministrator,
+       {}},
+      "2001:db8::10"};
+
+  auto created = service.CreateViewer("Monitor.East", Secret("SouthMoon!8"),
+                                      administrator);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  const std::int64_t viewer_id = created.value().id;
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT actor_identity FROM audit_events WHERE "
+                      "event_type = 'viewer_created' AND outcome = 'success';"),
+            "operator.one");
+
+  UserMutationContext viewer{
+      {viewer_id, "spoofed.viewer", UserRole::kViewer, {}}, "192.0.2.22"};
+  auto changed = service.ChangeOwnPassword(
+      Secret("SouthMoon!8"), Secret("Crimson!7"), viewer);
+  ASSERT_TRUE(changed.ok()) << changed.error().message;
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT actor_user_id || '|' || actor_identity FROM "
+                      "audit_events WHERE event_type = 'password_changed' "
+                      "AND outcome = 'success';"),
+            std::to_string(viewer_id) + "|monitor.east");
+
+  ASSERT_TRUE(service.DeleteViewer(viewer_id, administrator).ok());
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT COALESCE(actor_user_id, -1) || '|' || "
+                      "actor_identity FROM audit_events WHERE event_type = "
+                      "'password_changed' AND outcome = 'success';"),
+            "-1|monitor.east");
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT actor_identity FROM audit_events WHERE "
+                      "event_type = 'viewer_deleted' AND outcome = 'success';"),
+            "operator.one");
+}
+
+TEST(SecurityStoreTest, ProductionNullActorWriteSnapshotsSystemIdentity) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+  AuthService auth(*store.value());
+
+  auto login = auth.Login(
+      LoginRequest{"missing.user", Secret("BadSecret!9"), "2001:db8::10"});
+
+  ASSERT_FALSE(login.ok());
+  EXPECT_EQ(QueryText(last_opened_database,
+                      "SELECT COALESCE(actor_user_id, -1) || '|' || "
+                      "actor_identity FROM audit_events WHERE event_type = "
+                      "'authentication_failed';"),
+            "-1|system");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionDeleteTriggerFailureRollsBackCallerMutation) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(R"sql(
+CREATE TRIGGER reject_audit_delete
+BEFORE DELETE ON audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'injected audit deletion failure');
+END;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionDeleteCountMismatchRollsBackCallerMutation) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(R"sql(
+CREATE TRIGGER ignore_audit_delete
+BEFORE DELETE ON audit_events
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionStateTriggerFailureRollsBackCallerMutationAndDeletion) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(R"sql(
+CREATE TRIGGER reject_audit_state_update
+BEFORE UPDATE OF rotated_event_count ON audit_state
+BEGIN
+  SELECT RAISE(ABORT, 'injected audit state failure');
+END;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionStateCountMismatchRollsBackCallerMutationAndDeletion) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(R"sql(
+CREATE TRIGGER ignore_audit_state_update
+BEFORE UPDATE OF rotated_event_count ON audit_state
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionActorSnapshotFailureRollsBackCallerMutation) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(
+      "", AuditRetentionFailurePoint::kActorSnapshotLookup);
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionFinalInsertFailureRollsBackMutationDeletionAndState) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(R"sql(
+CREATE TRIGGER reject_final_audit_insert
+BEFORE INSERT ON audit_events
+WHEN NEW.event_type = 'viewer_created'
+BEGIN
+  SELECT RAISE(ABORT, 'injected final audit insertion failure');
+END;
+)sql");
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionCallerCommitFailureRollsBackMutationDeletionAndState) {
+  ExpectAuditRetentionFailureRollsBackViewerCreation(
+      "", AuditRetentionFailurePoint::kCallerCommit);
+}
+
+TEST(SecurityStoreTest,
+     BoundedSubprocessKillsAndReapsChildHungAfterBoundary) {
+  const auto result = RunBoundedSubprocessAtBoundary(
+      [](int boundary_descriptor) {
+        constexpr char kBoundaryReached = 'B';
+        ASSERT_EQ(::write(boundary_descriptor, &kBoundaryReached, 1), 1);
+        for (;;) {
+          (void)::pause();
+        }
+      },
+      std::chrono::seconds(1), std::chrono::milliseconds(50));
+
+  EXPECT_EQ(result.outcome,
+            BoundedSubprocessOutcome::kTimedOutAfterBoundary);
+  ASSERT_TRUE(WIFSIGNALED(result.status));
+  EXPECT_EQ(WTERMSIG(result.status), SIGKILL);
+  errno = 0;
+  EXPECT_EQ(::waitpid(result.child, nullptr, WNOHANG), -1);
+  EXPECT_EQ(errno, ECHILD);
+}
+
+TEST(SecurityStoreTest,
+     TransactionBoundaryGateBlocksUntilEveryWriterArrives) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  const auto result = RunBoundedSubprocessAtBoundary(
+      [state](int boundary_descriptor) {
+        auto store = SecurityStore::Open({state});
+        ASSERT_TRUE(store.ok()) << store.error().message;
+        SqliteTransactionBoundaryGate gate(2, boundary_descriptor);
+        transaction_boundary_gate = &gate;
+
+        auto transaction = store.value()->BeginTransaction();
+
+        transaction_boundary_gate = nullptr;
+        ASSERT_TRUE(transaction.ok()) << transaction.error().message;
+        ASSERT_TRUE(transaction.value().Rollback().ok());
+      },
+      std::chrono::seconds(1), std::chrono::milliseconds(50));
+
+  EXPECT_EQ(result.outcome,
+            BoundedSubprocessOutcome::kTimedOutAfterBoundary);
+  EXPECT_TRUE(result.boundary_observed);
+  ASSERT_TRUE(WIFSIGNALED(result.status));
+  EXPECT_EQ(WTERMSIG(result.status), SIGKILL);
+}
+
+TEST(SecurityStoreTest,
+     AuditRetentionConcurrentStoresSerializeRotationAtCapacity) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  const auto result = RunBoundedSubprocessAtBoundary(
+      [state](int boundary_descriptor) {
+        RunAuditRetentionConcurrentStoreWriters(state, boundary_descriptor);
+      },
+      std::chrono::seconds(5), std::chrono::seconds(5));
+
+  ASSERT_EQ(result.outcome, BoundedSubprocessOutcome::kExited);
+  ASSERT_TRUE(result.boundary_observed);
+  ASSERT_TRUE(WIFEXITED(result.status));
+  ASSERT_EQ(WEXITSTATUS(result.status), 0);
+  const auto database_path = state / "security.db";
+  EXPECT_EQ(QueryDatabaseTextRows(
+                database_path,
+                "SELECT canonical_username FROM users "
+                "ORDER BY canonical_username;"),
+            (std::vector<std::string>{"monitor.east", "monitor.west",
+                                      "operator.one"}));
+  const int final_count = QueryDatabaseInt(
+      database_path, "SELECT COUNT(*) FROM audit_events;");
+  EXPECT_EQ(final_count, 5);
+  EXPECT_LE(final_count, 5);
+  EXPECT_EQ(QueryDatabaseInt(
+                database_path,
+                "SELECT COUNT(DISTINCT sequence) FROM audit_events;"),
+            5);
+  const auto retained = QueryDatabaseTextRows(
+      database_path,
+      "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+      "event_type || '|' || outcome || '|' || actor_identity || '|' || "
+      "subject_identity FROM audit_events ORDER BY sequence;");
+  const std::vector<std::string> first_then_second{
+      "3|1720000002|seed_two|success|system|",
+      "4|1720000003|seed_three|success|system|",
+      "5|1720000004|seed_four|success|system|",
+      "6|1720000101|viewer_created|success|operator.one|monitor.east",
+      "7|1720000102|viewer_created|success|operator.one|monitor.west"};
+  const std::vector<std::string> second_then_first{
+      "3|1720000002|seed_two|success|system|",
+      "4|1720000003|seed_three|success|system|",
+      "5|1720000004|seed_four|success|system|",
+      "6|1720000102|viewer_created|success|operator.one|monitor.west",
+      "7|1720000101|viewer_created|success|operator.one|monitor.east"};
+  ASSERT_EQ(retained.size(), 5U);
+  const auto& expected_retained = retained[3] == first_then_second[3]
+                                      ? first_then_second
+                                      : second_then_first;
+  EXPECT_EQ(retained, expected_retained);
+  EXPECT_EQ(QueryDatabaseTextRows(database_path,
+                                  "SELECT sequence FROM audit_events "
+                                  "ORDER BY sequence;"),
+            (std::vector<std::string>{"3", "4", "5", "6", "7"}));
+  EXPECT_EQ(QueryDatabaseTextRows(
+                database_path,
+                "SELECT rotated_event_count || '|' || "
+                "last_rotated_sequence FROM audit_state;"),
+            (std::vector<std::string>{"2|2"}));
+  EXPECT_EQ(QueryDatabaseInt(
+                database_path,
+                "SELECT last_rotation_at_seconds FROM audit_state;"),
+            QueryDatabaseInt(database_path,
+                             "SELECT server_timestamp_seconds FROM "
+                             "audit_events WHERE sequence = 7;"));
+}
+
+TEST(SecurityStoreTest,
      MigrationObserverFaultsUnexpectedExecuteAfterFinalValidation) {
   ResetSqliteHooks();
   observe_migration_exec = true;
@@ -2047,13 +3073,17 @@ TEST(SecurityStoreTest,
   EXPECT_FALSE(ObserveMigrationExec("CREATE TABLE migrated(value INTEGER);"));
   EXPECT_FALSE(ObserveMigrationExec("SAVEPOINT schema_validation;"));
   EXPECT_FALSE(ObserveMigrationExec("RELEASE schema_validation;"));
+  EXPECT_FALSE(
+      ObserveMigrationExec("CREATE TABLE migrated_again(value INTEGER);"));
+  EXPECT_FALSE(ObserveMigrationExec("SAVEPOINT schema_validation;"));
+  EXPECT_FALSE(ObserveMigrationExec("RELEASE schema_validation;"));
 
   ASSERT_EQ(migration_exec_phase, MigrationExecPhase::kReadyToCommit);
   fail_migration_statement_ordinal = observed_migration_statements.size();
   expected_migration_statement = "PRAGMA unexpected_precommit;";
 
   EXPECT_TRUE(ObserveMigrationExec("PRAGMA unexpected_precommit;"));
-  ASSERT_EQ(observed_migration_statements.size(), 2U);
+  ASSERT_EQ(observed_migration_statements.size(), 3U);
   EXPECT_EQ(observed_migration_statements.back(),
             "PRAGMA unexpected_precommit;");
   EXPECT_TRUE(migration_statement_fault_injected);
@@ -2155,6 +3185,67 @@ TEST(SecurityStoreTest, MigrationValidationFailureRollsBackToRevisionTwo) {
                              "SELECT version FROM schema_version;"),
             2);
   EXPECT_EQ(fixture.evidence(), before);
+  EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest,
+     RevisionFourMigrationStatementFailureRollsBackToRevisionThree) {
+  ResetSqliteHooks();
+  RevisionThreeOperationalFixture fixture;
+  constexpr const char* kSchemaInventorySql =
+      "SELECT type || '|' || name || '|' || tbl_name || '|' || sql "
+      "FROM sqlite_schema ORDER BY type, name;";
+  constexpr const char* kAuditEvidenceSql =
+      "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+      "event_type || '|' || outcome || '|' || "
+      "COALESCE(actor_user_id, -1) || '|' || peer_ip || '|' || detail_code || "
+      "'|' || subject_type || '|' || subject_identity "
+      "FROM audit_events ORDER BY sequence;";
+  const auto before_schema =
+      QueryDatabaseTextRows(fixture.database_path(), kSchemaInventorySql);
+  const auto before_audit =
+      QueryDatabaseTextRows(fixture.database_path(), kAuditEvidenceSql);
+  fail_sqlite_exec_exact = "DROP TABLE audit_events_revision_three;";
+
+  auto opened = SecurityStore::Open({fixture.state_directory()});
+
+  ASSERT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error().code, "E_SECURITY_DB_SCHEMA");
+  fail_sqlite_exec_exact.reset();
+  EXPECT_EQ(rollback_calls, 1);
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT version FROM schema_version;"),
+            3);
+  EXPECT_EQ(QueryDatabaseTextRows(fixture.database_path(), kSchemaInventorySql),
+            before_schema);
+  EXPECT_EQ(QueryDatabaseTextRows(fixture.database_path(), kAuditEvidenceSql),
+            before_audit);
+  EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest,
+     RevisionFourFinalValidationFailureRollsBackToRevisionThree) {
+  ResetSqliteHooks();
+  RevisionThreeOperationalFixture fixture;
+  constexpr const char* kSchemaInventorySql =
+      "SELECT type || '|' || name || '|' || tbl_name || '|' || sql "
+      "FROM sqlite_schema ORDER BY type, name;";
+  const auto before_schema =
+      QueryDatabaseTextRows(fixture.database_path(), kSchemaInventorySql);
+  fail_sqlite_exec_exact = "SAVEPOINT schema_validation;";
+  fail_sqlite_exec_exact_after_matches = 1;
+
+  auto opened = SecurityStore::Open({fixture.state_directory()});
+
+  ASSERT_FALSE(opened.ok());
+  EXPECT_EQ(opened.error().code, "E_SECURITY_DB_SCHEMA");
+  fail_sqlite_exec_exact.reset();
+  EXPECT_EQ(rollback_calls, 1);
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT version FROM schema_version;"),
+            3);
+  EXPECT_EQ(QueryDatabaseTextRows(fixture.database_path(), kSchemaInventorySql),
+            before_schema);
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
 }
 
@@ -2437,8 +3528,8 @@ VALUES (zeroblob(32), 999, 'administrator', 1, 1, 2, '192.0.2.10');
   ExpectReopenRejectsSchemaMutation(R"sql(
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
-   peer_ip, detail_code)
-VALUES (1, 'bootstrap_completed', 'success', NULL,
+   actor_identity, peer_ip, detail_code)
+VALUES (1, 'bootstrap_completed', 'success', NULL, 'system',
         '192.0.2.10', 'initial_administrator');
 )sql");
 }
@@ -2465,8 +3556,8 @@ TEST(SecurityStoreTest, RejectsOperationalStateWithBrokenBootstrapLinks) {
   ExpectOperationalReopenRejectsDataMutation(R"sql(
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
-   peer_ip, detail_code)
-SELECT 2, 'bootstrap_completed', 'success', id,
+   actor_identity, peer_ip, detail_code)
+SELECT 2, 'bootstrap_completed', 'success', id, canonical_username,
        '2001:db8::10', 'duplicate_bootstrap'
 FROM users WHERE role = 'administrator';
 )sql");
@@ -2496,8 +3587,8 @@ SELECT randomblob(32), id, 'administrator', 2, 2, 3, '192.0.2.20'
 FROM users WHERE role = 'administrator';
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
-   peer_ip, detail_code)
-SELECT 2, 'login_completed', 'success', id,
+   actor_identity, peer_ip, detail_code)
+SELECT 2, 'login_completed', 'success', id, canonical_username,
        '192.0.2.20', 'session_created'
 FROM users WHERE role = 'administrator';
 )sql");

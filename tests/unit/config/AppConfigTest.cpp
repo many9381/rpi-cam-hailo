@@ -1,5 +1,6 @@
 #include "camera_firmware/config/AppConfig.hpp"
 
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -299,6 +300,60 @@ TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
       SecurityConfigWithCredentialFile(
           "/var/lib/camera-firmware/security/../rtsp.credentials"),
       "E_SECURITY_CREDENTIAL_PATH");
+}
+
+TEST(AppConfigTest, AuditRetentionUsesApprovedDefaults) {
+  const auto loaded = LoadInlineConfig(SecurityConfigWithTls(true));
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  EXPECT_EQ(loaded.value().security.audit.max_events, 50000U);
+  EXPECT_EQ(loaded.value().security.audit.warning_percent, 90U);
+}
+
+TEST(AppConfigTest, LoadsExplicitAuditRetentionSettings) {
+  auto yaml = SecurityConfigWithTls(true);
+  constexpr std::string_view marker =
+      "  state_directory: /var/lib/camera-firmware/security\n";
+  const auto position = yaml.find(marker);
+  ASSERT_NE(position, std::string::npos);
+  yaml.insert(position + marker.size(),
+              "  audit:\n"
+              "    max_events: 70000\n"
+              "    warning_percent: 85\n");
+  const auto loaded = LoadInlineConfig(yaml);
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  EXPECT_EQ(loaded.value().security.audit.max_events, 70000U);
+  EXPECT_EQ(loaded.value().security.audit.warning_percent, 85U);
+}
+
+TEST(AppConfigTest, RejectsAuditRetentionOutsideApprovedBounds) {
+  struct AuditSettingCase {
+    std::string_view setting;
+    std::string_view value;
+  };
+  constexpr std::array kCases = {
+      AuditSettingCase{"max_events", "0"},
+      AuditSettingCase{"max_events", "1000001"},
+      AuditSettingCase{"warning_percent", "0"},
+      AuditSettingCase{"warning_percent", "100"},
+  };
+  constexpr std::string_view marker =
+      "  state_directory: /var/lib/camera-firmware/security\n";
+  constexpr std::string_view security_enabled = "security:\n  enabled: true\n";
+
+  for (const auto& test_case : kCases) {
+    auto yaml = SecurityConfigWithTls(true);
+    const auto security_position = yaml.find(security_enabled);
+    ASSERT_NE(security_position, std::string::npos);
+    yaml.replace(security_position, security_enabled.size(),
+                 "security:\n  enabled: false\n");
+    const auto position = yaml.find(marker);
+    ASSERT_NE(position, std::string::npos);
+    yaml.insert(position + marker.size(),
+                "  audit:\n    " + std::string(test_case.setting) + ": " +
+                    std::string(test_case.value) + "\n");
+
+    ExpectConfigError(yaml, "E_CONFIG_SECURITY_AUDIT");
+  }
 }
 
 TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {

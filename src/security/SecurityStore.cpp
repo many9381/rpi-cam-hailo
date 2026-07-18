@@ -4,6 +4,7 @@
 #include <array>
 #include <cerrno>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <glib.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <sqlite3.h>
@@ -27,9 +29,15 @@ namespace {
 constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kDatabaseMode = 0600;
 constexpr int kBusyTimeoutMilliseconds = 1000;
-constexpr int kPreviousSecuritySchemaRevision = 2;
+constexpr int kRevisionTwoSecuritySchema = 2;
+constexpr int kRevisionThreeSecuritySchema = 3;
 constexpr int kMaximumViewerUsers = 32;
 constexpr int kMaximumManagementIpsPerRole = 32;
+
+enum class ForeignKeyValidation {
+  kStrict,
+  kAllowLegacyAuditActorOrphans,
+};
 
 class UniqueFd {
  public:
@@ -198,6 +206,158 @@ class PreparedStatement {
  private:
   sqlite3_stmt* statement_{nullptr};
 };
+
+bool CheckedMultiply(std::uint64_t left,
+                     std::uint64_t right,
+                     std::uint64_t& product) noexcept {
+  if (left != 0U &&
+      right > std::numeric_limits<std::uint64_t>::max() / left) {
+    return false;
+  }
+  product = left * right;
+  return true;
+}
+
+struct AuditInsertionState {
+  std::uint64_t current_events{0U};
+  std::int64_t next_sequence{1};
+  std::uint64_t rotated_event_count{0U};
+};
+
+common::Result<AuditInsertionState> ReadAuditInsertionState(
+    sqlite3* database) {
+  PreparedStatement statement(
+      database,
+      "SELECT (SELECT COUNT(*) FROM audit_events), "
+      "(SELECT MAX(sequence) FROM audit_events), rotated_event_count, "
+      "last_rotated_sequence FROM audit_state WHERE id = 1;");
+  if (!statement.valid() || ::sqlite3_step(statement.get()) != SQLITE_ROW ||
+      ::sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+      (::sqlite3_column_type(statement.get(), 1) != SQLITE_NULL &&
+       ::sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER) ||
+      ::sqlite3_column_type(statement.get(), 2) != SQLITE_INTEGER ||
+      (::sqlite3_column_type(statement.get(), 3) != SQLITE_NULL &&
+       ::sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER)) {
+    return StoreError<AuditInsertionState>("E_SECURITY_DB_AUDIT",
+                                           "audit transaction failed");
+  }
+
+  const std::int64_t current_events =
+      ::sqlite3_column_int64(statement.get(), 0);
+  const std::int64_t rotated_event_count =
+      ::sqlite3_column_int64(statement.get(), 2);
+  std::optional<std::int64_t> highest_sequence;
+  if (::sqlite3_column_type(statement.get(), 1) == SQLITE_INTEGER) {
+    highest_sequence = ::sqlite3_column_int64(statement.get(), 1);
+  }
+  std::optional<std::int64_t> last_rotated_sequence;
+  if (::sqlite3_column_type(statement.get(), 3) == SQLITE_INTEGER) {
+    last_rotated_sequence = ::sqlite3_column_int64(statement.get(), 3);
+  }
+  if (current_events < 0 || rotated_event_count < 0 ||
+      (highest_sequence.has_value() && *highest_sequence < 0) ||
+      (last_rotated_sequence.has_value() && *last_rotated_sequence < 0) ||
+      ::sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return StoreError<AuditInsertionState>("E_SECURITY_DB_AUDIT",
+                                           "audit transaction failed");
+  }
+
+  std::optional<std::int64_t> sequence_floor = highest_sequence;
+  if (last_rotated_sequence.has_value() &&
+      (!sequence_floor.has_value() ||
+       *last_rotated_sequence > *sequence_floor)) {
+    sequence_floor = last_rotated_sequence;
+  }
+  if (sequence_floor == std::numeric_limits<std::int64_t>::max()) {
+    return StoreError<AuditInsertionState>("E_SECURITY_DB_AUDIT",
+                                           "audit transaction failed");
+  }
+
+  AuditInsertionState state;
+  state.current_events = static_cast<std::uint64_t>(current_events);
+  state.rotated_event_count =
+      static_cast<std::uint64_t>(rotated_event_count);
+  state.next_sequence = sequence_floor.has_value() ? *sequence_floor + 1 : 1;
+  return common::Result<AuditInsertionState>::Ok(std::move(state));
+}
+
+common::Result<void> RotateAuditEvents(sqlite3* database,
+                                       const AuditInsertionState& state,
+                                       std::uint64_t max_events,
+                                       std::int64_t now_seconds) {
+  if (state.current_events < max_events) {
+    return common::Result<void>::Ok();
+  }
+
+  const std::uint64_t remove_count =
+      state.current_events - max_events + 1U;
+  constexpr std::uint64_t kMaximumSqliteInteger =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+  if (remove_count > kMaximumSqliteInteger ||
+      state.rotated_event_count > kMaximumSqliteInteger - remove_count) {
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+  }
+
+  std::int64_t last_rotated_sequence = 0;
+  {
+    PreparedStatement boundary(
+        database,
+        "SELECT sequence FROM audit_events ORDER BY sequence LIMIT 1 "
+        "OFFSET ?1;");
+    if (!boundary.valid() ||
+        ::sqlite3_bind_int64(
+            boundary.get(), 1,
+            static_cast<std::int64_t>(remove_count - 1U)) != SQLITE_OK ||
+        ::sqlite3_step(boundary.get()) != SQLITE_ROW ||
+        ::sqlite3_column_type(boundary.get(), 0) != SQLITE_INTEGER) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+    last_rotated_sequence = ::sqlite3_column_int64(boundary.get(), 0);
+    if (last_rotated_sequence < 0 ||
+        ::sqlite3_step(boundary.get()) != SQLITE_DONE) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+  }
+
+  {
+    PreparedStatement remove(
+        database,
+        "DELETE FROM audit_events WHERE sequence IN "
+        "(SELECT sequence FROM audit_events ORDER BY sequence LIMIT ?1);");
+    if (!remove.valid() ||
+        ::sqlite3_bind_int64(remove.get(), 1,
+                             static_cast<std::int64_t>(remove_count)) !=
+            SQLITE_OK ||
+        ::sqlite3_step(remove.get()) != SQLITE_DONE ||
+        ::sqlite3_changes64(database) !=
+            static_cast<sqlite3_int64>(remove_count)) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+  }
+
+  const std::uint64_t updated_rotation_count =
+      state.rotated_event_count + remove_count;
+  PreparedStatement update(
+      database,
+      "UPDATE audit_state SET rotated_event_count = ?1, "
+      "last_rotation_at_seconds = ?2, last_rotated_sequence = ?3 "
+      "WHERE id = 1 AND rotated_event_count = ?4;");
+  if (!update.valid() ||
+      ::sqlite3_bind_int64(
+          update.get(), 1,
+          static_cast<std::int64_t>(updated_rotation_count)) != SQLITE_OK ||
+      ::sqlite3_bind_int64(update.get(), 2, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_int64(update.get(), 3, last_rotated_sequence) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_int64(
+          update.get(), 4,
+          static_cast<std::int64_t>(state.rotated_event_count)) != SQLITE_OK ||
+      ::sqlite3_step(update.get()) != SQLITE_DONE ||
+      ::sqlite3_changes64(database) != 1) {
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+  }
+  return common::Result<void>::Ok();
+}
 
 std::optional<UserRole> ReadUserRole(sqlite3_stmt* statement, int column) {
   const auto* value = ::sqlite3_column_text(statement, column);
@@ -914,21 +1074,70 @@ WHERE NOT (
   ))
 );
 )sql";
-  const char* unexpected_object_count =
-      schema_revision == kSecuritySchemaRevision
-          ? kRevisionThreeUnexpectedObjectCount
-          : kRevisionTwoUnexpectedObjectCount;
-  const int expected_count =
-      schema_revision == kSecuritySchemaRevision ? 19 : 16;
+  constexpr const char* kRevisionFourUnexpectedObjectCount = R"sql(
+SELECT COUNT(*)
+FROM sqlite_schema
+WHERE NOT (
+  (type = 'table' AND (
+    (name = 'schema_version' AND tbl_name = 'schema_version') OR
+    (name = 'device_state' AND tbl_name = 'device_state') OR
+    (name = 'users' AND tbl_name = 'users') OR
+    (name = 'password_history' AND tbl_name = 'password_history') OR
+    (name = 'management_ips' AND tbl_name = 'management_ips') OR
+    (name = 'sessions' AND tbl_name = 'sessions') OR
+    (name = 'audit_events' AND tbl_name = 'audit_events') OR
+    (name = 'audit_state' AND tbl_name = 'audit_state') OR
+    (name = 'firmware_log_outbox' AND tbl_name = 'firmware_log_outbox')
+  )) OR
+  (type = 'index' AND (
+    (name = 'users_canonical_username_unique' AND tbl_name = 'users') OR
+    (name = 'users_single_administrator_unique' AND tbl_name = 'users') OR
+    (name = 'password_history_user_id_unique' AND
+     tbl_name = 'password_history') OR
+    (name = 'management_ips_role_ip_unique' AND
+     tbl_name = 'management_ips') OR
+    (name = 'sessions_token_hash_unique' AND tbl_name = 'sessions') OR
+    (name = 'sessions_single_administrator_unique' AND
+     tbl_name = 'sessions') OR
+    (name = 'sessions_user_id_unique' AND tbl_name = 'sessions') OR
+    (name = 'sessions_expiry_index' AND tbl_name = 'sessions') OR
+    (name = 'audit_events_timestamp_index' AND tbl_name = 'audit_events') OR
+    (name = 'firmware_log_outbox_category_peer_unique' AND
+     tbl_name = 'firmware_log_outbox') OR
+    (name = 'firmware_log_outbox_lease_expiry_index' AND
+     tbl_name = 'firmware_log_outbox')
+  ))
+);
+)sql";
+  const char* unexpected_object_count = kRevisionTwoUnexpectedObjectCount;
+  int expected_count = 16;
+  if (schema_revision == kRevisionThreeSecuritySchema) {
+    unexpected_object_count = kRevisionThreeUnexpectedObjectCount;
+    expected_count = 19;
+  } else if (schema_revision == kSecuritySchemaRevision) {
+    unexpected_object_count = kRevisionFourUnexpectedObjectCount;
+    expected_count = 20;
+  }
   return QuerySingleInt(database, unexpected_object_count, value) && value == 0 &&
          QuerySingleInt(database, "SELECT COUNT(*) FROM sqlite_schema;", value) &&
          value == expected_count;
 }
 
-bool HasValidCommittedState(sqlite3* database, int schema_revision) {
+bool HasValidCommittedState(sqlite3* database,
+                            int schema_revision,
+                            ForeignKeyValidation foreign_key_validation) {
   int value = 0;
-  if (!QuerySingleInt(database,
-                      "SELECT COUNT(*) FROM pragma_foreign_key_check;", value) ||
+  const bool allow_legacy_audit_actor_orphans =
+      foreign_key_validation ==
+          ForeignKeyValidation::kAllowLegacyAuditActorOrphans &&
+      schema_revision < kSecuritySchemaRevision;
+  const char* foreign_key_check =
+      allow_legacy_audit_actor_orphans
+          ? "SELECT COUNT(*) FROM pragma_foreign_key_check "
+            "WHERE \"table\" IS NOT 'audit_events' OR parent IS NOT 'users' "
+            "OR fkid IS NOT 0;"
+          : "SELECT COUNT(*) FROM pragma_foreign_key_check;";
+  if (!QuerySingleInt(database, foreign_key_check, value) ||
       value != 0 ||
       !QuerySingleInt(
           database,
@@ -936,7 +1145,7 @@ bool HasValidCommittedState(sqlite3* database, int schema_revision) {
           "failed_login_count > 5;",
           value) ||
       value != 0 ||
-      (schema_revision == kSecuritySchemaRevision &&
+      (schema_revision >= kRevisionThreeSecuritySchema &&
        (!QuerySingleInt(database,
                         "SELECT COUNT(*) FROM users WHERE role = 'viewer';",
                         value) ||
@@ -950,7 +1159,7 @@ bool HasValidCommittedState(sqlite3* database, int schema_revision) {
     return false;
   }
 
-  constexpr const char* kStateInvariant = R"sql(
+  constexpr const char* kLegacyStateInvariant = R"sql(
 SELECT CASE state
   WHEN 'default' THEN
     (SELECT COUNT(*) FROM users) = 0 AND
@@ -982,11 +1191,82 @@ END
 FROM device_state
 WHERE id = 1;
 )sql";
-  return QuerySingleInt(database, kStateInvariant, value) && value == 1;
+  constexpr const char* kRevisionFourStateInvariant = R"sql(
+SELECT CASE state
+  WHEN 'default' THEN
+    (SELECT COUNT(*) FROM users) = 0 AND
+    (SELECT COUNT(*) FROM management_ips) = 0 AND
+    (SELECT COUNT(*) FROM sessions) = 0 AND
+    (SELECT COUNT(*) FROM audit_events
+      WHERE event_type = 'bootstrap_completed' AND outcome = 'success') = 0
+  WHEN 'operational' THEN
+    (SELECT COUNT(*) FROM users
+      WHERE role = 'administrator' AND enabled = 1) = 1 AND
+    (
+      (
+        (SELECT COUNT(*) FROM audit_events
+          WHERE event_type = 'bootstrap_completed' AND outcome = 'success') = 1 AND
+        EXISTS (
+          SELECT 1
+          FROM audit_events AS audit
+          JOIN users AS administrator
+            ON administrator.id = audit.actor_user_id
+          JOIN management_ips AS management_ip
+            ON management_ip.normalized_ip = audit.peer_ip
+          WHERE audit.event_type = 'bootstrap_completed'
+            AND audit.outcome = 'success'
+            AND administrator.role = 'administrator'
+            AND administrator.enabled = 1
+            AND management_ip.role_scope = 'administrator'
+            AND management_ip.enabled = 1
+        )
+      ) OR (
+        (SELECT COUNT(*) FROM audit_events
+          WHERE event_type = 'bootstrap_completed' AND outcome = 'success') = 0 AND
+        EXISTS (
+          SELECT 1
+          FROM audit_state
+          WHERE id = 1
+            AND rotated_event_count > 0
+            AND last_rotation_at_seconds IS NOT NULL
+            AND last_rotated_sequence IS NOT NULL
+        )
+      )
+    )
+  ELSE 0
+END
+FROM device_state
+WHERE id = 1;
+)sql";
+  const char* state_invariant =
+      schema_revision == kSecuritySchemaRevision
+          ? kRevisionFourStateInvariant
+          : kLegacyStateInvariant;
+  if (!QuerySingleInt(database, state_invariant, value) || value != 1) {
+    return false;
+  }
+  return schema_revision != kSecuritySchemaRevision ||
+         (QuerySingleInt(
+              database,
+              "SELECT COUNT(*) FROM audit_state WHERE id = 1 AND "
+              "rotated_event_count >= 0 AND "
+              "((last_rotation_at_seconds IS NULL AND "
+              "last_rotated_sequence IS NULL) OR "
+              "(last_rotation_at_seconds >= 0 AND "
+              "last_rotated_sequence >= 0));",
+              value) &&
+          value == 1 &&
+          QuerySingleInt(database, "SELECT COUNT(*) FROM audit_state;", value) &&
+          value == 1);
 }
 
-common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
-  if (schema_revision != kPreviousSecuritySchemaRevision &&
+common::Result<void> ValidateSchema(
+    sqlite3* database,
+    int schema_revision,
+    ForeignKeyValidation foreign_key_validation =
+        ForeignKeyValidation::kStrict) {
+  if (schema_revision != kRevisionTwoSecuritySchema &&
+      schema_revision != kRevisionThreeSecuritySchema &&
       schema_revision != kSecuritySchemaRevision) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
@@ -994,9 +1274,12 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
   int value = 0;
   // The complete object inventory is read before any validation DML so an
   // unapproved trigger cannot run from the destructive constraint probes.
-  const bool revision_three = schema_revision == kSecuritySchemaRevision;
-  const int expected_table_count = revision_three ? 8 : 7;
-  const int expected_index_count = revision_three ? 11 : 9;
+  const bool revision_three_or_later =
+      schema_revision >= kRevisionThreeSecuritySchema;
+  const bool revision_four = schema_revision == kSecuritySchemaRevision;
+  const int expected_table_count =
+      revision_four ? 9 : (revision_three_or_later ? 8 : 7);
+  const int expected_index_count = revision_three_or_later ? 11 : 9;
   if (!HasExactSchemaObjectInventory(database, schema_revision) ||
       !QuerySingleInt(database, "PRAGMA foreign_keys;", value) || value != 1 ||
       !QuerySingleInt(database, "PRAGMA secure_delete;", value) || value != 1 ||
@@ -1012,7 +1295,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
           "WHERE type = 'table' "
           "AND name IN ('schema_version', 'device_state', 'users', "
           "'management_ips', 'password_history', 'sessions', 'audit_events', "
-          "'firmware_log_outbox');",
+          "'audit_state', 'firmware_log_outbox');",
           value) ||
       value != expected_table_count ||
       !QuerySingleInt(
@@ -1050,13 +1333,13 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
                      "BINARY",
                      "CREATE UNIQUE INDEX users_single_administrator_unique "
                      "ON users(role) WHERE role = 'administrator'") ||
-      (!revision_three &&
+      (!revision_three_or_later &&
        !ValidateIndex(database, "management_ips",
                       "management_ips_normalized_ip_unique", true, false,
                       "normalized_ip", "BINARY",
                       "CREATE UNIQUE INDEX management_ips_normalized_ip_unique "
                       "ON management_ips(normalized_ip)")) ||
-      (revision_three &&
+      (revision_three_or_later &&
        (!ValidateTwoColumnIndex(
             database, "management_ips", "management_ips_role_ip_unique", true,
             {"role_scope", "normalized_ip"},
@@ -1076,7 +1359,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
                      "role", "BINARY",
                      "CREATE UNIQUE INDEX sessions_single_administrator_unique "
                      "ON sessions(role) WHERE role = 'administrator'") ||
-      (revision_three &&
+      (revision_three_or_later &&
        !ValidateIndex(database, "sessions", "sessions_user_id_unique", true,
                       false, "user_id", "BINARY",
                       "CREATE UNIQUE INDEX sessions_user_id_unique "
@@ -1111,6 +1394,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
   std::vector<ForeignKeyInfo> management_foreign_keys;
   std::vector<ForeignKeyInfo> session_foreign_keys;
   std::vector<ForeignKeyInfo> audit_foreign_keys;
+  std::vector<ForeignKeyInfo> audit_state_foreign_keys;
   std::vector<ForeignKeyInfo> outbox_foreign_keys;
   if (!ReadForeignKeys(database, "schema_version",
                        schema_version_foreign_keys) ||
@@ -1119,7 +1403,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
       !state_foreign_keys.empty() ||
       !ReadForeignKeys(database, "users", user_foreign_keys) ||
       !user_foreign_keys.empty() ||
-      (revision_three &&
+      (revision_three_or_later &&
        (!ReadForeignKeys(database, "password_history",
                          password_history_foreign_keys) ||
         password_history_foreign_keys !=
@@ -1135,6 +1419,9 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
       audit_foreign_keys !=
           std::vector<ForeignKeyInfo>{{"users", "actor_user_id", "id",
                                        "NO ACTION", "SET NULL", "NONE"}} ||
+      (revision_four &&
+       (!ReadForeignKeys(database, "audit_state", audit_state_foreign_keys) ||
+        !audit_state_foreign_keys.empty())) ||
       !ReadForeignKeys(database, "firmware_log_outbox",
                        outbox_foreign_keys) ||
       !outbox_foreign_keys.empty()) {
@@ -1149,6 +1436,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
   std::vector<ColumnInfo> management_ip_columns;
   std::vector<ColumnInfo> sessions_columns;
   std::vector<ColumnInfo> audit_columns;
+  std::vector<ColumnInfo> audit_state_columns;
   std::vector<ColumnInfo> outbox_columns;
   if (!ReadColumns(database, "schema_version", schema_version_columns) ||
       schema_version_columns !=
@@ -1177,7 +1465,7 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
               {"lock_until_seconds", "INTEGER", 0, 0},
               {"created_at_seconds", "INTEGER", 1, 0},
               {"last_login_at_seconds", "INTEGER", 0, 0}} ||
-      (revision_three &&
+      (revision_three_or_later &&
        (!ReadColumns(database, "password_history", password_history_columns) ||
         password_history_columns !=
             std::vector<ColumnInfo>{
@@ -1208,7 +1496,19 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
                                   {"peer_ip", "TEXT", 1, 0}} ||
       !ReadColumns(database, "audit_events", audit_columns) ||
       audit_columns !=
-          (revision_three
+          (revision_four
+               ? std::vector<ColumnInfo>{
+                     {"sequence", "INTEGER", 0, 1},
+                     {"server_timestamp_seconds", "INTEGER", 1, 0},
+                     {"event_type", "TEXT", 1, 0},
+                     {"outcome", "TEXT", 1, 0},
+                     {"actor_user_id", "INTEGER", 0, 0},
+                     {"actor_identity", "TEXT", 1, 0},
+                     {"peer_ip", "TEXT", 1, 0},
+                     {"detail_code", "TEXT", 1, 0},
+                     {"subject_type", "TEXT", 1, 0},
+                     {"subject_identity", "TEXT", 1, 0}}
+               : revision_three_or_later
                ? std::vector<ColumnInfo>{
                      {"sequence", "INTEGER", 0, 1},
                      {"server_timestamp_seconds", "INTEGER", 1, 0},
@@ -1227,6 +1527,14 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
                      {"actor_user_id", "INTEGER", 0, 0},
                      {"peer_ip", "TEXT", 1, 0},
                      {"detail_code", "TEXT", 1, 0}}) ||
+      (revision_four &&
+       (!ReadColumns(database, "audit_state", audit_state_columns) ||
+        audit_state_columns !=
+            std::vector<ColumnInfo>{
+                {"id", "INTEGER", 0, 1},
+                {"rotated_event_count", "INTEGER", 1, 0},
+                {"last_rotation_at_seconds", "INTEGER", 0, 0},
+                {"last_rotated_sequence", "INTEGER", 0, 0}})) ||
       !ReadColumns(database, "firmware_log_outbox", outbox_columns) ||
       outbox_columns !=
           std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
@@ -1239,28 +1547,39 @@ common::Result<void> ValidateSchema(sqlite3* database, int schema_revision) {
                                   {"lease_expires_at_seconds", "INTEGER", 0,
                                    0}} ||
       !QuerySingleInt(database,
-                      revision_three
+                      revision_four
                           ? "SELECT COUNT(*) FROM schema_version "
-                            "WHERE version = 3;"
-                          : "SELECT COUNT(*) FROM schema_version "
-                            "WHERE version = 2;",
+                            "WHERE version = 4;"
+                          : revision_three_or_later
+                                ? "SELECT COUNT(*) FROM schema_version "
+                                  "WHERE version = 3;"
+                                : "SELECT COUNT(*) FROM schema_version "
+                                  "WHERE version = 2;",
                       value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM schema_version;", value) ||
       value != 1 ||
       !QuerySingleInt(
           database,
-          revision_three
+          revision_four
               ? "SELECT COUNT(*) FROM device_state "
-                "WHERE id = 1 AND schema_revision = 3 AND "
+                "WHERE id = 1 AND schema_revision = 4 AND "
                 "((state = 'default' AND setup_completed_at_seconds IS NULL) "
                 "OR (state = 'operational' AND "
                 "setup_completed_at_seconds >= 0));"
-              : "SELECT COUNT(*) FROM device_state "
-                "WHERE id = 1 AND schema_revision = 2 AND "
-                "((state = 'default' AND setup_completed_at_seconds IS NULL) "
-                "OR (state = 'operational' AND "
-                "setup_completed_at_seconds >= 0));",
+              : revision_three_or_later
+                    ? "SELECT COUNT(*) FROM device_state "
+                      "WHERE id = 1 AND schema_revision = 3 AND "
+                      "((state = 'default' AND "
+                      "setup_completed_at_seconds IS NULL) OR "
+                      "(state = 'operational' AND "
+                      "setup_completed_at_seconds >= 0));"
+                    : "SELECT COUNT(*) FROM device_state "
+                      "WHERE id = 1 AND schema_revision = 2 AND "
+                      "((state = 'default' AND "
+                      "setup_completed_at_seconds IS NULL) OR "
+                      "(state = 'operational' AND "
+                      "setup_completed_at_seconds >= 0));",
           value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM device_state;", value) ||
@@ -1276,6 +1595,10 @@ CREATE TABLE schema_version (
   constexpr std::string_view kRevisionThreeSchemaVersionSql = R"sql(
 CREATE TABLE schema_version (
   version INTEGER NOT NULL CHECK (version = 3)
+))sql";
+  constexpr std::string_view kRevisionFourSchemaVersionSql = R"sql(
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 4)
 ))sql";
   constexpr std::string_view kRevisionTwoDeviceStateSql = R"sql(
 CREATE TABLE device_state (
@@ -1294,6 +1617,18 @@ CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
   schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+))sql";
+  constexpr std::string_view kRevisionFourDeviceStateSql = R"sql(
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -1344,6 +1679,38 @@ CREATE TABLE audit_events (
   subject_identity TEXT NOT NULL DEFAULT ''
     CHECK (length(subject_identity) <= 64)
 ))sql";
+  constexpr std::string_view kRevisionFourAuditEventsSql = R"sql(
+CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_identity TEXT NOT NULL
+    CHECK (length(actor_identity) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+))sql";
+  constexpr std::string_view kAuditStateSql = R"sql(
+CREATE TABLE audit_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  rotated_event_count INTEGER NOT NULL DEFAULT 0
+    CHECK (rotated_event_count >= 0),
+  last_rotation_at_seconds INTEGER
+    CHECK (last_rotation_at_seconds >= 0),
+  last_rotated_sequence INTEGER
+    CHECK (last_rotated_sequence >= 0),
+  CHECK (
+    (last_rotation_at_seconds IS NULL AND last_rotated_sequence IS NULL) OR
+    (last_rotation_at_seconds IS NOT NULL AND
+     last_rotated_sequence IS NOT NULL)
+  )
+))sql";
   constexpr std::string_view kPasswordHistorySql = R"sql(
 CREATE TABLE password_history (
   id INTEGER PRIMARY KEY,
@@ -1359,10 +1726,16 @@ CREATE TABLE password_history (
 
   const std::array<std::pair<const char*, std::string_view>, 7>
       expected_table_definitions = {{
-          {"schema_version", revision_three ? kRevisionThreeSchemaVersionSql
-                                              : kRevisionTwoSchemaVersionSql},
-          {"device_state", revision_three ? kRevisionThreeDeviceStateSql
-                                            : kRevisionTwoDeviceStateSql},
+          {"schema_version",
+           revision_four ? kRevisionFourSchemaVersionSql
+                         : revision_three_or_later
+                               ? kRevisionThreeSchemaVersionSql
+                               : kRevisionTwoSchemaVersionSql},
+          {"device_state",
+           revision_four ? kRevisionFourDeviceStateSql
+                         : revision_three_or_later
+                               ? kRevisionThreeDeviceStateSql
+                               : kRevisionTwoDeviceStateSql},
           {"users", R"sql(
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -1387,8 +1760,9 @@ CREATE TABLE users (
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
   last_login_at_seconds INTEGER CHECK (last_login_at_seconds >= 0)
 ))sql"},
-          {"management_ips", revision_three ? kRevisionThreeManagementIpsSql
-                                              : kRevisionTwoManagementIpsSql},
+          {"management_ips",
+           revision_three_or_later ? kRevisionThreeManagementIpsSql
+                                   : kRevisionTwoManagementIpsSql},
           {"sessions", R"sql(
 CREATE TABLE sessions (
   id INTEGER PRIMARY KEY,
@@ -1402,8 +1776,11 @@ CREATE TABLE sessions (
     CHECK (expires_at_seconds >= last_activity_at_seconds),
   peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
 ))sql"},
-          {"audit_events", revision_three ? kRevisionThreeAuditEventsSql
-                                            : kRevisionTwoAuditEventsSql},
+          {"audit_events",
+           revision_four ? kRevisionFourAuditEventsSql
+                         : revision_three_or_later
+                               ? kRevisionThreeAuditEventsSql
+                               : kRevisionTwoAuditEventsSql},
           {"firmware_log_outbox", R"sql(
 CREATE TABLE firmware_log_outbox (
   id INTEGER PRIMARY KEY,
@@ -1431,14 +1808,20 @@ CREATE TABLE firmware_log_outbox (
     }
   }
 
-  if (revision_three &&
+  if (revision_three_or_later &&
       !ValidateSchemaObjectSql(database, "password_history",
                                kPasswordHistorySql)) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
+  if (revision_four &&
+      !ValidateSchemaObjectSql(database, "audit_state", kAuditStateSql)) {
+    return StoreError("E_SECURITY_DB_SCHEMA",
+                      "security database schema is invalid");
+  }
 
-  if (!HasValidCommittedState(database, schema_revision)) {
+  if (!HasValidCommittedState(database, schema_revision,
+                              foreign_key_validation)) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
@@ -1450,7 +1833,7 @@ CREATE TABLE firmware_log_outbox (
     return savepoint;
   }
   const char* preparation_sql =
-      revision_three
+      revision_three_or_later
           ? "DELETE FROM firmware_log_outbox; DELETE FROM audit_events; "
             "DELETE FROM sessions; DELETE FROM password_history; "
             "DELETE FROM management_ips; DELETE FROM users; "
@@ -1471,16 +1854,23 @@ CREATE TABLE firmware_log_outbox (
           "INSERT INTO schema_version (version) VALUES (NULL);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_three
-              ? "INSERT INTO schema_version (version) VALUES (2);"
-              : "INSERT INTO schema_version (version) VALUES (3);") &&
+          revision_four
+              ? "INSERT INTO schema_version (version) VALUES (3);"
+              : revision_three_or_later
+                    ? "INSERT INTO schema_version (version) VALUES (2);"
+                    : "INSERT INTO schema_version (version) VALUES (3);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_three
+          revision_four
               ? "INSERT INTO device_state "
-                "(id, state, schema_revision) VALUES (2, 'default', 3);"
-              : "INSERT INTO device_state "
-                "(id, state, schema_revision) VALUES (2, 'default', 2);") &&
+                "(id, state, schema_revision) VALUES (2, 'default', 4);"
+              : revision_three_or_later
+                    ? "INSERT INTO device_state "
+                      "(id, state, schema_revision) "
+                      "VALUES (2, 'default', 3);"
+                    : "INSERT INTO device_state "
+                      "(id, state, schema_revision) "
+                      "VALUES (2, 'default', 2);") &&
       StatementIsRejectedByConstraint(
           database,
           "UPDATE device_state SET state = 'invalid' WHERE id = 1;") &&
@@ -1552,7 +1942,7 @@ CREATE TABLE firmware_log_outbox (
           "INSERT INTO management_ips "
           "(normalized_ip, role_scope, enabled, created_at_seconds) "
           "VALUES ('192.0.2.1', 'administrator', 1, 1);") &&
-      (!revision_three ||
+      (!revision_three_or_later ||
        (StatementSucceeds(
             database,
             "INSERT INTO management_ips "
@@ -1612,7 +2002,7 @@ CREATE TABLE firmware_log_outbox (
           "last_activity_at_seconds, expires_at_seconds, peer_ip) "
           "VALUES (randomblob(32), (SELECT id FROM users LIMIT 1), "
           "'administrator', 1, 1, 2, '192.0.2.1');") &&
-      (!revision_three ||
+      (!revision_three_or_later ||
        (StatementSucceeds(
             database,
             "INSERT INTO sessions "
@@ -1642,7 +2032,7 @@ CREATE TABLE firmware_log_outbox (
           "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
           "peer_ip, detail_code) "
           "VALUES (1, 'event', 'success', 999999, '192.0.2.1', 'detail');") &&
-      (!revision_three ||
+      (!revision_three_or_later ||
        StatementIsRejectedByConstraint(
            database,
            "INSERT INTO audit_events "
@@ -1650,6 +2040,30 @@ CREATE TABLE firmware_log_outbox (
            "detail_code, subject_type, subject_identity) "
            "VALUES (1, 'event', 'success', '192.0.2.1', 'detail', "
            "printf('%065d', 0), 'viewer.one');")) &&
+      (!revision_four ||
+       (StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO audit_events "
+            "(server_timestamp_seconds, event_type, outcome, actor_identity, "
+            "peer_ip, detail_code) VALUES "
+            "(1, 'event', 'success', '', '192.0.2.1', 'detail');") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO audit_events "
+            "(server_timestamp_seconds, event_type, outcome, actor_identity, "
+            "peer_ip, detail_code) VALUES "
+            "(1, 'event', 'success', printf('%065d', 0), "
+            "'192.0.2.1', 'detail');") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "INSERT INTO audit_state (id) VALUES (2);") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "UPDATE audit_state SET rotated_event_count = -1 WHERE id = 1;") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "UPDATE audit_state SET last_rotation_at_seconds = 1, "
+            "last_rotated_sequence = NULL WHERE id = 1;"))) &&
       StatementSucceeds(
           database,
           "INSERT INTO firmware_log_outbox "
@@ -1774,6 +2188,80 @@ constexpr const char* kRevisionThreeMigrationStatements[] = {
     R"sql(CREATE INDEX audit_events_timestamp_index
   ON audit_events(server_timestamp_seconds);)sql"};
 
+constexpr const char* kRevisionFourMigrationStatements[] = {
+    "ALTER TABLE schema_version RENAME TO schema_version_revision_three;",
+    R"sql(CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 4)
+);)sql",
+    "INSERT INTO schema_version (version) VALUES (4);",
+    "DROP TABLE schema_version_revision_three;",
+    "ALTER TABLE device_state RENAME TO device_state_revision_three;",
+    R"sql(CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);)sql",
+    "INSERT INTO device_state "
+    "(id, state, schema_revision, setup_completed_at_seconds) "
+    "SELECT id, state, 4, setup_completed_at_seconds "
+    "FROM device_state_revision_three;",
+    "DROP TABLE device_state_revision_three;",
+    "ALTER TABLE audit_events RENAME TO audit_events_revision_three;",
+    R"sql(CREATE TABLE audit_events (
+  sequence INTEGER PRIMARY KEY,
+  server_timestamp_seconds INTEGER NOT NULL
+    CHECK (server_timestamp_seconds >= 0),
+  event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_identity TEXT NOT NULL
+    CHECK (length(actor_identity) BETWEEN 1 AND 64),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
+  subject_type TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_type) <= 64),
+  subject_identity TEXT NOT NULL DEFAULT ''
+    CHECK (length(subject_identity) <= 64)
+);)sql",
+    R"sql(INSERT INTO audit_events
+  (sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+   actor_identity, peer_ip, detail_code, subject_type, subject_identity)
+SELECT old.sequence, old.server_timestamp_seconds, old.event_type, old.outcome,
+       (SELECT id FROM users WHERE id = old.actor_user_id),
+       CASE
+         WHEN old.actor_user_id IS NULL THEN 'unknown'
+         ELSE COALESCE(
+           (SELECT canonical_username FROM users
+            WHERE id = old.actor_user_id),
+           'unknown')
+       END,
+       old.peer_ip, old.detail_code, old.subject_type, old.subject_identity
+FROM audit_events_revision_three AS old;)sql",
+    "DROP TABLE audit_events_revision_three;",
+    R"sql(CREATE INDEX audit_events_timestamp_index
+  ON audit_events(server_timestamp_seconds);)sql",
+    R"sql(CREATE TABLE audit_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  rotated_event_count INTEGER NOT NULL DEFAULT 0
+    CHECK (rotated_event_count >= 0),
+  last_rotation_at_seconds INTEGER
+    CHECK (last_rotation_at_seconds >= 0),
+  last_rotated_sequence INTEGER
+    CHECK (last_rotated_sequence >= 0),
+  CHECK (
+    (last_rotation_at_seconds IS NULL AND last_rotated_sequence IS NULL) OR
+    (last_rotation_at_seconds IS NOT NULL AND
+     last_rotated_sequence IS NOT NULL)
+  )
+);)sql",
+    "INSERT INTO audit_state (id) VALUES (1);"};
+
 }  // namespace
 
 struct SecurityStore::Impl {
@@ -1790,6 +2278,8 @@ struct SecurityStore::Impl {
   UniqueFd state_directory_fd;
   std::unique_ptr<sqlite3, DatabaseCloser> database;
   std::mutex connection_mutex;
+  std::uint64_t max_audit_events{50000U};
+  std::uint32_t audit_warning_percent{90U};
   bool poisoned{false};
 };
 
@@ -1881,6 +2371,8 @@ common::Result<std::unique_ptr<SecurityStore>> SecurityStore::Open(
   auto impl = std::make_shared<Impl>();
   impl->state_directory = std::move(state_directory);
   impl->database_path = impl->state_directory / "security.db";
+  impl->max_audit_events = config.max_audit_events;
+  impl->audit_warning_percent = config.audit_warning_percent;
   impl->state_directory_fd.Reset(
       OpenDirectoryNoFollow(impl->state_directory));
   if (!impl->state_directory_fd.valid() ||
@@ -1955,32 +2447,32 @@ common::Result<void> SecurityStore::InitializeSchema() {
                       "failed to inspect security database schema");
   }
   if (schema_object_count != 0) {
-    auto revision_three =
+    auto current =
         ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
-    if (revision_three.ok()) {
-      return revision_three;
+    if (current.ok()) {
+      return current;
     }
-    int revision_two_rows = 0;
+    int source_revision = 0;
     if (!QuerySingleInt(
             impl_->database.get(),
-            "SELECT COUNT(*) FROM schema_version WHERE version = 2;",
-            revision_two_rows) ||
-        revision_two_rows != 1) {
+            "SELECT version FROM schema_version;", source_revision) ||
+        (source_revision != kRevisionTwoSecuritySchema &&
+         source_revision != kRevisionThreeSecuritySchema)) {
       return StoreError("E_SECURITY_DB_SCHEMA",
                         "security database schema is invalid");
     }
-    return MigrateRevisionTwoToThree();
+    return MigrateToRevisionFour(source_revision);
   }
 
   constexpr const char* kSchema = R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 3)
+  version INTEGER NOT NULL CHECK (version = 4)
 );
-INSERT INTO schema_version (version) VALUES (3);
+INSERT INTO schema_version (version) VALUES (4);
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 3),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -1989,7 +2481,7 @@ CREATE TABLE device_state (
   )
 );
 INSERT INTO device_state (id, state, schema_revision)
-VALUES (1, 'default', 3);
+VALUES (1, 'default', 4);
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -2069,6 +2561,8 @@ CREATE TABLE audit_events (
   event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 64),
   outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
   actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_identity TEXT NOT NULL
+    CHECK (length(actor_identity) BETWEEN 1 AND 64),
   peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
   detail_code TEXT NOT NULL CHECK (length(detail_code) <= 64),
   subject_type TEXT NOT NULL DEFAULT ''
@@ -2078,6 +2572,22 @@ CREATE TABLE audit_events (
 );
 CREATE INDEX audit_events_timestamp_index
   ON audit_events(server_timestamp_seconds);
+
+CREATE TABLE audit_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  rotated_event_count INTEGER NOT NULL DEFAULT 0
+    CHECK (rotated_event_count >= 0),
+  last_rotation_at_seconds INTEGER
+    CHECK (last_rotation_at_seconds >= 0),
+  last_rotated_sequence INTEGER
+    CHECK (last_rotated_sequence >= 0),
+  CHECK (
+    (last_rotation_at_seconds IS NULL AND last_rotated_sequence IS NULL) OR
+    (last_rotation_at_seconds IS NOT NULL AND
+     last_rotated_sequence IS NOT NULL)
+  )
+);
+INSERT INTO audit_state (id) VALUES (1);
 
 CREATE TABLE firmware_log_outbox (
   id INTEGER PRIMARY KEY,
@@ -2140,7 +2650,7 @@ common::Result<void> SecurityStore::RollbackSchemaTransaction() {
   return rollback;
 }
 
-common::Result<void> SecurityStore::MigrateRevisionTwoToThree() {
+common::Result<void> SecurityStore::MigrateToRevisionFour(int source_revision) {
   auto begin = Execute(impl_->database.get(), "BEGIN IMMEDIATE;",
                        "E_SECURITY_DB_SCHEMA",
                        "failed to migrate security database");
@@ -2148,26 +2658,47 @@ common::Result<void> SecurityStore::MigrateRevisionTwoToThree() {
     return begin;
   }
 
-  auto revision_two =
-      ValidateSchema(impl_->database.get(), kPreviousSecuritySchemaRevision);
-  if (!revision_two.ok()) {
+  auto source = ValidateSchema(
+      impl_->database.get(), source_revision,
+      ForeignKeyValidation::kAllowLegacyAuditActorOrphans);
+  if (!source.ok()) {
     (void)RollbackSchemaTransaction();
-    return revision_two;
+    return source;
   }
 
-  int duplicate_session_users = 0;
-  if (!QuerySingleInt(
-          impl_->database.get(),
-          "SELECT COUNT(*) FROM (SELECT user_id FROM sessions "
-          "GROUP BY user_id HAVING COUNT(*) > 1);",
-          duplicate_session_users) ||
-      duplicate_session_users != 0) {
-    (void)RollbackSchemaTransaction();
-    return StoreError("E_SECURITY_DB_SCHEMA",
-                      "security database schema is invalid");
+  if (source_revision == kRevisionTwoSecuritySchema) {
+    int duplicate_session_users = 0;
+    if (!QuerySingleInt(
+            impl_->database.get(),
+            "SELECT COUNT(*) FROM (SELECT user_id FROM sessions "
+            "GROUP BY user_id HAVING COUNT(*) > 1);",
+            duplicate_session_users) ||
+        duplicate_session_users != 0) {
+      (void)RollbackSchemaTransaction();
+      return StoreError("E_SECURITY_DB_SCHEMA",
+                        "security database schema is invalid");
+    }
+
+    for (const char* statement : kRevisionThreeMigrationStatements) {
+      auto migrated = Execute(impl_->database.get(), statement,
+                              "E_SECURITY_DB_SCHEMA",
+                              "failed to migrate security database");
+      if (!migrated.ok()) {
+        (void)RollbackSchemaTransaction();
+        return migrated;
+      }
+    }
+
+    auto revision_three = ValidateSchema(
+        impl_->database.get(), kRevisionThreeSecuritySchema,
+        ForeignKeyValidation::kAllowLegacyAuditActorOrphans);
+    if (!revision_three.ok()) {
+      (void)RollbackSchemaTransaction();
+      return revision_three;
+    }
   }
 
-  for (const char* statement : kRevisionThreeMigrationStatements) {
+  for (const char* statement : kRevisionFourMigrationStatements) {
     auto migrated = Execute(impl_->database.get(), statement,
                             "E_SECURITY_DB_SCHEMA",
                             "failed to migrate security database");
@@ -2177,11 +2708,11 @@ common::Result<void> SecurityStore::MigrateRevisionTwoToThree() {
     }
   }
 
-  auto revision_three =
+  auto revision_four =
       ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
-  if (!revision_three.ok()) {
+  if (!revision_four.ok()) {
     (void)RollbackSchemaTransaction();
-    return revision_three;
+    return revision_four;
   }
 
   auto commit = Execute(impl_->database.get(), "COMMIT;",
@@ -2237,6 +2768,331 @@ SecurityStore::BeginReadTransaction() const {
   }
   return common::Result<Transaction>::Ok(
       Transaction(impl_, std::move(connection_lease)));
+}
+
+common::Result<SecurityStore::AuditStatusSnapshot>
+SecurityStore::ReadAuditStatus() const {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return StoreError<AuditStatusSnapshot>("E_SECURITY_DB_AUDIT",
+                                           "audit status read failed");
+  }
+  auto transaction = std::move(started).value();
+  const auto failure = [&transaction] {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError<AuditStatusSnapshot>("E_SECURITY_DB_AUDIT",
+                                           "audit status read failed");
+  };
+
+  AuditStatusSnapshot snapshot;
+  {
+    PreparedStatement statement(
+        impl_->database.get(),
+        "SELECT (SELECT COUNT(*) FROM audit_events), rotated_event_count, "
+        "last_rotation_at_seconds, last_rotated_sequence "
+        "FROM audit_state WHERE id = 1;");
+    if (!statement.valid() ||
+        ::sqlite3_step(statement.get()) != SQLITE_ROW ||
+        ::sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        ::sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER) {
+      return failure();
+    }
+    const int rotation_time_type =
+        ::sqlite3_column_type(statement.get(), 2);
+    const int rotation_sequence_type =
+        ::sqlite3_column_type(statement.get(), 3);
+    const bool rotation_values_are_null =
+        rotation_time_type == SQLITE_NULL &&
+        rotation_sequence_type == SQLITE_NULL;
+    const bool rotation_values_are_integers =
+        rotation_time_type == SQLITE_INTEGER &&
+        rotation_sequence_type == SQLITE_INTEGER;
+    if (!rotation_values_are_null && !rotation_values_are_integers) {
+      return failure();
+    }
+
+    const std::int64_t current_events =
+        ::sqlite3_column_int64(statement.get(), 0);
+    const std::int64_t rotated_event_count =
+        ::sqlite3_column_int64(statement.get(), 1);
+    if (current_events < 0 || rotated_event_count < 0) {
+      return failure();
+    }
+    snapshot.current_events = static_cast<std::uint64_t>(current_events);
+    snapshot.rotated_event_count =
+        static_cast<std::uint64_t>(rotated_event_count);
+    if (rotation_values_are_integers) {
+      const std::int64_t last_rotation_at_seconds =
+          ::sqlite3_column_int64(statement.get(), 2);
+      const std::int64_t last_rotated_sequence =
+          ::sqlite3_column_int64(statement.get(), 3);
+      if (last_rotation_at_seconds < 0 || last_rotated_sequence < 0) {
+        return failure();
+      }
+      snapshot.last_rotation_at_seconds = last_rotation_at_seconds;
+      snapshot.last_rotated_sequence = last_rotated_sequence;
+    }
+    if (::sqlite3_step(statement.get()) != SQLITE_DONE) {
+      return failure();
+    }
+  }
+
+  snapshot.max_events = impl_->max_audit_events;
+  std::uint64_t scaled_current = 0U;
+  const bool current_product_is_valid =
+      CheckedMultiply(snapshot.current_events, 100U, scaled_current);
+  std::uint64_t warning_boundary = 0U;
+  if (snapshot.max_events == 0U ||
+      !CheckedMultiply(snapshot.max_events, impl_->audit_warning_percent,
+                       warning_boundary)) {
+    return failure();
+  }
+  if (snapshot.current_events >= snapshot.max_events ||
+      !current_product_is_valid) {
+    snapshot.usage_percent = 100U;
+  } else {
+    snapshot.usage_percent = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(100U,
+                                scaled_current / snapshot.max_events));
+  }
+  snapshot.warning =
+      !current_product_is_valid || scaled_current >= warning_boundary;
+
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    return failure();
+  }
+  return common::Result<AuditStatusSnapshot>::Ok(std::move(snapshot));
+}
+
+common::Result<SecurityStore::AuditEventQueryResult>
+SecurityStore::ReadAuditEvents(const AuditEventQuery& query) const {
+  const auto store_failure = [] {
+    return StoreError<AuditEventQueryResult>("E_SECURITY_DB_AUDIT",
+                                             "audit event read failed");
+  };
+  if (query.limit < 1U || query.limit > 100U ||
+      (query.from_seconds.has_value() && *query.from_seconds < 0) ||
+      (query.to_seconds.has_value() && *query.to_seconds < 0) ||
+      (query.from_seconds.has_value() && query.to_seconds.has_value() &&
+       *query.from_seconds > *query.to_seconds)) {
+    return store_failure();
+  }
+
+  const char* sort_column = nullptr;
+  switch (query.sort_field) {
+    case AuditEventSortField::kTimestamp:
+      sort_column = "server_timestamp_seconds";
+      break;
+    case AuditEventSortField::kEventType:
+      sort_column = "event_type";
+      break;
+    case AuditEventSortField::kOutcome:
+      sort_column = "outcome";
+      break;
+    case AuditEventSortField::kActor:
+      sort_column = "actor_identity";
+      break;
+    case AuditEventSortField::kPeerIp:
+      sort_column = "peer_ip";
+      break;
+    case AuditEventSortField::kSubject:
+      sort_column = "subject_identity";
+      break;
+  }
+  if (sort_column == nullptr) {
+    return store_failure();
+  }
+  const bool ascending =
+      query.sort_direction == AuditEventSortDirection::kAscending;
+  if (!ascending &&
+      query.sort_direction != AuditEventSortDirection::kDescending) {
+    return store_failure();
+  }
+  if (query.cursor.has_value()) {
+    const bool integer_sort =
+        query.sort_field == AuditEventSortField::kTimestamp;
+    if (query.cursor->sequence <= 0 ||
+        integer_sort != query.cursor->integer_key.has_value() ||
+        integer_sort == query.cursor->text_key.has_value() ||
+        (query.cursor->integer_key.has_value() &&
+         *query.cursor->integer_key < 0)) {
+      return store_failure();
+    }
+  }
+
+  std::string sql =
+      "SELECT sequence, server_timestamp_seconds, event_type, outcome, "
+      "actor_identity, peer_ip, detail_code, subject_type, subject_identity "
+      "FROM audit_events WHERE 1 = 1";
+  if (query.from_seconds.has_value()) {
+    sql += " AND server_timestamp_seconds >= ?";
+  }
+  if (query.to_seconds.has_value()) {
+    sql += " AND server_timestamp_seconds <= ?";
+  }
+  if (query.event_type.has_value()) {
+    sql += " AND event_type = ?";
+  }
+  if (query.outcome.has_value()) {
+    sql += " AND outcome = ?";
+  }
+  if (query.actor_identity.has_value()) {
+    sql += " AND actor_identity = ?";
+  }
+  if (query.peer_ip.has_value()) {
+    sql += " AND peer_ip = ?";
+  }
+  if (query.subject_type.has_value()) {
+    sql += " AND subject_type = ?";
+  }
+  if (query.subject_identity.has_value()) {
+    sql += " AND subject_identity = ?";
+  }
+  if (query.cursor.has_value()) {
+    sql += " AND (";
+    sql += sort_column;
+    sql += ascending ? " > ? OR (" : " < ? OR (";
+    sql += sort_column;
+    sql += ascending ? " = ? AND sequence > ?))"
+                     : " = ? AND sequence < ?))";
+  }
+  sql += " ORDER BY ";
+  sql += sort_column;
+  sql += ascending ? " ASC, sequence ASC LIMIT ?;"
+                   : " DESC, sequence DESC LIMIT ?;";
+
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return store_failure();
+  }
+  auto transaction = std::move(started).value();
+  const auto failure = [&transaction, &store_failure] {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return store_failure();
+  };
+
+  PreparedStatement statement(impl_->database.get(), sql.c_str());
+  if (!statement.valid()) {
+    return failure();
+  }
+  int parameter = 1;
+  const auto bind_integer = [&statement, &parameter](std::int64_t value) {
+    return ::sqlite3_bind_int64(statement.get(), parameter++, value) ==
+           SQLITE_OK;
+  };
+  const auto bind_text = [&statement, &parameter](const std::string& value) {
+    return ::sqlite3_bind_text(statement.get(), parameter++, value.data(),
+                               static_cast<int>(value.size()),
+                               SQLITE_TRANSIENT) == SQLITE_OK;
+  };
+  if ((query.from_seconds.has_value() &&
+       !bind_integer(*query.from_seconds)) ||
+      (query.to_seconds.has_value() && !bind_integer(*query.to_seconds)) ||
+      (query.event_type.has_value() && !bind_text(*query.event_type)) ||
+      (query.outcome.has_value() && !bind_text(*query.outcome)) ||
+      (query.actor_identity.has_value() &&
+       !bind_text(*query.actor_identity)) ||
+      (query.peer_ip.has_value() && !bind_text(*query.peer_ip)) ||
+      (query.subject_type.has_value() && !bind_text(*query.subject_type)) ||
+      (query.subject_identity.has_value() &&
+       !bind_text(*query.subject_identity))) {
+    return failure();
+  }
+  if (query.cursor.has_value()) {
+    if (query.cursor->integer_key.has_value()) {
+      if (!bind_integer(*query.cursor->integer_key) ||
+          !bind_integer(*query.cursor->integer_key)) {
+        return failure();
+      }
+    } else if (query.cursor->text_key.has_value()) {
+      if (!bind_text(*query.cursor->text_key) ||
+          !bind_text(*query.cursor->text_key)) {
+        return failure();
+      }
+    } else {
+      return failure();
+    }
+    if (!bind_integer(query.cursor->sequence)) {
+      return failure();
+    }
+  }
+  if (!bind_integer(static_cast<std::int64_t>(query.limit) + 1) ||
+      parameter - 1 != ::sqlite3_bind_parameter_count(statement.get())) {
+    return failure();
+  }
+
+  const auto read_text = [&statement](int column,
+                                      std::size_t minimum_bytes,
+                                      std::size_t maximum_bytes,
+                                      std::string& output) {
+    if (::sqlite3_column_type(statement.get(), column) != SQLITE_TEXT) {
+      return false;
+    }
+    const int byte_count = ::sqlite3_column_bytes(statement.get(), column);
+    const auto* value = ::sqlite3_column_text(statement.get(), column);
+    if (byte_count < 0 ||
+        static_cast<std::size_t>(byte_count) < minimum_bytes ||
+        static_cast<std::size_t>(byte_count) > maximum_bytes ||
+        (byte_count > 0 && value == nullptr)) {
+      return false;
+    }
+    const std::string_view view(
+        value == nullptr ? "" : reinterpret_cast<const char*>(value),
+        static_cast<std::size_t>(byte_count));
+    if (view.find('\0') != std::string_view::npos ||
+        !g_utf8_validate(view.data(), static_cast<gssize>(view.size()),
+                         nullptr)) {
+      return false;
+    }
+    output.assign(view);
+    return true;
+  };
+
+  AuditEventQueryResult result;
+  result.events.reserve(static_cast<std::size_t>(query.limit) + 1U);
+  int step = SQLITE_ROW;
+  while ((step = ::sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (::sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        ::sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER) {
+      return failure();
+    }
+    AuditEventRecord event;
+    event.sequence = ::sqlite3_column_int64(statement.get(), 0);
+    event.server_timestamp_seconds =
+        ::sqlite3_column_int64(statement.get(), 1);
+    if (event.sequence <= 0 || event.server_timestamp_seconds < 0 ||
+        !read_text(2, 1U, 64U, event.event_type) ||
+        !read_text(3, 1U, 7U, event.outcome) ||
+        (event.outcome != "success" && event.outcome != "failure") ||
+        !read_text(4, 1U, 64U, event.actor_identity) ||
+        !read_text(5, 2U, 45U, event.peer_ip) ||
+        !read_text(6, 0U, 64U, event.detail_code) ||
+        !read_text(7, 0U, 64U, event.subject_type) ||
+        !read_text(8, 0U, 64U, event.subject_identity)) {
+      return failure();
+    }
+    result.events.push_back(std::move(event));
+    if (result.events.size() > static_cast<std::size_t>(query.limit) + 1U) {
+      return failure();
+    }
+  }
+  if (step != SQLITE_DONE) {
+    return failure();
+  }
+  result.has_more = result.events.size() > query.limit;
+  if (result.has_more) {
+    result.events.pop_back();
+  }
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    return failure();
+  }
+  return common::Result<AuditEventQueryResult>::Ok(std::move(result));
 }
 
 common::Result<void> SecurityStore::InitializeDevice(
@@ -2337,28 +3193,13 @@ common::Result<void> SecurityStore::InitializeDevice(
     }
     management_ip.reset();
 
-    sqlite3_stmt* raw_audit = nullptr;
-    constexpr const char* kInsertAudit =
-        "INSERT INTO audit_events "
-        "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
-        "peer_ip, detail_code) "
-        "VALUES (?1, 'bootstrap_completed', 'success', ?2, ?3, "
-        "'initial_administrator');";
-    if (::sqlite3_prepare_v2(impl_->database.get(), kInsertAudit, -1,
-                             &raw_audit, nullptr) != SQLITE_OK) {
+    auto audited = InsertAuditEvent(
+        transaction, record.completed_at_seconds, "bootstrap_completed",
+        "success", user_id, record.normalized_peer_ip,
+        "initial_administrator");
+    if (!audited.ok()) {
       return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
     }
-    std::unique_ptr<sqlite3_stmt, decltype(finalize)> audit(raw_audit, finalize);
-    if (::sqlite3_bind_int64(audit.get(), 1, record.completed_at_seconds) !=
-            SQLITE_OK ||
-        ::sqlite3_bind_int64(audit.get(), 2, user_id) != SQLITE_OK ||
-        ::sqlite3_bind_text(audit.get(), 3, record.normalized_peer_ip.data(),
-                            static_cast<int>(record.normalized_peer_ip.size()),
-                            SQLITE_TRANSIENT) != SQLITE_OK ||
-        ::sqlite3_step(audit.get()) != SQLITE_DONE) {
-      return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
-    }
-    audit.reset();
 
     common::Result<void> installed = common::Result<void>::Err(
         {"E_BOOTSTRAP_CREDENTIAL", "credential installation failed"});
@@ -2662,54 +3503,91 @@ common::Result<void> SecurityStore::InsertAuditEvent(
     std::string_view subject_identity) {
   if (!transaction.active_ || transaction.impl_ != impl_ ||
       impl_->database == nullptr) {
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
   }
+  std::string actor_identity{"system"};
+  if (actor_user_id.has_value()) {
+    PreparedStatement actor(
+        impl_->database.get(),
+        "SELECT canonical_username FROM users WHERE id = ?1;");
+    if (!actor.valid() ||
+        ::sqlite3_bind_int64(actor.get(), 1, *actor_user_id) != SQLITE_OK ||
+        ::sqlite3_step(actor.get()) != SQLITE_ROW) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+    const auto* identity = ::sqlite3_column_text(actor.get(), 0);
+    if (identity == nullptr) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+    actor_identity = reinterpret_cast<const char*>(identity);
+    if (::sqlite3_step(actor.get()) != SQLITE_DONE) {
+      return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+    }
+  }
+
+  auto insertion_state = ReadAuditInsertionState(impl_->database.get());
+  if (!insertion_state.ok()) {
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+  }
+  auto rotated = RotateAuditEvents(impl_->database.get(),
+                                   insertion_state.value(),
+                                   impl_->max_audit_events, now_seconds);
+  if (!rotated.ok()) {
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
+  }
+
   sqlite3_stmt* statement = nullptr;
   constexpr const char* kSql =
       "INSERT INTO audit_events "
-      "(server_timestamp_seconds, event_type, outcome, actor_user_id, "
-      "peer_ip, detail_code, subject_type, subject_identity) "
-      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+      "(sequence, server_timestamp_seconds, event_type, outcome, "
+      "actor_user_id, actor_identity, peer_ip, detail_code, subject_type, "
+      "subject_identity) "
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
-      ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 2, event_type.data(),
+      ::sqlite3_bind_int64(statement, 1,
+                           insertion_state.value().next_sequence) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 2, now_seconds) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 3, event_type.data(),
                           static_cast<int>(event_type.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 3, outcome.data(),
+      ::sqlite3_bind_text(statement, 4, outcome.data(),
                           static_cast<int>(outcome.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
       (actor_user_id.has_value()
-           ? ::sqlite3_bind_int64(statement, 4, *actor_user_id)
-           : ::sqlite3_bind_null(statement, 4)) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 5, normalized_peer_ip.data(),
+           ? ::sqlite3_bind_int64(statement, 5, *actor_user_id)
+           : ::sqlite3_bind_null(statement, 5)) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 6, actor_identity.data(),
+                          static_cast<int>(actor_identity.size()),
+                          SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_text(statement, 7, normalized_peer_ip.data(),
                           static_cast<int>(normalized_peer_ip.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 6, detail_code.data(),
+      ::sqlite3_bind_text(statement, 8, detail_code.data(),
                           static_cast<int>(detail_code.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 7,
+      ::sqlite3_bind_text(statement, 9,
                           subject_type.empty() ? "" : subject_type.data(),
                           static_cast<int>(subject_type.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_bind_text(statement, 8,
+      ::sqlite3_bind_text(statement, 10,
                           subject_identity.empty() ? ""
                                                    : subject_identity.data(),
                           static_cast<int>(subject_identity.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
-      ::sqlite3_step(statement) != SQLITE_DONE) {
+      ::sqlite3_step(statement) != SQLITE_DONE ||
+      ::sqlite3_changes64(impl_->database.get()) != 1) {
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
     }
-    return StoreError("E_AUTHENTICATION_STORE",
-                      "authentication transaction failed");
+    return StoreError("E_SECURITY_DB_AUDIT", "audit transaction failed");
   }
   const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
   return finalized
              ? common::Result<void>::Ok()
-             : StoreError("E_AUTHENTICATION_STORE",
-                          "authentication transaction failed");
+             : StoreError("E_SECURITY_DB_AUDIT",
+                          "audit transaction failed");
 }
 
 common::Result<void> SecurityStore::CoalesceFirmwareLogOutbox(
