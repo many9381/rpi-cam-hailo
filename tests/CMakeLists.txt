@@ -71,6 +71,7 @@ target_link_options(camera_firmware_runtime_settings_store_tests
 gtest_discover_tests(camera_firmware_runtime_settings_store_tests)
 
 add_executable(camera_firmware_security_tests
+    unit/security/AuditLogServiceTest.cpp
     unit/security/AuthServiceTest.cpp
     unit/security/BootstrapServiceTest.cpp
     unit/security/DeviceTlsManagerTest.cpp
@@ -344,6 +345,7 @@ gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
 )
 
 add_executable(camera_firmware_service_tests
+    unit/service/AuditLogHttpTest.cpp
     unit/service/SecurityRequestGateTest.cpp
     unit/service/SessionStreamRegistryTest.cpp
     unit/service/ServiceResponseTest.cpp

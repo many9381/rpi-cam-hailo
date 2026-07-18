@@ -130,9 +130,15 @@ struct AiConfig {
   std::vector<AiModelConfig> models;
 };
 
+struct AuditConfig {
+  std::uint64_t max_events{50000U};
+  std::uint32_t warning_percent{90U};
+};
+
 struct SecurityConfig {
   bool enabled{true};
   std::string state_directory{"/var/lib/camera-firmware/security"};
+  AuditConfig audit;
 };
 
 struct AppConfig {

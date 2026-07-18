@@ -262,6 +262,14 @@ common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
 }
 
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
+  if (config.security.audit.max_events < 1U ||
+      config.security.audit.max_events > 1000000U ||
+      config.security.audit.warning_percent < 1U ||
+      config.security.audit.warning_percent > 99U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SECURITY_AUDIT", "security.audit configuration is invalid"});
+  }
+
   if (!config.security.enabled) {
     return common::Result<void>::Ok();
   }
@@ -426,6 +434,12 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       AssignIfPresent(security, "enabled", config.security.enabled);
       AssignIfPresent(security, "state_directory",
                       config.security.state_directory);
+      const YAML::Node audit = security["audit"];
+      if (audit) {
+        AssignIfPresent(audit, "max_events", config.security.audit.max_events);
+        AssignIfPresent(audit, "warning_percent",
+                        config.security.audit.warning_percent);
+      }
     }
 
     const YAML::Node ai = root["ai"];

@@ -37,6 +37,9 @@ http:
 
 security:
   enabled: false
+  audit:
+    max_events: 50000
+    warning_percent: 90
 
 ai:
   enabled: true

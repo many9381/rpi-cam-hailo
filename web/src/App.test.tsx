@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { UnauthorizedError } from './api/client';
@@ -13,7 +14,11 @@ const administratorHooks = vi.hoisted(() => ({
   operationalConstructed: 0,
   runtimeConstructed: 0,
   userManagementConstructed: 0,
+  auditStatusConstructed: 0,
+  auditRecordsConstructed: 0,
 }));
+
+const originalScrollIntoView = Element.prototype.scrollIntoView;
 
 vi.mock('./hooks/useOperationalData', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hooks/useOperationalData')>();
@@ -57,6 +62,44 @@ vi.mock('./features/users/useUserManagement', async (importOriginal) => {
   };
 });
 
+vi.mock('./features/audit/useAuditStatus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./features/audit/useAuditStatus')>();
+  const { useRef } = await import('react');
+  return {
+    ...actual,
+    useAuditStatus: (...args: Parameters<typeof actual.useAuditStatus>) => {
+      const counted = useRef(false);
+      if (!counted.current) {
+        counted.current = true;
+        administratorHooks.auditStatusConstructed += 1;
+      }
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useAuditStatus');
+      }
+      return actual.useAuditStatus(...args);
+    },
+  };
+});
+
+vi.mock('./features/audit/useAuditRecords', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./features/audit/useAuditRecords')>();
+  const { useRef } = await import('react');
+  return {
+    ...actual,
+    useAuditRecords: (...args: Parameters<typeof actual.useAuditRecords>) => {
+      const counted = useRef(false);
+      if (!counted.current) {
+        counted.current = true;
+        administratorHooks.auditRecordsConstructed += 1;
+      }
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useAuditRecords');
+      }
+      return actual.useAuditRecords(...args);
+    },
+  };
+});
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -93,12 +136,21 @@ const makeClient = (): CameraApiClient => ({
 afterEach(() => {
   cleanup();
   window.location.hash = '';
+  if (originalScrollIntoView === undefined) {
+    delete (Element.prototype as { scrollIntoView?: Element['scrollIntoView'] })
+      .scrollIntoView;
+  } else {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  }
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   administratorHooks.throwOnConstruction = false;
   administratorHooks.operationalConstructed = 0;
   administratorHooks.runtimeConstructed = 0;
   administratorHooks.userManagementConstructed = 0;
+  administratorHooks.auditStatusConstructed = 0;
+  administratorHooks.auditRecordsConstructed = 0;
 });
 
 describe('App bootstrap gate', () => {
@@ -636,11 +688,23 @@ function renderRecoveredSession(
   role: 'administrator' | 'viewer',
   pathname: string,
   overrides: Record<string, unknown> = {},
+  options: {
+    strictMode?: boolean;
+    pendingPaths?: ReadonlySet<string>;
+    auditStatusResponses?: ReadonlyArray<unknown | Promise<unknown>>;
+  } = {},
 ) {
   const client = makeClient();
+  const auditStatusResponses = [...(options.auditStatusResponses ?? [])];
   window.location.hash = `#${pathname}`;
   vi.mocked(client.getBlob).mockResolvedValue(new Blob(['snapshot'], { type: 'image/jpeg' }));
   vi.mocked(client.getJson).mockImplementation(async (path, parser) => {
+    if (options.pendingPaths?.has(path)) {
+      return new Promise<never>(() => {});
+    }
+    if (path === '/api/v1/audit/status' && auditStatusResponses.length > 0) {
+      return parser(await auditStatusResponses.shift()) as never;
+    }
     const payloads: Record<string, unknown> = {
       '/api/v1/setup/status': { required: false },
       '/api/v1/auth/me': { username: `${role}.one`, role },
@@ -671,6 +735,20 @@ function renderRecoveredSession(
         pending: null,
         last_apply: { status: 'never', code: '', restored: false },
       },
+      '/api/v1/ai/detections': { events: [] },
+      '/api/v1/audit/status': {
+        current_events: 10,
+        max_events: 100,
+        usage_percent: 10,
+        warning: false,
+        rotated_event_count: 0,
+        last_rotation_at_seconds: null,
+        last_rotated_sequence: null,
+      },
+      '/api/v1/audit/events?sort_by=timestamp&sort_direction=desc&limit=50': {
+        events: [],
+        next_cursor: null,
+      },
       '/api/v1/monitoring/cameras': {
         cameras: [{ id: 'imx708', state: 'streaming', snapshot_available: true,
           width: 1920, height: 1080 }],
@@ -678,7 +756,10 @@ function renderRecoveredSession(
     };
     return parser({ ...payloads, ...overrides }[path]) as never;
   });
-  render(<App client={client} />);
+  const application = <App client={client} />;
+  render(options.strictMode
+    ? <StrictMode>{application}</StrictMode>
+    : application);
   return client;
 }
 
@@ -704,6 +785,8 @@ describe('App role-specific route trees', () => {
     expect(administratorHooks.operationalConstructed).toBe(0);
     expect(administratorHooks.runtimeConstructed).toBe(0);
     expect(administratorHooks.userManagementConstructed).toBe(0);
+    expect(administratorHooks.auditStatusConstructed).toBe(0);
+    expect(administratorHooks.auditRecordsConstructed).toBe(0);
   });
 
   it.each(['/dashboard', '/cameras', '/ai', '/system', '/users', '/monitor'])(
@@ -734,6 +817,234 @@ describe('App role-specific route trees', () => {
     renderRecoveredSession('administrator', pathname);
 
     await waitFor(() => expect(window.location.hash).toBe(`#${expectedPath}`));
+  });
+
+  it.each(['/dashboard', '/cameras', '/ai', '/users'])(
+    'constructs one audit status controller and no records controller on %s',
+    async (pathname) => {
+      const client = renderRecoveredSession('administrator', pathname, pathname === '/users'
+        ? {
+          '/api/v1/security/users': { users: [] },
+          '/api/v1/security/management-ips': {
+            management_ips: [],
+            current_peer_ip: '192.0.2.44',
+          },
+        }
+        : {});
+
+      await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/audit/status',
+      )).toHaveLength(1));
+      expect(administratorHooks.auditStatusConstructed).toBe(1);
+      expect(administratorHooks.auditRecordsConstructed).toBe(0);
+      expect(vi.mocked(client.getJson).mock.calls.some(
+        ([path]) => path.startsWith('/api/v1/audit/events'),
+      )).toBe(false);
+    },
+  );
+
+  it('constructs one status and one records controller only on System', async () => {
+    const client = renderRecoveredSession('administrator', '/system');
+
+    expect(await screen.findByRole('heading', { name: 'Audit records' })).toBeVisible();
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path.startsWith('/api/v1/audit/events?'),
+    )).toHaveLength(1));
+    expect(administratorHooks.auditStatusConstructed).toBe(1);
+    expect(administratorHooks.auditRecordsConstructed).toBe(1);
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(1);
+  });
+
+  it('scrolls and focuses audit records after the capacity warning routes to System', async () => {
+    const user = userEvent.setup();
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    renderRecoveredSession('administrator', '/dashboard', {
+      '/api/v1/audit/status': {
+        current_events: 90,
+        max_events: 100,
+        usage_percent: 90,
+        warning: true,
+        rotated_event_count: 4,
+        last_rotation_at_seconds: null,
+        last_rotated_sequence: null,
+      },
+    });
+
+    await user.click(await screen.findByRole('link', { name: 'Review audit records' }));
+
+    const auditSection = await screen.findByRole('region', { name: 'Audit records' });
+    await waitFor(() => {
+      expect(window.location.hash).toBe('#/system#audit-records');
+      expect(scrollIntoView).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(auditSection);
+    });
+
+    const refresh = screen.getByRole('button', { name: 'Refresh audit records' });
+    await user.click(refresh);
+    await waitFor(() => expect(refresh).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+  });
+
+  it('leaves one live audit status request and poll interval after the StrictMode probe', async () => {
+    const setInterval = vi.spyOn(window, 'setInterval');
+    const clearInterval = vi.spyOn(window, 'clearInterval');
+    const client = renderRecoveredSession('administrator', '/dashboard', {}, {
+      strictMode: true,
+      pendingPaths: new Set(['/api/v1/audit/status']),
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+      .toBeVisible();
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(2));
+
+    const statusSignals = vi.mocked(client.getJson).mock.calls
+      .filter(([path]) => path === '/api/v1/audit/status')
+      .map(([, , signal]) => signal);
+    expect(statusSignals.map((signal) => signal?.aborted)).toEqual([true, false]);
+
+    const auditTimerIds = setInterval.mock.calls.flatMap(([, delay], index) =>
+      delay === 30_000 ? [setInterval.mock.results[index]?.value] : []);
+    const clearedTimerIds = clearInterval.mock.calls.map(([timerId]) => timerId);
+    expect(auditTimerIds).toHaveLength(2);
+    expect(auditTimerIds.filter((timerId) => !clearedTimerIds.includes(timerId)))
+      .toHaveLength(1);
+  });
+
+  it('leaves one live System event request after the StrictMode probe', async () => {
+    const eventPath = '/api/v1/audit/events?sort_by=timestamp&sort_direction=desc&limit=50';
+    const client = renderRecoveredSession('administrator', '/system', {}, {
+      strictMode: true,
+      pendingPaths: new Set([eventPath]),
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Audit records' })).toBeVisible();
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === eventPath,
+    )).toHaveLength(2));
+
+    const eventSignals = vi.mocked(client.getJson).mock.calls
+      .filter(([path]) => path === eventPath)
+      .map(([, , signal]) => signal);
+    expect(eventSignals.map((signal) => signal?.aborted)).toEqual([true, false]);
+  });
+
+  it('starts zero audit effects for a viewer StrictMode entry', async () => {
+    administratorHooks.throwOnConstruction = true;
+    const setInterval = vi.spyOn(window, 'setInterval');
+    const client = renderRecoveredSession('viewer', '/monitor', {}, {
+      strictMode: true,
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Live monitoring' })).toBeVisible();
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status' || path.startsWith('/api/v1/audit/events'),
+    )).toHaveLength(0);
+    expect(setInterval.mock.calls.filter(([, delay]) => delay === 30_000))
+      .toHaveLength(0);
+  });
+
+  it('keeps the operational status controller while leaving System', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/system');
+    await screen.findByRole('heading', { name: 'Audit records' });
+    await waitFor(() => expect(administratorHooks.auditRecordsConstructed).toBe(1));
+
+    await user.click(screen.getByRole('link', { name: 'Dashboard' }));
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+
+    expect(administratorHooks.auditStatusConstructed).toBe(1);
+    expect(administratorHooks.auditRecordsConstructed).toBe(1);
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(1);
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path.startsWith('/api/v1/audit/events?'),
+    )).toHaveLength(1);
+  });
+
+  it('preserves an audit warning across administrator route transitions', async () => {
+    const user = userEvent.setup();
+    const pendingStatus = deferred<unknown>();
+    const client = renderRecoveredSession('administrator', '/dashboard', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': {
+        management_ips: [],
+        current_peer_ip: '192.0.2.44',
+      },
+    }, {
+      auditStatusResponses: [{
+        current_events: 90,
+        max_events: 100,
+        usage_percent: 90,
+        warning: true,
+        rotated_event_count: 4,
+        last_rotation_at_seconds: null,
+        last_rotated_sequence: null,
+      }, pendingStatus.promise, {
+        current_events: 40,
+        max_events: 100,
+        usage_percent: 40,
+        warning: false,
+        rotated_event_count: 4,
+        last_rotation_at_seconds: null,
+        last_rotated_sequence: null,
+      }],
+    });
+
+    const warningText = /Audit storage is at 90%/;
+    expect(await screen.findByText(warningText)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(2));
+
+    await user.click(screen.getByRole('link', { name: 'System' }));
+    await screen.findByRole('heading', { name: 'Audit records' });
+    expect(screen.getByText(warningText)).toBeVisible();
+
+    await user.click(screen.getByRole('link', { name: 'Users' }));
+    await screen.findByRole('heading', { name: 'Users & access' });
+    expect(screen.getByText(warningText)).toBeVisible();
+
+    await user.click(screen.getByRole('link', { name: 'Dashboard' }));
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    expect(screen.getByText(warningText)).toBeVisible();
+    expect(administratorHooks.auditStatusConstructed).toBe(1);
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(2);
+
+    pendingStatus.reject(new Error('status refresh failed'));
+    expect(await screen.findByText(/Capacity status may be out of date\./))
+      .toBeVisible();
+    expect(screen.getByText(warningText)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+    await waitFor(() => expect(screen.queryByText(warningText))
+      .not.toBeInTheDocument());
+    expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(3);
+  });
+
+  it('refreshes audit status with the administrator operational shell', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/dashboard');
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(1));
+
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/audit/status',
+    )).toHaveLength(2));
   });
 
   it('loads administrator users with only the two management resources', async () => {
@@ -795,6 +1106,9 @@ describe('App role-specific route trees', () => {
       expect(vi.mocked(client.getJson).mock.calls.filter(
         ([path]) => path === '/api/v1/security/management-ips',
       )).toHaveLength(1);
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/audit/status',
+      )).toHaveLength(1);
     });
     vi.mocked(client.getJson).mockRejectedValue(new Error('offline'));
 
@@ -806,6 +1120,9 @@ describe('App role-specific route trees', () => {
       )).toHaveLength(2);
       expect(vi.mocked(client.getJson).mock.calls.filter(
         ([path]) => path === '/api/v1/security/management-ips',
+      )).toHaveLength(2);
+      expect(vi.mocked(client.getJson).mock.calls.filter(
+        ([path]) => path === '/api/v1/audit/status',
       )).toHaveLength(2);
     });
   });
@@ -830,6 +1147,8 @@ describe('App role-specific route trees', () => {
     expect(administratorHooks.operationalConstructed).toBe(0);
     expect(administratorHooks.runtimeConstructed).toBe(0);
     expect(administratorHooks.userManagementConstructed).toBe(0);
+    expect(administratorHooks.auditStatusConstructed).toBe(0);
+    expect(administratorHooks.auditRecordsConstructed).toBe(0);
     const getJsonPaths = vi.mocked(client.getJson).mock.calls.map(([path]) => path);
     expect(getJsonPaths).toEqual(expect.arrayContaining([
       '/api/v1/setup/status',
@@ -848,6 +1167,8 @@ describe('App role-specific route trees', () => {
       '/api/v1/settings/runtime',
       '/api/v1/security/users',
       '/api/v1/security/management-ips',
+      '/api/v1/audit/status',
+      '/api/v1/audit/events?sort_by=timestamp&sort_direction=desc&limit=50',
     ]) {
       expect(getJsonPaths).not.toContain(path);
     }

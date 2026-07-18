@@ -1,4 +1,5 @@
 add_library(camera_firmware_security STATIC
+    AuditLogService.cpp
     AuthService.cpp
     BootstrapService.cpp
     DeviceTlsManager.cpp

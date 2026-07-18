@@ -73,6 +73,15 @@ void FailNextAuthorizationDispatchQueueForTesting() noexcept;
 void ResetAuthorizationDispatchQueueFailureForTesting() noexcept;
 void FailNextTerminalResponseQueueForTesting() noexcept;
 void ResetTerminalResponseQueueFailureForTesting() noexcept;
+std::shared_ptr<BoundedWorker> ReplaceAuditAuthorizationWorkerForTesting(
+    std::shared_ptr<BoundedWorker> worker) noexcept;
+std::shared_ptr<security::SecurityStore>
+ReplaceAuditAuthorizationStoreForTesting(
+    std::shared_ptr<security::SecurityStore> store) noexcept;
+std::shared_ptr<security::AuthService>
+ReplaceAuditAuthorizationServiceForTesting(
+    std::shared_ptr<security::AuthService> auth_service) noexcept;
+bool ReplaceAuditAuthorizationShutdownForTesting(bool shutting_down) noexcept;
 }  // namespace camera_firmware::service::internal
 
 namespace {
@@ -125,6 +134,57 @@ class PromiseReleaseGuard {
  private:
   std::promise<void>& promise_;
   bool released_{false};
+};
+
+template <typename T, auto Replace>
+class ScopedAuditAuthorizationDependency {
+ public:
+  explicit ScopedAuditAuthorizationDependency(std::shared_ptr<T> replacement)
+      : original_(Replace(std::move(replacement))) {}
+
+  ~ScopedAuditAuthorizationDependency() { (void)Replace(std::move(original_)); }
+
+  ScopedAuditAuthorizationDependency(
+      const ScopedAuditAuthorizationDependency&) = delete;
+  ScopedAuditAuthorizationDependency& operator=(
+      const ScopedAuditAuthorizationDependency&) = delete;
+
+ private:
+  std::shared_ptr<T> original_;
+};
+
+using AuditAuthorizationWorkerScope = ScopedAuditAuthorizationDependency<
+    camera_firmware::service::BoundedWorker,
+    camera_firmware::service::internal::
+        ReplaceAuditAuthorizationWorkerForTesting>;
+using AuditAuthorizationStoreScope = ScopedAuditAuthorizationDependency<
+    camera_firmware::security::SecurityStore,
+    camera_firmware::service::internal::
+        ReplaceAuditAuthorizationStoreForTesting>;
+using AuditAuthorizationServiceScope = ScopedAuditAuthorizationDependency<
+    camera_firmware::security::AuthService,
+    camera_firmware::service::internal::
+        ReplaceAuditAuthorizationServiceForTesting>;
+
+class AuditAuthorizationShutdownScope {
+ public:
+  explicit AuditAuthorizationShutdownScope(bool shutting_down) noexcept
+      : original_(camera_firmware::service::internal::
+                      ReplaceAuditAuthorizationShutdownForTesting(
+                          shutting_down)) {}
+
+  ~AuditAuthorizationShutdownScope() {
+    (void)camera_firmware::service::internal::
+        ReplaceAuditAuthorizationShutdownForTesting(original_);
+  }
+
+  AuditAuthorizationShutdownScope(const AuditAuthorizationShutdownScope&) =
+      delete;
+  AuditAuthorizationShutdownScope& operator=(
+      const AuditAuthorizationShutdownScope&) = delete;
+
+ private:
+  bool original_;
 };
 
 std::uint16_t ReserveLoopbackPort() {
@@ -275,6 +335,20 @@ void ExpectStatus(const HttpResult& result, drogon::HttpStatusCode status) {
   ASSERT_NE(result.response, nullptr);
   EXPECT_EQ(result.response->statusCode(), status)
       << result.response->getBody();
+}
+
+void ExpectJsonKeys(const Json::Value& value,
+                    std::initializer_list<std::string_view> expected) {
+  ASSERT_TRUE(value.isObject());
+  auto actual = value.getMemberNames();
+  std::sort(actual.begin(), actual.end());
+  std::vector<std::string> expected_keys;
+  expected_keys.reserve(expected.size());
+  for (const auto key : expected) {
+    expected_keys.emplace_back(key);
+  }
+  std::sort(expected_keys.begin(), expected_keys.end());
+  EXPECT_EQ(actual, expected_keys);
 }
 
 void ExpectSecurityHeaders(const drogon::HttpResponsePtr& response) {
@@ -5871,6 +5945,314 @@ TEST(HttpsAuthIntegrationTest,
   ASSERT_EQ(::waitpid(child, &status, 0), child);
   ASSERT_TRUE(WIFEXITED(status));
   EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(HttpsAuthIntegrationTest,
+     AuditApiListsRealEventsWithStrictAuthorizationAndWireContracts) {
+  TemporaryDirectory directory;
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.path().string();
+  config.security.audit.max_events = 50U;
+  config.security.audit.warning_percent = 80U;
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "audit-api-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory.path() / "rtsp.credentials").string();
+
+  auto opened = camera_firmware::security::SecurityStore::Open(
+      {config.security.state_directory, config.security.audit.max_events,
+       config.security.audit.warning_percent});
+  ASSERT_TRUE(opened.ok()) << opened.error().message;
+  auto store = std::shared_ptr<camera_firmware::security::SecurityStore>(
+      std::move(opened).value());
+  auto bootstrap =
+      std::make_shared<camera_firmware::security::BootstrapService>(
+          *store, config,
+          camera_firmware::security::BuildReservedIdentities(config));
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = config.http.public_base_url;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.security_store = store;
+  args.bootstrap_service = bootstrap;
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto unauthenticated =
+      Send(client, drogon::Get, "/api/v1/audit/status");
+  ExpectStatus(unauthenticated, drogon::k401Unauthorized);
+  ASSERT_NE(unauthenticated.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*unauthenticated.response->getJsonObject())["code"].asString(),
+            "E_AUTHENTICATION_REQUIRED");
+
+  const auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+
+  const auto expect_audit_unavailable = [&](std::string_view path) {
+    const auto unavailable = Send(client, drogon::Get, std::string(path), {},
+                                  {}, administrator_cookie);
+    ExpectStatus(unavailable, drogon::k503ServiceUnavailable);
+    ASSERT_NE(unavailable.response->getJsonObject(), nullptr);
+    ExpectJsonKeys(*unavailable.response->getJsonObject(), {"code", "message"});
+    EXPECT_EQ((*unavailable.response->getJsonObject())["code"].asString(),
+              "E_AUDIT_UNAVAILABLE");
+    EXPECT_EQ((*unavailable.response->getJsonObject())["message"].asString(),
+              "Audit records are temporarily unavailable.");
+  };
+  const auto expect_both_audit_routes_unavailable = [&] {
+    for (const std::string_view path : {"/api/v1/audit/status",
+                                        "/api/v1/audit/events"}) {
+      expect_audit_unavailable(path);
+    }
+  };
+
+  for (const std::string_view path : {"/api/v1/audit/status",
+                                      "/api/v1/audit/events"}) {
+    camera_firmware::service::internal::
+        FailNextAuthorizationDispatchQueueForTesting();
+    expect_audit_unavailable(path);
+    camera_firmware::service::internal::
+        ResetAuthorizationDispatchQueueFailureForTesting();
+  }
+  {
+    AuditAuthorizationWorkerScope missing_worker(nullptr);
+    expect_both_audit_routes_unavailable();
+  }
+  {
+    auto stopped_worker = std::make_shared<camera_firmware::service::BoundedWorker>(
+        1U);
+    stopped_worker->Stop();
+    AuditAuthorizationWorkerScope stopped(std::move(stopped_worker));
+    expect_both_audit_routes_unavailable();
+  }
+  {
+    auto saturated_worker =
+        std::make_shared<camera_firmware::service::BoundedWorker>(1U);
+    std::promise<void> blocker_started;
+    std::promise<void> release_blocker;
+    PromiseReleaseGuard release_guard(release_blocker);
+    auto release_future = release_blocker.get_future().share();
+    ASSERT_TRUE(saturated_worker
+                    ->Submit([&blocker_started, release_future] {
+                      blocker_started.set_value();
+                      release_future.wait();
+                    })
+                    .ok());
+    ASSERT_EQ(blocker_started.get_future().wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    ASSERT_TRUE(saturated_worker->Submit([] {}).ok());
+    {
+      AuditAuthorizationWorkerScope saturated(saturated_worker);
+      expect_both_audit_routes_unavailable();
+    }
+    release_guard.Release();
+    saturated_worker->Stop();
+  }
+  {
+    AuditAuthorizationShutdownScope shutting_down(true);
+    expect_both_audit_routes_unavailable();
+  }
+  {
+    AuditAuthorizationStoreScope missing_store(nullptr);
+    expect_both_audit_routes_unavailable();
+  }
+  {
+    AuditAuthorizationServiceScope missing_auth_service(nullptr);
+    expect_both_audit_routes_unavailable();
+  }
+
+  const auto created_viewer = Send(
+      client, drogon::Post, "/api/v1/security/users",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      administrator_cookie, true);
+  ExpectStatus(created_viewer, drogon::k201Created);
+  ExpectStatus(
+      Send(client, drogon::Post,
+           "/api/v1/security/management-ips/viewer",
+           R"({"address":"127.0.0.1"})", origin, administrator_cookie,
+           true),
+      drogon::k201Created);
+  const auto viewer_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
+      {}, true);
+  ExpectStatus(viewer_login, drogon::k200OK);
+  const std::string viewer_cookie =
+      "camera_session=" +
+      viewer_login.response->getCookie("camera_session").value();
+
+  for (const std::string path : {"/api/v1/audit/status",
+                                 "/api/v1/audit/events"}) {
+    const auto denied = Send(client, drogon::Get, path, {}, {}, viewer_cookie);
+    ExpectStatus(denied, drogon::k403Forbidden);
+    ASSERT_NE(denied.response->getJsonObject(), nullptr);
+    EXPECT_EQ((*denied.response->getJsonObject())["code"].asString(),
+              "E_AUTHORIZATION_REQUIRED");
+  }
+
+  const auto status = Send(client, drogon::Get, "/api/v1/audit/status", {},
+                           {}, administrator_cookie);
+  ExpectStatus(status, drogon::k200OK);
+  ASSERT_NE(status.response->getJsonObject(), nullptr);
+  const auto& status_json = *status.response->getJsonObject();
+  ExpectJsonKeys(status_json,
+                 {"current_events", "max_events", "usage_percent",
+                  "warning", "rotated_event_count",
+                  "last_rotation_at_seconds", "last_rotated_sequence"});
+  const auto event_count_before_reads = status_json["current_events"].asUInt64();
+  EXPECT_GT(event_count_before_reads, 0U);
+  EXPECT_EQ(status_json["max_events"].asUInt64(), 50U);
+  EXPECT_TRUE(status_json["last_rotation_at_seconds"].isNull());
+  EXPECT_TRUE(status_json["last_rotated_sequence"].isNull());
+
+  const auto filtered = RawHttpsGet(
+      port,
+      "/api/v1/audit/events?event_type=viewer_created&actor_identity=owner1&"
+      "subject_type=user&subject_identity=viewer1",
+      {administrator_cookie});
+  EXPECT_EQ(filtered.status, 200);
+  const auto filtered_json = DecodeRawJsonBody(filtered);
+  ASSERT_TRUE(filtered_json.has_value());
+  ExpectJsonKeys(*filtered_json, {"events", "next_cursor"});
+  ASSERT_TRUE((*filtered_json)["events"].isArray());
+  ASSERT_EQ((*filtered_json)["events"].size(), 1U);
+  const auto& filtered_event = (*filtered_json)["events"][0U];
+  ExpectJsonKeys(filtered_event,
+                 {"sequence", "server_timestamp_seconds", "event_type",
+                  "outcome", "actor_identity", "peer_ip", "detail_code",
+                  "subject_type", "subject_identity"});
+  EXPECT_EQ(filtered_event["event_type"].asString(), "viewer_created");
+  EXPECT_EQ(filtered_event["outcome"].asString(), "success");
+  EXPECT_EQ(filtered_event["actor_identity"].asString(), "owner1");
+  EXPECT_EQ(filtered_event["subject_type"].asString(), "user");
+  EXPECT_EQ(filtered_event["subject_identity"].asString(), "viewer1");
+  EXPECT_FALSE(filtered_event.isMember("actor_user_id"));
+
+  const auto first_page = RawHttpsGet(
+      port,
+      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=2",
+      {administrator_cookie});
+  EXPECT_EQ(first_page.status, 200);
+  const auto first_page_json = DecodeRawJsonBody(first_page);
+  ASSERT_TRUE(first_page_json.has_value());
+  ASSERT_EQ((*first_page_json)["events"].size(), 2U);
+  ASSERT_TRUE((*first_page_json)["next_cursor"].isString());
+  const auto collect_event_identities = [](const Json::Value& events) {
+    std::vector<std::pair<std::int64_t, std::int64_t>> identities;
+    identities.reserve(events.size());
+    for (const auto& event : events) {
+      identities.emplace_back(event["server_timestamp_seconds"].asInt64(),
+                              event["sequence"].asInt64());
+    }
+    return identities;
+  };
+  const auto first_page_identities =
+      collect_event_identities((*first_page_json)["events"]);
+  ASSERT_EQ(first_page_identities.size(), 2U);
+  EXPECT_TRUE(std::is_sorted(first_page_identities.begin(),
+                             first_page_identities.end()));
+  const std::string cursor = (*first_page_json)["next_cursor"].asString();
+  ASSERT_FALSE(cursor.empty());
+
+  const auto second_page = RawHttpsGet(
+      port,
+      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=2&"
+      "cursor=" +
+          cursor,
+      {administrator_cookie});
+  EXPECT_EQ(second_page.status, 200);
+  const auto second_page_json = DecodeRawJsonBody(second_page);
+  ASSERT_TRUE(second_page_json.has_value());
+  ASSERT_FALSE((*second_page_json)["events"].empty());
+  const auto second_page_identities =
+      collect_event_identities((*second_page_json)["events"]);
+  EXPECT_TRUE(std::is_sorted(second_page_identities.begin(),
+                             second_page_identities.end()));
+  for (const auto& identity : second_page_identities) {
+    EXPECT_EQ(std::find(first_page_identities.begin(),
+                        first_page_identities.end(), identity),
+              first_page_identities.end());
+  }
+  EXPECT_LT(first_page_identities.back(), second_page_identities.front());
+
+  for (const std::string path : {
+           "/api/v1/audit/events?limit=1&limit=2",
+           "/api/v1/audit/events?unknown=value",
+           "/api/v1/audit/status?limit=1",
+       }) {
+    const auto malformed = RawHttpsGet(port, path, {administrator_cookie});
+    EXPECT_EQ(malformed.status, 400) << path;
+    const auto json = DecodeRawJsonBody(malformed);
+    ASSERT_TRUE(json.has_value()) << path;
+    ExpectJsonKeys(*json, {"code", "message"});
+    EXPECT_EQ((*json)["code"].asString(), "E_AUDIT_QUERY_INVALID")
+        << path;
+    EXPECT_EQ((*json)["message"].asString(), "Audit query is invalid.")
+        << path;
+  }
+
+  const auto body_rejected = RawHttpsJsonRequest(
+      port, "GET", "/api/v1/audit/events", "{}", {},
+      administrator_cookie);
+  EXPECT_EQ(body_rejected.status, 400);
+  const auto body_error = DecodeRawJsonBody(body_rejected);
+  ASSERT_TRUE(body_error.has_value());
+  EXPECT_EQ((*body_error)["code"].asString(), "E_AUDIT_QUERY_INVALID");
+
+  for (const auto& [method, path] :
+       std::array<std::pair<std::string_view, std::string_view>, 4>{
+           {{"POST", "/api/v1/audit/status"},
+            {"PUT", "/api/v1/audit/events"},
+            {"GET", "/api/v1/audit/status/"},
+            {"GET", "/api/v1/audit/events/extra"}}}) {
+    const auto unknown = RawHttpsJsonRequest(
+        port, method, path, {}, {}, administrator_cookie);
+    EXPECT_EQ(unknown.status, 404) << method << ' ' << path;
+    const auto json = DecodeRawJsonBody(unknown);
+    ASSERT_TRUE(json.has_value());
+    EXPECT_EQ((*json)["code"].asString(), "E_NOT_FOUND");
+  }
+
+  const auto status_after_reads =
+      Send(client, drogon::Get, "/api/v1/audit/status", {}, {},
+           administrator_cookie);
+  ExpectStatus(status_after_reads, drogon::k200OK);
+  ASSERT_NE(status_after_reads.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*status_after_reads.response->getJsonObject())["current_events"]
+                .asUInt64(),
+            event_count_before_reads);
+
+  service.Stop();
 }
 
 TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
