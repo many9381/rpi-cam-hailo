@@ -36,6 +36,7 @@
 #include <sqlite3.h>
 
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/security/SecurityStore.hpp"
 
 namespace {
 
@@ -860,10 +861,11 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
     EXPECT_TRUE(process.StopCleanly());
   }
 
-  EXPECT_EQ(QueryInt(database_path, "SELECT version FROM schema_version;"), 3);
+  EXPECT_EQ(QueryInt(database_path, "SELECT version FROM schema_version;"),
+            camera_firmware::security::kSecuritySchemaRevision);
   EXPECT_EQ(QueryInt(database_path,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            3);
+            camera_firmware::security::kSecuritySchemaRevision);
   EXPECT_EQ(QueryText(database_path,
                       "SELECT canonical_username FROM users WHERE id = 11;"),
             kAdministratorUsername);
