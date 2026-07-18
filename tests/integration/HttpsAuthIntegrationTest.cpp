@@ -245,7 +245,8 @@ HttpResult Send(const drogon::HttpClientPtr& client,
                 std::string origin = {},
                 std::string cookie = {},
                 bool management_header = false,
-                double timeout_seconds = 15.0) {
+                double timeout_seconds = 15.0,
+                std::vector<std::pair<std::string, std::string>> headers = {}) {
   auto request = drogon::HttpRequest::newHttpRequest();
   request->setMethod(method);
   request->setPath(std::move(path));
@@ -261,6 +262,9 @@ HttpResult Send(const drogon::HttpClientPtr& client,
   }
   if (management_header) {
     request->addHeader("X-Camera-Request", "management");
+  }
+  for (auto& [name, value] : headers) {
+    request->addHeader(std::move(name), std::move(value));
   }
   auto [result, response] = client->sendRequest(request, timeout_seconds);
   return {result, std::move(response)};
@@ -2594,7 +2598,11 @@ void RunAdministratorManagementIpLifecycleScenario(
            administrator_cookie);
   ExpectStatus(initial_list, drogon::k200OK);
   ASSERT_NE(initial_list.response->getJsonObject(), nullptr);
-  expect_fields(*initial_list.response->getJsonObject(), {"management_ips"});
+  expect_fields(*initial_list.response->getJsonObject(),
+                {"management_ips", "current_peer_ip"});
+  EXPECT_EQ(
+      (*initial_list.response->getJsonObject())["current_peer_ip"].asString(),
+      "127.0.0.1");
   const auto& initial_entries =
       (*initial_list.response->getJsonObject())["management_ips"];
   ASSERT_TRUE(initial_entries.isArray());
@@ -2604,6 +2612,17 @@ void RunAdministratorManagementIpLifecycleScenario(
   EXPECT_EQ(initial_entries[0U]["role"].asString(), "administrator");
   const std::int64_t initial_administrator_ip_id =
       initial_entries[0U]["id"].asInt64();
+  const auto spoofed_list = Send(
+      client, drogon::Get, "/api/v1/security/management-ips", {}, {},
+      administrator_cookie, false, 15.0,
+      {{"X-Forwarded-For", "203.0.113.9"},
+       {"Forwarded", "for=203.0.113.10"},
+       {"Host", "203.0.113.11"}});
+  ExpectStatus(spoofed_list, drogon::k200OK);
+  ASSERT_NE(spoofed_list.response->getJsonObject(), nullptr);
+  EXPECT_EQ(
+      (*spoofed_list.response->getJsonObject())["current_peer_ip"].asString(),
+      "127.0.0.1");
   expect_error(Send(client, drogon::Get,
                     "/api/v1/security/management-ips", "{}", {},
                     administrator_cookie),
@@ -2862,6 +2881,11 @@ void RunAdministratorManagementIpLifecycleScenario(
            administrator_cookie);
   ExpectStatus(final_list, drogon::k200OK);
   ASSERT_NE(final_list.response->getJsonObject(), nullptr);
+  expect_fields(*final_list.response->getJsonObject(),
+                {"management_ips", "current_peer_ip"});
+  EXPECT_EQ(
+      (*final_list.response->getJsonObject())["current_peer_ip"].asString(),
+      "127.0.0.1");
   const auto& final_entries =
       (*final_list.response->getJsonObject())["management_ips"];
   ASSERT_TRUE(final_entries.isArray());

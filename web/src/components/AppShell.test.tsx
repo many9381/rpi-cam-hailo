@@ -35,9 +35,8 @@ describe('AppShell', () => {
     renderShell();
 
     const navigation = screen.getByRole('navigation', { name: /primary/i });
-    for (const name of ['Dashboard', 'Cameras', 'AI', 'System']) {
-      expect(within(navigation).getByRole('link', { name })).toBeVisible();
-    }
+    expect(within(navigation).getAllByRole('link').map((link) => link.textContent))
+      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
     for (const name of ['Open navigation', 'Refresh device state', 'Open user menu']) {
       const button = screen.getByRole('button', { name });
       expect(button).toHaveAttribute('title', name);
@@ -55,6 +54,8 @@ describe('AppShell', () => {
     await user.click(trigger);
     const drawer = screen.getByRole('dialog', { name: /navigation/i });
     expect(drawer).toHaveAttribute('aria-modal', 'true');
+    expect(within(drawer).getAllByRole('link').map((link) => link.textContent))
+      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
     expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveFocus();
     await user.keyboard('{Escape}');
 

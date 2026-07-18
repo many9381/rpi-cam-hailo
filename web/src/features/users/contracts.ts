@@ -28,6 +28,7 @@ export interface ManagementIp {
 
 export interface ManagementIpList {
   management_ips: ManagementIp[];
+  current_peer_ip: string;
 }
 
 export interface ManagementIpCreateResult {
@@ -137,10 +138,14 @@ export function parseManagedUserCreateResult(value: unknown): ManagedUserCreateR
 }
 
 export function parseManagementIpList(value: unknown): ManagementIpList {
-  if (!hasExactKeys(value, ['management_ips']) || !Array.isArray(value.management_ips)) {
+  if (!hasExactKeys(value, ['management_ips', 'current_peer_ip']) ||
+      !Array.isArray(value.management_ips) || !isNonemptyString(value.current_peer_ip)) {
     return invalidManagementIp();
   }
-  return { management_ips: value.management_ips.map(parseManagementIp) };
+  return {
+    management_ips: value.management_ips.map(parseManagementIp),
+    current_peer_ip: value.current_peer_ip,
+  };
 }
 
 export function parseManagementIpCreateResult(value: unknown): ManagementIpCreateResult {

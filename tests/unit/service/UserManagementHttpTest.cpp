@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -32,6 +33,7 @@ using camera_firmware::security::ManagementIpEntry;
 using camera_firmware::security::UserRole;
 using camera_firmware::service::BuildManagedUserJson;
 using camera_firmware::service::BuildManagementIpJson;
+using camera_firmware::service::BuildManagementIpListJson;
 using camera_firmware::service::BuildUserManagementErrorResponse;
 using camera_firmware::service::ParseCreateViewerJson;
 using camera_firmware::service::ParseManagedResourceId;
@@ -493,6 +495,19 @@ TEST(UserManagementHttpTest, PublicSerializersExposeExactManagedFields) {
   ExpectExactKeys(ip_json, {"id", "address", "role", "created_at_seconds"});
   EXPECT_EQ(ip_json["address"].asString(), "192.0.2.10");
   EXPECT_EQ(ip_json["role"].asString(), "administrator");
+
+  const std::vector<ManagementIpEntry> entries{entry};
+  const auto list_json = BuildManagementIpListJson(entries, "192.0.2.44");
+  ExpectExactKeys(list_json, {"management_ips", "current_peer_ip"});
+  ASSERT_TRUE(list_json["management_ips"].isArray());
+  ASSERT_EQ(list_json["management_ips"].size(), 1U);
+  ExpectExactKeys(list_json["management_ips"][0U],
+                  {"id", "address", "role", "created_at_seconds"});
+  EXPECT_EQ(list_json["current_peer_ip"].asString(), "192.0.2.44");
+
+  const auto ipv6_list_json =
+      BuildManagementIpListJson(entries, "2001:db8::44");
+  EXPECT_EQ(ipv6_list_json["current_peer_ip"].asString(), "2001:db8::44");
 }
 
 TEST(UserManagementHttpTest, SemanticErrorsMapToPublicStatusClasses) {

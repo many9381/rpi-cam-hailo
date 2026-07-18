@@ -7,6 +7,10 @@ import {
 } from '@playwright/test';
 
 import type { RuntimeSettingsSnapshot } from '../src/features/settings/contracts';
+import type {
+  ManagedUser,
+  ManagementIp,
+} from '../src/features/users/contracts';
 
 const LIVE_MP4_BASE64 = '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';
 
@@ -162,6 +166,7 @@ interface ApiMockControls {
   passwordRequests: Request[];
   snapshotRequests: Request[];
   authMeRequests: Request[];
+  userManagementRequests: Request[];
   unhandledPaths: string[];
   requestedAdministratorPaths: string[];
   emitDetection(): void;
@@ -182,6 +187,24 @@ async function installApiMocks(
   let runtimeSettings = makeRuntimeSettingsSnapshot(
     options.settingsRecoveryRequired ? 'recovery_required' : 'clean',
   );
+  const managedUsers: ManagedUser[] = [{
+    id: 1,
+    username: 'operator.one',
+    role: 'administrator',
+    enabled: true,
+    lock_until_seconds: null,
+    created_at_seconds: 1_720_000_000,
+    password_changed_at_seconds: 1_720_000_000,
+    last_login_at_seconds: 1_720_000_100,
+  }];
+  const managementIps: ManagementIp[] = [{
+    id: 1,
+    address: '192.0.2.44',
+    role: 'administrator',
+    created_at_seconds: 1_720_000_000,
+  }];
+  let nextUserId = 2;
+  let nextManagementIpId = 2;
   let emitDetection!: () => void;
   const detectionGate = new Promise<void>((resolve) => {
     emitDetection = resolve;
@@ -194,6 +217,7 @@ async function installApiMocks(
   const passwordRequests: Request[] = [];
   const snapshotRequests: Request[] = [];
   const authMeRequests: Request[] = [];
+  const userManagementRequests: Request[] = [];
   const unhandledPaths: string[] = [];
   const requestedAdministratorPaths: string[] = [];
 
@@ -306,6 +330,152 @@ async function installApiMocks(
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({ logged_out: true }),
+      });
+      return;
+    }
+    if (path === '/api/v1/security/users' && request.method() === 'GET') {
+      userManagementRequests.push(request);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ users: managedUsers }),
+      });
+      return;
+    }
+    if (path === '/api/v1/security/users' && request.method() === 'POST') {
+      userManagementRequests.push(request);
+      const body = request.postDataJSON() as { username: string; password: string };
+      const createdUser: ManagedUser = {
+        id: nextUserId,
+        username: body.username,
+        role: 'viewer',
+        enabled: true,
+        lock_until_seconds: null,
+        created_at_seconds: 1_720_000_200,
+        password_changed_at_seconds: 1_720_000_200,
+        last_login_at_seconds: null,
+      };
+      nextUserId += 1;
+      managedUsers.push(createdUser);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ user: createdUser }),
+      });
+      return;
+    }
+    const enabledMatch = path.match(
+      /^\/api\/v1\/security\/users\/([1-9]\d*)\/enabled$/,
+    );
+    if (request.method() === 'PUT' && enabledMatch !== null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const body = request.postDataJSON() as { enabled: boolean };
+      const user = managedUsers.find((entry) => entry.id === Number(enabledMatch[1]));
+      if (user !== undefined) {
+        user.enabled = body.enabled;
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ updated: true }),
+      });
+      return;
+    }
+    const passwordMatch = path.match(
+      /^\/api\/v1\/security\/users\/([1-9]\d*)\/password$/,
+    );
+    if (request.method() === 'PUT' && passwordMatch !== null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const user = managedUsers.find((entry) => entry.id === Number(passwordMatch[1]));
+      if (user !== undefined) {
+        user.password_changed_at_seconds = 1_720_000_300;
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ password_reset: true }),
+      });
+      return;
+    }
+    const userMatch = path.match(/^\/api\/v1\/security\/users\/([1-9]\d*)$/);
+    if (request.method() === 'DELETE' && userMatch !== null &&
+        request.postData() === null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const userIndex = managedUsers.findIndex(
+        (entry) => entry.id === Number(userMatch[1]),
+      );
+      if (userIndex !== -1) {
+        managedUsers.splice(userIndex, 1);
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ deleted: true }),
+      });
+      return;
+    }
+    if (path === '/api/v1/security/management-ips' && request.method() === 'GET') {
+      userManagementRequests.push(request);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          management_ips: managementIps,
+          current_peer_ip: '192.0.2.44',
+        }),
+      });
+      return;
+    }
+    const managementIpRoleMatch = path.match(
+      /^\/api\/v1\/security\/management-ips\/(administrator|viewer)$/,
+    );
+    if (request.method() === 'POST' && managementIpRoleMatch !== null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const body = request.postDataJSON() as { address: string };
+      const createdIp: ManagementIp = {
+        id: nextManagementIpId,
+        address: body.address,
+        role: managementIpRoleMatch[1] as ManagementIp['role'],
+        created_at_seconds: 1_720_000_200,
+      };
+      nextManagementIpId += 1;
+      managementIps.push(createdIp);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ management_ip: createdIp }),
+      });
+      return;
+    }
+    const managementIpMatch = path.match(
+      /^\/api\/v1\/security\/management-ips\/(administrator|viewer)\/([1-9]\d*)$/,
+    );
+    if (request.method() === 'PUT' && managementIpMatch !== null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const body = request.postDataJSON() as { address: string };
+      const entry = managementIps.find((candidate) =>
+        candidate.role === managementIpMatch[1] &&
+        candidate.id === Number(managementIpMatch[2]));
+      if (entry !== undefined) {
+        entry.address = body.address;
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ updated: true }),
+      });
+      return;
+    }
+    if (request.method() === 'DELETE' && managementIpMatch !== null &&
+        request.postData() === null) {
+      userManagementRequests.push(request);
+      requestedAdministratorPaths.push(`${request.method()} ${path}`);
+      const entryIndex = managementIps.findIndex((candidate) =>
+        candidate.role === managementIpMatch[1] &&
+        candidate.id === Number(managementIpMatch[2]));
+      if (entryIndex !== -1) {
+        managementIps.splice(entryIndex, 1);
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ deleted: true }),
       });
       return;
     }
@@ -511,7 +681,7 @@ async function installApiMocks(
 
   return { initializeRequests, runtimeRequests, runtimeRestartRequests,
     liveRequests, settingsRequests, passwordRequests, snapshotRequests, authMeRequests,
-    unhandledPaths, requestedAdministratorPaths, emitDetection };
+    userManagementRequests, unhandledPaths, requestedAdministratorPaths, emitDetection };
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -530,6 +700,38 @@ async function expectNoOverlap(a: Locator, b: Locator): Promise<void> {
   const vertical = Math.min(first!.y + first!.height, second!.y + second!.height) -
     Math.max(first!.y, second!.y);
   expect(Math.min(horizontal, vertical)).toBeLessThanOrEqual(0);
+}
+
+async function expectDialogFitsViewport(
+  page: Page,
+  dialog: Locator,
+  viewport: { width: number; height: number },
+): Promise<void> {
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+  expect(await dialog.evaluate((element) =>
+    element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const verticalFit = await dialog.evaluate((element) => ({
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+  }));
+  expect(verticalFit.scrollHeight).toBeLessThanOrEqual(verticalFit.clientHeight);
+  expect(await dialog.locator('input, select, button').evaluateAll((elements) =>
+    elements.every((element) => element.scrollWidth <= element.clientWidth + 1)))
+    .toBe(true);
+
+  const title = dialog.getByRole('heading');
+  const close = dialog.getByRole('button', { name: /^Close / });
+  await expectNoOverlap(title, close);
+  const stackedRegions = dialog.locator('.field, .user-management-dialog-actions');
+  for (let index = 0; index + 1 < await stackedRegions.count(); index += 1) {
+    await expectNoOverlap(stackedRegions.nth(index), stackedRegions.nth(index + 1));
+  }
+  await expectNoHorizontalOverflow(page);
 }
 
 async function canvasChecksum(canvas: Locator): Promise<number> {
@@ -808,6 +1010,201 @@ test('mobile dashboard drawer is modal, keyboard dismissible, and unclipped', as
   await expectNoOverlap(preview, ai);
   await expectNoOverlap(header, reconnect);
   expect(api.unhandledPaths).toEqual([]);
+});
+
+test('desktop users and access completes the administrator lifecycle', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/users');
+  await expect(page.getByRole('heading', { name: 'Users & access' })).toBeVisible();
+  const accountsTab = page.getByRole('tab', { name: 'Accounts' });
+  const accessIpsTab = page.getByRole('tab', { name: 'Access IPs' });
+  await expect(accountsTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('row').filter({ hasText: 'operator.one' })).toBeVisible();
+
+  await accessIpsTab.click();
+  const protectedAddress = page.getByRole('row').filter({ hasText: '192.0.2.44' });
+  await expect(page.getByRole('row').filter({ hasText: 'Administrator' })).toHaveCount(1);
+  await expect(protectedAddress.getByText('Current connection', { exact: true })).toBeVisible();
+  await expect(protectedAddress.getByRole('button', { name: 'Edit 192.0.2.44' }))
+    .toBeDisabled();
+  await expect(protectedAddress.getByRole('button', { name: 'Delete 192.0.2.44' }))
+    .toBeDisabled();
+
+  await accountsTab.click();
+  await page.getByRole('button', { name: 'Add viewer' }).click();
+  const addViewerDialog = page.getByRole('dialog', { name: 'Add viewer' });
+  await addViewerDialog.getByLabel('Username').fill('viewer.one');
+  await addViewerDialog.getByLabel('Password', { exact: true }).fill('ViewerPass9!');
+  await addViewerDialog.getByLabel('Confirm password').fill('ViewerPass9!');
+  await addViewerDialog.getByRole('button', { name: 'Create viewer' }).click();
+
+  const viewerRow = page.getByRole('row').filter({ hasText: 'viewer.one' });
+  await expect(viewerRow).toBeVisible();
+  const createViewerRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'POST' &&
+    new URL(request.url()).pathname === '/api/v1/security/users');
+  expect(createViewerRequest).toBeDefined();
+  expect(createViewerRequest!.postDataJSON()).toEqual({
+    username: 'viewer.one',
+    password: 'ViewerPass9!',
+  });
+
+  await viewerRow.getByRole('switch', { name: 'Disable viewer.one' }).click();
+  const disableDialog = page.getByRole('dialog', { name: 'Disable viewer' });
+  await expect(disableDialog).toContainText(
+    "Disable viewer.one? The viewer's active session ends immediately.",
+  );
+  await disableDialog.getByRole('button', { name: 'Disable viewer', exact: true }).click();
+  await expect(viewerRow.getByText('Disabled', { exact: true })).toBeVisible();
+  const disableRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'PUT' &&
+    new URL(request.url()).pathname === '/api/v1/security/users/2/enabled');
+  expect(disableRequest?.postDataJSON()).toEqual({ enabled: false });
+
+  await viewerRow.getByRole('button', { name: 'Reset password for viewer.one' }).click();
+  const resetDialog = page.getByRole('dialog', { name: 'Reset viewer password' });
+  await expect(resetDialog).toContainText('viewer.one');
+  await expect(resetDialog).toContainText(
+    "The viewer's active session may end immediately.",
+  );
+  await resetDialog.getByLabel('New password', { exact: true }).fill('ViewerPass10!');
+  await resetDialog.getByLabel('Confirm new password').fill('ViewerPass10!');
+  await resetDialog.getByRole('button', { name: 'Reset password' }).click();
+  await expect(resetDialog).toBeHidden();
+  const resetRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'PUT' &&
+    new URL(request.url()).pathname === '/api/v1/security/users/2/password');
+  expect(resetRequest).toBeDefined();
+  expect(resetRequest!.postDataJSON()).toEqual({ password: 'ViewerPass10!' });
+
+  await page.screenshot({
+    path: testInfo.outputPath('desktop-users-access.png'),
+    fullPage: true,
+  });
+
+  await accessIpsTab.click();
+  await page.getByRole('button', { name: 'Add access IP' }).click();
+  const addAccessIpDialog = page.getByRole('dialog', { name: 'Add access IP' });
+  await addAccessIpDialog.getByLabel('Role').selectOption('viewer');
+  await addAccessIpDialog.getByLabel('Address').fill('2001:db8::20');
+  await addAccessIpDialog.getByRole('button', { name: 'Add access IP', exact: true }).click();
+
+  const viewerIpRow = page.getByRole('row').filter({ hasText: '2001:db8::20' });
+  await expect(viewerIpRow).toBeVisible();
+  await expect(viewerIpRow.getByText('Viewer', { exact: true })).toBeVisible();
+  const createIpRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'POST' &&
+    new URL(request.url()).pathname === '/api/v1/security/management-ips/viewer');
+  expect(createIpRequest).toBeDefined();
+  expect(createIpRequest!.postDataJSON()).toEqual({ address: '2001:db8::20' });
+  await viewerIpRow.getByRole('button', { name: 'Edit 2001:db8::20' }).click();
+  const editAccessIpDialog = page.getByRole('dialog', { name: 'Edit access IP' });
+  await editAccessIpDialog.getByLabel('Address').fill('2001:db8::21');
+  await editAccessIpDialog.getByRole('button', { name: 'Save access IP' }).click();
+  const updatedViewerIpRow = page.getByRole('row').filter({ hasText: '2001:db8::21' });
+  await expect(updatedViewerIpRow).toBeVisible();
+  const editIpRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'PUT' &&
+    new URL(request.url()).pathname === '/api/v1/security/management-ips/viewer/2');
+  expect(editIpRequest).toBeDefined();
+  expect(editIpRequest!.postDataJSON()).toEqual({ address: '2001:db8::21' });
+
+  await updatedViewerIpRow.getByRole('button', { name: 'Delete 2001:db8::21' }).click();
+  const deleteAccessIpDialog = page.getByRole('alertdialog', { name: 'Delete access IP' });
+  await deleteAccessIpDialog.getByRole('button', { name: 'Delete access IP', exact: true })
+    .click();
+  await expect(updatedViewerIpRow).toBeHidden();
+  const deleteIpRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'DELETE' &&
+    new URL(request.url()).pathname === '/api/v1/security/management-ips/viewer/2');
+  expect(deleteIpRequest).toBeDefined();
+  expect(deleteIpRequest!.postData()).toBeNull();
+
+  await accountsTab.click();
+  await viewerRow.getByRole('button', { name: 'Delete viewer.one' }).click();
+  const deleteViewerDialog = page.getByRole('alertdialog', { name: 'Delete viewer' });
+  await expect(deleteViewerDialog).toContainText('viewer.one');
+  await expect(deleteViewerDialog).toContainText('This action cannot be undone.');
+  await expect(deleteViewerDialog).toContainText(
+    "The viewer's active session ends immediately.",
+  );
+  await deleteViewerDialog.getByRole('button', { name: 'Delete viewer', exact: true }).click();
+  await expect(viewerRow).toBeHidden();
+  const deleteViewerRequest = api.userManagementRequests.find((request) =>
+    request.method() === 'DELETE' &&
+    new URL(request.url()).pathname === '/api/v1/security/users/2');
+  expect(deleteViewerRequest).toBeDefined();
+  expect(deleteViewerRequest!.postData()).toBeNull();
+
+  const mutationRequests = api.userManagementRequests
+    .filter((request) => request.method() !== 'GET')
+    .map((request) => `${request.method()} ${new URL(request.url()).pathname}`);
+  expect(mutationRequests).toEqual([
+    'POST /api/v1/security/users',
+    'PUT /api/v1/security/users/2/enabled',
+    'PUT /api/v1/security/users/2/password',
+    'POST /api/v1/security/management-ips/viewer',
+    'PUT /api/v1/security/management-ips/viewer/2',
+    'DELETE /api/v1/security/management-ips/viewer/2',
+    'DELETE /api/v1/security/users/2',
+  ]);
+  for (const path of mutationRequests) {
+    expect(api.requestedAdministratorPaths).toContain(path);
+  }
+  expect(api.unhandledPaths).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+});
+
+test('mobile users and access dialogs remain bounded and restore focus', async ({
+  page,
+}, testInfo) => {
+  const viewport = { width: 390, height: 844 };
+  await page.setViewportSize(viewport);
+  const api = await installApiMocks(page);
+
+  await page.goto('/#/dashboard');
+  await expect(page.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Navigation' });
+  await drawer.getByRole('link', { name: 'Users' }).click();
+  await expect(drawer).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Users & access' })).toBeVisible();
+
+  const accountsTab = page.getByRole('tab', { name: 'Accounts' });
+  const accessIpsTab = page.getByRole('tab', { name: 'Access IPs' });
+  await expect(accountsTab).toHaveAttribute('aria-selected', 'true');
+  await accessIpsTab.click();
+  await expect(accessIpsTab).toHaveAttribute('aria-selected', 'true');
+  await accountsTab.click();
+
+  const addViewer = page.getByRole('button', { name: 'Add viewer' });
+  await addViewer.click();
+  const addViewerDialog = page.getByRole('dialog', { name: 'Add viewer' });
+  await expectDialogFitsViewport(page, addViewerDialog, viewport);
+  await page.keyboard.press('Escape');
+  await expect(addViewerDialog).toBeHidden();
+  await expect(addViewer).toBeFocused();
+
+  await accessIpsTab.click();
+  const addAccessIp = page.getByRole('button', { name: 'Add access IP' });
+  await addAccessIp.click();
+  const addAccessIpDialog = page.getByRole('dialog', { name: 'Add access IP' });
+  await expectDialogFitsViewport(page, addAccessIpDialog, viewport);
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-users-access.png'),
+    fullPage: true,
+  });
+  await page.keyboard.press('Escape');
+  await expect(addAccessIpDialog).toBeHidden();
+  await expect(addAccessIp).toBeFocused();
+  await expectNoOverlap(addAccessIp, page.getByRole('tablist', { name: 'Users and access' }));
+
+  expect(api.unhandledPaths).toEqual([]);
+  await expectNoHorizontalOverflow(page);
 });
 
 test('camera settings save explicitly, confirm apply, and remain responsive', async ({

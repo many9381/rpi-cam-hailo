@@ -84,7 +84,10 @@ describe('managed user contracts', () => {
 
 describe('management IP contracts', () => {
   it('parses exact list and create wrappers into fresh public values', () => {
-    const list = { management_ips: [managementIp] };
+    const list = {
+      management_ips: [managementIp],
+      current_peer_ip: '192.0.2.44',
+    };
     const create = { management_ip: managementIp };
 
     const parsedList = parseManagementIpList(list);
@@ -100,12 +103,17 @@ describe('management IP contracts', () => {
   });
 
   it.each([
-    ['unknown wrapper field', () => ({ management_ips: [managementIp], salt: 'viewer-secret' })],
-    ['unknown IP field', () => ({ management_ips: [{ ...managementIp, password: 'viewer-secret' }] })],
-    ['empty address', () => ({ management_ips: [{ ...managementIp, address: '' }] })],
-    ['invalid IP id', () => ({ management_ips: [{ ...managementIp, id: -1 }] })],
-    ['unsupported role', () => ({ management_ips: [{ ...managementIp, role: 'operator' }] })],
-    ['negative timestamp', () => ({ management_ips: [{ ...managementIp, created_at_seconds: -1 }] })],
+    ['missing peer', () => ({ management_ips: [managementIp] })],
+    ['empty peer', () => ({ management_ips: [managementIp], current_peer_ip: '' })],
+    ['non-string peer', () => ({ management_ips: [managementIp], current_peer_ip: 44 })],
+    ['unknown wrapper field', () => ({
+      management_ips: [managementIp], current_peer_ip: '192.0.2.44', salt: 'viewer-secret',
+    })],
+    ['unknown IP field', () => ({ management_ips: [{ ...managementIp, password: 'viewer-secret' }], current_peer_ip: '192.0.2.44' })],
+    ['empty address', () => ({ management_ips: [{ ...managementIp, address: '' }], current_peer_ip: '192.0.2.44' })],
+    ['invalid IP id', () => ({ management_ips: [{ ...managementIp, id: -1 }], current_peer_ip: '192.0.2.44' })],
+    ['unsupported role', () => ({ management_ips: [{ ...managementIp, role: 'operator' }], current_peer_ip: '192.0.2.44' })],
+    ['negative timestamp', () => ({ management_ips: [{ ...managementIp, created_at_seconds: -1 }], current_peer_ip: '192.0.2.44' })],
   ])('rejects %s without echoing rejected data', (_name, makeValue) => {
     expectRejectedWithoutEcho(
       parseManagementIpList,

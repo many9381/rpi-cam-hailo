@@ -5,6 +5,7 @@ import {
   RefreshCw,
   ScanSearch,
   Settings,
+  UsersRound,
   X,
 } from 'lucide-react';
 import {
@@ -36,6 +37,7 @@ const navigation = [
   { label: 'Cameras', path: '/cameras', icon: Camera },
   { label: 'AI', path: '/ai', icon: ScanSearch },
   { label: 'System', path: '/system', icon: Settings },
+  { label: 'Users', path: '/users', icon: UsersRound },
 ] as const;
 
 function RuntimeSettingsNotice({

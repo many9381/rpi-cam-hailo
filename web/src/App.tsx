@@ -11,8 +11,10 @@ import { SetupPage } from './pages/SetupPage';
 import { RuntimeRecoveryPage } from './pages/RuntimeRecoveryPage';
 import { DashboardPage, type OperationalView } from './pages/DashboardPage';
 import { MonitorPage } from './pages/MonitorPage';
+import { UsersPage } from './pages/UsersPage';
 import { useOperationalData } from './hooks/useOperationalData';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
+import { useUserManagement } from './features/users/useUserManagement';
 
 type BootstrapState =
   | { kind: 'checking' }
@@ -156,7 +158,7 @@ const operationalViews: Record<string, OperationalView> = {
   '/system': 'system',
 };
 
-function AdministratorDefaultShell({ client }: { client: CameraApiClient }) {
+function AdministratorOperationalShell({ client }: { client: CameraApiClient }) {
   const auth = useAuth();
   const location = useLocation();
   const controller = useOperationalData(client);
@@ -171,6 +173,21 @@ function AdministratorDefaultShell({ client }: { client: CameraApiClient }) {
       }}>
       <DashboardPage client={client} controller={controller}
         runtimeSettings={runtimeSettings} view={view} />
+    </AppShell>
+  );
+}
+
+function AdministratorUsersShell({ client }: { client: CameraApiClient }) {
+  const auth = useAuth();
+  const controller = useUserManagement(client);
+  return (
+    <AppShell
+      principal={auth.principal!}
+      logout={auth.logout}
+      changePassword={auth.changePassword}
+      onRefresh={() => void controller.refreshAll().catch(() => undefined)}
+    >
+      <UsersPage controller={controller} />
     </AppShell>
   );
 }
@@ -190,7 +207,9 @@ function AdministratorApplication({ child, client }: {
   }, [location.pathname, navigate]);
 
   if (child === undefined) {
-    return <AdministratorDefaultShell client={client} />;
+    return location.pathname === '/users'
+      ? <AdministratorUsersShell client={client} />
+      : <AdministratorOperationalShell client={client} />;
   }
   return (
     <AppShell principal={auth.principal!} logout={auth.logout}
