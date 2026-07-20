@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 
@@ -29,6 +30,8 @@ class ResolvedTlsMaterial {
   friend common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
       const config::HttpTlsConfig&,
       const std::filesystem::path&);
+  friend common::Result<void> CheckTlsMaterialHealth(
+      const ResolvedTlsMaterial&, std::chrono::system_clock::time_point);
   ResolvedTlsMaterial(
       std::filesystem::path certificate,
       std::filesystem::path private_key,
@@ -41,5 +44,8 @@ class ResolvedTlsMaterial {
 common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
     const config::HttpTlsConfig& tls,
     const std::filesystem::path& protected_state_directory);
+common::Result<void> CheckTlsMaterialHealth(
+    const ResolvedTlsMaterial& material,
+    std::chrono::system_clock::time_point now);
 
 }  // namespace camera_firmware::security

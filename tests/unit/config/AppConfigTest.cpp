@@ -58,6 +58,10 @@ http:
 security:
   enabled: true
   state_directory: /var/lib/camera-firmware/security
+self_protection:
+  manifest_path: /var/lib/camera-firmware/integrity/manifest.yaml
+  signature_path: /var/lib/camera-firmware/integrity/manifest.sig
+  interval_hours: 24
 secure_rtsp:
   enabled: true
   control_tls: true
@@ -109,6 +113,28 @@ std::string SecurityConfigWithCredentialFile(std::string_view credential_file) {
   return yaml;
 }
 
+camera_firmware::config::AppConfig ValidSecurityConfig() {
+  camera_firmware::config::AppConfig config;
+  config.http.enabled = true;
+  config.http.public_base_url = "https://camera.local:8443";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.security.enabled = true;
+  config.secure_rtsp.enabled = true;
+  config.secure_rtsp.control_tls = true;
+  config.secure_rtsp.media_srtp = false;
+  config.secure_rtsp.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "rpi-camera";
+  config.secure_rtsp.client_auth.credential_file =
+      "/var/lib/camera-firmware/security/rtsp.credentials";
+  config.self_protection.manifest_path =
+      "/var/lib/camera-firmware/integrity/manifest.yaml";
+  config.self_protection.signature_path =
+      "/var/lib/camera-firmware/integrity/manifest.sig";
+  return config;
+}
+
 void ExpectConfigError(std::string_view yaml, std::string_view code) {
   const auto config = LoadInlineConfig(yaml);
   ASSERT_FALSE(config.ok());
@@ -116,6 +142,152 @@ void ExpectConfigError(std::string_view yaml, std::string_view code) {
 }
 
 }  // namespace
+
+TEST(AppConfigTest, LoadsSelfProtectionConfiguration) {
+  const auto loaded = LoadInlineConfig(SecurityConfigWithTls(true));
+
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  EXPECT_EQ(loaded.value().self_protection.manifest_path,
+            "/var/lib/camera-firmware/integrity/manifest.yaml");
+  EXPECT_EQ(loaded.value().self_protection.signature_path,
+            "/var/lib/camera-firmware/integrity/manifest.sig");
+  EXPECT_EQ(loaded.value().self_protection.interval_hours, 24U);
+}
+
+TEST(AppConfigTest, RejectsSecurityWithoutProtectionArtifacts) {
+  auto config = ValidSecurityConfig();
+  config.self_protection.manifest_path.clear();
+
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION");
+}
+
+TEST(AppConfigTest, RejectsSecurityWithoutProtectionSignature) {
+  auto config = ValidSecurityConfig();
+  config.self_protection.signature_path.clear();
+
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION");
+}
+
+TEST(AppConfigTest, RejectsSecurityWithNonNormalizedProtectionPaths) {
+  constexpr std::array<std::string_view, 5> kInvalidPaths{
+      "/var/lib//camera-firmware/integrity/manifest.yaml",
+      "/var/lib/camera-firmware/integrity/./manifest.yaml",
+      "/var/lib/camera-firmware/integrity/../integrity/manifest.yaml",
+      "var/lib/camera-firmware/integrity/manifest.yaml",
+      "",
+  };
+
+  for (const auto path : kInvalidPaths) {
+    auto config = ValidSecurityConfig();
+    config.self_protection.manifest_path = path;
+
+    const auto result =
+        camera_firmware::config::ValidateAppConfigSemantics(config);
+
+    EXPECT_FALSE(result.ok()) << path;
+    if (!result.ok()) {
+      EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION") << path;
+    }
+  }
+}
+
+TEST(AppConfigTest, RejectsEmbeddedNulInProtectionPaths) {
+  for (const bool manifest_path : {true, false}) {
+    auto config = ValidSecurityConfig();
+    std::string invalid = "/var/lib/camera-firmware/integrity/manifest";
+    invalid.push_back('\0');
+    invalid += ".yaml";
+    if (manifest_path) {
+      config.self_protection.manifest_path = invalid;
+    } else {
+      config.self_protection.signature_path = invalid;
+    }
+
+    const auto result =
+        camera_firmware::config::ValidateAppConfigSemantics(config);
+
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION");
+  }
+}
+
+TEST(AppConfigTest, RejectsProtectionPathsLongerThan4096Bytes) {
+  for (const bool manifest_path : {true, false}) {
+    auto config = ValidSecurityConfig();
+    const std::string invalid = "/" + std::string(4096U, 'a');
+    if (manifest_path) {
+      config.self_protection.manifest_path = invalid;
+    } else {
+      config.self_protection.signature_path = invalid;
+    }
+
+    const auto result =
+        camera_firmware::config::ValidateAppConfigSemantics(config);
+
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION");
+  }
+}
+
+TEST(AppConfigTest, DefaultsSelfProtectionIntervalToOneDay) {
+  const auto config = LoadInlineConfig(R"(
+security:
+  enabled: false
+self_protection:
+  manifest_path: relative-manifest.yaml
+  signature_path: relative-manifest.sig
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_EQ(config.value().self_protection.interval_hours, 24U);
+}
+
+TEST(AppConfigTest, PreservesDisabledSecuritySelfProtectionBehavior) {
+  const auto config = LoadInlineConfig(R"(
+security:
+  enabled: false
+self_protection:
+  manifest_path: relative/../manifest.yaml
+  signature_path: ./signature.sig
+  interval_hours: 24
+secure_rtsp:
+  enabled: false
+)");
+
+  ASSERT_TRUE(config.ok()) << config.error().message;
+}
+
+TEST(AppConfigTest, RejectsZeroProtectionInterval) {
+  auto config = ValidSecurityConfig();
+  config.self_protection.interval_hours = 0U;
+
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION_INTERVAL");
+}
+
+TEST(AppConfigTest, RejectsProtectionIntervalOutsideOneDay) {
+  auto config = ValidSecurityConfig();
+  config.self_protection.interval_hours = 25U;
+
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_SELF_PROTECTION_INTERVAL");
+}
 
 TEST(AppConfigTest, LoadsEnabledBootstrapSecurityConfig) {
   const auto config = LoadInlineConfig(R"(
@@ -129,6 +301,10 @@ http:
 security:
   enabled: true
   state_directory: /var/lib/camera-firmware/security
+self_protection:
+  manifest_path: /var/lib/camera-firmware/integrity/manifest.yaml
+  signature_path: /var/lib/camera-firmware/integrity/manifest.sig
+  interval_hours: 24
 secure_rtsp:
   enabled: true
   control_tls: true

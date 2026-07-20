@@ -141,6 +141,12 @@ struct SecurityConfig {
   AuditConfig audit;
 };
 
+struct SelfProtectionConfig {
+  std::string manifest_path;
+  std::string signature_path;
+  std::uint32_t interval_hours{24U};
+};
+
 struct AppConfig {
   PlatformConfig platform;
   CameraConfig camera;
@@ -148,6 +154,7 @@ struct AppConfig {
   AiConfig ai;
   SecureRtspConfig secure_rtsp;
   SecurityConfig security;
+  SelfProtectionConfig self_protection;
 };
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);

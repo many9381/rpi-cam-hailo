@@ -23,36 +23,47 @@ class Result {
 
   static Result Err(Error error) { return Result(std::move(error)); }
 
+  // The referenced Error must have static storage duration. This path stores
+  // only its address so resource-exhaustion handlers can return without allocation.
+  static Result ErrFromStaticLifetime(const Error& error) noexcept {
+    return Result(&error);
+  }
+
   [[nodiscard]] bool ok() const noexcept {
-    return std::holds_alternative<T>(state_);
+    return state_.index() == 0U;
   }
 
   [[nodiscard]] const T& value() const& {
     assert(ok());
-    return std::get<T>(state_);
+    return std::get<0U>(state_);
   }
 
   [[nodiscard]] T& value() & {
     assert(ok());
-    return std::get<T>(state_);
+    return std::get<0U>(state_);
   }
 
   [[nodiscard]] T&& value() && {
     assert(ok());
-    return std::get<T>(std::move(state_));
+    return std::get<0U>(std::move(state_));
   }
 
-  [[nodiscard]] const Error& error() const& {
+  [[nodiscard]] const Error& error() const& noexcept {
     assert(!ok());
-    return std::get<Error>(state_);
+    if (state_.index() == 1U) {
+      return std::get<1U>(state_);
+    }
+    return *std::get<2U>(state_);
   }
 
  private:
   explicit Result(T value) noexcept(std::is_nothrow_move_constructible_v<T>)
       : state_(std::move(value)) {}
   explicit Result(Error error) : state_(std::move(error)) {}
+  explicit Result(const Error* static_error) noexcept
+      : state_(std::in_place_index<2U>, static_error) {}
 
-  std::variant<T, Error> state_;
+  std::variant<T, Error, const Error*> state_;
 };
 
 template <>
@@ -62,18 +73,29 @@ class Result<void> {
 
   static Result Err(Error error) { return Result(std::move(error)); }
 
-  [[nodiscard]] bool ok() const noexcept { return !error_.has_value(); }
+  // The referenced Error must have static storage duration. This path stores
+  // only its address so resource-exhaustion handlers can return without allocation.
+  static Result ErrFromStaticLifetime(const Error& error) noexcept {
+    return Result(&error);
+  }
 
-  [[nodiscard]] const Error& error() const& {
+  [[nodiscard]] bool ok() const noexcept {
+    return !error_.has_value() && static_error_ == nullptr;
+  }
+
+  [[nodiscard]] const Error& error() const& noexcept {
     assert(!ok());
-    return *error_;
+    return error_.has_value() ? *error_ : *static_error_;
   }
 
  private:
   Result() noexcept = default;
   explicit Result(Error error) : error_(std::move(error)) {}
+  explicit Result(const Error* static_error) noexcept
+      : static_error_(static_error) {}
 
   std::optional<Error> error_;
+  const Error* static_error_{nullptr};
 };
 
 }  // namespace camera_firmware::common

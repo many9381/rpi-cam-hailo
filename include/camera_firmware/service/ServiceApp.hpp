@@ -25,7 +25,9 @@
 #include "camera_firmware/security/BootstrapService.hpp"
 #include "camera_firmware/security/DeviceTlsManager.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
+#include "camera_firmware/security/SystemProtectionService.hpp"
 #include "camera_firmware/service/BoundedWorker.hpp"
+#include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SessionStreamRegistry.hpp"
 #include "camera_firmware/settings/RuntimeSettingsService.hpp"
 
@@ -120,6 +122,14 @@ using RuntimeSettingsApplyCallback =
     std::function<settings::SettingsApplyResult(std::uint64_t)>;
 using RuntimeSettingsDiscardCallback = std::function<
     common::Result<settings::RuntimeSettingsSnapshot>(std::uint64_t)>;
+using ProtectionSnapshotCallback =
+    std::function<security::SystemProtectionSnapshot()>;
+using ProtectionStartCheckCallback = std::function<
+    common::Result<security::SystemProtectionSnapshot>(
+        security::ProtectionSuite, security::ProtectionActor)>;
+using ProtectionRuntimeAllowedCallback = std::function<bool()>;
+using ProtectionRuntimeControlGate =
+    std::function<bool(const std::function<void()>&)>;
 
 struct SecureStreamDiagnostics {
   std::uint64_t per_media_key_zeroize_count{0};
@@ -165,11 +175,16 @@ struct ServiceInitArgs {
   RuntimeSettingsSaveCallback runtime_settings_save_callback;
   RuntimeSettingsApplyCallback runtime_settings_apply_callback;
   RuntimeSettingsDiscardCallback runtime_settings_discard_callback;
+  ProtectionSnapshotCallback protection_snapshot_callback;
+  ProtectionStartCheckCallback protection_start_check_callback;
+  ProtectionRuntimeAllowedCallback protection_runtime_allowed_callback;
+  ProtectionRuntimeControlGate protection_runtime_control_gate;
   std::shared_ptr<security::SecurityStore> security_store;
   std::shared_ptr<security::BootstrapService> bootstrap_service;
   AuthServiceDependenciesProvider auth_service_dependencies_provider;
   std::shared_ptr<SessionStreamRegistry> stream_registry;
   CancellableLiveMp4OpenCallback cancellable_live_stream_callback;
+  std::optional<security::ResolvedTlsMaterial> tls_material;
 };
 
 Json::Value BuildHealthJson(const std::string& status);
@@ -223,6 +238,28 @@ namespace internal {
 
 class LiveMp4PumpManager;
 class RuntimeCallbackLifecycle;
+
+drogon::HttpResponsePtr ExecuteProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& command);
+drogon::HttpResponsePtr ExecuteSequentialProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& validate,
+    const std::function<drogon::HttpResponsePtr()>& command);
+drogon::HttpResponsePtr ExecuteAtomicallyProtectedRuntimeControlCommand(
+    const ProtectionRuntimeControlGate& protection_runtime_control_gate,
+    const std::function<drogon::HttpResponsePtr()>& command);
+common::Result<void> DispatchAtomicallyProtectedRuntimeControlCommand(
+    const std::shared_ptr<BoundedWorker>& worker,
+    ProtectionRuntimeControlGate protection_runtime_control_gate,
+    std::function<drogon::HttpResponsePtr()> command,
+    std::function<void(drogon::HttpResponsePtr)> complete);
+drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
+    const std::function<drogon::HttpResponsePtr()>& operation);
+common::Result<std::optional<security::ResolvedTlsMaterial>>
+SelectServiceTlsMaterial(const ServiceInitArgs& args);
+void InstallDefaultProtectionRuntimeAllowedCallback(
+    ServiceInitArgs& args, bool security_enabled);
 
 std::thread StartServiceThreadWithTlsOwner(
     std::optional<security::ResolvedTlsMaterial> tls_material,

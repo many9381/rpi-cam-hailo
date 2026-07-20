@@ -20,3 +20,6 @@ security.db-wal
 **/device-tls/private-key.pem
 **/.device-tls.tmp-*/certificate.pem
 **/.device-tls.tmp-*/private-key.pem
+/config/integrity/*.private.pem
+/integrity-manifest.yaml
+/integrity-manifest.sig

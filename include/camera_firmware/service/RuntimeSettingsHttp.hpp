@@ -39,5 +39,6 @@ drogon::HttpResponsePtr BuildRuntimeSettingsErrorResponse(
     const common::Error& error);
 drogon::HttpResponsePtr BuildRuntimeSettingsApplyResponse(
     const settings::SettingsApplyResult& result);
+drogon::HttpResponsePtr BuildProtectionRestrictedResponse();
 
 }  // namespace camera_firmware::service

@@ -1,5 +1,6 @@
 #include "camera_firmware/boot/FirmwareBootCoordinator.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <mutex>
@@ -28,6 +29,9 @@ struct Calls {
   unsigned int service_starts{0U};
   unsigned int service_quiesces{0U};
   unsigned int service_stops{0U};
+  unsigned int protection_checks{0U};
+  unsigned int protection_allowed_reads{0U};
+  bool protection_allows_runtime{true};
   RuntimeStartCallback runtime_start_callback;
 };
 
@@ -63,6 +67,15 @@ FirmwareBootDependencies SuccessfulDependencies(
     ++calls.service_stops;
     calls.Record("service.stop");
   };
+  dependencies.run_startup_protection_checks = [&] {
+    ++calls.protection_checks;
+    calls.Record("protection.check");
+  };
+  dependencies.protection_allows_runtime = [&] {
+    ++calls.protection_allowed_reads;
+    calls.Record("protection.allowed");
+    return calls.protection_allows_runtime;
+  };
   return dependencies;
 }
 
@@ -75,14 +88,16 @@ TEST(FirmwareBootCoordinatorTest, DefaultStateStartsOnlyService) {
 
   EXPECT_EQ(coordinator.State(), FirmwareBootState::kRunning);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "service.start"}));
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start"}));
   EXPECT_EQ(calls.runtime_starts, 0U);
   ASSERT_TRUE(calls.runtime_start_callback);
 
   ASSERT_TRUE(calls.runtime_start_callback().ok());
   EXPECT_EQ(calls.runtime_starts, 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "service.start",
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "protection.allowed",
                                       "runtime.start"}));
 }
 
@@ -95,10 +110,240 @@ TEST(FirmwareBootCoordinatorTest, OperationalStateStartsServiceBeforeRuntime) {
   ASSERT_TRUE(coordinator.Start().ok());
 
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "service.start",
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "protection.allowed",
                                       "runtime.start"}));
   EXPECT_EQ(calls.runtime_starts, 1U);
   EXPECT_EQ(calls.service_starts, 1U);
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     RestrictedStartupStillStartsManagementServiceWithoutRuntime) {
+  Calls calls;
+  calls.protection_allows_runtime = false;
+  FirmwareBootCoordinator coordinator(
+      {true, true},
+      SuccessfulDependencies(calls, security::DeviceState::kOperational));
+
+  ASSERT_TRUE(coordinator.Start().ok());
+
+  EXPECT_EQ(coordinator.State(), FirmwareBootState::kRunning);
+  EXPECT_EQ(calls.protection_checks, 1U);
+  EXPECT_EQ(calls.protection_allowed_reads, 1U);
+  EXPECT_EQ(calls.service_starts, 1U);
+  EXPECT_EQ(calls.runtime_starts, 0U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "protection.allowed"}));
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     RestrictedHeadlessStartupDoesNotStartRuntime) {
+  Calls calls;
+  calls.protection_allows_runtime = false;
+  FirmwareBootCoordinator coordinator(
+      {true, false},
+      SuccessfulDependencies(calls, security::DeviceState::kOperational));
+
+  ASSERT_TRUE(coordinator.Start().ok());
+
+  EXPECT_EQ(calls.protection_checks, 1U);
+  EXPECT_EQ(calls.protection_allowed_reads, 1U);
+  EXPECT_EQ(calls.runtime_starts, 0U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"state", "protection.check",
+                                      "protection.allowed"}));
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     ProtectionStopWaitsForInFlightRuntimeStartAndStopsOnce) {
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  std::promise<void> runtime_entered;
+  const auto runtime_entered_future = runtime_entered.get_future().share();
+  std::atomic_bool release_runtime{false};
+  dependencies.start_runtime = [&] {
+    ++calls.runtime_starts;
+    calls.Record("runtime.start");
+    runtime_entered.set_value();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(500);
+    while (!release_runtime.load() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!release_runtime.load()) {
+      return common::Result<void>::Err(
+          {"E_TEST_TIMEOUT", "runtime start release timed out"});
+    }
+    return common::Result<void>::Ok();
+  };
+  FirmwareBootCoordinator coordinator({true, true}, std::move(dependencies));
+  ASSERT_TRUE(coordinator.Start().ok());
+  ASSERT_TRUE(calls.runtime_start_callback);
+
+  auto start = std::async(std::launch::async, [&] {
+    return calls.runtime_start_callback();
+  });
+  ASSERT_EQ(runtime_entered_future.wait_for(std::chrono::milliseconds(250)),
+            std::future_status::ready);
+  auto stop = std::async(std::launch::async, [&] {
+    coordinator.StopRuntimeForProtection();
+  });
+
+  EXPECT_EQ(stop.wait_for(std::chrono::milliseconds(250)),
+            std::future_status::timeout);
+  release_runtime.store(true);
+  ASSERT_EQ(start.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  ASSERT_TRUE(start.get().ok());
+  ASSERT_EQ(stop.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  stop.get();
+
+  EXPECT_EQ(calls.runtime_starts, 1U);
+  EXPECT_EQ(calls.runtime_stops, 1U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "protection.allowed",
+                                      "runtime.start", "runtime.stop"}));
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     ProtectionStopInvalidatesAuthorizationReadBeforeStartAdmission) {
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  std::promise<void> authorization_read;
+  const auto authorization_read_future =
+      authorization_read.get_future().share();
+  std::atomic_bool release_authorization{false};
+  dependencies.protection_allows_runtime = [&] {
+    ++calls.protection_allowed_reads;
+    calls.Record("protection.allowed");
+    const bool allowed = calls.protection_allows_runtime;
+    authorization_read.set_value();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(500);
+    while (!release_authorization.load() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return allowed;
+  };
+  FirmwareBootCoordinator coordinator({true, true}, std::move(dependencies));
+  ASSERT_TRUE(coordinator.Start().ok());
+  ASSERT_TRUE(calls.runtime_start_callback);
+
+  auto start = std::async(std::launch::async, [&] {
+    return calls.runtime_start_callback();
+  });
+  ASSERT_EQ(authorization_read_future.wait_for(std::chrono::milliseconds(250)),
+            std::future_status::ready);
+  calls.protection_allows_runtime = false;
+  auto protection_stop = std::async(std::launch::async, [&] {
+    coordinator.StopRuntimeForProtection();
+  });
+  const auto stop_status =
+      protection_stop.wait_for(std::chrono::milliseconds(250));
+  release_authorization.store(true);
+
+  ASSERT_EQ(stop_status, std::future_status::ready);
+  protection_stop.get();
+  ASSERT_EQ(start.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  const auto started = start.get();
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_BOOT_PROTECTION_RESTRICTED");
+  EXPECT_EQ(calls.runtime_starts, 0U);
+  EXPECT_EQ(calls.runtime_stops, 0U);
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     ActiveProtectionStopBlocksNormalStopSecondStopAndStartAdmission) {
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(calls);
+  std::promise<void> runtime_stop_entered;
+  const auto runtime_stop_entered_future =
+      runtime_stop_entered.get_future().share();
+  std::atomic_uint runtime_stop_calls{0U};
+  std::atomic_bool release_runtime_stop{false};
+  dependencies.stop_runtime = [&] {
+    calls.Record("runtime.stop");
+    if (runtime_stop_calls.fetch_add(1U) == 0U) {
+      runtime_stop_entered.set_value();
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(750);
+    while (!release_runtime_stop.load() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  };
+  FirmwareBootCoordinator coordinator({false, true}, std::move(dependencies));
+  ASSERT_TRUE(coordinator.Start().ok());
+  ASSERT_TRUE(calls.runtime_start_callback);
+
+  auto first_protection_stop = std::async(std::launch::async, [&] {
+    coordinator.StopRuntimeForProtection();
+  });
+  ASSERT_EQ(
+      runtime_stop_entered_future.wait_for(std::chrono::milliseconds(250)),
+      std::future_status::ready);
+  auto normal_stop =
+      std::async(std::launch::async, [&] { coordinator.Stop(); });
+  auto second_protection_stop = std::async(std::launch::async, [&] {
+    coordinator.StopRuntimeForProtection();
+  });
+  auto start = std::async(std::launch::async, [&] {
+    return calls.runtime_start_callback();
+  });
+
+  EXPECT_EQ(normal_stop.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(second_protection_stop.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(start.wait_for(std::chrono::milliseconds(100)),
+            std::future_status::timeout);
+  EXPECT_EQ(runtime_stop_calls.load(), 1U);
+  release_runtime_stop.store(true);
+
+  ASSERT_EQ(first_protection_stop.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  first_protection_stop.get();
+  ASSERT_EQ(second_protection_stop.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  second_protection_stop.get();
+  ASSERT_EQ(normal_stop.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  normal_stop.get();
+  ASSERT_EQ(start.wait_for(std::chrono::milliseconds(500)),
+            std::future_status::ready);
+  EXPECT_FALSE(start.get().ok());
+  EXPECT_EQ(runtime_stop_calls.load(), 1U);
+  EXPECT_EQ(calls.runtime_starts, 1U);
+  EXPECT_EQ(coordinator.State(), FirmwareBootState::kStopped);
+}
+
+TEST(FirmwareBootCoordinatorTest,
+     StartupProtectionExceptionStartsServiceWithoutRuntime) {
+  Calls calls;
+  auto dependencies = SuccessfulDependencies(
+      calls, security::DeviceState::kOperational);
+  dependencies.run_startup_protection_checks = [&] {
+    ++calls.protection_checks;
+    calls.Record("protection.check");
+    throw std::runtime_error("injected startup protection failure");
+  };
+  FirmwareBootCoordinator coordinator({true, true}, std::move(dependencies));
+
+  ASSERT_TRUE(coordinator.Start().ok());
+
+  EXPECT_EQ(coordinator.State(), FirmwareBootState::kRunning);
+  EXPECT_EQ(calls.service_starts, 1U);
+  EXPECT_EQ(calls.runtime_starts, 0U);
+  EXPECT_EQ(calls.protection_allowed_reads, 0U);
+  EXPECT_EQ(calls.ordered,
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start"}));
 }
 
 TEST(FirmwareBootCoordinatorTest, SecurityDisabledSkipsStateRead) {
@@ -264,7 +509,8 @@ TEST(FirmwareBootCoordinatorTest,
   EXPECT_EQ(calls.runtime_starts, 1U);
   EXPECT_EQ(calls.runtime_stops, 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "service.start",
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "protection.allowed",
                                       "runtime.start", "service.quiesce",
                                       "runtime.stop", "service.stop"}));
 }
@@ -348,8 +594,9 @@ TEST(FirmwareBootCoordinatorTest, StopProhibitsRuntimeTransitionBeforeQuiesce) {
   coordinator.Stop();
 
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"state", "service.start",
-                                      "service.quiesce", "service.stop"}));
+            (std::vector<std::string>{"state", "protection.check",
+                                      "service.start", "service.quiesce",
+                                      "service.stop"}));
 }
 
 TEST(FirmwareBootCoordinatorTest,

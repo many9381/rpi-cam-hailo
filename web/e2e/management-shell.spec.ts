@@ -16,6 +16,7 @@ import type {
   AuditStatus,
 } from '../src/features/audit/contracts';
 import type { RuntimeSettingsSnapshot } from '../src/features/settings/contracts';
+import type { ProtectionSnapshot } from '../src/features/protection/contracts';
 import type {
   ManagedUser,
   ManagementIp,
@@ -224,7 +225,42 @@ const administratorOnlyPaths = new Set([
   '/api/v1/security/management-ips',
   '/api/v1/audit/status',
   '/api/v1/audit/events',
+  '/api/v1/system/protection',
+  '/api/v1/system/self-tests',
+  '/api/v1/system/integrity-checks',
 ]);
+
+const makeProtectionSnapshot = (
+  restricted: boolean,
+  integrityTrigger: 'startup' | 'manual' = 'startup',
+): ProtectionSnapshot => ({
+  state: restricted ? 'restricted' : 'operational',
+  check_running: false,
+  next_periodic_at_seconds: 1_784_586_400,
+  self_test: {
+    suite: 'self_test',
+    trigger: 'startup',
+    passed: true,
+    started_at_seconds: 1_784_500_000,
+    finished_at_seconds: 1_784_500_002,
+    items: [{
+      id: 'crypto.sha256', category: null, passed: true, code: 'OK',
+    }],
+  },
+  integrity: {
+    suite: 'integrity',
+    trigger: integrityTrigger,
+    passed: !restricted,
+    started_at_seconds: 1_784_500_010,
+    finished_at_seconds: 1_784_500_013,
+    items: [{
+      id: 'camera-firmware',
+      category: 'firmware',
+      passed: !restricted,
+      code: restricted ? 'E_INTEGRITY_MISMATCH' : 'OK',
+    }],
+  },
+});
 
 const makeRuntimeSettingsSnapshot = (
   state: RuntimeSettingsSnapshot['state'] = 'clean',
@@ -272,6 +308,7 @@ interface ApiMockOptions {
   settingsApplyFailureOnce?: boolean;
   settingsRecoveryRequired?: boolean;
   auditStatusResponses?: ReadonlyArray<AuditStatus | Promise<AuditStatus>>;
+  protectionRestricted?: boolean;
 }
 
 interface ApiMockControls {
@@ -286,6 +323,8 @@ interface ApiMockControls {
   userManagementRequests: Request[];
   auditRequests: Request[];
   auditProtocolViolations: string[];
+  protectionRequests: Request[];
+  protectionProtocolViolations: string[];
   unhandledPaths: string[];
   requestedAdministratorPaths: string[];
   waitForAuditStatusRequests(count: number): Promise<void>;
@@ -306,6 +345,10 @@ async function installApiMocks(
   let settingsApplyFailureOnce = options.settingsApplyFailureOnce ?? false;
   const auditStatus = makeAuditStatus(false);
   const auditStatusResponses = [...(options.auditStatusResponses ?? [])];
+  let protectionSnapshot = makeProtectionSnapshot(
+    options.protectionRestricted ?? false,
+  );
+  let completeProtectionOnNextGet = false;
   let runtimeSettings = makeRuntimeSettingsSnapshot(
     options.settingsRecoveryRequired ? 'recovery_required' : 'clean',
   );
@@ -342,6 +385,8 @@ async function installApiMocks(
   const userManagementRequests: Request[] = [];
   const auditRequests: Request[] = [];
   const auditProtocolViolations: string[] = [];
+  const protectionRequests: Request[] = [];
+  const protectionProtocolViolations: string[] = [];
   let auditStatusRequestCount = 0;
   const auditStatusRequestWaiters: Array<{
     count: number;
@@ -383,6 +428,66 @@ async function installApiMocks(
 
     if (administratorOnlyPaths.has(path)) {
       requestedAdministratorPaths.push(`${request.method()} ${path}`);
+    }
+
+    if (path.startsWith('/api/v1/system/')) {
+      protectionRequests.push(request);
+      const rejectProtectionRequest = async (reason: string) => {
+        protectionProtocolViolations.push(
+          `${request.method()} ${path}${url.search}: ${reason}`,
+        );
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'E_UNEXPECTED_PROTECTION_TEST_REQUEST' }),
+        });
+      };
+      if (role === 'viewer') {
+        await rejectProtectionRequest('viewer request');
+        return;
+      }
+      if (url.search !== '') {
+        await rejectProtectionRequest('unexpected query');
+        return;
+      }
+      if (path === '/api/v1/system/protection' && request.method() === 'GET') {
+        if (request.postData() !== null) {
+          await rejectProtectionRequest('unexpected GET body');
+          return;
+        }
+        if (completeProtectionOnNextGet) {
+          protectionSnapshot = makeProtectionSnapshot(false, 'manual');
+          completeProtectionOnNextGet = false;
+        }
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(protectionSnapshot),
+        });
+        return;
+      }
+      if ((path === '/api/v1/system/self-tests' ||
+           path === '/api/v1/system/integrity-checks') &&
+          request.method() === 'POST') {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        if (Object.keys(body).length !== 0) {
+          await rejectProtectionRequest('unexpected POST body');
+          return;
+        }
+        protectionSnapshot = {
+          ...protectionSnapshot,
+          state: 'checking',
+          check_running: true,
+        };
+        completeProtectionOnNextGet = true;
+        await route.fulfill({
+          status: 202,
+          contentType: 'application/json',
+          body: JSON.stringify(protectionSnapshot),
+        });
+        return;
+      }
+      await rejectProtectionRequest('unexpected method or path');
+      return;
     }
 
     if (path.startsWith('/api/v1/audit/')) {
@@ -873,7 +978,8 @@ async function installApiMocks(
 
   return { initializeRequests, runtimeRequests, runtimeRestartRequests,
     liveRequests, settingsRequests, passwordRequests, snapshotRequests, authMeRequests,
-    userManagementRequests, auditRequests, auditProtocolViolations, unhandledPaths,
+    userManagementRequests, auditRequests, auditProtocolViolations,
+    protectionRequests, protectionProtocolViolations, unhandledPaths,
     requestedAdministratorPaths,
     waitForAuditStatusRequests: (count: number) => {
       if (auditStatusRequestCount >= count) {
@@ -1585,6 +1691,82 @@ test('recovery settings are replaced through save and apply', async ({ page }) =
   expect(api.unhandledPaths).toEqual([]);
 });
 
+test('restricted startup keeps responsive System recovery controls available', async ({
+  page,
+}, testInfo) => {
+  const browserErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const api = await installApiMocks(page, { protectionRestricted: true });
+
+  await page.goto('/#/dashboard');
+  const notice = page.getByRole('alert').filter({
+    hasText: 'System protection is restricted.',
+  });
+  await expect(notice).toBeVisible();
+  await expect(page.locator('.device-state')).toHaveText('Restricted');
+  await notice.getByRole('link', { name: 'Review system protection' }).click();
+  await expect(page).toHaveURL(/#\/system$/);
+
+  const panel = page.getByRole('region', { name: 'System protection' });
+  const audit = page.getByRole('region', { name: 'Audit records' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText('Restricted', { exact: true })).toBeVisible();
+  await expect(audit).toBeVisible();
+  await expectNoOverlap(panel, audit);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath('desktop-system-protection-restricted.png'),
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  const protectionCommands = panel.locator('.protection-command-button');
+  await expect(protectionCommands).toHaveCount(2);
+  for (let index = 0; index < await protectionCommands.count(); index += 1) {
+    await expectNoInternalOverflow(protectionCommands.nth(index));
+  }
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-system-protection-restricted.png'),
+    fullPage: true,
+  });
+
+  await panel.getByRole('button', { name: 'Run integrity check' }).click();
+  await expect(panel.getByText('Checking', { exact: true })).toBeVisible();
+  const runningIntegrityCheck = panel.getByRole('button', {
+    name: 'Integrity check running',
+  });
+  await expect(runningIntegrityCheck).toBeDisabled();
+  await expect(runningIntegrityCheck).toHaveAttribute('aria-busy', 'true');
+  await expectNoInternalOverflow(runningIntegrityCheck);
+  await panel.screenshot({
+    path: testInfo.outputPath('mobile-system-protection-checking.png'),
+  });
+  await page.getByRole('button', { name: 'Refresh device state' }).click();
+  await expect(panel.getByText('Operational', { exact: true })).toBeVisible();
+  await expect(notice).toBeHidden();
+  await expect(page.locator('.device-state')).toHaveText('Operational');
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath('mobile-system-protection-recovered.png'),
+    fullPage: true,
+  });
+
+  expect(api.protectionRequests.map((request) =>
+    `${request.method()} ${new URL(request.url()).pathname}`)).toEqual([
+    'GET /api/v1/system/protection',
+    'POST /api/v1/system/integrity-checks',
+    'GET /api/v1/system/protection',
+  ]);
+  expect(api.protectionProtocolViolations).toEqual([]);
+  expect(api.unhandledPaths).toEqual([]);
+  expect(browserErrors).toEqual([]);
+});
+
 test('audit records load 50 rows, encode every filter, and paginate duplicate values', async ({
   page,
 }, testInfo) => {
@@ -1783,6 +1965,8 @@ test('viewer shell makes zero audit records requests', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'System' })).toHaveCount(0);
   expect(api.auditRequests).toEqual([]);
   expect(api.auditProtocolViolations).toEqual([]);
+  expect(api.protectionRequests).toEqual([]);
+  expect(api.protectionProtocolViolations).toEqual([]);
   expect(api.unhandledPaths).toEqual([]);
   expect(api.requestedAdministratorPaths).toEqual([]);
 });
@@ -1817,6 +2001,8 @@ test('viewer monitoring keeps the live shell least-privileged and responsive', a
   await expect(snapshot).toBeVisible();
   await expect(page.getByRole('link', { name: 'Live' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Dashboard' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'System protection' })).toHaveCount(0);
+  await expect(page.getByText('System protection is restricted.')).toHaveCount(0);
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => ({
     readyState: element.readyState,
     width: element.videoWidth,
@@ -1850,6 +2036,8 @@ test('viewer monitoring keeps the live shell least-privileged and responsive', a
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('heading', { name: 'System protection' })).toHaveCount(0);
+  await expect(page.getByText('System protection is restricted.')).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
   await expectNoOverlap(header, livePreview);
   await expectNoOverlap(header, snapshotSection);
@@ -1917,6 +2105,8 @@ test('viewer monitoring keeps the live shell least-privileged and responsive', a
 
   expect(api.unhandledPaths).toEqual([]);
   expect(api.requestedAdministratorPaths).toEqual([]);
+  expect(api.protectionRequests).toEqual([]);
+  expect(api.protectionProtocolViolations).toEqual([]);
   expect(api.liveRequests).not.toHaveLength(0);
   expect(api.liveRequests.every((request) =>
     new URL(request.url()).pathname === '/api/v1/cameras/imx708/live.mp4')).toBe(true);

@@ -6,6 +6,7 @@ set(CAMERA_FIRMWARE_SERVICE_SOURCES
     SessionStreamRegistry.cpp
     ServiceApp.cpp
     ServiceStartup.cpp
+    SystemProtectionHttp.cpp
     UserManagementHttp.cpp
 )
 

@@ -8,10 +8,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
 include(cmake/Dependencies.cmake)
+include(cmake/EmbedIntegrityPublicKey.cmake)
+
+cf_embed_integrity_public_key(CF_INTEGRITY_TRUST_ANCHOR_SOURCE)
 
 add_subdirectory(src/common)
 add_subdirectory(src/ai)
 add_subdirectory(src/config)
+add_subdirectory(src/integrity)
 add_subdirectory(src/settings)
 add_subdirectory(src/security)
 add_subdirectory(src/boot)
@@ -22,6 +26,7 @@ add_subdirectory(src/service)
 add_subdirectory(plugins/gst-secure-srtp)
 add_subdirectory(web)
 add_subdirectory(apps/camera-firmware)
+add_subdirectory(apps/camera-firmware-integrity)
 add_subdirectory(apps/rtsp-digest-credential)
 
 if(BUILD_TESTING)

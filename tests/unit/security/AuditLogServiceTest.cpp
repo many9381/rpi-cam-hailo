@@ -25,6 +25,9 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/security/SecurityTypes.hpp"
 
+void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
+                                                       bool rollback);
+
 namespace {
 
 using camera_firmware::security::AuditLogService;
@@ -1030,6 +1033,106 @@ TEST(AuditLogServiceTest, QueryStoreFailureIsSanitized) {
   EXPECT_EQ(listed.error().message.find("audit_events"), std::string::npos);
   EXPECT_EQ(listed.error().message.find(root.StatePath().string()),
             std::string::npos);
+}
+
+TEST(AuditLogServiceTest, AppendsSystemAndAdministratorEventsTransactionally) {
+  TemporaryDirectory root;
+  auto store = OpenStore(root.StatePath(), 5U, 80U);
+  ExecuteSql(store->database_path(), R"sql(
+INSERT INTO users
+  (id, canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, lock_until_seconds,
+   created_at_seconds, last_login_at_seconds)
+VALUES
+  (1, 'operator.one', 'Operator One', 'administrator', 1,
+   'pbkdf2-hmac-sha256', 1000, zeroblob(16), zeroblob(32), 1, 0, NULL, 1,
+   NULL);
+)sql");
+  AuditLogService service(*store);
+
+  ASSERT_TRUE(service.AppendSystemEvent("self_test.started", "success",
+                                        "OK", "suite", "self_test")
+                  .ok());
+  ASSERT_TRUE(service.AppendAdministratorEvent(
+                  Actor(UserRole::kAdministrator), "2001:db8::1",
+                  "self_test.succeeded", "success", "OK", "suite",
+                  "self_test")
+                  .ok());
+
+  AuditQueryParameters query;
+  query.sort_direction = "asc";
+  const auto page = ListOrThrow(service, query);
+  ASSERT_EQ(page.events.size(), 2U);
+  EXPECT_EQ(page.events[0].sequence, 1);
+  EXPECT_EQ(page.events[0].actor_identity, "system");
+  EXPECT_EQ(page.events[0].peer_ip, "127.0.0.1");
+  EXPECT_EQ(page.events[1].sequence, 2);
+  EXPECT_EQ(page.events[1].actor_identity, "operator.one");
+  EXPECT_EQ(page.events[1].peer_ip, "2001:db8::1");
+  EXPECT_EQ(QueryInt64Rows(
+                store->database_path(),
+                "SELECT actor_user_id IS NULL FROM audit_events "
+                "WHERE sequence = 1;"),
+            (std::vector<std::int64_t>{1}));
+}
+
+TEST(AuditLogServiceTest, RollsBackFailedAuditAppendTransactions) {
+  TemporaryDirectory root;
+  auto store = OpenStore(root.StatePath(), 5U, 80U);
+  AuditLogService service(*store);
+
+  auto insertion = service.AppendSystemEvent("", "success", "OK");
+  ASSERT_FALSE(insertion.ok());
+  EXPECT_EQ(insertion.error().code, "E_AUDIT_APPEND_UNAVAILABLE");
+  EXPECT_EQ(insertion.error().message, "audit append is unavailable");
+  EXPECT_EQ(insertion.error().message.find("sqlite"), std::string::npos);
+  EXPECT_EQ(insertion.error().message.find("audit_events"), std::string::npos);
+  EXPECT_EQ(insertion.error().message.find(root.StatePath().string()),
+            std::string::npos);
+  EXPECT_TRUE(ListOrThrow(service, {}).events.empty());
+
+  ConfigureSecurityStoreTransactionFailuresForTest(true, false);
+  auto commit = service.AppendSystemEvent("self_test.started", "success", "OK");
+  ConfigureSecurityStoreTransactionFailuresForTest(false, false);
+  ASSERT_FALSE(commit.ok());
+  EXPECT_EQ(commit.error().code, "E_AUDIT_APPEND_UNAVAILABLE");
+  EXPECT_EQ(commit.error().message, "audit append is unavailable");
+  EXPECT_EQ(commit.error().message.find("sqlite"), std::string::npos);
+  EXPECT_EQ(commit.error().message.find("COMMIT"), std::string::npos);
+  EXPECT_EQ(commit.error().message.find(root.StatePath().string()),
+            std::string::npos);
+  EXPECT_TRUE(ListOrThrow(service, {}).events.empty());
+}
+
+TEST(AuditLogServiceTest, RejectsNoncanonicalAdministratorPeer) {
+  TemporaryDirectory root;
+  auto store = OpenStore(root.StatePath(), 5U, 80U);
+  AuditLogService service(*store);
+
+  const auto result = service.AppendAdministratorEvent(
+      Actor(UserRole::kAdministrator), "2001:0db8::1", "self_test.started",
+      "success", "OK");
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_AUDIT_APPEND_INVALID");
+  EXPECT_EQ(result.error().message, "audit append is invalid");
+  EXPECT_TRUE(ListOrThrow(service, {}).events.empty());
+}
+
+TEST(AuditLogServiceTest, RejectsNonAdministratorAuditAppendActor) {
+  TemporaryDirectory root;
+  auto store = OpenStore(root.StatePath(), 5U, 80U);
+  AuditLogService service(*store);
+
+  auto result = service.AppendAdministratorEvent(
+      Actor(UserRole::kViewer), "192.0.2.10", "self_test.started", "success",
+      "OK");
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_AUDIT_FORBIDDEN");
+  EXPECT_EQ(result.error().message, "audit append is forbidden");
+  EXPECT_TRUE(ListOrThrow(service, {}).events.empty());
 }
 
 }  // namespace

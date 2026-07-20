@@ -5,6 +5,8 @@ import { HashRouter } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
 import type { AuditStatusController } from '../features/audit/useAuditStatus';
+import type { ProtectionSnapshot } from '../features/protection/contracts';
+import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import {
   makeSettings,
   makeSettingsController,
@@ -20,11 +22,12 @@ const renderShell = (
   runtimeSettings?: RuntimeSettingsController,
   changePassword = vi.fn(),
   auditStatus?: AuditStatusController,
+  protection?: SystemProtectionController,
 ) => render(
   <HashRouter>
     <AppShell principal={principal} logout={logout}
       changePassword={changePassword} runtimeSettings={runtimeSettings}
-      auditStatus={auditStatus}>Dashboard content</AppShell>
+      auditStatus={auditStatus} protection={protection}>Dashboard content</AppShell>
   </HashRouter>,
 );
 
@@ -40,6 +43,24 @@ const warningAuditStatus: AuditStatusController = {
     last_rotated_sequence: 2,
   },
   refresh: vi.fn(async () => undefined),
+};
+
+const restrictedProtectionSnapshot: ProtectionSnapshot = {
+  state: 'restricted',
+  check_running: false,
+  next_periodic_at_seconds: 1_784_586_400,
+  self_test: null,
+  integrity: null,
+};
+
+const restrictedProtection: SystemProtectionController = {
+  state: 'ready',
+  snapshot: restrictedProtectionSnapshot,
+  publicMessage: null,
+  activeCommand: null,
+  refresh: vi.fn(async () => undefined),
+  runSelfTest: vi.fn(async () => undefined),
+  runIntegrityCheck: vi.fn(async () => undefined),
 };
 
 afterEach(() => {
@@ -74,6 +95,18 @@ describe('AppShell', () => {
     expect(within(screen.getByRole('navigation', { name: /primary/i }))
       .getAllByRole('link').map((link) => link.textContent))
       .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
+  });
+
+  it('places the restricted protection notice before route content', () => {
+    renderShell(vi.fn(), undefined, vi.fn(), undefined, restrictedProtection);
+
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent('System protection is restricted.');
+    expect(notice.nextSibling?.textContent).toContain('Dashboard content');
+    expect(screen.getByRole('link', { name: 'Review system protection' }))
+      .toHaveAttribute('href', '#/system');
+    expect(screen.getByText('Restricted', { selector: '.device-state' }))
+      .toHaveClass('device-state-restricted');
   });
 
   it('opens a modal mobile drawer and closes it on Escape with focus restored', async () => {

@@ -4,6 +4,8 @@
 #include <array>
 #include <barrier>
 #include <cerrno>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -22,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/inotify.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -33,6 +36,7 @@
 extern "C" int __real_fstat(int descriptor, struct stat* status);
 extern "C" int __real_close(int descriptor);
 extern "C" int __real_fsync(int descriptor);
+extern "C" void __real_OPENSSL_cleanse(void* pointer, std::size_t length);
 extern "C" int __real_camera_firmware_tls_rename_noreplace(
     int old_directory,
     const char* old_name,
@@ -169,6 +173,53 @@ void RewriteCertificateAsExpired(
   ASSERT_EQ(::chmod(material.certificate_path.c_str(), 0644), 0);
 }
 
+void RewriteCertificateValidity(
+    const camera_firmware::security::ResolvedTlsMaterial& material,
+    std::time_t not_before,
+    std::time_t not_after) {
+  auto certificate = LoadCertificate(material.certificate_path);
+  auto private_key = LoadPrivateKey(material.private_key_path);
+  ASSERT_TRUE(certificate);
+  ASSERT_TRUE(private_key);
+  ASSERT_NE(ASN1_TIME_set(X509_getm_notBefore(certificate.get()), not_before),
+            nullptr);
+  ASSERT_NE(ASN1_TIME_set(X509_getm_notAfter(certificate.get()), not_after),
+            nullptr);
+  ASSERT_GT(X509_sign(certificate.get(), private_key.get(), EVP_sha256()), 0);
+
+  BioPtr output(BIO_new_file(material.certificate_path.c_str(), "w"), BIO_free);
+  ASSERT_TRUE(output);
+  ASSERT_EQ(PEM_write_bio_X509(output.get(), certificate.get()), 1);
+  output.reset();
+  ASSERT_EQ(::chmod(material.certificate_path.c_str(), 0644), 0);
+}
+
+void RewriteCertificateWithMalformedTime(
+    const camera_firmware::security::ResolvedTlsMaterial& material,
+    bool malformed_not_before,
+    std::time_t valid_time) {
+  auto certificate = LoadCertificate(material.certificate_path);
+  auto private_key = LoadPrivateKey(material.private_key_path);
+  ASSERT_TRUE(certificate);
+  ASSERT_TRUE(private_key);
+  ASSERT_NE(ASN1_TIME_set(X509_getm_notBefore(certificate.get()), valid_time - 60),
+            nullptr);
+  ASSERT_NE(ASN1_TIME_set(X509_getm_notAfter(certificate.get()), valid_time + 60),
+            nullptr);
+  ASN1_TIME* malformed = malformed_not_before
+                             ? X509_getm_notBefore(certificate.get())
+                             : X509_getm_notAfter(certificate.get());
+  constexpr std::string_view kMalformed = "not-a-valid-time";
+  ASSERT_EQ(ASN1_STRING_set(malformed, kMalformed.data(), kMalformed.size()), 1);
+  ASSERT_GT(X509_sign(certificate.get(), private_key.get(), EVP_sha256()), 0);
+
+  BioPtr output(BIO_new_file(material.certificate_path.c_str(), "w"), BIO_free);
+  ASSERT_TRUE(output);
+  ASSERT_EQ(PEM_write_bio_X509(output.get(), certificate.get()), 1);
+  output.reset();
+  ASSERT_EQ(::chmod(material.certificate_path.c_str(), 0644), 0);
+}
+
 void RemoveCertificateExtensions(X509* certificate, int nid) {
   int index = -1;
   while ((index = X509_get_ext_by_NID(certificate, nid, -1)) >= 0) {
@@ -202,6 +253,209 @@ void RewriteGeneratedCertificate(
   ASSERT_TRUE(output);
   ASSERT_EQ(PEM_write_bio_X509(output.get(), certificate.get()), 1);
   ASSERT_EQ(::chmod(LiveCertificate(state).c_str(), 0644), 0);
+}
+
+void ReplaceFileContents(const std::filesystem::path& source,
+                         const std::filesystem::path& destination,
+                         mode_t mode) {
+  std::ifstream input(source, std::ios::binary);
+  std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+  if (!input.is_open() || !output.is_open()) {
+    throw std::runtime_error("failed to replace TLS test file contents");
+  }
+  output << input.rdbuf();
+  output.close();
+  if (!output || ::chmod(destination.c_str(), mode) != 0) {
+    throw std::runtime_error("failed to protect replacement TLS test file");
+  }
+}
+
+std::size_t FileSize(const std::filesystem::path& path) {
+  struct stat status {};
+  if (::stat(path.c_str(), &status) != 0 || status.st_size < 0) {
+    throw std::runtime_error("failed to inspect TLS test file");
+  }
+  return static_cast<std::size_t>(status.st_size);
+}
+
+void AppendFileContents(const std::filesystem::path& source,
+                        const std::filesystem::path& destination) {
+  std::ifstream input(source, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to append TLS test file");
+  }
+  input.seekg(0, std::ios::end);
+  const auto size = input.tellg();
+  if (size <= 0) {
+    throw std::runtime_error("failed to size TLS test file");
+  }
+  const auto byte_count = static_cast<std::streamsize>(size);
+  std::vector<char> snapshot(static_cast<std::size_t>(byte_count));
+  input.seekg(0, std::ios::beg);
+  input.read(snapshot.data(), byte_count);
+  if (!input) {
+    throw std::runtime_error("failed to snapshot TLS test file");
+  }
+  input.close();
+  std::ofstream output(destination, std::ios::binary | std::ios::app);
+  if (!output.is_open()) {
+    throw std::runtime_error("failed to append TLS test file");
+  }
+  output.write(snapshot.data(), byte_count);
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to append TLS test file");
+  }
+}
+
+void AppendText(const std::filesystem::path& destination,
+                std::string_view text) {
+  std::ofstream output(destination, std::ios::binary | std::ios::app);
+  if (!output.is_open()) {
+    throw std::runtime_error("failed to append TLS test text");
+  }
+  output.write(text.data(), static_cast<std::streamsize>(text.size()));
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to append TLS test text");
+  }
+}
+
+void RewritePrivateKeyAsEncrypted(
+    const camera_firmware::security::ResolvedTlsMaterial& material) {
+  auto private_key = LoadPrivateKey(material.private_key_path);
+  ASSERT_TRUE(private_key);
+  std::array<unsigned char, 16> password{};
+  password.fill(0x5aU);
+  BioPtr output(BIO_new_file(material.private_key_path.c_str(), "w"), BIO_free);
+  ASSERT_TRUE(output);
+  ASSERT_EQ(PEM_write_bio_PrivateKey(
+                output.get(), private_key.get(), EVP_aes_256_cbc(),
+                password.data(), static_cast<int>(password.size()), nullptr,
+                nullptr),
+            1);
+  OPENSSL_cleanse(password.data(), password.size());
+  output.reset();
+  ASSERT_EQ(::chmod(material.private_key_path.c_str(), 0600), 0);
+}
+
+void RewritePrivateKeyAsInvalid(
+    const camera_firmware::security::ResolvedTlsMaterial& material) {
+  std::ofstream output(material.private_key_path,
+                       std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(output.is_open());
+  constexpr std::string_view kInvalid = "invalid private key";
+  output.write(kInvalid.data(), static_cast<std::streamsize>(kInvalid.size()));
+  output.close();
+  ASSERT_TRUE(output);
+  ASSERT_EQ(::chmod(material.private_key_path.c_str(), 0600), 0);
+}
+
+void MakePrivateKeySnapshotOversized(
+    const camera_firmware::security::ResolvedTlsMaterial& material) {
+  const int descriptor =
+      ::open(material.private_key_path.c_str(), O_WRONLY | O_CLOEXEC);
+  ASSERT_GE(descriptor, 0);
+  constexpr off_t kOversized = 1024 * 1024 + 1;
+  ASSERT_EQ(::ftruncate(descriptor, kOversized), 0);
+  ASSERT_EQ(::close(descriptor), 0);
+  ASSERT_EQ(::chmod(material.private_key_path.c_str(), 0600), 0);
+}
+
+struct BoundedTlsHealthResult {
+  bool completed{false};
+  bool rejected_with_exact_code{false};
+};
+
+BoundedTlsHealthResult RunTlsHealthInBoundedSubprocess(
+    const camera_firmware::security::ResolvedTlsMaterial& material,
+    std::chrono::system_clock::time_point now) {
+  int result_pipe[2] = {-1, -1};
+  if (::pipe2(result_pipe, O_CLOEXEC) != 0) {
+    throw std::system_error(errno, std::generic_category(), "pipe2");
+  }
+  const pid_t child = ::fork();
+  if (child < 0) {
+    const int error = errno;
+    (void)::close(result_pipe[0]);
+    (void)::close(result_pipe[1]);
+    throw std::system_error(error, std::generic_category(), "fork");
+  }
+  if (child == 0) {
+    (void)::close(result_pipe[0]);
+    const auto health =
+        camera_firmware::security::CheckTlsMaterialHealth(material, now);
+    const unsigned char result =
+        !health.ok() && health.error().code == "E_SECURITY_TLS_HEALTH" ? 1U
+                                                                        : 0U;
+    (void)::write(result_pipe[1], &result, sizeof(result));
+    (void)::close(result_pipe[1]);
+    ::_exit(0);
+  }
+
+  (void)::close(result_pipe[1]);
+  pollfd descriptor{result_pipe[0], POLLIN, 0};
+  int polled;
+  do {
+    polled = ::poll(&descriptor, 1, 2000);
+  } while (polled < 0 && errno == EINTR);
+  if (polled != 1 || (descriptor.revents & POLLIN) == 0) {
+    (void)::kill(child, SIGKILL);
+    while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+    }
+    (void)::close(result_pipe[0]);
+    return {};
+  }
+  unsigned char result = 0U;
+  ssize_t read_size;
+  do {
+    read_size = ::read(result_pipe[0], &result, sizeof(result));
+  } while (read_size < 0 && errno == EINTR);
+  (void)::close(result_pipe[0]);
+  int status = 0;
+  pid_t waited;
+  do {
+    waited = ::waitpid(child, &status, 0);
+  } while (waited < 0 && errno == EINTR);
+  return {waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+              read_size == 1,
+          result == 1U};
+}
+
+struct PrivatePemCleanseObservation {
+  std::size_t matching_calls{0U};
+  bool all_zero{true};
+};
+
+bool observe_private_pem_cleanse{false};
+std::size_t expected_private_pem_cleanse_size{0U};
+PrivatePemCleanseObservation private_pem_cleanse_observation;
+bool observe_pem_remainder_cleanse{false};
+std::size_t pem_remainder_cleanse_calls{0U};
+
+void BeginPrivatePemCleanseObservation(std::size_t expected_size) {
+  expected_private_pem_cleanse_size = expected_size;
+  private_pem_cleanse_observation = {};
+  observe_private_pem_cleanse = true;
+}
+
+PrivatePemCleanseObservation EndPrivatePemCleanseObservation() {
+  observe_private_pem_cleanse = false;
+  expected_private_pem_cleanse_size = 0U;
+  return private_pem_cleanse_observation;
+}
+
+void ObservePrivatePemCleanse(const void* pointer, std::size_t length) noexcept {
+  if (!observe_private_pem_cleanse ||
+      length != expected_private_pem_cleanse_size) {
+    return;
+  }
+  ++private_pem_cleanse_observation.matching_calls;
+  const auto* bytes = static_cast<const unsigned char*>(pointer);
+  private_pem_cleanse_observation.all_zero =
+      private_pem_cleanse_observation.all_zero &&
+      std::all_of(bytes, bytes + length,
+                  [](unsigned char value) { return value == 0U; });
 }
 
 std::vector<std::filesystem::path> TemporaryIdentityEntries(
@@ -395,6 +649,245 @@ TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement)
 
   EXPECT_EQ(CertificateFingerprint(configured.value().certificate_path),
             generated_fingerprint);
+}
+
+TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) {
+  TemporaryDirectory state;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  const auto now = std::chrono::system_clock::now();
+
+  EXPECT_TRUE(camera_firmware::security::CheckTlsMaterialHealth(
+                  material.value(), now)
+                  .ok());
+  EXPECT_FALSE(camera_firmware::security::CheckTlsMaterialHealth(
+                   material.value(), now - std::chrono::hours(24))
+                   .ok());
+  EXPECT_FALSE(camera_firmware::security::CheckTlsMaterialHealth(
+                   material.value(), now + std::chrono::hours(24 * 365 * 6))
+                   .ok());
+
+  const auto preserved_certificate = state.path() / "preserved-certificate.pem";
+  std::filesystem::rename(LiveCertificate(state), preserved_certificate);
+  ASSERT_EQ(::symlink(preserved_certificate.c_str(),
+                      LiveCertificate(state).c_str()),
+            0);
+  EXPECT_TRUE(camera_firmware::security::CheckTlsMaterialHealth(
+                  material.value(), now)
+                  .ok());
+}
+
+TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthIncludesExactValidityBounds) {
+  TemporaryDirectory state;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  constexpr std::time_t kNowSeconds = 1700000000;
+  const auto now = std::chrono::system_clock::from_time_t(kNowSeconds);
+
+  RewriteCertificateValidity(material.value(), kNowSeconds, kNowSeconds + 60);
+  EXPECT_TRUE(
+      camera_firmware::security::CheckTlsMaterialHealth(material.value(), now)
+          .ok());
+
+  RewriteCertificateValidity(material.value(), kNowSeconds - 60, kNowSeconds);
+  EXPECT_TRUE(
+      camera_firmware::security::CheckTlsMaterialHealth(material.value(), now)
+          .ok());
+}
+
+TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMalformedValidityTimes) {
+  constexpr std::time_t kNowSeconds = 1700000000;
+  const auto now = std::chrono::system_clock::from_time_t(kNowSeconds);
+
+  for (const bool malformed_not_before : {true, false}) {
+    TemporaryDirectory state;
+    auto material = camera_firmware::security::ResolveTlsMaterial(
+        DevelopmentTls(), state.path());
+    ASSERT_TRUE(material.ok()) << material.error().message;
+    RewriteCertificateWithMalformedTime(material.value(), malformed_not_before,
+                                        kNowSeconds);
+
+    const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+        material.value(), now);
+
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_TLS_HEALTH");
+  }
+}
+
+TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) {
+  TemporaryDirectory state;
+  TemporaryDirectory replacement;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  auto replacement_material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), replacement.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  ASSERT_TRUE(replacement_material.ok()) << replacement_material.error().message;
+
+  ReplaceFileContents(LivePrivateKey(replacement), LivePrivateKey(state), 0600);
+  auto mismatched = camera_firmware::security::CheckTlsMaterialHealth(
+      material.value(), std::chrono::system_clock::now());
+  ASSERT_FALSE(mismatched.ok());
+  EXPECT_EQ(mismatched.error().code, "E_SECURITY_TLS_HEALTH");
+
+  TemporaryDirectory trailing_state;
+  auto trailing_material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), trailing_state.path());
+  ASSERT_TRUE(trailing_material.ok()) << trailing_material.error().message;
+  const int descriptor = ::open(LiveCertificate(trailing_state).c_str(),
+                                O_WRONLY | O_APPEND | O_CLOEXEC);
+  ASSERT_GE(descriptor, 0);
+  constexpr std::string_view kTrailing = "unexpected";
+  ASSERT_EQ(::write(descriptor, kTrailing.data(), kTrailing.size()),
+            static_cast<ssize_t>(kTrailing.size()));
+  ASSERT_EQ(::close(descriptor), 0);
+  auto trailing = camera_firmware::security::CheckTlsMaterialHealth(
+      trailing_material.value(), std::chrono::system_clock::now());
+  ASSERT_FALSE(trailing.ok());
+  EXPECT_EQ(trailing.error().code, "E_SECURITY_TLS_HEALTH");
+}
+
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthRejectsEncryptedKeyInBoundedSubprocess) {
+  TemporaryDirectory state;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  RewritePrivateKeyAsEncrypted(material.value());
+
+  const auto child = RunTlsHealthInBoundedSubprocess(
+      material.value(), std::chrono::system_clock::now());
+
+  EXPECT_TRUE(child.completed);
+  EXPECT_TRUE(child.rejected_with_exact_code);
+}
+
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthRejectsTrailingPrivateAndSecondPemBlocks) {
+  {
+    TemporaryDirectory state;
+    auto material = camera_firmware::security::ResolveTlsMaterial(
+        DevelopmentTls(), state.path());
+    ASSERT_TRUE(material.ok()) << material.error().message;
+    AppendText(material.value().private_key_path, "trailing private data");
+    const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+        material.value(), std::chrono::system_clock::now());
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_TLS_HEALTH");
+  }
+
+  {
+    TemporaryDirectory state;
+    auto material = camera_firmware::security::ResolveTlsMaterial(
+        DevelopmentTls(), state.path());
+    ASSERT_TRUE(material.ok()) << material.error().message;
+    AppendFileContents(LiveCertificate(state),
+                       material.value().certificate_path);
+    const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+        material.value(), std::chrono::system_clock::now());
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_TLS_HEALTH");
+  }
+
+  {
+    TemporaryDirectory state;
+    auto material = camera_firmware::security::ResolveTlsMaterial(
+        DevelopmentTls(), state.path());
+    ASSERT_TRUE(material.ok()) << material.error().message;
+    AppendFileContents(LivePrivateKey(state),
+                       material.value().private_key_path);
+    const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+        material.value(), std::chrono::system_clock::now());
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_TLS_HEALTH");
+  }
+}
+
+TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsOversizedSnapshot) {
+  TemporaryDirectory state;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  MakePrivateKeySnapshotOversized(material.value());
+
+  const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+      material.value(), std::chrono::system_clock::now());
+
+  ASSERT_FALSE(health.ok());
+  EXPECT_EQ(health.error().code, "E_SECURITY_TLS_HEALTH");
+}
+
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthCleansesFullPrivatePemOnSuccessAndFailures) {
+  const auto expect_cleansed = [](auto&& prepare, bool expect_success) {
+    TemporaryDirectory state;
+    auto material = camera_firmware::security::ResolveTlsMaterial(
+        DevelopmentTls(), state.path());
+    ASSERT_TRUE(material.ok()) << material.error().message;
+    prepare(state, material.value());
+    const std::size_t allocation_size =
+        FileSize(material.value().private_key_path);
+    BeginPrivatePemCleanseObservation(allocation_size);
+
+    const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+        material.value(), std::chrono::system_clock::now());
+    const auto observation = EndPrivatePemCleanseObservation();
+
+    EXPECT_EQ(health.ok(), expect_success);
+    EXPECT_GE(observation.matching_calls, 1U);
+    EXPECT_TRUE(observation.all_zero);
+  };
+
+  expect_cleansed([](const auto&, const auto&) {}, true);
+  expect_cleansed(
+      [](const auto&, const auto& material) {
+        RewritePrivateKeyAsInvalid(material);
+      },
+      false);
+  expect_cleansed(
+      [](const auto& state, const auto& material) {
+        TemporaryDirectory replacement;
+        auto replacement_material =
+            camera_firmware::security::ResolveTlsMaterial(
+                DevelopmentTls(), replacement.path());
+        ASSERT_TRUE(replacement_material.ok())
+            << replacement_material.error().message;
+        ReplaceFileContents(replacement_material.value().private_key_path,
+                            material.private_key_path, 0600);
+        (void)state;
+      },
+      false);
+  expect_cleansed(
+      [](const auto&, const auto& material) {
+        AppendText(material.private_key_path, "trailing private data");
+      },
+      false);
+}
+
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthCleansesTrailingPrivatePemInspectionBuffer) {
+  TemporaryDirectory state;
+  auto material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path());
+  ASSERT_TRUE(material.ok()) << material.error().message;
+  TemporaryDirectory second_state;
+  auto second_material = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), second_state.path());
+  ASSERT_TRUE(second_material.ok()) << second_material.error().message;
+  AppendFileContents(second_material.value().private_key_path,
+                     material.value().private_key_path);
+
+  pem_remainder_cleanse_calls = 0U;
+  observe_pem_remainder_cleanse = true;
+  const auto health = camera_firmware::security::CheckTlsMaterialHealth(
+      material.value(), std::chrono::system_clock::now());
+  observe_pem_remainder_cleanse = false;
+
+  EXPECT_FALSE(health.ok());
+  EXPECT_GE(pem_remainder_cleanse_calls, 1U);
 }
 
 TEST(DeviceTlsManagerTest, InterruptedLinuxCloseIsNeverRetried) {
@@ -830,6 +1323,19 @@ TEST(DeviceTlsManagerTest, PublicationFailureRemovesWrittenTemporaryIdentity) {
 }
 
 }  // namespace
+
+void ConfigureFstatOwnerSpoofForSecurityStoreTest(
+    std::optional<ino_t> inode) {
+  spoofed_owner_inode = inode;
+}
+
+extern "C" void __wrap_OPENSSL_cleanse(void* pointer, std::size_t length) {
+  __real_OPENSSL_cleanse(pointer, length);
+  ObservePrivatePemCleanse(pointer, length);
+  if (observe_pem_remainder_cleanse && length == 256U) {
+    ++pem_remainder_cleanse_calls;
+  }
+}
 
 extern "C" int __wrap_fstat(int descriptor, struct stat* status) {
   const int result = __real_fstat(descriptor, status);

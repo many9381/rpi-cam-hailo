@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cctype>
 #include <climits>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -24,6 +27,7 @@
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/buffer.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -381,6 +385,127 @@ struct PreparedTlsMaterial {
   OpenedPemFile private_key;
   bool generated_for_development{false};
 };
+
+struct PinnedPemSnapshot {
+  struct stat status {};
+  common::SecureBytes bytes;
+};
+
+bool SamePemSnapshot(const struct stat& first,
+                     const struct stat& second) noexcept {
+  return first.st_dev == second.st_dev && first.st_ino == second.st_ino &&
+         first.st_size == second.st_size && first.st_mtim.tv_sec == second.st_mtim.tv_sec &&
+         first.st_mtim.tv_nsec == second.st_mtim.tv_nsec &&
+         first.st_ctim.tv_sec == second.st_ctim.tv_sec &&
+         first.st_ctim.tv_nsec == second.st_ctim.tv_nsec;
+}
+
+class PrivatePemCleanser {
+ public:
+  explicit PrivatePemCleanser(common::SecureBytes& bytes) noexcept
+      : bytes_(bytes) {}
+  ~PrivatePemCleanser() {
+    if (active_ && bytes_.size() != 0U) {
+      OPENSSL_cleanse(bytes_.data(), bytes_.size());
+      bytes_.clear();
+    }
+  }
+
+  PrivatePemCleanser(const PrivatePemCleanser&) = delete;
+  PrivatePemCleanser& operator=(const PrivatePemCleanser&) = delete;
+  void Release() noexcept { active_ = false; }
+
+ private:
+  common::SecureBytes& bytes_;
+  bool active_{true};
+};
+
+class PemInspectionBufferCleanser {
+ public:
+  PemInspectionBufferCleanser(void* data, std::size_t size) noexcept
+      : data_(data), size_(size) {}
+  ~PemInspectionBufferCleanser() { OPENSSL_cleanse(data_, size_); }
+
+  PemInspectionBufferCleanser(const PemInspectionBufferCleanser&) = delete;
+  PemInspectionBufferCleanser& operator=(
+      const PemInspectionBufferCleanser&) = delete;
+
+ private:
+  void* data_;
+  std::size_t size_;
+};
+
+common::Result<PinnedPemSnapshot> ReadPinnedPemSnapshot(int descriptor,
+                                                         bool private_key) {
+  struct stat initial {};
+  if (::fstat(descriptor, &initial) != 0 || !S_ISREG(initial.st_mode) ||
+      S_ISLNK(initial.st_mode) || initial.st_uid != ::geteuid() ||
+      initial.st_nlink != 1 ||
+      (private_key ? !HasMode(initial, kPrivateKeyMode)
+                   : !CertificateModeIsProtected(initial)) ||
+      initial.st_size <= 0 ||
+      static_cast<unsigned long long>(initial.st_size) > kMaximumPemBytes) {
+    return TlsError<PinnedPemSnapshot>("E_SECURITY_TLS_HEALTH",
+                                       "TLS identity health check failed");
+  }
+
+  PinnedPemSnapshot snapshot;
+  snapshot.status = initial;
+  PrivatePemCleanser cleanser(snapshot.bytes);
+  try {
+    snapshot.bytes.resize(static_cast<std::size_t>(initial.st_size));
+  } catch (...) {
+    return TlsError<PinnedPemSnapshot>("E_SECURITY_TLS_HEALTH",
+                                       "TLS identity health check failed");
+  }
+  std::size_t offset = 0U;
+  while (offset < snapshot.bytes.size()) {
+    const ssize_t read_size =
+        ::pread(descriptor, snapshot.bytes.data() + offset,
+                snapshot.bytes.size() - offset, static_cast<off_t>(offset));
+    if (read_size < 0 && errno == EINTR) {
+      continue;
+    }
+    if (read_size <= 0) {
+      return TlsError<PinnedPemSnapshot>("E_SECURITY_TLS_HEALTH",
+                                         "TLS identity health check failed");
+    }
+    offset += static_cast<std::size_t>(read_size);
+  }
+  struct stat final_status {};
+  if (::fstat(descriptor, &final_status) != 0 ||
+      !S_ISREG(final_status.st_mode) || S_ISLNK(final_status.st_mode) ||
+      final_status.st_uid != ::geteuid() || final_status.st_nlink != 1 ||
+      (private_key ? !HasMode(final_status, kPrivateKeyMode)
+                   : !CertificateModeIsProtected(final_status)) ||
+      !SamePemSnapshot(initial, final_status)) {
+    return TlsError<PinnedPemSnapshot>("E_SECURITY_TLS_HEALTH",
+                                       "TLS identity health check failed");
+  }
+  if (private_key) {
+    cleanser.Release();
+  }
+  return common::Result<PinnedPemSnapshot>::Ok(std::move(snapshot));
+}
+
+bool HasOnlyWhitespaceRemaining(BIO* input) noexcept {
+  std::array<unsigned char, 256> buffer{};
+  const PemInspectionBufferCleanser cleanser(buffer.data(), buffer.size());
+  while (true) {
+    const int read_size = BIO_read(input, buffer.data(), buffer.size());
+    if (read_size == 0) {
+      return true;
+    }
+    if (read_size < 0) {
+      return false;
+    }
+    for (int index = 0; index < read_size; ++index) {
+      if (std::isspace(buffer[static_cast<std::size_t>(index)]) == 0) {
+        return false;
+      }
+    }
+  }
+}
 
 bool IsTemporaryIdentityName(std::string_view name) {
   if (!name.starts_with(kTemporaryPrefix) ||
@@ -1178,6 +1303,74 @@ common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
   } catch (...) {
     return TlsError<ResolvedTlsMaterial>(
         "E_HTTP_TLS_GENERATE", "failed to resolve HTTP TLS identity");
+  }
+}
+
+common::Result<void> CheckTlsMaterialHealth(
+    const ResolvedTlsMaterial& material,
+    std::chrono::system_clock::time_point now) {
+  const auto failure = [] {
+    return TlsError("E_SECURITY_TLS_HEALTH", "TLS identity health check failed");
+  };
+  try {
+    if (!material.handles_ || material.handles_->certificate < 0 ||
+        material.handles_->private_key < 0) {
+      return failure();
+    }
+    auto certificate =
+        ReadPinnedPemSnapshot(material.handles_->certificate, false);
+    if (!certificate.ok()) {
+      return failure();
+    }
+    auto private_key = ReadPinnedPemSnapshot(material.handles_->private_key, true);
+    if (!private_key.ok()) {
+      return failure();
+    }
+    PrivatePemCleanser private_key_cleanser(private_key.value().bytes);
+
+    BioPtr certificate_bio(
+        BIO_new_mem_buf(certificate.value().bytes.data(),
+                        static_cast<int>(certificate.value().bytes.size())),
+        BIO_free);
+    BioPtr private_key_bio(
+        BIO_new_mem_buf(private_key.value().bytes.data(),
+                        static_cast<int>(private_key.value().bytes.size())),
+        BIO_free);
+    X509Ptr parsed_certificate(
+        certificate_bio
+            ? PEM_read_bio_X509(certificate_bio.get(), nullptr, nullptr, nullptr)
+            : nullptr,
+        X509_free);
+    KeyPtr parsed_private_key(
+        private_key_bio
+            ? PEM_read_bio_PrivateKey(private_key_bio.get(), nullptr,
+                                      RejectEncryptedPemPassword, nullptr)
+            : nullptr,
+        EVP_PKEY_free);
+    std::time_t current_time =
+        std::chrono::system_clock::to_time_t(now);
+    const int not_before_comparison =
+        parsed_certificate
+            ? ASN1_TIME_cmp_time_t(
+                  X509_get0_notBefore(parsed_certificate.get()), current_time)
+            : -2;
+    const int not_after_comparison =
+        parsed_certificate
+            ? ASN1_TIME_cmp_time_t(
+                  X509_get0_notAfter(parsed_certificate.get()), current_time)
+            : -2;
+    if (!parsed_certificate || !parsed_private_key ||
+        !HasOnlyWhitespaceRemaining(certificate_bio.get()) ||
+        !HasOnlyWhitespaceRemaining(private_key_bio.get()) ||
+        not_before_comparison == -2 || not_after_comparison == -2 ||
+        not_before_comparison > 0 || not_after_comparison < 0 ||
+        X509_check_private_key(parsed_certificate.get(),
+                               parsed_private_key.get()) != 1) {
+      return failure();
+    }
+    return common::Result<void>::Ok();
+  } catch (...) {
+    return failure();
   }
 }
 

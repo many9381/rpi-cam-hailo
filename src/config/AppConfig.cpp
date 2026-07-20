@@ -80,6 +80,18 @@ bool IsLexicallyBeneath(const std::filesystem::path& path,
   return path_component != normalized_path.end();
 }
 
+bool IsAbsoluteNormalizedPath(const std::string& value) {
+  constexpr std::size_t kMaximumPathBytes = 4096U;
+  if (value.empty() || value.size() > kMaximumPathBytes ||
+      value.find('\0') != std::string::npos) {
+    return false;
+  }
+
+  const std::filesystem::path path(value);
+  return path.is_absolute() &&
+         path.native() == path.lexically_normal().native();
+}
+
 }  // namespace
 
 common::Result<void> ValidateAiConfigSemantics(
@@ -345,6 +357,20 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
   if (!security_semantics.ok()) {
     return common::Result<void>::Err(security_semantics.error());
   }
+  if (config.self_protection.interval_hours < 1U ||
+      config.self_protection.interval_hours > 24U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SELF_PROTECTION_INTERVAL",
+         "self_protection.interval_hours must be between 1 and 24"});
+  }
+  if (config.security.enabled &&
+      (!IsAbsoluteNormalizedPath(config.self_protection.manifest_path) ||
+       !IsAbsoluteNormalizedPath(config.self_protection.signature_path))) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SELF_PROTECTION",
+         "self_protection manifest_path and signature_path must be absolute "
+         "normalized paths when security is enabled"});
+  }
   return common::Result<void>::Ok();
 }
 
@@ -440,6 +466,16 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         AssignIfPresent(audit, "warning_percent",
                         config.security.audit.warning_percent);
       }
+    }
+
+    const YAML::Node self_protection = root["self_protection"];
+    if (self_protection) {
+      AssignIfPresent(self_protection, "manifest_path",
+                      config.self_protection.manifest_path);
+      AssignIfPresent(self_protection, "signature_path",
+                      config.self_protection.signature_path);
+      AssignIfPresent(self_protection, "interval_hours",
+                      config.self_protection.interval_hours);
     }
 
     const YAML::Node ai = root["ai"];

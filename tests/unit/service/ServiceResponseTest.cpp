@@ -34,6 +34,27 @@ namespace camera_firmware::service::internal {
 void FailNextLiveMp4PumpAllocationForTesting() noexcept;
 std::optional<std::string_view> SerializeUserRoleForTesting(
     security::UserRole role) noexcept;
+drogon::HttpResponsePtr ExecuteProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& command);
+drogon::HttpResponsePtr ExecuteSequentialProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& validate,
+    const std::function<drogon::HttpResponsePtr()>& command);
+drogon::HttpResponsePtr ExecuteAtomicallyProtectedRuntimeControlCommand(
+    const ProtectionRuntimeControlGate& protection_runtime_control_gate,
+    const std::function<drogon::HttpResponsePtr()>& command);
+common::Result<void> DispatchAtomicallyProtectedRuntimeControlCommand(
+    const std::shared_ptr<BoundedWorker>& worker,
+    ProtectionRuntimeControlGate protection_runtime_control_gate,
+    std::function<drogon::HttpResponsePtr()> command,
+    std::function<void(drogon::HttpResponsePtr)> complete);
+drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
+    const std::function<drogon::HttpResponsePtr()>& operation);
+common::Result<std::optional<security::ResolvedTlsMaterial>>
+SelectServiceTlsMaterial(const ServiceInitArgs& args);
+void InstallDefaultProtectionRuntimeAllowedCallback(
+    ServiceInitArgs& args, bool security_enabled);
 }
 
 namespace {
@@ -488,6 +509,244 @@ TEST(ServiceResponseTest, AiRestartResponseInvokesCallback) {
   EXPECT_EQ((*json)["status"].asString(), "restarted");
 }
 
+TEST(ServiceResponseTest, ProtectionRestrictionResponseIsLocked) {
+  const auto response =
+      camera_firmware::service::BuildProtectionRestrictedResponse();
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k423Locked);
+  const auto json = response->jsonObject();
+  ASSERT_NE(json, nullptr);
+  EXPECT_EQ((*json)["code"].asString(), "E_PROTECTION_RESTRICTED");
+  EXPECT_EQ((*json)["message"].asString(), "runtime control is restricted");
+  EXPECT_EQ(response->body().find("/"), std::string::npos);
+}
+
+TEST(ServiceResponseTest,
+     ProtectedRuntimeControlRejectsRestrictedMissingAndThrowingPredicates) {
+  const std::vector<camera_firmware::service::ProtectionRuntimeAllowedCallback>
+      predicates = {
+          [] { return false; },
+          {},
+          []() -> bool {
+            throw std::runtime_error("injected protection predicate failure");
+          },
+      };
+
+  for (const auto& predicate : predicates) {
+    unsigned int command_calls = 0U;
+    const auto response = camera_firmware::service::internal::
+        ExecuteProtectedRuntimeControlCommand(predicate, [&] {
+          ++command_calls;
+          return camera_firmware::service::BuildRuntimeRestartResponse([] {
+            return camera_firmware::common::Result<void>::Ok();
+          });
+        });
+
+    ASSERT_NE(response, nullptr);
+    EXPECT_EQ(response->statusCode(), drogon::k423Locked);
+    EXPECT_EQ(command_calls, 0U);
+  }
+}
+
+TEST(ServiceResponseTest, ProtectedRuntimeControlInvokesAllowedCommandOnce) {
+  unsigned int predicate_calls = 0U;
+  unsigned int command_calls = 0U;
+
+  const auto response = camera_firmware::service::internal::
+      ExecuteProtectedRuntimeControlCommand(
+          [&] {
+            ++predicate_calls;
+            return true;
+          },
+          [&] {
+            ++command_calls;
+            return camera_firmware::service::BuildRuntimeRestartResponse([] {
+              return camera_firmware::common::Result<void>::Ok();
+            });
+          });
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  EXPECT_EQ(predicate_calls, 1U);
+  EXPECT_EQ(command_calls, 1U);
+}
+
+TEST(ServiceResponseTest,
+     AtomicRuntimeControlGateRechecksAtExecutionAndRunsCommandOnce) {
+  unsigned int rejected_calls = 0U;
+  const camera_firmware::service::ProtectionRuntimeControlGate restricted =
+      [](const std::function<void()>&) { return false; };
+  const auto rejected = camera_firmware::service::internal::
+      ExecuteAtomicallyProtectedRuntimeControlCommand(restricted, [&] {
+        ++rejected_calls;
+        return drogon::HttpResponse::newHttpResponse();
+      });
+
+  ASSERT_NE(rejected, nullptr);
+  EXPECT_EQ(rejected->statusCode(), drogon::k423Locked);
+  EXPECT_EQ(rejected_calls, 0U);
+
+  unsigned int allowed_calls = 0U;
+  const camera_firmware::service::ProtectionRuntimeControlGate operational =
+      [](const std::function<void()>& command) {
+        command();
+        return true;
+      };
+  const auto allowed = camera_firmware::service::internal::
+      ExecuteAtomicallyProtectedRuntimeControlCommand(operational, [&] {
+        ++allowed_calls;
+        auto response = drogon::HttpResponse::newHttpResponse();
+        response->setStatusCode(drogon::k200OK);
+        return response;
+      });
+
+  ASSERT_NE(allowed, nullptr);
+  EXPECT_EQ(allowed->statusCode(), drogon::k200OK);
+  EXPECT_EQ(allowed_calls, 1U);
+}
+
+TEST(ServiceResponseTest,
+     AtomicRuntimeControlDispatchDoesNotRunCommandOnCallingThread) {
+  auto worker = std::make_shared<camera_firmware::service::BoundedWorker>(2U);
+  std::promise<void> command_entered;
+  std::promise<void> release_command;
+  auto release_future = release_command.get_future().share();
+  std::promise<drogon::HttpResponsePtr> completed;
+  auto completion = completed.get_future();
+  const auto calling_thread = std::this_thread::get_id();
+  std::thread::id command_thread;
+
+  const auto dispatched = camera_firmware::service::internal::
+      DispatchAtomicallyProtectedRuntimeControlCommand(
+          worker,
+          [](const std::function<void()>& command) {
+            command();
+            return true;
+          },
+          [&] {
+            command_thread = std::this_thread::get_id();
+            command_entered.set_value();
+            release_future.wait();
+            auto response = drogon::HttpResponse::newHttpResponse();
+            response->setStatusCode(drogon::k200OK);
+            return response;
+          },
+          [&](drogon::HttpResponsePtr response) {
+            completed.set_value(std::move(response));
+          });
+
+  ASSERT_TRUE(dispatched.ok()) << dispatched.error().message;
+  ASSERT_EQ(command_entered.get_future().wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  EXPECT_NE(command_thread, calling_thread);
+  EXPECT_EQ(completion.wait_for(std::chrono::milliseconds(20)),
+            std::future_status::timeout);
+  release_command.set_value();
+  ASSERT_EQ(completion.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  ASSERT_NE(completion.get(), nullptr);
+  worker->Stop();
+}
+
+TEST(ServiceResponseTest,
+     SequentialRuntimeControlReturnsRestrictionBeforeBodyValidation) {
+  unsigned int validation_calls = 0U;
+  unsigned int command_calls = 0U;
+
+  const auto response = camera_firmware::service::internal::
+      ExecuteSequentialProtectedRuntimeControlCommand(
+          [] { return false; },
+          [&] {
+            ++validation_calls;
+            return camera_firmware::service::BuildRuntimeRestartResponse({});
+          },
+          [&] {
+            ++command_calls;
+            return drogon::HttpResponse::newHttpResponse();
+          });
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k423Locked);
+  EXPECT_EQ(validation_calls, 0U);
+  EXPECT_EQ(command_calls, 0U);
+}
+
+TEST(ServiceResponseTest,
+     SequentialRuntimeControlRechecksProtectionAfterValidation) {
+  bool allowed = true;
+  unsigned int predicate_calls = 0U;
+  unsigned int command_calls = 0U;
+
+  const auto response = camera_firmware::service::internal::
+      ExecuteSequentialProtectedRuntimeControlCommand(
+          [&] {
+            ++predicate_calls;
+            return allowed;
+          },
+          [&] {
+            allowed = false;
+            return drogon::HttpResponsePtr{};
+          },
+          [&] {
+            ++command_calls;
+            return drogon::HttpResponse::newHttpResponse();
+          });
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k423Locked);
+  EXPECT_EQ(predicate_calls, 2U);
+  EXPECT_EQ(command_calls, 0U);
+}
+
+TEST(ServiceResponseTest, ReadSaveAndDiscardOperationsRemainUnrestricted) {
+  unsigned int operation_calls = 0U;
+
+  for (unsigned int operation = 0U; operation < 3U; ++operation) {
+    const auto response = camera_firmware::service::internal::
+        ExecuteUnrestrictedRuntimeOperation([&] {
+          ++operation_calls;
+          auto allowed = drogon::HttpResponse::newHttpResponse();
+          allowed->setStatusCode(drogon::k200OK);
+          return allowed;
+        });
+    ASSERT_NE(response, nullptr);
+    EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  }
+
+  EXPECT_EQ(operation_calls, 3U);
+}
+
+TEST(ServiceResponseTest,
+     ServiceInitProtectionDefaultFailsClosedOnlyWhenSecurityIsEnabled) {
+  camera_firmware::service::ServiceInitArgs secured;
+  camera_firmware::service::internal::
+      InstallDefaultProtectionRuntimeAllowedCallback(secured, true);
+  ASSERT_TRUE(secured.protection_runtime_allowed_callback);
+  EXPECT_FALSE(secured.protection_runtime_allowed_callback());
+  EXPECT_FALSE(secured.protection_runtime_control_gate);
+
+  camera_firmware::service::ServiceInitArgs unsecured;
+  camera_firmware::service::internal::
+      InstallDefaultProtectionRuntimeAllowedCallback(unsecured, false);
+  ASSERT_TRUE(unsecured.protection_runtime_allowed_callback);
+  EXPECT_TRUE(unsecured.protection_runtime_allowed_callback());
+  ASSERT_TRUE(unsecured.protection_runtime_control_gate);
+  unsigned int unsecured_command_calls = 0U;
+  EXPECT_TRUE(unsecured.protection_runtime_control_gate(
+      [&] { ++unsecured_command_calls; }));
+  EXPECT_EQ(unsecured_command_calls, 1U);
+
+  camera_firmware::service::ServiceInitArgs configured;
+  configured.protection_runtime_allowed_callback = []() -> bool {
+    throw std::runtime_error("injected configured predicate");
+  };
+  camera_firmware::service::internal::
+      InstallDefaultProtectionRuntimeAllowedCallback(configured, true);
+  EXPECT_THROW(configured.protection_runtime_allowed_callback(),
+               std::runtime_error);
+}
+
 TEST(ServiceResponseTest, AiRestartResponseIncludesRuntimeStatus) {
   bool restarted = false;
 
@@ -841,6 +1100,50 @@ TEST(ServiceResponseTest, TlsListenerConfigUsesResolvedMaterial) {
   EXPECT_EQ(listener_certificate.st_ino, validated_certificate.st_ino);
 }
 
+TEST(ServiceResponseTest,
+     InjectedTlsOwnerSurvivesConfiguredPathRemovalBeforeServiceInit) {
+  TemporaryTlsDirectory state;
+  camera_firmware::config::HttpTlsConfig development_tls;
+  development_tls.enabled = true;
+  development_tls.allow_development_self_signed_tls = true;
+  auto generated = camera_firmware::security::ResolveTlsMaterial(
+      development_tls, state.path());
+  ASSERT_TRUE(generated.ok()) << generated.error().message;
+
+  camera_firmware::config::AppConfig config;
+  config.http.enabled = true;
+  config.http.tls.enabled = true;
+  config.http.tls.certificate_path =
+      (state.path() / "device-tls" / "certificate.pem").string();
+  config.http.tls.private_key_path =
+      (state.path() / "device-tls" / "private-key.pem").string();
+  auto pinned = camera_firmware::security::ResolveTlsMaterial(
+      config.http.tls, state.path());
+  ASSERT_TRUE(pinned.ok()) << pinned.error().message;
+  struct stat pinned_certificate {};
+  ASSERT_EQ(::stat(pinned.value().certificate_path.c_str(),
+                   &pinned_certificate),
+            0);
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.tls_material = pinned.value();
+  ASSERT_TRUE(std::filesystem::remove_all(state.path() / "device-tls"));
+
+  auto selected =
+      camera_firmware::service::internal::SelectServiceTlsMaterial(args);
+
+  ASSERT_TRUE(selected.ok()) << selected.error().message;
+  ASSERT_TRUE(selected.value().has_value());
+  struct stat selected_certificate {};
+  ASSERT_EQ(::stat(selected.value()->certificate_path.c_str(),
+                   &selected_certificate),
+            0);
+  EXPECT_EQ(selected_certificate.st_dev, pinned_certificate.st_dev);
+  EXPECT_EQ(selected_certificate.st_ino, pinned_certificate.st_ino);
+  EXPECT_TRUE(std::filesystem::exists(selected.value()->private_key_path));
+}
+
 TEST(ServiceResponseTest, HttpTlsValidationPermitsMissingExplicitDevelopmentPair) {
   camera_firmware::config::HttpConfig http;
   http.enabled = true;
@@ -892,6 +1195,24 @@ TEST(ServiceResponseTest, TlsInitRejectsSecurityWithoutTlsInsteadOfDowngrade) {
 
   ASSERT_FALSE(initialized.ok());
   EXPECT_EQ(initialized.error().code, "E_HTTP_TLS_REQUIRED");
+}
+
+TEST(ServiceResponseTest,
+     InitRejectsConfiguredSelfProtectionWithoutAtomicRuntimeControlGate) {
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.self_protection.manifest_path = "/opt/camera/integrity.yaml";
+  config.self_protection.signature_path = "/opt/camera/integrity.sig";
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  camera_firmware::service::ServiceApp service;
+
+  const auto initialized = service.Init(args);
+
+  ASSERT_FALSE(initialized.ok());
+  EXPECT_EQ(initialized.error().code, "E_SERVICE_CONFIG");
+  EXPECT_NE(initialized.error().message.find("atomic runtime control gate"),
+            std::string::npos);
 }
 
 TEST(ServiceResponseTest,

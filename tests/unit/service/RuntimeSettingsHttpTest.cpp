@@ -15,6 +15,7 @@ using camera_firmware::common::Error;
 using camera_firmware::common::Result;
 using camera_firmware::service::BuildRuntimeSettingsApplyResponse;
 using camera_firmware::service::BuildRuntimeSettingsErrorResponse;
+using camera_firmware::service::BuildProtectionRestrictedResponse;
 using camera_firmware::service::BuildRuntimeSettingsSnapshotJson;
 using camera_firmware::service::BuildRuntimeSettingsSnapshotResponse;
 using camera_firmware::service::ParseRuntimeSettingsCommandJson;
@@ -198,6 +199,13 @@ TEST(RuntimeSettingsHttpTest, SnapshotResponseUsesJsonContract) {
   const auto json = response->getJsonObject();
   ASSERT_NE(json, nullptr);
   EXPECT_EQ((*json)["schema_version"].asUInt(), 1U);
+}
+
+TEST(RuntimeSettingsHttpTest, ProtectionRestrictionResponseIsStableAndSecretFree) {
+  const auto response = BuildProtectionRestrictedResponse();
+
+  ExpectPublicError(response, drogon::k423Locked, "E_PROTECTION_RESTRICTED",
+                    "runtime control is restricted");
 }
 
 TEST(RuntimeSettingsHttpTest, InternalErrorsMapToBoundedPublicContract) {

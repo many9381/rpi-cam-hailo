@@ -1,6 +1,7 @@
 #include "camera_firmware/security/AuditLogService.hpp"
 
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -460,9 +461,96 @@ common::Result<AuditEventPage> UnavailableAuditEvents() {
       {"E_AUDIT_UNAVAILABLE", "audit events are unavailable"});
 }
 
+common::Result<void> UnavailableAuditAppend() {
+  return common::Result<void>::Err(
+      {"E_AUDIT_APPEND_UNAVAILABLE", "audit append is unavailable"});
+}
+
+common::Result<void> InvalidAuditAppend() {
+  return common::Result<void>::Err(
+      {"E_AUDIT_APPEND_INVALID", "audit append is invalid"});
+}
+
 }  // namespace
 
 AuditLogService::AuditLogService(SecurityStore& store) : store_(store) {}
+
+common::Result<void> AuditLogService::AppendEvent(
+    std::optional<std::int64_t> actor_user_id,
+    std::string_view normalized_peer_ip,
+    std::string_view event_type,
+    std::string_view outcome,
+    std::string_view detail_code,
+    std::string_view subject_type,
+    std::string_view subject_identity) {
+  try {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    if (now < 0 || now > std::numeric_limits<std::int64_t>::max()) {
+      return UnavailableAuditAppend();
+    }
+    auto started = store_.BeginTransaction();
+    if (!started.ok()) {
+      return UnavailableAuditAppend();
+    }
+    auto transaction = std::move(started).value();
+    auto inserted = store_.InsertAuditEvent(
+        transaction, static_cast<std::int64_t>(now), event_type, outcome,
+        actor_user_id, normalized_peer_ip, detail_code, subject_type,
+        subject_identity);
+    if (!inserted.ok()) {
+      if (transaction.active()) {
+        (void)transaction.Rollback();
+      }
+      return UnavailableAuditAppend();
+    }
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      if (transaction.active()) {
+        (void)transaction.Rollback();
+      }
+      return UnavailableAuditAppend();
+    }
+    return common::Result<void>::Ok();
+  } catch (...) {
+    return UnavailableAuditAppend();
+  }
+}
+
+common::Result<void> AuditLogService::AppendSystemEvent(
+    std::string_view event_type,
+    std::string_view outcome,
+    std::string_view detail_code,
+    std::string_view subject_type,
+    std::string_view subject_identity) {
+  return AppendEvent(std::nullopt, "127.0.0.1", event_type, outcome,
+                     detail_code, subject_type, subject_identity);
+}
+
+common::Result<void> AuditLogService::AppendAdministratorEvent(
+    const Principal& actor,
+    std::string_view normalized_peer_ip,
+    std::string_view event_type,
+    std::string_view outcome,
+    std::string_view detail_code,
+    std::string_view subject_type,
+    std::string_view subject_identity) {
+  if (actor.role != UserRole::kAdministrator) {
+    return common::Result<void>::Err(
+        {"E_AUDIT_FORBIDDEN", "audit append is forbidden"});
+  }
+  try {
+    const auto peer = NormalizePeerIp(std::string(normalized_peer_ip));
+    if (!peer.has_value() || *peer != normalized_peer_ip) {
+      return InvalidAuditAppend();
+    }
+    return AppendEvent(actor.user_id, *peer, event_type, outcome, detail_code,
+                       subject_type, subject_identity);
+  } catch (...) {
+    return UnavailableAuditAppend();
+  }
+}
 
 common::Result<AuditStatus> AuditLogService::ReadStatus(
     const Principal& actor) const {

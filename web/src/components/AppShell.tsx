@@ -21,6 +21,8 @@ import type { Principal } from '../api/types';
 import type { AuthContextValue } from '../auth/AuthContext';
 import { AuditCapacityNotice } from '../features/audit/AuditCapacityNotice';
 import type { AuditStatusController } from '../features/audit/useAuditStatus';
+import { ProtectionNotice } from '../features/protection/ProtectionNotice';
+import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
@@ -33,6 +35,7 @@ interface AppShellProps {
   onRefresh?: () => void;
   runtimeSettings?: RuntimeSettingsController;
   auditStatus?: AuditStatusController;
+  protection?: SystemProtectionController;
 }
 
 const navigation = [
@@ -129,8 +132,18 @@ export function AppShell({
   onRefresh = () => undefined,
   runtimeSettings,
   auditStatus,
+  protection,
 }: AppShellProps) {
   const { pathname } = useLocation();
+  const protectionState = protection?.snapshot?.state;
+  const deviceState = protectionState === 'restricted'
+    ? 'Restricted'
+    : protectionState === 'checking' ? 'Checking' : 'Operational';
+  const deviceStateClass = protectionState === 'restricted'
+    ? 'device-state device-state-restricted'
+    : protectionState === 'checking'
+      ? 'device-state device-state-checking'
+      : 'device-state';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -200,7 +213,9 @@ export function AppShell({
           >
             <Menu size={20} aria-hidden="true" />
           </IconButton>
-          <span className="device-state"><span aria-hidden="true" />Operational</span>
+          <span className={deviceStateClass}>
+            <span aria-hidden="true" />{deviceState}
+          </span>
         </div>
         <div className="topbar-actions">
           <IconButton label="Refresh device state" onClick={onRefresh}>
@@ -211,6 +226,7 @@ export function AppShell({
       </header>
 
       <main className="shell-content">
+        <ProtectionNotice controller={protection} />
         <AuditCapacityNotice controller={auditStatus} />
         <RuntimeSettingsNotice controller={runtimeSettings} />
         {children}

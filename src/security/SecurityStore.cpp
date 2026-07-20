@@ -97,6 +97,18 @@ bool IsProtectedDirectoryFd(int descriptor, uid_t expected_owner) noexcept {
          (status.st_mode & 0777) == kStateDirectoryMode;
 }
 
+bool IsProtectedDatabaseStatus(const struct stat& status,
+                               uid_t expected_owner) noexcept {
+  return S_ISREG(status.st_mode) && !S_ISLNK(status.st_mode) &&
+         status.st_uid == expected_owner && status.st_nlink == 1 &&
+         (status.st_mode & 0777) == kDatabaseMode;
+}
+
+bool SameFileIdentity(const struct stat& first,
+                      const struct stat& second) noexcept {
+  return first.st_dev == second.st_dev && first.st_ino == second.st_ino;
+}
+
 int DuplicateFd(int descriptor) noexcept {
   int duplicate;
   do {
@@ -605,59 +617,81 @@ common::Result<void> EnsureStateDirectory(
   return common::Result<void>::Ok();
 }
 
-common::Result<void> CreateOrValidateDatabase(
-    const std::filesystem::path& database_path,
-    uid_t expected_owner) {
-  struct stat status {};
-  if (::lstat(database_path.c_str(), &status) != 0) {
-    if (errno != ENOENT) {
-      return StoreError("E_SECURITY_DB_PATH", "failed to inspect security database");
+common::Result<UniqueFd> OpenAnchoredDatabase(int state_directory_fd,
+                                              uid_t expected_owner) {
+  struct stat observed_entry {};
+  const bool entry_exists =
+      ::fstatat(state_directory_fd, "security.db", &observed_entry,
+                AT_SYMLINK_NOFOLLOW) == 0;
+  if (!entry_exists && errno != ENOENT) {
+    return StoreError<UniqueFd>("E_SECURITY_DB_PATH",
+                                "failed to inspect security database");
+  }
+  if (entry_exists) {
+    if (!S_ISREG(observed_entry.st_mode) || S_ISLNK(observed_entry.st_mode) ||
+        observed_entry.st_nlink != 1) {
+      return StoreError<UniqueFd>("E_SECURITY_DB_PATH",
+                                  "security database must be a regular file");
     }
-
-    const int descriptor = ::open(database_path.c_str(),
-                                  O_RDWR | O_NOFOLLOW | O_CREAT | O_EXCL |
-                                      O_CLOEXEC,
-                                  kDatabaseMode);
-    if (descriptor < 0) {
-      return StoreError("E_SECURITY_DB_PATH", "failed to create security database");
+    if (!HasExactMode(observed_entry, kDatabaseMode)) {
+      return StoreError<UniqueFd>("E_SECURITY_DB_MODE",
+                                  "security database must have mode 0600");
     }
-    if (::fchmod(descriptor, kDatabaseMode) != 0) {
-      (void)::close(descriptor);
-      return StoreError("E_SECURITY_DB_PATH",
-                        "failed to protect security database");
-    }
-    const int close_result = ::close(descriptor);
-    if (close_result != 0) {
-      return StoreError("E_SECURITY_DB_PATH", "failed to close security database");
-    }
-    if (::lstat(database_path.c_str(), &status) != 0) {
-      return StoreError("E_SECURITY_DB_PATH", "failed to inspect security database");
+    if (observed_entry.st_uid != expected_owner) {
+      return StoreError<UniqueFd>(
+          "E_SECURITY_DB_OWNER",
+          "security database must be owned by the effective user");
     }
   }
 
-  if (!S_ISREG(status.st_mode) || S_ISLNK(status.st_mode)) {
-    return StoreError("E_SECURITY_DB_PATH",
-                      "security database must be a regular file");
+  int flags = O_RDWR | O_NOFOLLOW | O_CLOEXEC;
+  if (!entry_exists) {
+    flags |= O_CREAT | O_EXCL;
   }
-  if (!HasExactMode(status, kDatabaseMode)) {
-    return StoreError("E_SECURITY_DB_MODE",
-                      "security database must have mode 0600");
+  int descriptor;
+  do {
+    descriptor = ::openat(state_directory_fd, "security.db", flags,
+                          kDatabaseMode);
+  } while (descriptor < 0 && errno == EINTR);
+  UniqueFd anchored_database(descriptor);
+  if (!anchored_database.valid()) {
+    return StoreError<UniqueFd>(
+        "E_SECURITY_DB_PATH",
+        entry_exists ? "failed to open security database"
+                     : "failed to create security database");
   }
-  if (status.st_uid != expected_owner) {
-    return StoreError("E_SECURITY_DB_OWNER",
-                      "security database must be owned by the effective user");
+  if (!entry_exists &&
+      ::fchmod(anchored_database.get(), kDatabaseMode) != 0) {
+    return StoreError<UniqueFd>("E_SECURITY_DB_PATH",
+                                "failed to protect security database");
   }
 
-  const int descriptor =
-      ::open(database_path.c_str(), O_RDWR | O_NOFOLLOW | O_CLOEXEC);
-  if (descriptor < 0) {
-    return StoreError("E_SECURITY_DB_PATH", "failed to open security database");
+  struct stat anchor_status {};
+  struct stat current_entry {};
+  if (::fstat(anchored_database.get(), &anchor_status) != 0 ||
+      !S_ISREG(anchor_status.st_mode) || S_ISLNK(anchor_status.st_mode) ||
+      anchor_status.st_nlink != 1) {
+    return StoreError<UniqueFd>("E_SECURITY_DB_PATH",
+                                "security database must be a regular file");
   }
-  const int close_result = ::close(descriptor);
-  if (close_result != 0) {
-    return StoreError("E_SECURITY_DB_PATH", "failed to close security database");
+  if (!HasExactMode(anchor_status, kDatabaseMode)) {
+    return StoreError<UniqueFd>("E_SECURITY_DB_MODE",
+                                "security database must have mode 0600");
   }
-  return common::Result<void>::Ok();
+  if (anchor_status.st_uid != expected_owner) {
+    return StoreError<UniqueFd>(
+        "E_SECURITY_DB_OWNER",
+        "security database must be owned by the effective user");
+  }
+  if (::fstatat(state_directory_fd, "security.db", &current_entry,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+      !IsProtectedDatabaseStatus(current_entry, expected_owner) ||
+      !SameFileIdentity(anchor_status, current_entry) ||
+      (entry_exists && !SameFileIdentity(observed_entry, anchor_status))) {
+    return StoreError<UniqueFd>("E_SECURITY_DB_PATH",
+                                "security database changed during open");
+  }
+  return common::Result<UniqueFd>::Ok(std::move(anchored_database));
 }
 
 common::Result<void> Execute(sqlite3* database,
@@ -2276,12 +2310,62 @@ struct SecurityStore::Impl {
   std::filesystem::path state_directory;
   std::filesystem::path database_path;
   UniqueFd state_directory_fd;
+  UniqueFd database_anchor_fd;
   std::unique_ptr<sqlite3, DatabaseCloser> database;
+  dev_t database_device{0};
+  ino_t database_inode{0};
+  bool database_identity_captured{false};
   std::mutex connection_mutex;
   std::uint64_t max_audit_events{50000U};
   std::uint32_t audit_warning_percent{90U};
   bool poisoned{false};
 };
+
+namespace {
+
+bool ValidateStoreAnchors(const std::filesystem::path& state_directory,
+                          int state_directory_fd,
+                          int database_anchor_fd,
+                          dev_t database_device,
+                          ino_t database_inode,
+                          uid_t expected_owner) noexcept {
+  if (!IsProtectedDirectoryFd(state_directory_fd, expected_owner)) {
+    return false;
+  }
+  UniqueFd current_state_directory(OpenDirectoryNoFollow(state_directory));
+  if (!current_state_directory.valid() ||
+      !IsProtectedDirectoryFd(current_state_directory.get(), expected_owner) ||
+      !SameDirectory(state_directory_fd, current_state_directory.get())) {
+    return false;
+  }
+
+  struct stat anchor_status {};
+  struct stat entry_status {};
+  if (::fstat(database_anchor_fd, &anchor_status) != 0 ||
+      !IsProtectedDatabaseStatus(anchor_status, expected_owner) ||
+      anchor_status.st_dev != database_device ||
+      anchor_status.st_ino != database_inode ||
+      ::fstatat(state_directory_fd, "security.db", &entry_status,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+      !IsProtectedDatabaseStatus(entry_status, expected_owner) ||
+      !SameFileIdentity(anchor_status, entry_status)) {
+    return false;
+  }
+
+  int descriptor;
+  do {
+    descriptor = ::openat(state_directory_fd, "security.db",
+                          O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  } while (descriptor < 0 && errno == EINTR);
+  UniqueFd current_database(descriptor);
+  struct stat current_status {};
+  return current_database.valid() &&
+         ::fstat(current_database.get(), &current_status) == 0 &&
+         IsProtectedDatabaseStatus(current_status, expected_owner) &&
+         SameFileIdentity(anchor_status, current_status);
+}
+
+}  // namespace
 
 SecurityStore::SecurityStore(std::shared_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
@@ -2382,37 +2466,46 @@ common::Result<std::unique_ptr<SecurityStore>> SecurityStore::Open(
         "E_SECURITY_DB_PATH", "failed to anchor security state directory");
   }
   auto database_result =
-      CreateOrValidateDatabase(impl->database_path, effective_user_id);
+      OpenAnchoredDatabase(impl->state_directory_fd.get(), effective_user_id);
   if (!database_result.ok()) {
     return StoreError<std::unique_ptr<SecurityStore>>(
         database_result.error().code, database_result.error().message);
   }
+  impl->database_anchor_fd = std::move(database_result).value();
+  struct stat database_status {};
+  if (::fstat(impl->database_anchor_fd.get(), &database_status) != 0 ||
+      !IsProtectedDatabaseStatus(database_status, effective_user_id)) {
+    return StoreError<std::unique_ptr<SecurityStore>>(
+        "E_SECURITY_DB_PATH", "failed to anchor security database");
+  }
+  impl->database_device = database_status.st_dev;
+  impl->database_inode = database_status.st_ino;
+  impl->database_identity_captured = true;
+  if (!ValidateStoreAnchors(
+          impl->state_directory, impl->state_directory_fd.get(),
+          impl->database_anchor_fd.get(), impl->database_device,
+          impl->database_inode, effective_user_id)) {
+    return StoreError<std::unique_ptr<SecurityStore>>(
+        "E_SECURITY_DB_PATH", "security database changed during open");
+  }
 
   sqlite3* opened_database = nullptr;
+  const std::string sqlite_path =
+      "/proc/self/fd/" + std::to_string(impl->database_anchor_fd.get());
   const int open_result = ::sqlite3_open_v2(
-      impl->database_path.c_str(), &opened_database,
-      SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW,
-      nullptr);
+      sqlite_path.c_str(), &opened_database,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr);
   impl->database.reset(opened_database);
   if (open_result != SQLITE_OK) {
     return StoreError<std::unique_ptr<SecurityStore>>(
         "E_SECURITY_DB_OPEN", "failed to open security database");
   }
-  database_result =
-      CreateOrValidateDatabase(impl->database_path, effective_user_id);
-  if (!database_result.ok()) {
+  if (!ValidateStoreAnchors(
+          impl->state_directory, impl->state_directory_fd.get(),
+          impl->database_anchor_fd.get(), impl->database_device,
+          impl->database_inode, effective_user_id)) {
     return StoreError<std::unique_ptr<SecurityStore>>(
-        database_result.error().code, database_result.error().message);
-  }
-  UniqueFd current_state_directory(
-      OpenDirectoryNoFollow(impl->state_directory));
-  if (!current_state_directory.valid() ||
-      !IsProtectedDirectoryFd(current_state_directory.get(),
-                              effective_user_id) ||
-      !SameDirectory(impl->state_directory_fd.get(),
-                     current_state_directory.get())) {
-    return StoreError<std::unique_ptr<SecurityStore>>(
-        "E_SECURITY_DB_PATH", "security state directory changed during open");
+        "E_SECURITY_DB_PATH", "security database changed during open");
   }
   if (::sqlite3_busy_timeout(impl->database.get(), kBusyTimeoutMilliseconds) !=
       SQLITE_OK) {
@@ -2425,6 +2518,15 @@ common::Result<std::unique_ptr<SecurityStore>> SecurityStore::Open(
   if (!schema_result.ok()) {
     return StoreError<std::unique_ptr<SecurityStore>>(
         schema_result.error().code, schema_result.error().message);
+  }
+  if (!ValidateStoreAnchors(
+          store->impl_->state_directory,
+          store->impl_->state_directory_fd.get(),
+          store->impl_->database_anchor_fd.get(),
+          store->impl_->database_device, store->impl_->database_inode,
+          effective_user_id)) {
+    return StoreError<std::unique_ptr<SecurityStore>>(
+        "E_SECURITY_DB_PATH", "security database changed during open");
   }
   return common::Result<std::unique_ptr<SecurityStore>>::Ok(std::move(store));
 }
@@ -2768,6 +2870,53 @@ SecurityStore::BeginReadTransaction() const {
   }
   return common::Result<Transaction>::Ok(
       Transaction(impl_, std::move(connection_lease)));
+}
+
+common::Result<void> SecurityStore::CheckHealth() const {
+  const auto failure = [] {
+    return StoreError("E_SECURITY_DB_HEALTH",
+                      "security store health check failed");
+  };
+  try {
+    std::unique_lock<std::mutex> connection_lease(impl_->connection_mutex);
+    if (impl_->poisoned || impl_->database == nullptr ||
+        !impl_->database_identity_captured) {
+      return failure();
+    }
+
+    const uid_t effective_user_id = ::geteuid();
+    if (!ValidateStoreAnchors(
+            impl_->state_directory, impl_->state_directory_fd.get(),
+            impl_->database_anchor_fd.get(), impl_->database_device,
+            impl_->database_inode, effective_user_id)) {
+      return failure();
+    }
+
+    PreparedStatement quick_check(impl_->database.get(), "PRAGMA quick_check;");
+    if (!quick_check.valid() || ::sqlite3_step(quick_check.get()) != SQLITE_ROW ||
+        ::sqlite3_column_type(quick_check.get(), 0) != SQLITE_TEXT) {
+      return failure();
+    }
+    const auto* quick_check_text = ::sqlite3_column_text(quick_check.get(), 0);
+    const int quick_check_length = ::sqlite3_column_bytes(quick_check.get(), 0);
+    if (quick_check_text == nullptr || quick_check_length != 2 ||
+        quick_check_text[0] != 'o' || quick_check_text[1] != 'k' ||
+        ::sqlite3_step(quick_check.get()) != SQLITE_DONE) {
+      return failure();
+    }
+
+    auto schema = ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
+    if (!schema.ok() ||
+        !ValidateStoreAnchors(
+            impl_->state_directory, impl_->state_directory_fd.get(),
+            impl_->database_anchor_fd.get(), impl_->database_device,
+            impl_->database_inode, effective_user_id)) {
+      return failure();
+    }
+    return common::Result<void>::Ok();
+  } catch (...) {
+    return failure();
+  }
 }
 
 common::Result<SecurityStore::AuditStatusSnapshot>

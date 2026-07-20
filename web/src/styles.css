@@ -286,6 +286,16 @@ select:focus-visible {
   box-shadow: 0 0 0 3px #e4f3ea;
 }
 
+.device-state-restricted > span {
+  background: #b84545;
+  box-shadow: 0 0 0 3px #f7e1e1;
+}
+
+.device-state-checking > span {
+  background: #b97524;
+  box-shadow: 0 0 0 3px #f8ecd8;
+}
+
 .header-username {
   max-width: 180px;
   overflow: hidden;
@@ -794,6 +804,275 @@ select:focus-visible {
 .audit-records-section {
   min-width: 0;
   scroll-margin-top: 76px;
+}
+
+.protection-shell-notice {
+  border-left-color: #b84545;
+  background: #fff1f1;
+  color: #8a3030;
+}
+
+.protection-shell-notice > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.protection-shell-notice svg {
+  flex: 0 0 auto;
+}
+
+.protection-section {
+  min-width: 0;
+}
+
+.protection-heading h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.protection-heading .icon-button:disabled,
+.protection-command-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.protection-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid #d6dcd7;
+  border-bottom: 1px solid #d6dcd7;
+}
+
+.protection-summary > div {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+}
+
+.protection-summary > div + div {
+  border-left: 1px solid #d6dcd7;
+}
+
+.protection-summary span {
+  color: #657169;
+  font-size: 12px;
+}
+
+.protection-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #35434b;
+  font-size: 13px;
+  text-align: right;
+}
+
+.protection-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.protection-state-operational,
+.protection-suite-passed {
+  color: #237848 !important;
+}
+
+.protection-state-checking,
+.protection-suite-neutral {
+  color: #9a631e !important;
+}
+
+.protection-state-restricted,
+.protection-suite-failed {
+  color: #a13535 !important;
+}
+
+.protection-message {
+  margin: 12px 0 0;
+  padding: 8px 11px;
+  border-left: 3px solid;
+  font-size: 13px;
+}
+
+.protection-message-stale {
+  border-left-color: #b97524;
+  background: #fff8e9;
+  color: #774d19;
+}
+
+.protection-message-error {
+  border-left-color: #b84545;
+  background: #fff1f1;
+  color: #8a3030;
+}
+
+.protection-suites {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  padding-top: 18px;
+}
+
+.protection-suite {
+  min-width: 0;
+}
+
+.protection-suite-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid #cbd3ce;
+}
+
+.protection-suite-heading > div {
+  min-width: 0;
+}
+
+.protection-suite-heading h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.protection-suite-heading span,
+.protection-suite-heading > strong {
+  color: #68756e;
+  font-size: 11px;
+}
+
+.protection-suite-heading span {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.protection-suite-heading > strong {
+  flex: 0 0 auto;
+}
+
+.protection-item-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.protection-item {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 58px minmax(90px, 0.8fr);
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 7px 4px;
+  border-bottom: 1px solid #e0e5e1;
+  color: #53615a;
+  font-size: 11px;
+}
+
+.protection-item > * {
+  min-width: 0;
+}
+
+.protection-item-identity {
+  display: grid;
+  gap: 2px;
+}
+
+.protection-item-identity strong {
+  overflow-wrap: anywhere;
+  color: #34434b;
+  font-size: 12px;
+}
+
+.protection-item-identity small {
+  color: #758079;
+  text-transform: capitalize;
+}
+
+.protection-item-failed {
+  border-left: 3px solid #b84545;
+  padding-left: 8px;
+}
+
+.protection-item-code {
+  overflow-wrap: anywhere;
+  color: #405159;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  text-align: right;
+  white-space: normal;
+}
+
+.protection-empty-items,
+.protection-resource-state {
+  margin: 0;
+  padding: 12px 0;
+  color: #657169;
+  font-size: 13px;
+}
+
+.protection-resource-state {
+  min-height: 64px;
+}
+
+.protection-resource-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #9a3434;
+}
+
+.protection-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.protection-command-button {
+  display: inline-flex;
+  min-width: 150px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #147c78;
+  border-radius: 6px;
+  background: #147c78;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.protection-command-button:hover:not(:disabled) {
+  border-color: #0f6966;
+  background: #0f6966;
+}
+
+.protection-progress-icon {
+  animation: protection-spin 900ms linear infinite;
+}
+
+@keyframes protection-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .audit-records-section:focus {
@@ -1872,6 +2151,10 @@ select:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .protection-suites {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .audit-records-table-wrap {
     overflow: visible;
     border: 0;
@@ -2088,6 +2371,41 @@ select:focus-visible {
 }
 
 @media (max-width: 420px) {
+  .protection-shell-notice,
+  .protection-resource-error,
+  .protection-summary > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .protection-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .protection-summary > div + div {
+    border-top: 1px solid #d6dcd7;
+    border-left: 0;
+  }
+
+  .protection-summary strong {
+    text-align: left;
+  }
+
+  .protection-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .protection-item-code {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .protection-actions,
+  .protection-command-button,
+  .protection-resource-error .protection-command-button {
+    width: 100%;
+  }
+
   .device-state {
     font-size: 12px;
   }
@@ -2206,5 +2524,9 @@ select:focus-visible {
 
   .users-page .switch-control span::after {
     transition: none;
+  }
+
+  .protection-progress-icon {
+    animation: none;
   }
 }
