@@ -50,6 +50,12 @@ extern "C" int __real_sqlite3_exec(sqlite3* database,
                                     int (*callback)(void*, int, char**, char**),
                                     void* context,
                                     char** error_message);
+extern "C" int __real_sqlite3_prepare_v2(sqlite3* database,
+                                          const char* sql,
+                                          int byte_count,
+                                          sqlite3_stmt** statement,
+                                          const char** trailing_sql);
+void ConfigureFstatOwnerSpoofForSecurityStoreTest(std::optional<ino_t> inode);
 
 namespace {
 
@@ -122,12 +128,17 @@ TEST(SecurityTypesTest,
 
 std::optional<std::filesystem::path> spoofed_owner_path;
 std::function<void(const char*, int)> before_sqlite_open;
+std::function<void(const char*, int)> after_sqlite_open;
 bool fail_busy_timeout{false};
 int last_sqlite_open_flags{0};
 sqlite3* last_opened_database{nullptr};
 int sqlite_close_calls{0};
 bool fail_commit{false};
 bool fail_rollback{false};
+bool fail_quick_check_prepare{false};
+std::optional<std::string> quick_check_sql_override;
+std::function<void()> before_quick_check_prepare;
+std::function<void(std::string_view)> before_sqlite_exec;
 int rollback_calls{0};
 std::optional<std::string> fail_sqlite_exec_exact;
 int fail_sqlite_exec_exact_after_matches{0};
@@ -188,12 +199,17 @@ SqliteTransactionBoundaryGate* transaction_boundary_gate{nullptr};
 void ResetSqliteHooks() {
   spoofed_owner_path.reset();
   before_sqlite_open = {};
+  after_sqlite_open = {};
   fail_busy_timeout = false;
   last_sqlite_open_flags = 0;
   last_opened_database = nullptr;
   sqlite_close_calls = 0;
   fail_commit = false;
   fail_rollback = false;
+  fail_quick_check_prepare = false;
+  quick_check_sql_override.reset();
+  before_quick_check_prepare = {};
+  before_sqlite_exec = {};
   rollback_calls = 0;
   fail_sqlite_exec_exact.reset();
   fail_sqlite_exec_exact_after_matches = 0;
@@ -1624,6 +1640,9 @@ extern "C" int __wrap_sqlite3_open_v2(const char* filename,
   const int result =
       __real_sqlite3_open_v2(filename, database, flags, vfs_name);
   last_opened_database = database == nullptr ? nullptr : *database;
+  if (after_sqlite_open) {
+    after_sqlite_open(filename, result);
+  }
   return result;
 }
 
@@ -1647,6 +1666,9 @@ extern "C" int __wrap_sqlite3_exec(
     void* context,
     char** error_message) {
   const std::string_view sql = statement == nullptr ? "" : statement;
+  if (before_sqlite_exec) {
+    before_sqlite_exec(sql);
+  }
   if (sql == "BEGIN IMMEDIATE;" && transaction_boundary_gate != nullptr) {
     transaction_boundary_gate->ArriveAndWait();
   }
@@ -1679,6 +1701,28 @@ extern "C" int __wrap_sqlite3_exec(
   }
   return __real_sqlite3_exec(database, statement, callback, context,
                              error_message);
+}
+
+extern "C" int __wrap_sqlite3_prepare_v2(sqlite3* database,
+                                          const char* sql,
+                                          int byte_count,
+                                          sqlite3_stmt** statement,
+                                          const char** trailing_sql) {
+  if (sql != nullptr && std::string_view(sql) == "PRAGMA quick_check;") {
+    if (before_quick_check_prepare) {
+      before_quick_check_prepare();
+    }
+    if (fail_quick_check_prepare) {
+      return SQLITE_IOERR;
+    }
+    if (quick_check_sql_override.has_value()) {
+      return __real_sqlite3_prepare_v2(
+          database, quick_check_sql_override->c_str(), -1, statement,
+          trailing_sql);
+    }
+  }
+  return __real_sqlite3_prepare_v2(database, sql, byte_count, statement,
+                                   trailing_sql);
 }
 
 TEST(SecurityStoreTest, CreatesProtectedStateAndSchema) {
@@ -1741,16 +1785,19 @@ TEST(SecurityStoreTest, RejectsDatabaseNotOwnedByEffectiveUser) {
   MakeDirectory(state);
   const auto database = state / "security.db";
   MakeFile(database, 0600);
-  spoofed_owner_path = database;
+  struct stat database_status {};
+  ASSERT_EQ(::stat(database.c_str(), &database_status), 0);
+  ConfigureFstatOwnerSpoofForSecurityStoreTest(database_status.st_ino);
 
   const auto store = SecurityStore::Open({state});
 
+  ConfigureFstatOwnerSpoofForSecurityStoreTest(std::nullopt);
   ResetSqliteHooks();
   ASSERT_FALSE(store.ok());
   EXPECT_EQ(store.error().code, "E_SECURITY_DB_OWNER");
 }
 
-TEST(SecurityStoreTest, SQLiteOpenRejectsPathReplacedBySymlink) {
+TEST(SecurityStoreTest, SQLiteOpenUsesPinnedDescriptorWhenPathBecomesSymlink) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   const auto state = root.Path("security");
@@ -1759,8 +1806,10 @@ TEST(SecurityStoreTest, SQLiteOpenRejectsPathReplacedBySymlink) {
   const auto target = root.Path("target.db");
   MakeFile(database, 0600);
   MakeFile(target, 0600);
+  bool opened_through_proc_fd = false;
   before_sqlite_open = [&](const char* filename, int) {
-    ASSERT_EQ(std::filesystem::path(filename), database);
+    opened_through_proc_fd =
+        std::filesystem::path(filename).parent_path() == "/proc/self/fd";
     ASSERT_EQ(::unlink(database.c_str()), 0);
     ASSERT_EQ(::symlink(target.c_str(), database.c_str()), 0);
   };
@@ -1770,8 +1819,101 @@ TEST(SecurityStoreTest, SQLiteOpenRejectsPathReplacedBySymlink) {
 
   ResetSqliteHooks();
   ASSERT_FALSE(store.ok());
-  EXPECT_NE(open_flags & SQLITE_OPEN_NOFOLLOW, 0);
+  EXPECT_TRUE(opened_through_proc_fd);
+  EXPECT_EQ(open_flags & SQLITE_OPEN_NOFOLLOW, 0);
   EXPECT_EQ(store.error().code, "E_SECURITY_DB_OPEN");
+}
+
+TEST(SecurityStoreTest,
+     SQLiteOpenCannotBindToRegularReplacementBeforeDescriptorOpen) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  MakeDirectory(state);
+  const auto database = state / "security.db";
+  const auto displaced = state / "original.db";
+  MakeFile(database, 0600);
+  struct stat original_status {};
+  ASSERT_EQ(::stat(database.c_str(), &original_status), 0);
+  bool opened_through_proc_fd = false;
+  ino_t sqlite_target_inode = 0;
+  before_sqlite_open = [&](const char* filename, int) {
+    opened_through_proc_fd =
+        std::filesystem::path(filename).parent_path() == "/proc/self/fd";
+    struct stat target_status {};
+    ASSERT_EQ(::stat(filename, &target_status), 0);
+    sqlite_target_inode = target_status.st_ino;
+    ASSERT_EQ(::rename(database.c_str(), displaced.c_str()), 0);
+    MakeFile(database, 0600);
+  };
+
+  const auto store = SecurityStore::Open({state});
+
+  ResetSqliteHooks();
+  struct stat replacement_status {};
+  ASSERT_EQ(::stat(database.c_str(), &replacement_status), 0);
+  ASSERT_FALSE(store.ok());
+  EXPECT_TRUE(opened_through_proc_fd);
+  EXPECT_EQ(sqlite_target_inode, original_status.st_ino);
+  EXPECT_NE(replacement_status.st_ino, original_status.st_ino);
+  EXPECT_EQ(store.error().code, "E_SECURITY_DB_PATH");
+}
+
+TEST(SecurityStoreTest,
+     SQLiteOpenRejectsRegularReplacementAfterConnectionOpen) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  MakeDirectory(state);
+  const auto database = state / "security.db";
+  const auto displaced = state / "original.db";
+  MakeFile(database, 0600);
+  struct stat original_status {};
+  ASSERT_EQ(::stat(database.c_str(), &original_status), 0);
+  bool opened_through_proc_fd = false;
+  after_sqlite_open = [&](const char* filename, int open_result) {
+    ASSERT_EQ(open_result, SQLITE_OK);
+    opened_through_proc_fd =
+        std::filesystem::path(filename).parent_path() == "/proc/self/fd";
+    ASSERT_EQ(::rename(database.c_str(), displaced.c_str()), 0);
+    MakeFile(database, 0600);
+  };
+
+  const auto store = SecurityStore::Open({state});
+
+  ResetSqliteHooks();
+  struct stat replacement_status {};
+  ASSERT_EQ(::stat(database.c_str(), &replacement_status), 0);
+  ASSERT_FALSE(store.ok());
+  EXPECT_TRUE(opened_through_proc_fd);
+  EXPECT_NE(replacement_status.st_ino, original_status.st_ino);
+  EXPECT_EQ(store.error().code, "E_SECURITY_DB_PATH");
+}
+
+TEST(SecurityStoreTest, SQLiteOpenRejectsRegularReplacementDuringSchemaSetup) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  MakeDirectory(state);
+  const auto database = state / "security.db";
+  const auto displaced = state / "original.db";
+  MakeFile(database, 0600);
+  bool replaced_during_schema = false;
+  before_sqlite_exec = [&](std::string_view sql) {
+    if (!replaced_during_schema &&
+        sql == "PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON;") {
+      ASSERT_EQ(::rename(database.c_str(), displaced.c_str()), 0);
+      MakeFile(database, 0600);
+      replaced_during_schema = true;
+    }
+  };
+
+  const auto store = SecurityStore::Open({state});
+
+  ResetSqliteHooks();
+  ASSERT_FALSE(store.ok());
+  EXPECT_TRUE(replaced_during_schema);
+  EXPECT_EQ(store.error().code, "E_SECURITY_DB_PATH");
 }
 
 TEST(SecurityStoreTest, BusyTimeoutFailureClosesOpenedDatabase) {
@@ -3605,4 +3747,179 @@ TEST(SecurityStoreTest, ProtectsNestedGeneratedSecurityFilesFromGit) {
   EXPECT_TRUE(GitIgnores("config/security/security.db-shm"));
   EXPECT_TRUE(GitIgnores("var/security/rtsp.credentials"));
   EXPECT_TRUE(GitIgnores("config/nested/device.credentials"));
+}
+
+TEST(SecurityStoreTest, CheckHealthFailsClosedForQuickCheckSchemaAndMetadata) {
+  ResetSqliteHooks();
+
+  {
+    TemporaryDirectory root;
+    auto store = SecurityStore::Open({root.Path("security")});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_TRUE(store.value()->CheckHealth().ok());
+
+    fail_quick_check_prepare = true;
+    auto health = store.value()->CheckHealth();
+    fail_quick_check_prepare = false;
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    TemporaryDirectory root;
+    auto store = SecurityStore::Open({root.Path("security")});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ExecuteDatabaseSql(store.value()->database_path(),
+                       "DROP INDEX audit_events_timestamp_index;");
+    auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    TemporaryDirectory root;
+    auto store = SecurityStore::Open({root.Path("security")});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_EQ(::chmod(store.value()->database_path().c_str(), 0644), 0);
+    auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    TemporaryDirectory root;
+    const auto state_directory = root.Path("security");
+    auto store = SecurityStore::Open({state_directory});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    const auto moved = root.Path("moved-security");
+    std::filesystem::rename(state_directory, moved);
+    ASSERT_EQ(::symlink(moved.c_str(), state_directory.c_str()), 0);
+    auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+}
+
+TEST(SecurityStoreTest, CheckHealthRequiresExactlyOneOkQuickCheckRow) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+
+  quick_check_sql_override = "SELECT 'corrupt';";
+  auto non_ok = store.value()->CheckHealth();
+  quick_check_sql_override.reset();
+  ASSERT_FALSE(non_ok.ok());
+  EXPECT_EQ(non_ok.error().code, "E_SECURITY_DB_HEALTH");
+  EXPECT_EQ(non_ok.error().message, "security store health check failed");
+
+  quick_check_sql_override = "SELECT 'ok' UNION ALL SELECT 'ok';";
+  auto multiple = store.value()->CheckHealth();
+  quick_check_sql_override.reset();
+  ASSERT_FALSE(multiple.ok());
+  EXPECT_EQ(multiple.error().code, "E_SECURITY_DB_HEALTH");
+  EXPECT_EQ(multiple.error().message, "security store health check failed");
+}
+
+TEST(SecurityStoreTest, CheckHealthRevalidatesDatabaseAfterSqlChecks) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  const auto database = state / "security.db";
+  const auto displaced = state / "original.db";
+  before_quick_check_prepare = [&] {
+    ASSERT_EQ(::rename(database.c_str(), displaced.c_str()), 0);
+    MakeFile(database, 0600);
+  };
+
+  const auto health = store.value()->CheckHealth();
+
+  before_quick_check_prepare = {};
+  ASSERT_FALSE(health.ok());
+  EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  EXPECT_EQ(health.error().message, "security store health check failed");
+}
+
+TEST(SecurityStoreTest,
+     CheckHealthRejectsCurrentDatabaseEntryAndMetadataChanges) {
+  {
+    ResetSqliteHooks();
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    const auto database = state / "security.db";
+    const auto displaced = state / "original.db";
+    ASSERT_EQ(::rename(database.c_str(), displaced.c_str()), 0);
+    ASSERT_EQ(::symlink(displaced.c_str(), database.c_str()), 0);
+    const auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    ResetSqliteHooks();
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    const auto database = state / "security.db";
+    ASSERT_EQ(::rename(database.c_str(), (state / "original.db").c_str()), 0);
+    MakeFile(database, 0600);
+    const auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    ResetSqliteHooks();
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    struct stat database_status {};
+    ASSERT_EQ(::stat((state / "security.db").c_str(), &database_status), 0);
+    ConfigureFstatOwnerSpoofForSecurityStoreTest(database_status.st_ino);
+    const auto health = store.value()->CheckHealth();
+    ConfigureFstatOwnerSpoofForSecurityStoreTest(std::nullopt);
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+
+  {
+    ResetSqliteHooks();
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_EQ(::link((state / "security.db").c_str(),
+                     (state / "security.db.alias").c_str()),
+              0);
+    const auto health = store.value()->CheckHealth();
+    ASSERT_FALSE(health.ok());
+    EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+  }
+}
+
+TEST(SecurityStoreTest, CheckHealthFailsClosedForPoisonedStore) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto started = store.value()->BeginTransaction();
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto transaction = std::move(started).value();
+  fail_commit = true;
+  fail_rollback = true;
+  ASSERT_FALSE(transaction.Commit().ok());
+  ASSERT_FALSE(transaction.Rollback().ok());
+  fail_commit = false;
+  fail_rollback = false;
+
+  auto health = store.value()->CheckHealth();
+
+  ASSERT_FALSE(health.ok());
+  EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
 }

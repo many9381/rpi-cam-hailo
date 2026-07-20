@@ -425,4 +425,11 @@ drogon::HttpResponsePtr BuildRuntimeSettingsApplyResponse(
   return JsonResponse(std::move(json), mapped.status);
 }
 
+drogon::HttpResponsePtr BuildProtectionRestrictedResponse() {
+  Json::Value json(Json::objectValue);
+  json["code"] = "E_PROTECTION_RESTRICTED";
+  json["message"] = "runtime control is restricted";
+  return JsonResponse(std::move(json), drogon::k423Locked);
+}
+
 }  // namespace camera_firmware::service

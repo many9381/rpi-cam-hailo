@@ -142,6 +142,13 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
     return RoutePolicy::kAdministrator;
   }
 
+  if ((path == "/api/v1/system/protection" && method == "GET") ||
+      ((path == "/api/v1/system/self-tests" ||
+        path == "/api/v1/system/integrity-checks") &&
+       method == "POST")) {
+    return RoutePolicy::kAdministrator;
+  }
+
   if (method == "GET") {
     if (path == "/api/v1/monitoring/cameras" ||
         path == "/api/v1/ai/detections" ||

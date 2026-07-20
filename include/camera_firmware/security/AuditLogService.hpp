@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "camera_firmware/common/Result.hpp"
@@ -73,8 +74,31 @@ class AuditLogService {
   common::Result<AuditEventPage> ListEvents(
       const AuditQueryParameters& parameters,
       const Principal& actor) const;
+  common::Result<void> AppendSystemEvent(
+      std::string_view event_type,
+      std::string_view outcome,
+      std::string_view detail_code,
+      std::string_view subject_type = {},
+      std::string_view subject_identity = {});
+  common::Result<void> AppendAdministratorEvent(
+      const Principal& actor,
+      std::string_view normalized_peer_ip,
+      std::string_view event_type,
+      std::string_view outcome,
+      std::string_view detail_code,
+      std::string_view subject_type = {},
+      std::string_view subject_identity = {});
 
  private:
+  common::Result<void> AppendEvent(
+      std::optional<std::int64_t> actor_user_id,
+      std::string_view normalized_peer_ip,
+      std::string_view event_type,
+      std::string_view outcome,
+      std::string_view detail_code,
+      std::string_view subject_type,
+      std::string_view subject_identity);
+
   SecurityStore& store_;
 };
 

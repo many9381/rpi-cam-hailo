@@ -33,6 +33,7 @@
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/service/ServiceStartup.hpp"
+#include "camera_firmware/service/SystemProtectionHttp.hpp"
 #include "camera_firmware/service/UserManagementHttp.hpp"
 
 namespace camera_firmware::service {
@@ -890,6 +891,13 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
       path == "/api/v1/audit/events") {
     return method == drogon::Get;
   }
+  if (path == "/api/v1/system/protection") {
+    return method == drogon::Get;
+  }
+  if (path == "/api/v1/system/self-tests" ||
+      path == "/api/v1/system/integrity-checks") {
+    return method == drogon::Post;
+  }
   if (path == "/api/v1/security/users") {
     return method == drogon::Get || method == drogon::Post;
   }
@@ -1428,11 +1436,26 @@ struct RuntimeSettingsDependencies {
   RuntimeSettingsSaveCallback save;
   RuntimeSettingsApplyCallback apply;
   RuntimeSettingsDiscardCallback discard;
+  ProtectionRuntimeAllowedCallback protection_runtime_allowed;
+  ProtectionRuntimeControlGate protection_runtime_control_gate;
   std::shared_ptr<BoundedWorker> worker;
 
   [[nodiscard]] bool Available() const noexcept {
     return security_enabled && !shutting_down && snapshot && save && apply &&
            discard && worker;
+  }
+};
+
+struct SystemProtectionDependencies {
+  bool security_enabled{false};
+  bool shutting_down{false};
+  ProtectionSnapshotCallback snapshot;
+  ProtectionStartCheckCallback start;
+  std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
+
+  [[nodiscard]] bool Available() const noexcept {
+    return security_enabled && !shutting_down && snapshot && start &&
+           runtime_lifecycle;
   }
 };
 
@@ -1454,8 +1477,54 @@ RuntimeSettingsDependencies CopyRuntimeSettingsDependencies() {
       state.args.runtime_settings_save_callback,
       state.args.runtime_settings_apply_callback,
       state.args.runtime_settings_discard_callback,
+      state.args.protection_runtime_allowed_callback,
+      state.args.protection_runtime_control_gate,
       state.runtime_settings_worker,
   };
+}
+
+SystemProtectionDependencies CopySystemProtectionDependencies() {
+  std::scoped_lock lock(StateMutex());
+  const auto& state = GlobalState();
+  return {
+      state.args.app_config != nullptr &&
+          state.args.app_config->security.enabled,
+      state.shutting_down,
+      state.args.protection_snapshot_callback,
+      state.args.protection_start_check_callback,
+      state.runtime_lifecycle,
+  };
+}
+
+common::Result<security::ProtectionActor> BuildProtectionActor(
+    const drogon::HttpRequestPtr& request,
+    const AuthorizedRequest& authorized_request) {
+  if (!request || !authorized_request.principal.has_value()) {
+    return common::Result<security::ProtectionActor>::Err(
+        {"E_PROTECTION_UNAVAILABLE", "system protection is unavailable"});
+  }
+  auto peer = NormalizePeerIp(request->peerAddr().toIp());
+  if (!peer.ok()) {
+    return common::Result<security::ProtectionActor>::Err(
+        {"E_PROTECTION_UNAVAILABLE", "system protection is unavailable"});
+  }
+  security::ProtectionActor actor;
+  actor.user_id = authorized_request.principal->user_id;
+  actor.username = authorized_request.principal->username;
+  actor.peer_ip = std::move(peer).value();
+  return common::Result<security::ProtectionActor>::Ok(std::move(actor));
+}
+
+bool RuntimeControlAllowed(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed) {
+  if (!protection_runtime_allowed) {
+    return false;
+  }
+  try {
+    return protection_runtime_allowed();
+  } catch (...) {
+    return false;
+  }
 }
 
 bool RuntimeSettingsBecameUnavailable(
@@ -2083,11 +2152,14 @@ void RegisterHandlers() {
               std::shared_ptr<security::BootstrapService> bootstrap;
               std::shared_ptr<BoundedWorker> worker;
               RuntimeStartCallback runtime_start;
+              ProtectionRuntimeControlGate runtime_control_gate;
               {
                 std::scoped_lock lock(StateMutex());
                 bootstrap = GlobalState().args.bootstrap_service;
                 worker = GlobalState().security_worker;
                 runtime_start = GlobalState().args.runtime_start_callback;
+                runtime_control_gate =
+                    GlobalState().args.protection_runtime_control_gate;
               }
               if (!bootstrap || !worker || actual_peer.empty()) {
                 callback(SecurityUnavailableResponse());
@@ -2097,7 +2169,7 @@ void RegisterHandlers() {
                   std::make_shared<ParsedSetupRequest>(std::move(parsed).value());
               auto submitted = worker->Submit(
                   [parsed_request, actual_peer, bootstrap, runtime_start,
-                   callback,
+                   runtime_control_gate, callback,
                    event_loop = app().getLoop()]() mutable {
                     try {
                       security::BootstrapRequest bootstrap_request;
@@ -2141,8 +2213,16 @@ void RegisterHandlers() {
                                       SecurityUnavailableResponse());
                         return;
                       }
-                      auto runtime = runtime_start();
-                      if (!runtime.ok()) {
+                      std::optional<common::Result<void>> runtime;
+                      bool runtime_admitted = true;
+                      if (runtime_control_gate) {
+                        runtime_admitted = runtime_control_gate(
+                            [&] { runtime = runtime_start(); });
+                      } else {
+                        runtime = runtime_start();
+                      }
+                      if (!runtime_admitted || !runtime.has_value() ||
+                          !runtime->ok()) {
                         QueueResponse(event_loop, std::move(callback),
                                       SecurityUnavailableResponse());
                         return;
@@ -2197,17 +2277,20 @@ void RegisterHandlers() {
               }
               std::shared_ptr<BoundedWorker> worker;
               RuntimeStartCallback runtime_start;
+              ProtectionRuntimeControlGate runtime_control_gate;
               {
                 std::scoped_lock lock(StateMutex());
                 worker = GlobalState().security_worker;
                 runtime_start = GlobalState().args.runtime_start_callback;
+                runtime_control_gate =
+                    GlobalState().args.protection_runtime_control_gate;
               }
               if (!worker || !runtime_start || actual_peer.empty()) {
                 callback(SecurityUnavailableResponse());
                 return;
               }
               auto submitted = worker->Submit(
-                  [actual_peer, runtime_start, callback,
+                  [actual_peer, runtime_start, runtime_control_gate, callback,
                    event_loop = app().getLoop()]() mutable {
                     try {
                       bool transition_allowed = false;
@@ -2226,8 +2309,16 @@ void RegisterHandlers() {
                                 {"E_ACCESS_DENIED", "request denied"}));
                         return;
                       }
-                      auto runtime = runtime_start();
-                      if (!runtime.ok()) {
+                      std::optional<common::Result<void>> runtime;
+                      bool runtime_admitted = true;
+                      if (runtime_control_gate) {
+                        runtime_admitted = runtime_control_gate(
+                            [&] { runtime = runtime_start(); });
+                      } else {
+                        runtime = runtime_start();
+                      }
+                      if (!runtime_admitted || !runtime.has_value() ||
+                          !runtime->ok()) {
                         QueueResponse(event_loop, std::move(callback),
                                       SecurityUnavailableResponse());
                         return;
@@ -3354,6 +3445,93 @@ void RegisterHandlers() {
       {Get});
 
   app().registerHandler(
+      "/api/v1/system/protection",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](AuthorizedRequest, HttpCallback callback) {
+              const auto dependencies = CopySystemProtectionDependencies();
+              if (!dependencies.Available()) {
+                callback(BuildSystemProtectionStatusResponse({}));
+                return;
+              }
+              std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+                  runtime_lease;
+              try {
+                runtime_lease = dependencies.runtime_lifecycle->TryAcquire();
+              } catch (...) {
+                callback(BuildSystemProtectionStatusResponse({}));
+                return;
+              }
+              if (!runtime_lease) {
+                callback(BuildSystemProtectionStatusResponse({}));
+                return;
+              }
+              callback(BuildSystemProtectionStatusResponse(
+                  [snapshot = dependencies.snapshot,
+                   runtime_lease = std::move(runtime_lease)] {
+                    auto callback_scope = runtime_lease->EnterCallback();
+                    return snapshot();
+                  }));
+            });
+      },
+      {Get});
+
+  const auto register_protection_start = [](
+      std::string path, security::ProtectionSuite suite) {
+    app().registerHandler(
+        std::move(path),
+        [suite](const HttpRequestPtr& request, DrogonCallback&& callback) {
+          AuthorizeRequest(
+              request, std::move(callback),
+              [request, suite](AuthorizedRequest authorized_request,
+                               HttpCallback callback) {
+                const auto dependencies = CopySystemProtectionDependencies();
+                if (!dependencies.Available()) {
+                  callback(BuildSystemProtectionStartResponse({}));
+                  return;
+                }
+                auto body = ValidateEmptyJsonObject(
+                    request->getBody(), request->getHeader("content-type"));
+                if (!body.ok()) {
+                  callback(SecurityErrorResponse(body.error()));
+                  return;
+                }
+                auto actor = BuildProtectionActor(request, authorized_request);
+                if (!actor.ok()) {
+                  callback(BuildSystemProtectionStartResponse({}));
+                  return;
+                }
+                std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
+                    runtime_lease;
+                try {
+                  runtime_lease =
+                      dependencies.runtime_lifecycle->TryAcquire();
+                } catch (...) {
+                  callback(BuildSystemProtectionStartResponse({}));
+                  return;
+                }
+                if (!runtime_lease) {
+                  callback(BuildSystemProtectionStartResponse({}));
+                  return;
+                }
+                callback(BuildSystemProtectionStartResponse(
+                    [start = dependencies.start, suite,
+                     actor = std::move(actor).value(),
+                     runtime_lease = std::move(runtime_lease)]() mutable {
+                      auto callback_scope = runtime_lease->EnterCallback();
+                      return start(suite, std::move(actor));
+                    }));
+              });
+        },
+        {Post});
+  };
+  register_protection_start("/api/v1/system/self-tests",
+                            security::ProtectionSuite::kSelfTest);
+  register_protection_start("/api/v1/system/integrity-checks",
+                            security::ProtectionSuite::kIntegrity);
+
+  app().registerHandler(
       "/api/v1/settings/runtime",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
@@ -3364,12 +3542,14 @@ void RegisterHandlers() {
                 callback(RuntimeSettingsUnavailableResponse());
                 return;
               }
-              try {
-                callback(BuildRuntimeSettingsSnapshotResponse(
-                    dependencies.snapshot()));
-              } catch (...) {
-                callback(RuntimeSettingsUnavailableResponse());
-              }
+              callback(internal::ExecuteUnrestrictedRuntimeOperation([&] {
+                try {
+                  return BuildRuntimeSettingsSnapshotResponse(
+                      dependencies.snapshot());
+                } catch (...) {
+                  return RuntimeSettingsUnavailableResponse();
+                }
+              }));
             });
       },
       {Get});
@@ -3392,24 +3572,34 @@ void RegisterHandlers() {
                 callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
                 return;
               }
-              auto submitted = dependencies.worker->Submit(
-                  [save = dependencies.save,
-                   update = std::move(parsed).value(), callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      auto result = save(update.expected_revision,
-                                         std::move(update.settings));
-                      QueueRuntimeSettingsResult(
-                          event_loop, std::move(callback), std::move(result));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
-                                    RuntimeSettingsUnavailableResponse());
+              auto response = internal::ExecuteUnrestrictedRuntimeOperation(
+                  [&]() -> drogon::HttpResponsePtr {
+                    auto submitted = dependencies.worker->Submit(
+                        [save = dependencies.save,
+                         update = std::move(parsed).value(), callback,
+                         event_loop = app().getLoop()]() mutable {
+                          try {
+                            auto result = save(update.expected_revision,
+                                               std::move(update.settings));
+                            QueueRuntimeSettingsResult(
+                                event_loop, std::move(callback),
+                                std::move(result));
+                          } catch (...) {
+                            QueueResponse(
+                                event_loop, std::move(callback),
+                                RuntimeSettingsUnavailableResponse());
+                          }
+                        });
+                    if (!submitted.ok()) {
+                      return RuntimeSettingsBecameUnavailable(
+                                 dependencies.worker)
+                                 ? RuntimeSettingsUnavailableResponse()
+                                 : RuntimeSettingsBusyResponse();
                     }
+                    return {};
                   });
-              if (!submitted.ok()) {
-                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
-                             ? RuntimeSettingsUnavailableResponse()
-                             : RuntimeSettingsBusyResponse());
+              if (response) {
+                callback(std::move(response));
               }
             });
       },
@@ -3427,30 +3617,55 @@ void RegisterHandlers() {
                 callback(RuntimeSettingsUnavailableResponse());
                 return;
               }
-              auto parsed = ParseRuntimeSettingsCommandJson(
-                  request->getBody(), request->getHeader("content-type"));
-              if (!parsed.ok()) {
-                callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
-                return;
-              }
-              auto submitted = dependencies.worker->Submit(
-                  [apply = dependencies.apply,
-                   command = std::move(parsed).value(), callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      auto result = apply(command.expected_revision);
-                      QueueResponse(
-                          event_loop, std::move(callback),
-                          BuildRuntimeSettingsApplyResponse(result));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
+              std::optional<RuntimeSettingsCommandRequest> command;
+              auto response = internal::
+                  ExecuteSequentialProtectedRuntimeControlCommand(
+                      dependencies.protection_runtime_allowed,
+                      [&]() -> drogon::HttpResponsePtr {
+                        auto parsed = ParseRuntimeSettingsCommandJson(
+                            request->getBody(),
+                            request->getHeader("content-type"));
+                        if (!parsed.ok()) {
+                          return BuildRuntimeSettingsErrorResponse(
+                              parsed.error());
+                        }
+                        command = std::move(parsed).value();
+                        return {};
+                      },
+                      [&]() -> drogon::HttpResponsePtr {
+                        auto submitted = dependencies.worker->Submit(
+                            [apply = dependencies.apply,
+                             protection_runtime_control_gate =
+                                 dependencies.protection_runtime_control_gate,
+                             command = std::move(*command), callback,
+                             event_loop = app().getLoop()]() mutable {
+                              try {
+                                auto response = internal::
+                                    ExecuteAtomicallyProtectedRuntimeControlCommand(
+                                        protection_runtime_control_gate,
+                                        [&] {
+                                          return BuildRuntimeSettingsApplyResponse(
+                                              apply(command.expected_revision));
+                                        });
+                                QueueResponse(
+                                    event_loop, std::move(callback),
+                                    std::move(response));
+                              } catch (...) {
+                                QueueResponse(
+                                    event_loop, std::move(callback),
                                     RuntimeSettingsUnavailableResponse());
-                    }
-                  });
-              if (!submitted.ok()) {
-                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
-                             ? RuntimeSettingsUnavailableResponse()
-                             : RuntimeSettingsBusyResponse());
+                              }
+                            });
+                        if (!submitted.ok()) {
+                          return RuntimeSettingsBecameUnavailable(
+                                     dependencies.worker)
+                                     ? RuntimeSettingsUnavailableResponse()
+                                     : RuntimeSettingsBusyResponse();
+                        }
+                        return {};
+                      });
+              if (response) {
+                callback(std::move(response));
               }
             });
       },
@@ -3474,23 +3689,33 @@ void RegisterHandlers() {
                 callback(BuildRuntimeSettingsErrorResponse(parsed.error()));
                 return;
               }
-              auto submitted = dependencies.worker->Submit(
-                  [discard = dependencies.discard,
-                   command = std::move(parsed).value(), callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      auto result = discard(command.expected_revision);
-                      QueueRuntimeSettingsResult(
-                          event_loop, std::move(callback), std::move(result));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
-                                    RuntimeSettingsUnavailableResponse());
+              auto response = internal::ExecuteUnrestrictedRuntimeOperation(
+                  [&]() -> drogon::HttpResponsePtr {
+                    auto submitted = dependencies.worker->Submit(
+                        [discard = dependencies.discard,
+                         command = std::move(parsed).value(), callback,
+                         event_loop = app().getLoop()]() mutable {
+                          try {
+                            auto result = discard(command.expected_revision);
+                            QueueRuntimeSettingsResult(
+                                event_loop, std::move(callback),
+                                std::move(result));
+                          } catch (...) {
+                            QueueResponse(
+                                event_loop, std::move(callback),
+                                RuntimeSettingsUnavailableResponse());
+                          }
+                        });
+                    if (!submitted.ok()) {
+                      return RuntimeSettingsBecameUnavailable(
+                                 dependencies.worker)
+                                 ? RuntimeSettingsUnavailableResponse()
+                                 : RuntimeSettingsBusyResponse();
                     }
+                    return {};
                   });
-              if (!submitted.ok()) {
-                callback(RuntimeSettingsBecameUnavailable(dependencies.worker)
-                             ? RuntimeSettingsUnavailableResponse()
-                             : RuntimeSettingsBusyResponse());
+              if (response) {
+                callback(std::move(response));
               }
             });
       },
@@ -3641,32 +3866,60 @@ void RegisterHandlers() {
             request, std::move(callback),
             [request](AuthorizedRequest,
                       HttpCallback callback) {
-              auto validated = ValidateEmptyJsonObject(
-                  request->getBody(), request->getHeader("content-type"));
-              if (!validated.ok()) {
-                callback(SecurityErrorResponse(validated.error()));
-                return;
-              }
               RuntimeStartCallback restart;
+              ProtectionRuntimeAllowedCallback protection_runtime_allowed;
+              ProtectionRuntimeControlGate protection_runtime_control_gate;
               std::shared_ptr<BoundedWorker> worker;
               {
                 std::scoped_lock lock(StateMutex());
                 restart = GlobalState().args.runtime_start_callback;
+                protection_runtime_allowed =
+                    GlobalState().args.protection_runtime_allowed_callback;
+                protection_runtime_control_gate =
+                    GlobalState().args.protection_runtime_control_gate;
                 worker = GlobalState().security_worker;
               }
-              if (!worker) {
-                callback(BuildRuntimeRestartResponse({}));
-                return;
-              }
-              auto submitted = worker->Submit(
-                  [restart = std::move(restart), callback,
-                   event_loop = app().getLoop()]() mutable {
-                    QueueResponse(
-                        event_loop, std::move(callback),
-                        BuildRuntimeRestartResponse(restart));
-                  });
-              if (!submitted.ok()) {
-                callback(SecurityUnavailableResponse());
+              auto response = internal::
+                  ExecuteSequentialProtectedRuntimeControlCommand(
+                      protection_runtime_allowed,
+                      [&]() -> drogon::HttpResponsePtr {
+                        auto validated = ValidateEmptyJsonObject(
+                            request->getBody(),
+                            request->getHeader("content-type"));
+                        return validated.ok()
+                                   ? drogon::HttpResponsePtr{}
+                                   : SecurityErrorResponse(validated.error());
+                      },
+                      [&]() -> drogon::HttpResponsePtr {
+                        if (!worker) {
+                          return BuildRuntimeRestartResponse({});
+                        }
+                        auto submitted = worker->Submit(
+                            [restart = std::move(restart),
+                             protection_runtime_control_gate =
+                                 std::move(protection_runtime_control_gate),
+                             callback,
+                             event_loop = app().getLoop()]() mutable {
+                              try {
+                                auto response = internal::
+                                    ExecuteAtomicallyProtectedRuntimeControlCommand(
+                                        protection_runtime_control_gate,
+                                        [&] {
+                                          return BuildRuntimeRestartResponse(
+                                              restart);
+                                        });
+                                QueueResponse(event_loop, std::move(callback),
+                                              std::move(response));
+                              } catch (...) {
+                                QueueResponse(event_loop, std::move(callback),
+                                              SecurityUnavailableResponse());
+                              }
+                            });
+                        return submitted.ok() ? drogon::HttpResponsePtr{}
+                                              : SecurityUnavailableResponse();
+                      });
+              if (response) {
+                callback(std::move(response));
               }
             });
       },
@@ -3680,12 +3933,41 @@ void RegisterHandlers() {
             [](AuthorizedRequest, HttpCallback callback) {
               AiControlCallback restart;
               AiStatusProvider status;
+              ProtectionRuntimeAllowedCallback protection_runtime_allowed;
+              ProtectionRuntimeControlGate protection_runtime_control_gate;
+              std::shared_ptr<BoundedWorker> worker;
               {
                 std::scoped_lock lock(StateMutex());
                 restart = GlobalState().args.ai_restart_callback;
                 status = GlobalState().args.ai_status_provider;
+                protection_runtime_allowed =
+                    GlobalState().args.protection_runtime_allowed_callback;
+                protection_runtime_control_gate =
+                    GlobalState().args.protection_runtime_control_gate;
+                worker = GlobalState().security_worker;
               }
-              callback(BuildAiRestartResponse(restart, status));
+              auto admitted = internal::ExecuteProtectedRuntimeControlCommand(
+                  protection_runtime_allowed,
+                  [] { return drogon::HttpResponsePtr{}; });
+              if (admitted) {
+                callback(std::move(admitted));
+                return;
+              }
+              auto dispatched = internal::
+                  DispatchAtomicallyProtectedRuntimeControlCommand(
+                      worker, std::move(protection_runtime_control_gate),
+                      [restart = std::move(restart),
+                       status = std::move(status)] {
+                        return BuildAiRestartResponse(restart, status);
+                      },
+                      [callback, event_loop = app().getLoop()](
+                          drogon::HttpResponsePtr response) mutable {
+                        QueueResponse(event_loop, std::move(callback),
+                                      std::move(response));
+                      });
+              if (!dispatched.ok()) {
+                callback(SecurityUnavailableResponse());
+              }
             });
       },
       {Post});
@@ -3803,6 +4085,93 @@ void RegisterHandlers() {
 }  // namespace
 
 namespace internal {
+
+drogon::HttpResponsePtr ExecuteProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& command) {
+  if (!RuntimeControlAllowed(protection_runtime_allowed)) {
+    return BuildProtectionRestrictedResponse();
+  }
+  return command();
+}
+
+drogon::HttpResponsePtr ExecuteSequentialProtectedRuntimeControlCommand(
+    const ProtectionRuntimeAllowedCallback& protection_runtime_allowed,
+    const std::function<drogon::HttpResponsePtr()>& validate,
+    const std::function<drogon::HttpResponsePtr()>& command) {
+  auto restricted = ExecuteProtectedRuntimeControlCommand(
+      protection_runtime_allowed, [] { return drogon::HttpResponsePtr{}; });
+  if (restricted) {
+    return restricted;
+  }
+  auto validation_error = validate();
+  if (validation_error) {
+    return validation_error;
+  }
+  return ExecuteProtectedRuntimeControlCommand(protection_runtime_allowed,
+                                                command);
+}
+
+drogon::HttpResponsePtr ExecuteAtomicallyProtectedRuntimeControlCommand(
+    const ProtectionRuntimeControlGate& protection_runtime_control_gate,
+    const std::function<drogon::HttpResponsePtr()>& command) {
+  if (!protection_runtime_control_gate || !command) {
+    return BuildProtectionRestrictedResponse();
+  }
+  drogon::HttpResponsePtr response;
+  if (!protection_runtime_control_gate([&] { response = command(); })) {
+    return BuildProtectionRestrictedResponse();
+  }
+  return response;
+}
+
+common::Result<void> DispatchAtomicallyProtectedRuntimeControlCommand(
+    const std::shared_ptr<BoundedWorker>& worker,
+    ProtectionRuntimeControlGate protection_runtime_control_gate,
+    std::function<drogon::HttpResponsePtr()> command,
+    std::function<void(drogon::HttpResponsePtr)> complete) {
+  if (!worker || !command || !complete) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+  }
+  return worker->Submit(
+      [protection_runtime_control_gate =
+           std::move(protection_runtime_control_gate),
+       command = std::move(command), complete = std::move(complete)]() mutable {
+        drogon::HttpResponsePtr response;
+        try {
+          response = ExecuteAtomicallyProtectedRuntimeControlCommand(
+              protection_runtime_control_gate, command);
+        } catch (...) {
+          response = SecurityUnavailableResponse();
+        }
+        complete(std::move(response));
+      });
+}
+
+drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
+    const std::function<drogon::HttpResponsePtr()>& operation) {
+  return operation();
+}
+
+void InstallDefaultProtectionRuntimeAllowedCallback(
+    ServiceInitArgs& args, bool security_enabled) {
+  if (!args.protection_runtime_allowed_callback) {
+    args.protection_runtime_allowed_callback = [security_enabled] {
+      return !security_enabled;
+    };
+  }
+  if (!security_enabled && !args.protection_runtime_control_gate) {
+    args.protection_runtime_control_gate =
+        [](const std::function<void()>& command) {
+          if (!command) {
+            return false;
+          }
+          command();
+          return true;
+        };
+  }
+}
 
 #if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
 using AuditHandlerCallbackForTesting =
@@ -4536,7 +4905,9 @@ ServiceListenerConfig BuildServiceListenerConfig(
   return listener;
 }
 
-common::Result<void> ValidateHttpTlsConfigFiles(
+namespace {
+
+common::Result<void> ValidateHttpTlsConfigShape(
     const config::HttpConfig& http_config) {
   if (!http_config.enabled || !http_config.tls.enabled) {
     return common::Result<void>::Ok();
@@ -4549,12 +4920,25 @@ common::Result<void> ValidateHttpTlsConfigFiles(
         {"E_HTTP_TLS_REQUIRED",
          "a complete HTTP TLS certificate and private-key pair is required"});
   }
-  if (!has_certificate) {
-    if (http_config.tls.allow_development_self_signed_tls) {
-      return common::Result<void>::Ok();
-    }
+  if (!has_certificate &&
+      !http_config.tls.allow_development_self_signed_tls) {
     return common::Result<void>::Err(
         {"E_HTTP_TLS_REQUIRED", "configured HTTP TLS material is required"});
+  }
+  return common::Result<void>::Ok();
+}
+
+}  // namespace
+
+common::Result<void> ValidateHttpTlsConfigFiles(
+    const config::HttpConfig& http_config) {
+  auto shape = ValidateHttpTlsConfigShape(http_config);
+  if (!shape.ok()) {
+    return shape;
+  }
+  if (!http_config.enabled || !http_config.tls.enabled ||
+      http_config.tls.certificate_path.empty()) {
+    return shape;
   }
 
   auto resolved = security::ResolveTlsMaterial(http_config.tls, {});
@@ -4565,6 +4949,37 @@ common::Result<void> ValidateHttpTlsConfigFiles(
   }
   return common::Result<void>::Ok();
 }
+
+namespace internal {
+
+common::Result<std::optional<security::ResolvedTlsMaterial>>
+SelectServiceTlsMaterial(const ServiceInitArgs& args) {
+  auto shape = ValidateHttpTlsConfigShape(args.app_config->http);
+  if (!shape.ok()) {
+    return common::Result<
+        std::optional<security::ResolvedTlsMaterial>>::Err(shape.error());
+  }
+  if (!args.app_config->http.tls.enabled) {
+    return common::Result<
+        std::optional<security::ResolvedTlsMaterial>>::Ok(std::nullopt);
+  }
+  if (args.tls_material) {
+    return common::Result<
+        std::optional<security::ResolvedTlsMaterial>>::Ok(args.tls_material);
+  }
+
+  auto resolved = security::ResolveTlsMaterial(
+      args.app_config->http.tls,
+      args.app_config->security.state_directory);
+  if (!resolved.ok()) {
+    return common::Result<
+        std::optional<security::ResolvedTlsMaterial>>::Err(resolved.error());
+  }
+  return common::Result<std::optional<security::ResolvedTlsMaterial>>::Ok(
+      std::move(resolved).value());
+}
+
+}  // namespace internal
 
 drogon::HttpResponsePtr BuildSnapshotResponse(
     const SnapshotCallback& snapshot_callback,
@@ -4694,18 +5109,29 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
     return common::Result<void>::Err(
         {"E_SERVICE_CONFIG", "ServiceApp::Init requires app_config"});
   }
-  auto tls_validation = ValidateHttpTlsConfigFiles(args.app_config->http);
-  if (!tls_validation.ok()) {
-    return tls_validation;
+  const bool protection_configured =
+      !args.app_config->self_protection.manifest_path.empty() ||
+      !args.app_config->self_protection.signature_path.empty();
+  if (args.app_config->security.enabled && protection_configured &&
+      !args.protection_runtime_control_gate) {
+    return common::Result<void>::Err(
+        {"E_SERVICE_CONFIG",
+         "self-protection requires an atomic runtime control gate"});
   }
   if (args.app_config->security.enabled &&
       (!args.app_config->http.enabled || !args.app_config->http.tls.enabled)) {
     return common::Result<void>::Err(
         {"E_HTTP_TLS_REQUIRED", "security requires an HTTPS listener"});
   }
+  auto selected_tls_material = internal::SelectServiceTlsMaterial(args);
+  if (!selected_tls_material.ok()) {
+    return common::Result<void>::Err(selected_tls_material.error());
+  }
 
   try {
     ServiceInitArgs effective_args = args;
+    internal::InstallDefaultProtectionRuntimeAllowedCallback(
+        effective_args, args.app_config->security.enabled);
     if (!effective_args.stream_registry) {
       effective_args.stream_registry =
           std::make_shared<SessionStreamRegistry>();
@@ -4796,16 +5222,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       }
     }
 
-    std::optional<security::ResolvedTlsMaterial> tls_material;
-    if (args.app_config->http.tls.enabled) {
-      auto resolved = security::ResolveTlsMaterial(
-          args.app_config->http.tls,
-          args.app_config->security.state_directory);
-      if (!resolved.ok()) {
-        return common::Result<void>::Err(resolved.error());
-      }
-      tls_material = std::move(resolved).value();
-    }
+    std::optional<security::ResolvedTlsMaterial> tls_material =
+        std::move(selected_tls_material).value();
     std::shared_ptr<ServiceStartupSignal> startup_signal;
     {
       std::scoped_lock lock(StateMutex());

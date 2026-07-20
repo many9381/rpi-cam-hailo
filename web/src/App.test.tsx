@@ -16,6 +16,7 @@ const administratorHooks = vi.hoisted(() => ({
   userManagementConstructed: 0,
   auditStatusConstructed: 0,
   auditRecordsConstructed: 0,
+  protectionConstructed: 0,
 }));
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -100,6 +101,29 @@ vi.mock('./features/audit/useAuditRecords', async (importOriginal) => {
   };
 });
 
+vi.mock('./features/protection/useSystemProtection', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('./features/protection/useSystemProtection')
+  >();
+  const { useRef } = await import('react');
+  return {
+    ...actual,
+    useSystemProtection: (
+      ...args: Parameters<typeof actual.useSystemProtection>
+    ) => {
+      const counted = useRef(false);
+      if (!counted.current) {
+        counted.current = true;
+        administratorHooks.protectionConstructed += 1;
+      }
+      if (administratorHooks.throwOnConstruction) {
+        throw new Error('Viewer session must not construct useSystemProtection');
+      }
+      return actual.useSystemProtection(...args);
+    },
+  };
+});
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -151,6 +175,7 @@ afterEach(() => {
   administratorHooks.userManagementConstructed = 0;
   administratorHooks.auditStatusConstructed = 0;
   administratorHooks.auditRecordsConstructed = 0;
+  administratorHooks.protectionConstructed = 0;
 });
 
 describe('App bootstrap gate', () => {
@@ -749,6 +774,13 @@ function renderRecoveredSession(
         events: [],
         next_cursor: null,
       },
+      '/api/v1/system/protection': {
+        state: 'operational',
+        check_running: false,
+        next_periodic_at_seconds: 1_784_586_400,
+        self_test: null,
+        integrity: null,
+      },
       '/api/v1/monitoring/cameras': {
         cameras: [{ id: 'imx708', state: 'streaming', snapshot_available: true,
           width: 1920, height: 1080 }],
@@ -787,6 +819,7 @@ describe('App role-specific route trees', () => {
     expect(administratorHooks.userManagementConstructed).toBe(0);
     expect(administratorHooks.auditStatusConstructed).toBe(0);
     expect(administratorHooks.auditRecordsConstructed).toBe(0);
+    expect(administratorHooks.protectionConstructed).toBe(0);
   });
 
   it.each(['/dashboard', '/cameras', '/ai', '/system', '/users', '/monitor'])(
@@ -852,6 +885,8 @@ describe('App role-specific route trees', () => {
     )).toHaveLength(1));
     expect(administratorHooks.auditStatusConstructed).toBe(1);
     expect(administratorHooks.auditRecordsConstructed).toBe(1);
+    expect(administratorHooks.protectionConstructed).toBe(1);
+    expect(screen.getByRole('heading', { name: 'System protection' })).toBeVisible();
     expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/audit/status',
     )).toHaveLength(1);
@@ -910,9 +945,9 @@ describe('App role-specific route trees', () => {
     const auditTimerIds = setInterval.mock.calls.flatMap(([, delay], index) =>
       delay === 30_000 ? [setInterval.mock.results[index]?.value] : []);
     const clearedTimerIds = clearInterval.mock.calls.map(([timerId]) => timerId);
-    expect(auditTimerIds).toHaveLength(2);
+    expect(auditTimerIds).toHaveLength(4);
     expect(auditTimerIds.filter((timerId) => !clearedTimerIds.includes(timerId)))
-      .toHaveLength(1);
+      .toHaveLength(2);
   });
 
   it('leaves one live System event request after the StrictMode probe', async () => {
@@ -959,6 +994,7 @@ describe('App role-specific route trees', () => {
 
     expect(administratorHooks.auditStatusConstructed).toBe(1);
     expect(administratorHooks.auditRecordsConstructed).toBe(1);
+    expect(administratorHooks.protectionConstructed).toBe(1);
     expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/audit/status',
     )).toHaveLength(1);
@@ -1149,6 +1185,7 @@ describe('App role-specific route trees', () => {
     expect(administratorHooks.userManagementConstructed).toBe(0);
     expect(administratorHooks.auditStatusConstructed).toBe(0);
     expect(administratorHooks.auditRecordsConstructed).toBe(0);
+    expect(administratorHooks.protectionConstructed).toBe(0);
     const getJsonPaths = vi.mocked(client.getJson).mock.calls.map(([path]) => path);
     expect(getJsonPaths).toEqual(expect.arrayContaining([
       '/api/v1/setup/status',
@@ -1169,6 +1206,7 @@ describe('App role-specific route trees', () => {
       '/api/v1/security/management-ips',
       '/api/v1/audit/status',
       '/api/v1/audit/events?sort_by=timestamp&sort_direction=desc&limit=50',
+      '/api/v1/system/protection',
     ]) {
       expect(getJsonPaths).not.toContain(path);
     }
@@ -1178,6 +1216,8 @@ describe('App role-specific route trees', () => {
     expect(vi.mocked(client.postJson).mock.calls).toEqual([]);
     expect(vi.mocked(client.putJson).mock.calls).toEqual([]);
     expect(vi.mocked(client.deleteJson).mock.calls).toEqual([]);
+    expect(screen.queryByRole('heading', { name: 'System protection' }))
+      .not.toBeInTheDocument();
     expect(FakeEventSource.instances.map(({ url }) => url)).toEqual([
       '/api/v1/ai/detections/stream',
     ]);

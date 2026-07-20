@@ -19,6 +19,8 @@ import {
 } from './features/audit/useAuditStatus';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
 import { useUserManagement } from './features/users/useUserManagement';
+import { useSystemProtection } from './features/protection/useSystemProtection';
+import type { SystemProtectionController } from './features/protection/useSystemProtection';
 
 type BootstrapState =
   | { kind: 'checking' }
@@ -165,9 +167,11 @@ const operationalViews: Record<string, OperationalView> = {
 function AdministratorOperationalShell({
   auditStatus,
   client,
+  protection,
 }: {
   auditStatus: AuditStatusController;
   client: CameraApiClient;
+  protection: SystemProtectionController;
 }) {
   const auth = useAuth();
   const location = useLocation();
@@ -178,21 +182,25 @@ function AdministratorOperationalShell({
     <AppShell principal={auth.principal!} logout={auth.logout} changePassword={auth.changePassword}
       runtimeSettings={runtimeSettings}
       auditStatus={auditStatus}
+      protection={protection}
       onRefresh={() => {
         void controller.refresh().catch(() => undefined);
         void runtimeSettings.refresh().catch(() => undefined);
         void auditStatus.refresh().catch(() => undefined);
+        void protection.refresh().catch(() => undefined);
       }}>
       <DashboardPage client={client} controller={controller}
         runtimeSettings={runtimeSettings} auditStatus={auditStatus}
+        protection={protection}
         auditFragment={location.hash} view={view} />
     </AppShell>
   );
 }
 
-function AdministratorUsersShell({ auditStatus, client }: {
+function AdministratorUsersShell({ auditStatus, client, protection }: {
   auditStatus: AuditStatusController;
   client: CameraApiClient;
+  protection: SystemProtectionController;
 }) {
   const auth = useAuth();
   const controller = useUserManagement(client);
@@ -202,9 +210,11 @@ function AdministratorUsersShell({ auditStatus, client }: {
       logout={auth.logout}
       changePassword={auth.changePassword}
       auditStatus={auditStatus}
+      protection={protection}
       onRefresh={() => {
         void controller.refreshAll().catch(() => undefined);
         void auditStatus.refresh().catch(() => undefined);
+        void protection.refresh().catch(() => undefined);
       }}
     >
       <UsersPage controller={controller} />
@@ -215,9 +225,12 @@ function AdministratorUsersShell({ auditStatus, client }: {
 function AdministratorDefaultApplication({ client }: { client: CameraApiClient }) {
   const location = useLocation();
   const auditStatus = useAuditStatus(client);
+  const protection = useSystemProtection(client);
   return location.pathname === '/users'
-    ? <AdministratorUsersShell client={client} auditStatus={auditStatus} />
-    : <AdministratorOperationalShell client={client} auditStatus={auditStatus} />;
+    ? <AdministratorUsersShell client={client} auditStatus={auditStatus}
+        protection={protection} />
+    : <AdministratorOperationalShell client={client} auditStatus={auditStatus}
+        protection={protection} />;
 }
 
 function AdministratorApplication({ child, client }: {

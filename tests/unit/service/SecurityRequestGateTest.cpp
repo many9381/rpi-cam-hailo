@@ -278,6 +278,101 @@ TEST(SecurityRequestGateTest, RuntimeSettingsRouteMethodsAreExact) {
   }
 }
 
+TEST(SecurityRequestGateTest,
+     ProtectionStatusRequiresManagementAdministratorWithoutCsrf) {
+  auto wrong_ip = Operational("/api/v1/system/protection");
+  wrong_ip.peer_is_management = false;
+  auto denied_ip = AuthorizeSecurityRequest(wrong_ip);
+  ASSERT_FALSE(denied_ip.ok());
+  EXPECT_EQ(denied_ip.error().code, "E_ACCESS_DENIED");
+
+  auto unauthenticated = Operational("/api/v1/system/protection");
+  auto missing = AuthorizeSecurityRequest(unauthenticated);
+  ASSERT_FALSE(missing.ok());
+  EXPECT_EQ(missing.error().code, "E_AUTHENTICATION_REQUIRED");
+
+  auto viewer = Operational("/api/v1/system/protection");
+  viewer.principal = Viewer();
+  auto wrong_role = AuthorizeSecurityRequest(viewer);
+  ASSERT_FALSE(wrong_role.ok());
+  EXPECT_EQ(wrong_role.error().code, "E_AUTHORIZATION_REQUIRED");
+
+  auto administrator = Operational("/api/v1/system/protection");
+  administrator.principal = Administrator();
+  EXPECT_TRUE(AuthorizeSecurityRequest(administrator).ok());
+}
+
+TEST(SecurityRequestGateTest,
+     ProtectionStartsRequireAdministratorOriginAndManagementHeader) {
+  for (const std::string path : {"/api/v1/system/self-tests",
+                                 "/api/v1/system/integrity-checks"}) {
+    auto context = Operational(path, "POST");
+    context.principal = Administrator();
+
+    auto missing_origin = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(missing_origin.ok()) << path;
+    EXPECT_EQ(missing_origin.error().code, "E_REQUEST_ORIGIN") << path;
+
+    context.origin = std::string(kOrigin);
+    auto missing_header = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(missing_header.ok()) << path;
+    EXPECT_EQ(missing_header.error().code, "E_REQUEST_HEADER") << path;
+
+    context.has_management_header = true;
+    EXPECT_TRUE(AuthorizeSecurityRequest(context).ok()) << path;
+
+    context.principal = Viewer();
+    auto viewer = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(viewer.ok()) << path;
+    EXPECT_EQ(viewer.error().code, "E_AUTHORIZATION_REQUIRED") << path;
+  }
+}
+
+TEST(SecurityRequestGateTest, ProtectionRoutesRejectWrongMethodsAndUnknownPaths) {
+  for (const auto& [path, method] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"/api/v1/system/protection", "POST"},
+           {"/api/v1/system/protection", "PUT"},
+           {"/api/v1/system/self-tests", "GET"},
+           {"/api/v1/system/self-tests", "PUT"},
+           {"/api/v1/system/integrity-checks", "GET"},
+           {"/api/v1/system/integrity-checks", "DELETE"},
+           {"/api/v1/system/protection/", "GET"},
+           {"/api/v1/system/self-tests/extra", "POST"},
+           {"/api/v1/system/integrity-check", "POST"},
+       }) {
+    const auto denied = AuthorizeSecurityRequest(
+        ValidManagementRequest(path, method));
+    ASSERT_FALSE(denied.ok()) << method << ' ' << path;
+    EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED")
+        << method << ' ' << path;
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     ProtectionStartsRequireExactBoundedObjectAndSingleCookie) {
+  EXPECT_TRUE(ValidateEmptyJsonObject("{}", "application/json").ok());
+  for (const std::string body : {"", "null", "[]", "{\"extra\":true}"}) {
+    auto parsed = ValidateEmptyJsonObject(body, "application/json");
+    ASSERT_FALSE(parsed.ok()) << body;
+    EXPECT_EQ(parsed.error().code, "E_INVALID_REQUEST") << body;
+  }
+  auto oversized = ValidateEmptyJsonObject(
+      std::string(camera_firmware::service::kMaximumSecurityBodyBytes + 1U,
+                  ' '),
+      "application/json");
+  ASSERT_FALSE(oversized.ok());
+  EXPECT_EQ(oversized.error().code, "E_REQUEST_TOO_LARGE");
+
+  const std::array<std::string, 2U> duplicate_cookies = {
+      "camera_session=" + std::string(64U, 'a'),
+      "camera_session=" + std::string(64U, 'b'),
+  };
+  auto cookie = ParseSessionCookieHeaders(duplicate_cookies);
+  ASSERT_FALSE(cookie.ok());
+  EXPECT_EQ(cookie.error().code, "E_AUTHENTICATION_REQUIRED");
+}
+
 TEST(SecurityRequestGateTest, AuditReadsRequireAdministratorWithoutCsrf) {
   for (const std::string path : {"/api/v1/audit/status",
                                  "/api/v1/audit/events"}) {

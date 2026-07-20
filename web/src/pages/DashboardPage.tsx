@@ -9,6 +9,8 @@ import { StreamPanel } from '../components/StreamPanel';
 import type { CameraApiClient, DetectionSnapshot } from '../api/types';
 import { AuditRecordsPanel } from '../features/audit/AuditRecordsPanel';
 import type { AuditStatusController } from '../features/audit/useAuditStatus';
+import { SystemProtectionPanel } from '../features/protection/SystemProtectionPanel';
+import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
 import { CameraSettingsPanel } from '../features/settings/CameraSettingsPanel';
 import { SettingsActionBar } from '../features/settings/SettingsActionBar';
@@ -21,6 +23,7 @@ interface DashboardPageProps {
   controller: OperationalController;
   runtimeSettings?: RuntimeSettingsController;
   auditStatus?: AuditStatusController;
+  protection?: SystemProtectionController;
   auditFragment?: string;
   view?: OperationalView;
 }
@@ -51,6 +54,7 @@ export function DashboardPage({
   controller,
   runtimeSettings,
   auditStatus,
+  protection,
   auditFragment,
   view = 'dashboard',
 }: DashboardPageProps) {
@@ -61,6 +65,9 @@ export function DashboardPage({
     }
     if (auditStatus !== undefined) {
       void auditStatus.refresh().catch(() => undefined);
+    }
+    if (protection !== undefined) {
+      void protection.refresh().catch(() => undefined);
     }
   };
   const initialDetections: DetectionSnapshot = controller.data?.detections ?? { events: [] };
@@ -151,6 +158,9 @@ export function DashboardPage({
       {data !== null && showAi && (
         <AiPanel ai={data.ai} detections={detectionStream.snapshot}
           streamStatus={detectionStream.status} onRestart={restartAi} />
+      )}
+      {view === 'system' && protection !== undefined && (
+        <SystemProtectionPanel controller={protection} />
       )}
       {view === 'system' && (
         <AuditRecordsPanel client={client} auditStatus={auditStatus}

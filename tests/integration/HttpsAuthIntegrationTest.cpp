@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -41,10 +42,13 @@
 #include <openssl/ssl.h>
 
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/SystemProtectionService.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
+#include "camera_firmware/integrity/IntegritySigner.hpp"
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 #include "camera_firmware/settings/RuntimeSettingsStore.hpp"
+#include "unit/integrity/IntegrityTestSupport.hpp"
 
 namespace camera_firmware::service::internal {
 void SetLiveMp4StartPublicationPauseForTesting(
@@ -1030,6 +1034,11 @@ int RunRuntimeSettingsPersistenceLifecycle(
   args.runtime_start_callback = [] {
     return camera_firmware::common::Result<void>::Ok();
   };
+  args.protection_runtime_allowed_callback = [] { return true; };
+  args.protection_runtime_control_gate = [](const std::function<void()>& command) {
+    command();
+    return true;
+  };
   args.runtime_settings_snapshot_callback = [&runtime_settings] {
     return runtime_settings.Snapshot();
   };
@@ -1134,12 +1143,19 @@ bool RunParentOwnedWatchdogCleanupProbe() {
 
 class FirmwareProcess final {
  public:
-  explicit FirmwareProcess(const std::filesystem::path& config_path) {
+  explicit FirmwareProcess(
+      const std::filesystem::path& config_path,
+      std::string_view integrity_public_key_pem = {}) {
     child_ = ::fork();
     if (child_ < 0) {
       throw std::system_error(errno, std::generic_category(), "fork");
     }
     if (child_ == 0) {
+      if (!integrity_public_key_pem.empty() &&
+          ::setenv("CF_TEST_INTEGRITY_PUBLIC_KEY_PEM",
+                   std::string(integrity_public_key_pem).c_str(), 1) != 0) {
+        _exit(126);
+      }
       ::execl(CF_CAMERA_FIRMWARE_BIN, CF_CAMERA_FIRMWARE_BIN,
               config_path.c_str(), nullptr);
       _exit(127);
@@ -1181,11 +1197,81 @@ class FirmwareProcess final {
   pid_t child_{-1};
 };
 
-void WriteManagedFirmwareConfig(const std::filesystem::path& config_path,
-                                const std::filesystem::path& state_directory,
-                                std::uint16_t https_port,
-                                std::uint16_t rtsp_port,
-                                bool security_enabled = true) {
+std::string WriteTestIntegrityArtifacts(
+    const std::filesystem::path& config_path,
+    const std::filesystem::path& state_directory) {
+  const auto integrity_directory = state_directory / "integrity";
+  std::filesystem::create_directories(integrity_directory);
+  std::filesystem::permissions(
+      state_directory, std::filesystem::perms::owner_all,
+      std::filesystem::perm_options::replace);
+  std::filesystem::permissions(
+      integrity_directory, std::filesystem::perms::owner_all,
+      std::filesystem::perm_options::replace);
+
+  const auto kernel_path = integrity_directory / "kernel.fixture";
+  {
+    std::ofstream kernel(kernel_path, std::ios::binary | std::ios::trunc);
+    kernel << "integration test kernel identity\n";
+    if (!kernel.good()) {
+      throw std::runtime_error("unable to write integrity kernel fixture");
+    }
+  }
+
+  const auto executable_path =
+      std::filesystem::canonical(CF_CAMERA_FIRMWARE_BIN);
+  const auto active_config =
+      std::filesystem::absolute(config_path).lexically_normal();
+  const auto digest = [](const std::filesystem::path& path) {
+    auto result = camera_firmware::integrity::DigestRegularFile(path);
+    if (!result.ok()) {
+      throw std::runtime_error("unable to digest integrity fixture: " +
+                               result.error().code);
+    }
+    return std::move(result).value();
+  };
+
+  camera_firmware::integrity::IntegrityManifest manifest{
+      1U,
+      "camera-firmware",
+      "2026-01-01T00:00:00Z",
+      {{"configuration",
+        camera_firmware::integrity::IntegrityCategory::kConfiguration,
+        active_config, digest(active_config)},
+       {"firmware", camera_firmware::integrity::IntegrityCategory::kFirmware,
+        executable_path, digest(executable_path)},
+       {"kernel", camera_firmware::integrity::IntegrityCategory::kKernel,
+        kernel_path, digest(kernel_path)}}};
+  auto serialized =
+      camera_firmware::integrity::SerializeIntegrityManifest(manifest);
+  if (!serialized.ok()) {
+    throw std::runtime_error("unable to serialize integrity fixture: " +
+                             serialized.error().code);
+  }
+
+  camera_firmware::integrity::testing::EphemeralEd25519Key key;
+  const auto signature = key.Sign(serialized.value());
+  const auto manifest_bytes = std::span<const unsigned char>(
+      reinterpret_cast<const unsigned char*>(serialized.value().data()),
+      serialized.value().size());
+  auto manifest_written =
+      camera_firmware::integrity::WriteIntegrityArtifactAtomically(
+          integrity_directory / "manifest.yaml", manifest_bytes);
+  auto signature_written =
+      camera_firmware::integrity::WriteIntegrityArtifactAtomically(
+          integrity_directory / "manifest.sig", signature);
+  if (!manifest_written.ok() || !signature_written.ok()) {
+    throw std::runtime_error("unable to write signed integrity fixture");
+  }
+  return key.PublicPem();
+}
+
+std::string WriteManagedFirmwareConfig(
+    const std::filesystem::path& config_path,
+    const std::filesystem::path& state_directory,
+    std::uint16_t https_port,
+    std::uint16_t rtsp_port,
+    bool security_enabled = true) {
   std::ofstream config(config_path);
   if (!config.is_open()) {
     throw std::runtime_error("unable to write firmware process config");
@@ -1214,6 +1300,13 @@ void WriteManagedFirmwareConfig(const std::filesystem::path& config_path,
             "  state_directory: "
          << state_directory.string()
          << "\n"
+            "self_protection:\n"
+            "  manifest_path: "
+         << (state_directory / "integrity" / "manifest.yaml").string()
+         << "\n"
+            "  signature_path: "
+         << (state_directory / "integrity" / "manifest.sig").string()
+         << "\n"
             "secure_rtsp:\n"
             "  enabled: true\n"
             "  control_tls: true\n"
@@ -1233,6 +1326,14 @@ void WriteManagedFirmwareConfig(const std::filesystem::path& config_path,
   if (!config.good()) {
     throw std::runtime_error("unable to flush firmware process config");
   }
+  config.close();
+  if (!config) {
+    throw std::runtime_error("unable to close firmware process config");
+  }
+  if (!security_enabled) {
+    return {};
+  }
+  return WriteTestIntegrityArtifacts(config_path, state_directory);
 }
 
 bool WaitForSetupService(
@@ -1254,8 +1355,9 @@ bool WaitForSetupService(
 
 bool InitializeOperationalFirmwareState(
     const std::filesystem::path& config_path,
-    std::uint16_t port) {
-  FirmwareProcess process(config_path);
+    std::uint16_t port,
+    std::string_view integrity_public_key_pem) {
+  FirmwareProcess process(config_path, integrity_public_key_pem);
   if (!WaitForSetupService(port)) {
     return false;
   }
@@ -1331,13 +1433,13 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
-  WriteManagedFirmwareConfig(config_path, state_directory, https_port,
-                             https_port);
+  const auto integrity_public_key = WriteManagedFirmwareConfig(
+      config_path, state_directory, https_port, https_port);
 
   const std::string origin =
       "https://127.0.0.1:" + std::to_string(https_port);
   {
-    FirmwareProcess setup_process(config_path);
+    FirmwareProcess setup_process(config_path, integrity_public_key);
     ASSERT_TRUE(WaitForSetupService(https_port));
     const auto setup = RawHttpsJsonRequest(
         https_port, "POST", "/api/v1/setup/initialize",
@@ -1346,7 +1448,7 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
     ASSERT_EQ(setup.status, 503) << setup.bytes;
   }
 
-  FirmwareProcess process(config_path);
+  FirmwareProcess process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(https_port));
   const auto login = RawHttpsJsonRequest(
       https_port, "POST", "/api/v1/auth/login",
@@ -1379,13 +1481,15 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t port = ReserveLoopbackPort();
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port);
-  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port));
+  const auto integrity_public_key =
+      WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port,
+                                                 integrity_public_key));
   WriteRuntimeSettingsFile(
       state_directory,
       RuntimeSettingsDocument("imx708-1080p30", 8000U, 30U));
 
-  FirmwareProcess process(config_path);
+  FirmwareProcess process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(port));
   const auto cookie = LoginToFirmware(port);
   ASSERT_TRUE(cookie.has_value());
@@ -1413,14 +1517,16 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t port = ReserveLoopbackPort();
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port);
-  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port));
+  const auto integrity_public_key =
+      WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port,
+                                                 integrity_public_key));
   WriteRuntimeSettingsFile(
       state_directory,
       RuntimeSettingsDocument("imx708-1080p30", 8000U, 30U,
                               "imx708-1080p50"));
 
-  FirmwareProcess process(config_path);
+  FirmwareProcess process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(port));
   const auto cookie = LoginToFirmware(port);
   ASSERT_TRUE(cookie.has_value());
@@ -1448,12 +1554,14 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t port = ReserveLoopbackPort();
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port);
-  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port));
+  const auto integrity_public_key =
+      WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port,
+                                                 integrity_public_key));
   constexpr std::string_view kMalformedDocument = "not-json-private-marker";
   WriteRuntimeSettingsFile(state_directory, kMalformedDocument);
 
-  FirmwareProcess process(config_path);
+  FirmwareProcess process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(port));
   const auto cookie = LoginToFirmware(port);
   ASSERT_TRUE(cookie.has_value());
@@ -1485,11 +1593,13 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const std::uint16_t port = ReserveLoopbackPort();
   const std::string origin =
       "https://127.0.0.1:" + std::to_string(port);
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port);
-  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port));
+  const auto integrity_public_key =
+      WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port,
+                                                 integrity_public_key));
 
   {
-    FirmwareProcess first_process(config_path);
+    FirmwareProcess first_process(config_path, integrity_public_key);
     ASSERT_TRUE(WaitForSetupService(port));
     const auto cookie = LoginToFirmware(port);
     ASSERT_TRUE(cookie.has_value());
@@ -1508,7 +1618,7 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
     ASSERT_EQ(logout.status, 200) << logout.bytes;
   }
 
-  FirmwareProcess second_process(config_path);
+  FirmwareProcess second_process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(port));
   const auto cookie = LoginToFirmware(port);
   ASSERT_TRUE(cookie.has_value());
@@ -1532,10 +1642,12 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   const std::uint16_t port = ReserveLoopbackPort();
   const std::string origin =
       "https://127.0.0.1:" + std::to_string(port);
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port);
-  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port));
+  const auto integrity_public_key =
+      WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+  ASSERT_TRUE(InitializeOperationalFirmwareState(config_path, port,
+                                                 integrity_public_key));
 
-  FirmwareProcess process(config_path);
+  FirmwareProcess process(config_path, integrity_public_key);
   ASSERT_TRUE(WaitForSetupService(port));
   const auto cookie = LoginToFirmware(port);
   ASSERT_TRUE(cookie.has_value());
@@ -1581,10 +1693,11 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
   std::filesystem::permissions(
       state_directory, std::filesystem::perms::owner_all,
       std::filesystem::perm_options::replace);
-  WriteManagedFirmwareConfig(config_path, state_directory, port, port, false);
+  const auto integrity_public_key = WriteManagedFirmwareConfig(
+      config_path, state_directory, port, port, false);
 
   {
-    FirmwareProcess process(config_path);
+    FirmwareProcess process(config_path, integrity_public_key);
     ASSERT_TRUE(WaitForSetupService(port, "/api/v1/health"));
     const auto settings =
         RawHttpsGet(port, "/api/v1/settings/runtime", {});
@@ -1622,6 +1735,13 @@ TEST(FirmwareProcessSignalIntegrationTest,
               "  enabled: true\n"
               "  state_directory: "
            << (directory.path() / "security").string()
+           << "\n"
+              "self_protection:\n"
+              "  manifest_path: "
+           << (directory.path() / "security" / "integrity" / "manifest.yaml").string()
+           << "\n"
+              "  signature_path: "
+           << (directory.path() / "security" / "integrity" / "manifest.sig").string()
            << "\n"
               "secure_rtsp:\n"
               "  enabled: true\n"
@@ -5947,6 +6067,295 @@ TEST(HttpsAuthIntegrationTest,
   EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
+void RunProtectionStartShutdownDrainScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin =
+      "https://127.0.0.1:" + std::to_string(port);
+
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "protection-shutdown-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  struct BlockingStartState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered{false};
+    bool release{false};
+    camera_firmware::security::ProtectionSuite suite{
+        camera_firmware::security::ProtectionSuite::kSelfTest};
+    camera_firmware::security::ProtectionActor actor;
+  } start_state;
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.protection_snapshot_callback = [] {
+    camera_firmware::security::SystemProtectionSnapshot snapshot;
+    snapshot.state =
+        camera_firmware::security::ProtectionState::kOperational;
+    return snapshot;
+  };
+  args.protection_start_check_callback =
+      [&start_state](camera_firmware::security::ProtectionSuite suite,
+                     camera_firmware::security::ProtectionActor actor) {
+        {
+          std::unique_lock lock(start_state.mutex);
+          start_state.suite = suite;
+          start_state.actor = std::move(actor);
+          start_state.entered = true;
+          start_state.changed.notify_all();
+          start_state.changed.wait(lock,
+                                   [&] { return start_state.release; });
+        }
+        camera_firmware::security::SystemProtectionSnapshot snapshot;
+        snapshot.state =
+            camera_firmware::security::ProtectionState::kChecking;
+        snapshot.check_running = true;
+        return camera_firmware::common::Result<
+            camera_firmware::security::SystemProtectionSnapshot>::Ok(
+            std::move(snapshot));
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" +
+      login.response->getCookie("camera_session").value();
+
+  auto request = std::async(std::launch::async, [&] {
+    return Send(client, drogon::Post,
+                "/api/v1/system/integrity-checks", "{}", origin, cookie,
+                true);
+  });
+  {
+    std::unique_lock lock(start_state.mutex);
+    ASSERT_TRUE(start_state.changed.wait_for(
+        lock, std::chrono::seconds(2),
+        [&] { return start_state.entered; }));
+  }
+
+  auto shutdown =
+      std::async(std::launch::async, [&] { service.BeginShutdown(); });
+  EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(150)),
+            std::future_status::timeout);
+  {
+    std::lock_guard lock(start_state.mutex);
+    start_state.release = true;
+    start_state.changed.notify_all();
+  }
+
+  ASSERT_EQ(request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  ExpectStatus(request.get(), drogon::k202Accepted);
+  ASSERT_EQ(shutdown.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  shutdown.get();
+  EXPECT_EQ(start_state.suite,
+            camera_firmware::security::ProtectionSuite::kIntegrity);
+  EXPECT_EQ(start_state.actor.username, "owner1");
+  EXPECT_EQ(start_state.actor.peer_ip, "127.0.0.1");
+  service.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ProtectionStartAdmissionDrainsBeforeShutdown) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(15U);
+    RunProtectionStartShutdownDrainScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+void RunProtectionBusyAdmissionScenario(
+    const std::filesystem::path& directory) {
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin =
+      "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "protection-busy-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory / "rtsp.credentials").string();
+
+  camera_firmware::security::SystemProtectionDependencies protection_dependencies;
+  protection_dependencies.run_self_tests = [] {
+    return camera_firmware::common::Result<
+        camera_firmware::security::SelfTestReport>::Ok(
+        {true, {{"crypto.sha256", true, "OK"}}});
+  };
+  protection_dependencies.run_integrity = [] {
+    return camera_firmware::common::Result<
+        camera_firmware::integrity::IntegrityVerificationReport>::Ok(
+        {true,
+         {{"camera-firmware",
+           camera_firmware::integrity::IntegrityCategory::kFirmware, true,
+           "OK"}}});
+  };
+  protection_dependencies.append_system_audit = [](auto, auto, auto) {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  protection_dependencies.append_administrator_audit =
+      [](auto const&, auto, auto, auto) {
+        return camera_firmware::common::Result<void>::Ok();
+      };
+  protection_dependencies.read_device_state = [] {
+    return camera_firmware::common::Result<
+        camera_firmware::security::DeviceState>::Ok(
+        camera_firmware::security::DeviceState::kOperational);
+  };
+  camera_firmware::security::SystemProtectionService protection(
+      std::move(protection_dependencies));
+  ASSERT_EQ(protection.RunStartupChecks().state,
+            camera_firmware::security::ProtectionState::kOperational);
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.protection_snapshot_callback = [&] { return protection.Snapshot(); };
+  args.protection_start_check_callback =
+      [&](camera_firmware::security::ProtectionSuite suite,
+          camera_firmware::security::ProtectionActor actor) {
+        return protection.StartManualCheck(suite, std::move(actor));
+      };
+  args.protection_runtime_allowed_callback = [&] {
+    return protection.RuntimeAllowed();
+  };
+  args.protection_runtime_control_gate =
+      [&](const std::function<void()>& command) {
+        return protection.RunRuntimeControlIfAllowed(command);
+      };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin,
+      {}, true);
+  ExpectStatus(login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" +
+      login.response->getCookie("camera_session").value();
+
+  std::promise<void> command_entered;
+  std::promise<void> release_command;
+  auto release_command_future = release_command.get_future().share();
+  PromiseReleaseGuard release_command_guard(release_command);
+  auto command = std::async(std::launch::async, [&] {
+    return protection.RunRuntimeControlIfAllowed([&] {
+      command_entered.set_value();
+      release_command_future.wait();
+    });
+  });
+  ASSERT_EQ(command_entered.get_future().wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+
+  auto request = std::async(std::launch::async, [&] {
+    return Send(NewClient(port), drogon::Post,
+                "/api/v1/system/integrity-checks", "{}", origin, cookie,
+                true);
+  });
+  const auto prompt_status = request.wait_for(std::chrono::milliseconds(500));
+  release_command_guard.Release();
+  ASSERT_TRUE(command.get());
+  ASSERT_EQ(request.wait_for(std::chrono::seconds(2)),
+            std::future_status::ready);
+  const auto busy = request.get();
+  EXPECT_EQ(prompt_status, std::future_status::ready);
+  ExpectStatus(busy, drogon::k409Conflict);
+  ASSERT_NE(busy.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*busy.response->getJsonObject())["code"].asString(),
+            "E_PROTECTION_TRANSITION_BUSY");
+
+  const auto accepted = Send(client, drogon::Post,
+                             "/api/v1/system/integrity-checks", "{}", origin,
+                             cookie, true);
+  ExpectStatus(accepted, drogon::k202Accepted);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (protection.Snapshot().check_running &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_FALSE(protection.Snapshot().check_running);
+  service.Stop();
+  protection.Stop();
+}
+
+TEST(HttpsAuthIntegrationTest,
+     ProtectionBusyAdmissionReturnsPromptConflictWithoutBlockingEventLoop) {
+  TemporaryDirectory directory;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    (void)::alarm(20U);
+    RunProtectionBusyAdmissionScenario(directory.path());
+    _exit(::testing::Test::HasFailure() ? 1 : 0);
+  }
+
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
 TEST(HttpsAuthIntegrationTest,
      AuditApiListsRealEventsWithStrictAuthorizationAndWireContracts) {
   TemporaryDirectory directory;
@@ -6398,6 +6807,11 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
           {"E_RUNTIME_START", "runtime failure detail"});
     }
     return camera_firmware::common::Result<void>::Ok();
+  };
+  args.protection_runtime_allowed_callback = [] { return true; };
+  args.protection_runtime_control_gate = [](const std::function<void()>& command) {
+    command();
+    return true;
   };
   args.security_store = store;
   args.bootstrap_service = bootstrap;
@@ -6946,6 +7360,12 @@ TEST(HttpsAuthIntegrationTest,
     args.runtime_start_callback = [] {
       return camera_firmware::common::Result<void>::Ok();
     };
+    args.protection_runtime_allowed_callback = [] { return true; };
+    args.protection_runtime_control_gate =
+        [](const std::function<void()>& command) {
+          command();
+          return true;
+        };
     args.runtime_settings_snapshot_callback = [] {
       return camera_firmware::settings::RuntimeSettingsSnapshot{};
     };
@@ -7063,6 +7483,7 @@ TEST(HttpsAuthIntegrationTest,
     std::promise<void> release_apply;
     auto release_apply_future = release_apply.get_future().share();
     PromiseReleaseGuard release_apply_guard(release_apply);
+    std::atomic<bool> runtime_control_allowed{true};
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
@@ -7071,6 +7492,17 @@ TEST(HttpsAuthIntegrationTest,
     args.runtime_start_callback = [] {
       return camera_firmware::common::Result<void>::Ok();
     };
+    args.protection_runtime_allowed_callback = [&] {
+      return runtime_control_allowed.load();
+    };
+    args.protection_runtime_control_gate =
+        [&](const std::function<void()>& command) {
+          if (!runtime_control_allowed.load()) {
+            return false;
+          }
+          command();
+          return true;
+        };
     args.runtime_settings_snapshot_callback = [&] {
       std::lock_guard lock(snapshot_mutex);
       return snapshot;
@@ -7346,6 +7778,7 @@ TEST(HttpsAuthIntegrationTest,
       busy_completed_before_release =
           is_busy(contender_one_response) || is_busy(contender_two_response);
     }
+    runtime_control_allowed.store(false);
     release_apply_guard.Release();
     const auto executing_apply_response = executing_apply.get();
     if (contender_one.has_value() && !contender_one_response.has_value()) {
@@ -7355,6 +7788,7 @@ TEST(HttpsAuthIntegrationTest,
       contender_two_response = contender_two->get();
     }
     saturate_apply.store(false);
+    runtime_control_allowed.store(true);
 
     const auto status_count = [&](drogon::HttpStatusCode status) {
       unsigned int count = 0U;
@@ -7373,9 +7807,9 @@ TEST(HttpsAuthIntegrationTest,
         busy_completed_before_release &&
         executing_apply_response.response &&
         executing_apply_response.response->statusCode() == drogon::k200OK &&
-        status_count(drogon::k200OK) == 1U &&
+        status_count(drogon::k423Locked) == 1U &&
         status_count(drogon::k409Conflict) == 1U &&
-        saturated_apply_calls.load() == 2U;
+        saturated_apply_calls.load() == 1U;
     if (!saturation_passed) {
       service.Stop();
       _exit(18);

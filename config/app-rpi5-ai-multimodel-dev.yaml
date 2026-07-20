@@ -41,6 +41,11 @@ security:
     max_events: 50000
     warning_percent: 90
 
+self_protection:
+  manifest_path: /var/lib/camera-firmware/integrity/manifest.yaml
+  signature_path: /var/lib/camera-firmware/integrity/manifest.sig
+  interval_hours: 24
+
 ai:
   enabled: true
   backend: hailo

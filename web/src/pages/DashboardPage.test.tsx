@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient } from '../api/types';
 import type { AuditStatusController } from '../features/audit/useAuditStatus';
+import type { ProtectionSnapshot } from '../features/protection/contracts';
+import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import type { OperationalController } from '../hooks/useOperationalData';
 import {
   makeSettingsController,
@@ -16,6 +18,17 @@ vi.mock('../features/audit/AuditRecordsPanel', () => ({
     <section data-testid="audit-records-panel"
       data-has-status={auditStatus === undefined ? 'false' : 'true'}>
       <h2>Audit records</h2>
+    </section>
+  ),
+}));
+
+vi.mock('../features/protection/SystemProtectionPanel', () => ({
+  SystemProtectionPanel: ({ controller: protection }: {
+    controller: SystemProtectionController;
+  }) => (
+    <section data-testid="system-protection-panel"
+      data-protection-state={protection.snapshot?.state ?? 'unavailable'}>
+      <h2>System protection</h2>
     </section>
   ),
 }));
@@ -90,6 +103,24 @@ const auditStatus: AuditStatusController = {
   refresh: vi.fn(async () => undefined),
 };
 
+const protectionSnapshot: ProtectionSnapshot = {
+  state: 'operational',
+  check_running: false,
+  next_periodic_at_seconds: 1_784_586_400,
+  self_test: null,
+  integrity: null,
+};
+
+const protection: SystemProtectionController = {
+  state: 'ready',
+  snapshot: protectionSnapshot,
+  publicMessage: null,
+  activeCommand: null,
+  refresh: vi.fn(async () => undefined),
+  runSelfTest: vi.fn(async () => undefined),
+  runIntegrityCheck: vi.fn(async () => undefined),
+};
+
 beforeEach(() => {
   client = makeClient();
   FakeEventSource.instances = [];
@@ -143,6 +174,21 @@ describe('DashboardPage', () => {
       'data-has-status',
       'true',
     );
+  });
+
+  it('places system protection above audit records only on the System view', () => {
+    const view = render(<DashboardPage client={client} controller={controller}
+      protection={protection} auditStatus={auditStatus} view="dashboard" />);
+    expect(screen.queryByTestId('system-protection-panel')).not.toBeInTheDocument();
+
+    view.rerender(<DashboardPage client={client} controller={controller}
+      protection={protection} auditStatus={auditStatus} view="system" />);
+
+    const panel = screen.getByTestId('system-protection-panel');
+    const audit = screen.getByTestId('audit-records-panel');
+    expect(panel).toHaveAttribute('data-protection-state', 'operational');
+    expect(panel.compareDocumentPosition(audit) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
   });
 
   it.each([

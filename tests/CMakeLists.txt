@@ -2,6 +2,82 @@ find_package(GTest REQUIRED)
 find_package(jsoncpp CONFIG REQUIRED)
 pkg_check_modules(GSTREAMER_CHECK REQUIRED IMPORTED_TARGET gstreamer-check-1.0)
 
+add_executable(camera_firmware_integrity_tool_tests
+    integration/IntegrityToolTest.cpp
+)
+
+add_dependencies(camera_firmware_integrity_tool_tests
+    camera-firmware-integrity
+)
+
+target_compile_definitions(camera_firmware_integrity_tool_tests
+    PRIVATE
+        CF_INTEGRITY_TOOL="$<TARGET_FILE:camera-firmware-integrity>"
+)
+
+target_include_directories(camera_firmware_integrity_tool_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(camera_firmware_integrity_tool_tests
+    PRIVATE
+        camera_firmware_integrity
+        GTest::gtest_main
+        OpenSSL::Crypto
+)
+
+gtest_discover_tests(camera_firmware_integrity_tool_tests
+    PROPERTIES
+        TIMEOUT 20
+)
+
+add_executable(camera_firmware_integrity_tests
+    unit/integrity/SafeFileDigestTest.cpp
+    unit/integrity/IntegrityManifestTest.cpp
+    unit/integrity/IntegritySignerTest.cpp
+    unit/integrity/IntegrityVerifierTest.cpp
+)
+
+target_link_libraries(camera_firmware_integrity_tests
+    PRIVATE
+        camera_firmware_integrity_test
+        GTest::gtest_main
+        OpenSSL::Crypto
+)
+
+target_link_options(camera_firmware_integrity_tests
+    PRIVATE
+        -Wl,--wrap=OPENSSL_cleanse
+)
+
+target_include_directories(camera_firmware_integrity_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/integrity
+)
+
+gtest_discover_tests(camera_firmware_integrity_tests
+    TEST_FILTER "SafeFileDigestTest.*:IntegrityManifestTest.*:IntegritySignerTest.*:IntegrityVerifierTest.*-SafeFileDigestTest.RejectsFifoWithoutBlocking:IntegrityManifestTest.RejectsPathologicalYamlWithinLimits:IntegrityVerifierTest.RejectsNonRegularArtifactsWithoutBlocking"
+)
+
+gtest_discover_tests(camera_firmware_integrity_tests
+    TEST_FILTER "SafeFileDigestTest.RejectsFifoWithoutBlocking"
+    PROPERTIES
+        TIMEOUT 2
+)
+
+gtest_discover_tests(camera_firmware_integrity_tests
+    TEST_FILTER "IntegrityManifestTest.RejectsPathologicalYamlWithinLimits"
+    PROPERTIES
+        TIMEOUT 2
+)
+
+gtest_discover_tests(camera_firmware_integrity_tests
+    TEST_FILTER "IntegrityVerifierTest.RejectsNonRegularArtifactsWithoutBlocking"
+    PROPERTIES
+        TIMEOUT 2
+)
+
 add_executable(camera_firmware_common_tests
     unit/common/ResultTest.cpp
     unit/common/SecureBytesTest.cpp
@@ -70,6 +146,18 @@ target_link_options(camera_firmware_runtime_settings_store_tests
 
 gtest_discover_tests(camera_firmware_runtime_settings_store_tests)
 
+add_executable(camera_firmware_security_production_self_test_link_test
+    unit/security/SecuritySelfTestProductionLinkTest.cpp
+)
+
+target_link_libraries(camera_firmware_security_production_self_test_link_test
+    PRIVATE
+        camera_firmware_security
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_security_production_self_test_link_test)
+
 add_executable(camera_firmware_security_tests
     unit/security/AuditLogServiceTest.cpp
     unit/security/AuthServiceTest.cpp
@@ -77,12 +165,15 @@ add_executable(camera_firmware_security_tests
     unit/security/DeviceTlsManagerTest.cpp
     unit/security/PasswordHasherTest.cpp
     unit/security/PasswordPolicyTest.cpp
+    unit/security/SecuritySelfTestTest.cpp
+    unit/security/SystemProtectionServiceTest.cpp
     unit/security/SecurityStoreTest.cpp
     unit/security/UserManagementServiceTest.cpp
 )
 
 target_link_libraries(camera_firmware_security_tests
     PRIVATE
+        camera_firmware_security_self_test
         camera_firmware_security
         camera_firmware_common
         camera_firmware_rtsp
@@ -100,10 +191,13 @@ target_link_options(camera_firmware_security_tests
         -Wl,--wrap=sqlite3_busy_timeout
         -Wl,--wrap=sqlite3_close_v2
         -Wl,--wrap=sqlite3_exec
+        -Wl,--wrap=sqlite3_prepare_v2
+        -Wl,--wrap=OPENSSL_cleanse
 )
 
 target_compile_definitions(camera_firmware_security_tests
     PRIVATE
+        CAMERA_FIRMWARE_SECURITY_SELF_TESTING
         CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
 
@@ -270,7 +364,11 @@ target_link_libraries(camera_firmware_boot_tests
         GTest::gtest_main
 )
 
-gtest_discover_tests(camera_firmware_boot_tests)
+gtest_discover_tests(
+    camera_firmware_boot_tests
+    PROPERTIES
+        TIMEOUT 5
+)
 
 add_executable(camera_firmware_ai_hardware_smoke
     integration/AiHardwareSmokeTest.cpp
@@ -313,6 +411,24 @@ set_tests_properties(${camera_firmware_camera_hardware_smoke_tests}
         TIMEOUT 20
 )
 
+add_executable(camera_firmware_system_protection_hardware_smoke
+    integration/SystemProtectionHardwareSmokeTest.cpp
+)
+
+target_link_libraries(camera_firmware_system_protection_hardware_smoke
+    PRIVATE
+        camera_firmware_runtime
+        camera_firmware_security
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_system_protection_hardware_smoke
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    PROPERTIES
+        TIMEOUT 90
+        RESOURCE_LOCK camera_firmware_hardware
+)
+
 add_executable(camera_firmware_fragmented_mp4_tests
     integration/FragmentedMp4HubTest.cpp
 )
@@ -350,6 +466,7 @@ add_executable(camera_firmware_service_tests
     unit/service/SessionStreamRegistryTest.cpp
     unit/service/ServiceResponseTest.cpp
     unit/service/ServiceStartupTest.cpp
+    unit/service/SystemProtectionHttpTest.cpp
     unit/service/UserManagementHttpTest.cpp
 )
 
@@ -372,22 +489,29 @@ add_test(
 
 add_executable(camera_firmware_https_auth_integration
     integration/HttpsAuthIntegrationTest.cpp
+    integration/SystemProtectionIntegrationTest.cpp
 )
 
 add_dependencies(camera_firmware_https_auth_integration
-    camera-firmware
+    camera-firmware-integration
     camera_firmware_web
 )
 
 target_compile_definitions(camera_firmware_https_auth_integration
     PRIVATE
-        CF_CAMERA_FIRMWARE_BIN="$<TARGET_FILE:camera-firmware>"
+        CF_CAMERA_FIRMWARE_BIN="$<TARGET_FILE:camera-firmware-integration>"
         CF_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_include_directories(camera_firmware_https_auth_integration
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(camera_firmware_https_auth_integration
     PRIVATE
         camera_firmware_boot
+        camera_firmware_integrity_signer
         camera_firmware_service_testing
         GTest::gtest_main
         OpenSSL::SSL
@@ -455,6 +579,20 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DrogonSourceIdentityTest.cmake
     )
     set_tests_properties(DrogonSourceIdentityConfigureTest
+        PROPERTIES
+            TIMEOUT 120
+    )
+
+    add_test(
+        NAME integrity_public_key
+        COMMAND ${CMAKE_COMMAND}
+            -DCF_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -DCF_DROGON_SOURCE_DIR=${CAMERA_FIRMWARE_DROGON_SOURCE_DIR}
+            -DCF_TRANTOR_SOURCE_DIR=${CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR}
+            -DCF_TEST_ROOT=${PROJECT_BINARY_DIR}/integrity-public-key-test
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/IntegrityPublicKeyTest.cmake
+    )
+    set_tests_properties(integrity_public_key
         PROPERTIES
             TIMEOUT 120
     )

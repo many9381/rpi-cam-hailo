@@ -723,6 +723,13 @@ void WriteFirmwareConfig(const std::filesystem::path& config_path,
             "  state_directory: "
          << state_directory.string()
          << "\n"
+            "self_protection:\n"
+            "  manifest_path: "
+         << (state_directory / "integrity" / "manifest.yaml").string()
+         << "\n"
+            "  signature_path: "
+         << (state_directory / "integrity" / "manifest.sig").string()
+         << "\n"
             "secure_rtsp:\n"
             "  enabled: true\n"
             "  control_tls: true\n"
