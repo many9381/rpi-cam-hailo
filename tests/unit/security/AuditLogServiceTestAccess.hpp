@@ -2,8 +2,10 @@
 
 #include "camera_firmware/security/SecurityStore.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,6 +14,44 @@ namespace camera_firmware::security {
 
 class AuditLogServiceTestAccess {
  public:
+  static common::Result<void> InsertSession(
+      SecurityStore& store,
+      SecurityStore::Transaction& transaction,
+      std::span<const unsigned char> token_hash,
+      std::int64_t user_id,
+      std::string_view role,
+      std::int64_t now_seconds,
+      std::int64_t expires_at_seconds,
+      std::string_view normalized_peer_ip,
+      std::int64_t management_expires_at_seconds) {
+    return store.InsertSession(transaction, token_hash, user_id, role,
+                               now_seconds, expires_at_seconds,
+                               normalized_peer_ip,
+                               management_expires_at_seconds);
+  }
+
+  static common::Result<std::optional<std::int64_t>>
+  ReadNextManagementExpiry(SecurityStore& store,
+                           SecurityStore::Transaction& transaction) {
+    return store.ReadNextManagementExpiry(transaction);
+  }
+
+  static common::Result<std::size_t> ExpireLapsedManagementAuthority(
+      SecurityStore& store,
+      SecurityStore::Transaction& transaction,
+      std::int64_t now_seconds) {
+    return store.ExpireLapsedManagementAuthority(transaction, now_seconds);
+  }
+
+  static common::Result<void> RefreshManagementDeadline(
+      SecurityStore& store,
+      SecurityStore::Transaction& transaction,
+      std::int64_t session_id,
+      std::int64_t management_expires_at_seconds) {
+    return store.RefreshManagementDeadline(transaction, session_id,
+                                           management_expires_at_seconds);
+  }
+
   static common::Result<void> InsertCommittedEvent(
       SecurityStore& store,
       std::int64_t now_seconds,

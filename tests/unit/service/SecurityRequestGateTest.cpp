@@ -25,9 +25,11 @@ using camera_firmware::security::UserRole;
 using camera_firmware::service::AuthorizeSecurityRequest;
 using camera_firmware::service::BoundedWorker;
 using camera_firmware::service::ParseLoginJson;
+using camera_firmware::service::ParseReauthenticateJson;
 using camera_firmware::service::ParseSessionCookie;
 using camera_firmware::service::ParseSessionCookieHeaders;
 using camera_firmware::service::ParseSetupJson;
+using camera_firmware::service::RouteRefreshesManagementDeadline;
 using camera_firmware::service::SecurityRequestContext;
 using camera_firmware::service::ValidateEmptyJsonObject;
 
@@ -40,7 +42,9 @@ SecureBytes SecureBody(std::string_view text) {
 }
 
 Principal Administrator() {
-  return {1, "operator", UserRole::kAdministrator};
+  Principal principal{1, "operator", UserRole::kAdministrator};
+  principal.management_authority_valid = true;
+  return principal;
 }
 
 Principal Viewer() {
@@ -810,6 +814,49 @@ TEST(SecurityRequestGateTest, SetupJsonRequiresExactPeerFieldAndBounds) {
   EXPECT_EQ(oversized_ip.error().code, "E_INVALID_REQUEST");
 }
 
+TEST(SecurityRequestGateTest, ReauthenticateJsonRequiresStrictBoundedObject) {
+  auto parsed = ParseReauthenticateJson(SecureBody(R"({"password":"ValidPass1!"})"),
+                                        "application/json; charset=utf-8");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().size(), 11U);
+
+  const std::vector<std::string> invalid = {
+      R"([])",
+      R"({})",
+      R"({"username":"operator"})",
+      R"({"password":"ValidPass1!","role":"administrator"})",
+      R"({"password":"ValidPass1!","password":"OtherPass1!"})",
+      R"({"password":7})",
+      R"({"password":"ValidPass1!"} trailing)",
+  };
+  for (const auto& body : invalid) {
+    auto result = ParseReauthenticateJson(SecureBody(body), "application/json");
+    ASSERT_FALSE(result.ok()) << body;
+    EXPECT_EQ(result.error().code, "E_INVALID_REQUEST") << body;
+  }
+
+  auto wrong_type = ParseReauthenticateJson(
+      SecureBody(R"({"password":"ValidPass1!"})"), "text/plain");
+  ASSERT_FALSE(wrong_type.ok());
+  EXPECT_EQ(wrong_type.error().code, "E_INVALID_REQUEST");
+
+  auto absent_type =
+      ParseReauthenticateJson(SecureBody(R"({"password":"ValidPass1!"})"), "");
+  ASSERT_FALSE(absent_type.ok());
+  EXPECT_EQ(absent_type.error().code, "E_INVALID_REQUEST");
+
+  auto oversized_body = ParseReauthenticateJson(
+      SecureBody(std::string(4097U, 'x')), "application/json");
+  ASSERT_FALSE(oversized_body.ok());
+  EXPECT_EQ(oversized_body.error().code, "E_REQUEST_TOO_LARGE");
+
+  auto oversized_password = ParseReauthenticateJson(
+      SecureBody("{\"password\":\"" + std::string(129U, 'p') + "\"}"),
+      "application/json");
+  ASSERT_FALSE(oversized_password.ok());
+  EXPECT_EQ(oversized_password.error().code, "E_INVALID_REQUEST");
+}
+
 TEST(SecurityRequestGateTest, RuntimeRetryRequiresAnExactEmptyJsonObject) {
   EXPECT_TRUE(ValidateEmptyJsonObject(" { \n } ", "application/json").ok());
 
@@ -830,6 +877,94 @@ TEST(SecurityRequestGateTest, RuntimeRetryRequiresAnExactEmptyJsonObject) {
     ASSERT_FALSE(non_json_whitespace.ok()) << body;
     EXPECT_EQ(non_json_whitespace.error().code, "E_INVALID_REQUEST") << body;
   }
+}
+
+TEST(SecurityRequestGateTest, ManagementDeadlineRefreshClassification) {
+  const std::vector<std::pair<std::string, std::string>> refreshing = {
+      {"/api/v1/security/users", "GET"},
+      {"/api/v1/security/users", "POST"},
+      {"/api/v1/security/users/7", "DELETE"},
+      {"/api/v1/security/users/7/enabled", "PUT"},
+      {"/api/v1/security/users/7/password", "PUT"},
+      {"/api/v1/security/management-ips", "GET"},
+      {"/api/v1/security/management-ips/administrator", "POST"},
+      {"/api/v1/security/management-ips/administrator/3", "PUT"},
+      {"/api/v1/security/management-ips/administrator/3", "DELETE"},
+      {"/api/v1/audit/events", "GET"},
+      {"/api/v1/settings/runtime", "GET"},
+      {"/api/v1/settings/runtime", "PUT"},
+      {"/api/v1/settings/runtime/apply", "POST"},
+      {"/api/v1/settings/runtime/discard", "POST"},
+      {"/api/v1/system/self-tests", "POST"},
+      {"/api/v1/system/integrity-checks", "POST"},
+      {"/api/v1/runtime/restart", "POST"},
+      {"/api/v1/ai/restart", "POST"}};
+  for (const auto& [path, method] : refreshing) {
+    EXPECT_TRUE(RouteRefreshesManagementDeadline(path, method))
+        << path << " " << method;
+  }
+
+  const std::vector<std::pair<std::string, std::string>> non_refreshing = {
+      {"/api/v1/health", "GET"},
+      {"/api/v1/setup/status", "GET"},
+      {"/api/v1/auth/me", "GET"},
+      {"/api/v1/auth/login", "POST"},
+      {"/api/v1/auth/logout", "POST"},
+      {"/api/v1/auth/password", "PUT"},
+      {"/api/v1/auth/reauthenticate", "POST"},
+      {"/api/v1/monitoring/cameras", "GET"},
+      {"/api/v1/cameras", "GET"},
+      {"/api/v1/cameras/imx708-main/snapshot.jpg", "GET"},
+      {"/api/v1/cameras/imx708-main/live.mp4", "GET"},
+      {"/api/v1/stream", "GET"},
+      {"/api/v1/ai/detections", "GET"},
+      {"/api/v1/ai/detections/stream", "GET"},
+      {"/api/v1/audit/status", "GET"},
+      {"/api/v1/system/protection", "GET"},
+      {"/api/v1/unknown/route", "GET"}};
+  for (const auto& [path, method] : non_refreshing) {
+    EXPECT_FALSE(RouteRefreshesManagementDeadline(path, method))
+        << path << " " << method;
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     LapsedManagementAuthorityIsRefusedOnlyOnRefreshingRoutes) {
+  const auto context = [](std::string path, std::string method,
+                          bool management_valid) {
+    SecurityRequestContext value;
+    value.state = DeviceState::kOperational;
+    value.path = std::move(path);
+    value.method = std::move(method);
+    value.normalized_peer_ip = "192.0.2.10";
+    value.peer_is_management = true;
+    value.origin = "https://camera.example";
+    value.expected_origin = "https://camera.example";
+    value.has_management_header = true;
+    Principal principal;
+    principal.user_id = 1;
+    principal.username = "Operator.One";
+    principal.role = UserRole::kAdministrator;
+    principal.management_authority_valid = management_valid;
+    value.principal = std::move(principal);
+    return value;
+  };
+
+  const auto refused =
+      AuthorizeSecurityRequest(context("/api/v1/security/users", "GET", false));
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "E_MANAGEMENT_REAUTHENTICATION_REQUIRED");
+  EXPECT_EQ(refused.error().message, "management reauthentication required");
+
+  EXPECT_TRUE(
+      AuthorizeSecurityRequest(context("/api/v1/security/users", "GET", true))
+          .ok());
+  EXPECT_TRUE(AuthorizeSecurityRequest(
+                  context("/api/v1/monitoring/cameras", "GET", false))
+                  .ok());
+  EXPECT_TRUE(
+      AuthorizeSecurityRequest(context("/api/v1/audit/status", "GET", false))
+          .ok());
 }
 
 TEST(BoundedWorkerTest, SubmitDoesNotBlockCallingThread) {

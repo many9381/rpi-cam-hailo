@@ -74,6 +74,7 @@ using camera_firmware::security::UserManagementDependencies;
 using camera_firmware::security::UserManagementService;
 using camera_firmware::security::UserMutationContext;
 using camera_firmware::security::UserRole;
+using camera_firmware::security::kSecuritySchemaRevision;
 using camera_firmware::security::kSessionIdentityBytes;
 
 static_assert(!std::is_trivially_destructible_v<SessionIdentity>);
@@ -311,6 +312,23 @@ int QueryInt(sqlite3* database, const char* sql) {
     throw std::runtime_error("sqlite3_finalize failed");
   }
   return value;
+}
+
+bool QuerySingleInt(sqlite3* database, const char* sql, int& value) {
+  sqlite3_stmt* statement = nullptr;
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+      SQLITE_OK) {
+    return false;
+  }
+  const int step = ::sqlite3_step(statement);
+  if (step != SQLITE_ROW) {
+    (void)::sqlite3_finalize(statement);
+    return false;
+  }
+  value = ::sqlite3_column_int(statement, 0);
+  const bool has_one_row = ::sqlite3_step(statement) == SQLITE_DONE;
+  const bool finalized = ::sqlite3_finalize(statement) == SQLITE_OK;
+  return has_one_row && finalized;
 }
 
 camera_firmware::common::SecureBytes FilledBytes(std::size_t size,
@@ -1612,6 +1630,77 @@ VALUES
   ASSERT_TRUE(second_result->ok()) << second_result->error().message;
 }
 
+void ExpectDowngradeSessionsToRevisionFour(
+    const std::filesystem::path& state_directory) {
+  sqlite3* database = nullptr;
+  ASSERT_EQ(::sqlite3_open_v2((state_directory / "security.db").c_str(),
+                              &database,
+                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
+                              nullptr),
+            SQLITE_OK);
+  char* error_message = nullptr;
+  const int executed = ::sqlite3_exec(
+      database,
+      "PRAGMA foreign_keys=OFF;"
+      "INSERT INTO sessions "
+      "(token_hash, user_id, role, created_at_seconds, "
+      "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+      "management_expires_at_seconds) "
+      "VALUES (zeroblob(32), 1, 'administrator', 1720000000, 1720000000, "
+      "1720000600, '192.0.2.10', 1720000600);"
+      "ALTER TABLE sessions RENAME TO sessions_new;"
+      "CREATE TABLE sessions ("
+      "  id INTEGER PRIMARY KEY,"
+      "  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),"
+      "  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+      "  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),"
+      "  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),"
+      "  last_activity_at_seconds INTEGER NOT NULL"
+      "    CHECK (last_activity_at_seconds >= created_at_seconds),"
+      "  expires_at_seconds INTEGER NOT NULL"
+      "    CHECK (expires_at_seconds >= last_activity_at_seconds),"
+      "  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)"
+      ");"
+      "INSERT INTO sessions (id, token_hash, user_id, role, "
+      "created_at_seconds, last_activity_at_seconds, expires_at_seconds, "
+      "peer_ip) SELECT id, token_hash, user_id, role, created_at_seconds, "
+      "last_activity_at_seconds, expires_at_seconds, peer_ip "
+      "FROM sessions_new;"
+      "DROP TABLE sessions_new;"
+      "CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);"
+      "CREATE UNIQUE INDEX sessions_single_administrator_unique"
+      "  ON sessions(role) WHERE role = 'administrator';"
+      "CREATE UNIQUE INDEX sessions_user_id_unique ON sessions(user_id);"
+      "CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);"
+      "ALTER TABLE schema_version RENAME TO schema_version_five;"
+      "CREATE TABLE schema_version (version INTEGER NOT NULL CHECK "
+      "(version = 4));"
+      "INSERT INTO schema_version (version) VALUES (4);"
+      "DROP TABLE schema_version_five;"
+      "ALTER TABLE device_state RENAME TO device_state_five;"
+      "CREATE TABLE device_state ("
+      "  id INTEGER PRIMARY KEY CHECK (id = 1),"
+      "  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),"
+      "  schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),"
+      "  setup_completed_at_seconds INTEGER,"
+      "  CHECK ("
+      "    (state = 'default' AND setup_completed_at_seconds IS NULL) OR"
+      "    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL"
+      "     AND setup_completed_at_seconds >= 0)"
+      "  )"
+      ");"
+      "INSERT INTO device_state "
+      "(id, state, schema_revision, setup_completed_at_seconds) "
+      "SELECT id, state, 4, setup_completed_at_seconds FROM device_state_five;"
+      "DROP TABLE device_state_five;",
+      nullptr, nullptr, &error_message);
+  if (error_message != nullptr) {
+    ::sqlite3_free(error_message);
+  }
+  ASSERT_EQ(executed, SQLITE_OK);
+  ASSERT_EQ(::sqlite3_close_v2(database), SQLITE_OK);
+}
+
 }  // namespace
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
@@ -2116,7 +2205,7 @@ TEST(SecurityStoreTest, CommitFailureRetainsLeaseUntilRollback) {
   EXPECT_EQ(released_state.value(), DeviceState::kDefault);
 }
 
-TEST(SecurityStoreTest, CreatesExactRevisionFourSchemaAndConfiguresConnection) {
+TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -2188,7 +2277,8 @@ TEST(SecurityStoreTest, CreatesExactRevisionFourSchemaAndConfiguresConnection) {
                 "user_id:INTEGER:1:0", "role:TEXT:1:0",
                 "created_at_seconds:INTEGER:1:0",
                 "last_activity_at_seconds:INTEGER:1:0",
-                "expires_at_seconds:INTEGER:1:0", "peer_ip:TEXT:1:0"}));
+                "expires_at_seconds:INTEGER:1:0", "peer_ip:TEXT:1:0",
+                "management_expires_at_seconds:INTEGER:1:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
@@ -2246,10 +2336,10 @@ TEST(SecurityStoreTest, CreatesExactRevisionFourSchemaAndConfiguresConnection) {
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
             1);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT version FROM schema_version;"),
-            4);
+            5);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            4);
+            5);
   EXPECT_EQ(QueryText(last_opened_database,
                       "SELECT id || '|' || rotated_event_count || '|' || "
                       "COALESCE(last_rotation_at_seconds, -1) || '|' || "
@@ -2442,7 +2532,7 @@ TEST(SecurityStoreTest,
   EXPECT_EQ(reopened.value()->State().value(), DeviceState::kOperational);
 }
 
-TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFour) {
+TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFive) {
   ResetSqliteHooks();
   RevisionTwoOperationalFixture fixture;
   const auto before = fixture.evidence();
@@ -2453,11 +2543,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFour) {
   opened.value().reset();
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT version FROM schema_version;"),
-            4);
+            5);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            4);
+            5);
   EXPECT_EQ(fixture.evidence(), before);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
@@ -2483,7 +2573,7 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFour) {
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
 }
 
-TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFour) {
+TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFive) {
   ResetSqliteHooks();
   RevisionThreeOperationalFixture fixture;
 
@@ -2493,11 +2583,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFour) {
   opened.value().reset();
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT version FROM schema_version;"),
-            4);
+            5);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            4);
+            5);
   EXPECT_EQ(QueryDatabaseTextRows(
                 fixture.database_path(),
                 "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
@@ -2518,7 +2608,88 @@ TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFour) {
                 "COALESCE(last_rotation_at_seconds, -1) || '|' || "
                 "COALESCE(last_rotated_sequence, -1) FROM audit_state;"),
             std::vector<std::string>({"1|0|-1|-1"}));
+  EXPECT_EQ(QueryDatabaseInt(
+                fixture.database_path(),
+                "SELECT COUNT(*) FROM sessions "
+                "WHERE management_expires_at_seconds = 0;"),
+            QueryDatabaseInt(fixture.database_path(),
+                             "SELECT COUNT(*) FROM sessions;"));
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
+}
+
+TEST(SecurityStoreTest, CurrentSchemaRevisionIsFive) {
+  EXPECT_EQ(kSecuritySchemaRevision, 5);
+}
+
+TEST(SecurityStoreTest, FreshSessionsTableCarriesManagementDeadline) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+
+  sqlite3* database = nullptr;
+  ASSERT_EQ(::sqlite3_open_v2(store.value()->database_path().c_str(), &database,
+                              SQLITE_OPEN_READONLY, nullptr),
+            SQLITE_OK);
+  int column_count = 0;
+  EXPECT_TRUE(QuerySingleInt(
+      database,
+      "SELECT COUNT(*) FROM pragma_table_info('sessions') "
+      "WHERE name = 'management_expires_at_seconds' AND type = 'INTEGER' "
+      "AND \"notnull\" = 1;",
+      column_count));
+  EXPECT_EQ(column_count, 1);
+  int version = 0;
+  EXPECT_TRUE(
+      QuerySingleInt(database, "SELECT version FROM schema_version;", version));
+  EXPECT_EQ(version, 5);
+  (void)::sqlite3_close_v2(database);
+}
+
+TEST(SecurityStoreTest, MigrationToRevisionFiveBackfillsZeroAndKeepsSessions) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    ASSERT_TRUE(store.value()
+                    ->InitializeDevice(MakeBootstrapRecord(), [] {
+                      return camera_firmware::common::Result<void>::Ok();
+                    })
+                    .ok());
+  }
+  // Rewrite the database back to revision 4 shape: drop the new column by
+  // rebuilding `sessions` without it, and set the recorded revision to 4.
+  ExpectDowngradeSessionsToRevisionFour(state);
+
+  auto reopened = SecurityStore::Open({state});
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+
+  sqlite3* database = nullptr;
+  ASSERT_EQ(::sqlite3_open_v2(reopened.value()->database_path().c_str(),
+                              &database, SQLITE_OPEN_READONLY, nullptr),
+            SQLITE_OK);
+  int version = 0;
+  EXPECT_TRUE(
+      QuerySingleInt(database, "SELECT version FROM schema_version;", version));
+  EXPECT_EQ(version, 5);
+  int sessions = 0;
+  EXPECT_TRUE(QuerySingleInt(database, "SELECT COUNT(*) FROM sessions;",
+                             sessions));
+  EXPECT_EQ(sessions, 1);
+  int lapsed = 0;
+  EXPECT_TRUE(QuerySingleInt(
+      database,
+      "SELECT COUNT(*) FROM sessions WHERE management_expires_at_seconds = 0;",
+      lapsed));
+  EXPECT_EQ(lapsed, 1);
+  (void)::sqlite3_close_v2(database);
 }
 
 TEST(SecurityStoreTest,
@@ -2608,8 +2779,8 @@ INSERT INTO management_ips
 VALUES ('2001:db8::10', 'viewer', 1, 3);
 INSERT INTO sessions
   (token_hash, user_id, role, created_at_seconds, last_activity_at_seconds,
-   expires_at_seconds, peer_ip)
-SELECT randomblob(32), id, 'viewer', 3, 3, 4, '2001:db8::10'
+   expires_at_seconds, peer_ip, management_expires_at_seconds)
+SELECT randomblob(32), id, 'viewer', 3, 3, 4, '2001:db8::10', 0
 FROM users WHERE canonical_username = 'viewer.one';
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
@@ -2634,8 +2805,8 @@ FROM users WHERE canonical_username = 'viewer.one';
   EXPECT_TRUE(DatabaseStatementIsRejected(database, R"sql(
 INSERT INTO sessions
   (token_hash, user_id, role, created_at_seconds, last_activity_at_seconds,
-   expires_at_seconds, peer_ip)
-SELECT randomblob(32), id, 'viewer', 4, 4, 5, '2001:db8::10'
+   expires_at_seconds, peer_ip, management_expires_at_seconds)
+SELECT randomblob(32), id, 'viewer', 4, 4, 5, '2001:db8::10', 0
 FROM users WHERE canonical_username = 'viewer.one';
 )sql"));
   EXPECT_TRUE(DatabaseStatementIsRejected(database, R"sql(
@@ -2800,7 +2971,7 @@ CREATE INDEX password_history_user_id_unique ON password_history(user_id);
       "DROP INDEX sessions_user_id_unique;");
 }
 
-TEST(SecurityStoreTest, FreshAndMigratedRevisionFourUseExactSameSchema) {
+TEST(SecurityStoreTest, FreshAndMigratedRevisionFiveUseExactSameSchema) {
   ResetSqliteHooks();
   TemporaryDirectory fresh_root;
   const auto fresh_state = fresh_root.Path("security");
@@ -3560,7 +3731,9 @@ CREATE TABLE sessions (
     CHECK (last_activity_at_seconds >= created_at_seconds),
   expires_at_seconds INTEGER NOT NULL
     CHECK (expires_at_seconds >= last_activity_at_seconds),
-  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  management_expires_at_seconds INTEGER NOT NULL
+    CHECK (management_expires_at_seconds >= 0)
 );
 DROP TABLE sessions_old;
 CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
@@ -3584,7 +3757,9 @@ CREATE TABLE sessions (
     CHECK (last_activity_at_seconds >= created_at_seconds),
   expires_at_seconds INTEGER NOT NULL
     CHECK (expires_at_seconds >= last_activity_at_seconds),
-  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  management_expires_at_seconds INTEGER NOT NULL
+    CHECK (management_expires_at_seconds >= 0)
 );
 DROP TABLE sessions_old;
 CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
@@ -3664,8 +3839,9 @@ VALUES ('192.0.2.10', 'administrator', 1, 1);
   ExpectReopenRejectsSchemaMutation(R"sql(
 INSERT INTO sessions
   (token_hash, user_id, role, created_at_seconds,
-   last_activity_at_seconds, expires_at_seconds, peer_ip)
-VALUES (zeroblob(32), 999, 'administrator', 1, 1, 2, '192.0.2.10');
+   last_activity_at_seconds, expires_at_seconds, peer_ip,
+   management_expires_at_seconds)
+VALUES (zeroblob(32), 999, 'administrator', 1, 1, 2, '192.0.2.10', 0);
 )sql");
   ExpectReopenRejectsSchemaMutation(R"sql(
 INSERT INTO audit_events
@@ -3724,8 +3900,9 @@ INSERT INTO management_ips
 VALUES ('192.0.2.20', 'administrator', 1, 2);
 INSERT INTO sessions
   (token_hash, user_id, role, created_at_seconds,
-   last_activity_at_seconds, expires_at_seconds, peer_ip)
-SELECT randomblob(32), id, 'administrator', 2, 2, 3, '192.0.2.20'
+   last_activity_at_seconds, expires_at_seconds, peer_ip,
+   management_expires_at_seconds)
+SELECT randomblob(32), id, 'administrator', 2, 2, 3, '192.0.2.20', 0
 FROM users WHERE role = 'administrator';
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
@@ -3922,4 +4099,81 @@ TEST(SecurityStoreTest, CheckHealthFailsClosedForPoisonedStore) {
 
   ASSERT_FALSE(health.ok());
   EXPECT_EQ(health.error().code, "E_SECURITY_DB_HEALTH");
+}
+
+TEST(SecurityStoreTest, ManagementDeadlineSentinelStatesBehaveAsSpecified) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  auto store = SecurityStore::Open({root.Path("security")});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  ASSERT_TRUE(store.value()
+                  ->InitializeDevice(MakeBootstrapRecord(), [] {
+                    return camera_firmware::common::Result<void>::Ok();
+                  })
+                  .ok());
+
+  auto started = store.value()->BeginTransaction();
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto transaction = std::move(started).value();
+
+  const std::array<unsigned char, 32> token{};
+  ASSERT_TRUE(AuditLogServiceTestAccess::InsertSession(
+                  *store.value(), transaction, token, 1, "administrator",
+                  1720000000, 1720000600, "192.0.2.10", 1720000600)
+                  .ok());
+
+  auto next = AuditLogServiceTestAccess::ReadNextManagementExpiry(
+      *store.value(), transaction);
+  ASSERT_TRUE(next.ok()) << next.error().message;
+  ASSERT_TRUE(next.value().has_value());
+  EXPECT_EQ(*next.value(), 1720000600);
+
+  // Not yet lapsed: nothing expires.
+  auto early = AuditLogServiceTestAccess::ExpireLapsedManagementAuthority(
+      *store.value(), transaction, 1720000599);
+  ASSERT_TRUE(early.ok()) << early.error().message;
+  EXPECT_EQ(early.value(), 0U);
+
+  // Lapsed: exactly one session expires and is audited.
+  auto lapsed = AuditLogServiceTestAccess::ExpireLapsedManagementAuthority(
+      *store.value(), transaction, 1720000600);
+  ASSERT_TRUE(lapsed.ok()) << lapsed.error().message;
+  EXPECT_EQ(lapsed.value(), 1U);
+
+  // Idempotent: the sentinel prevents a second audit row.
+  auto again = AuditLogServiceTestAccess::ExpireLapsedManagementAuthority(
+      *store.value(), transaction, 1720000900);
+  ASSERT_TRUE(again.ok()) << again.error().message;
+  EXPECT_EQ(again.value(), 0U);
+
+  // A lapsed session no longer offers a next expiry.
+  auto after = AuditLogServiceTestAccess::ReadNextManagementExpiry(
+      *store.value(), transaction);
+  ASSERT_TRUE(after.ok()) << after.error().message;
+  EXPECT_FALSE(after.value().has_value());
+
+  // Refreshing restores a live deadline.
+  ASSERT_TRUE(AuditLogServiceTestAccess::RefreshManagementDeadline(
+                  *store.value(), transaction, 1, 1720001500)
+                  .ok());
+  auto refreshed = AuditLogServiceTestAccess::ReadNextManagementExpiry(
+      *store.value(), transaction);
+  ASSERT_TRUE(refreshed.ok()) << refreshed.error().message;
+  ASSERT_TRUE(refreshed.value().has_value());
+  EXPECT_EQ(*refreshed.value(), 1720001500);
+
+  ASSERT_TRUE(transaction.Commit().ok());
+
+  sqlite3* database = nullptr;
+  ASSERT_EQ(::sqlite3_open_v2(store.value()->database_path().c_str(), &database,
+                              SQLITE_OPEN_READONLY, nullptr),
+            SQLITE_OK);
+  int audits = 0;
+  EXPECT_TRUE(QuerySingleInt(
+      database,
+      "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+      "'management_authority_expired';",
+      audits));
+  EXPECT_EQ(audits, 1);
+  (void)::sqlite3_close_v2(database);
 }

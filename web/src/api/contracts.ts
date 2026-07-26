@@ -303,6 +303,26 @@ export function parseLoginResult(value: unknown): LoginResult {
   };
 }
 
+export interface ReauthenticateResult {
+  management_expires_at_seconds: number;
+}
+
+export function parseReauthenticateResult(
+  value: unknown,
+): ReauthenticateResult {
+  if (typeof value !== 'object' || value === null ||
+      !('management_expires_at_seconds' in value) ||
+      typeof value.management_expires_at_seconds !== 'number' ||
+      !Number.isInteger(value.management_expires_at_seconds) ||
+      value.management_expires_at_seconds < 0 ||
+      Object.keys(value).length !== 1) {
+    throw new Error('Malformed reauthenticate response');
+  }
+  return {
+    management_expires_at_seconds: value.management_expires_at_seconds,
+  };
+}
+
 function parseMonitoringCamera(value: unknown): MonitoringCamera {
   if (!hasExactKeys(value, ['id', 'state', 'width', 'height', 'snapshot_available']) ||
       !isNonemptyString(value.id) || !isNonemptyString(value.state) ||

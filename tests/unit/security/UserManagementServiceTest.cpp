@@ -392,8 +392,9 @@ class UserManagementServiceTest : public ::testing::Test {
     Statement statement(
         database.get(),
         "INSERT INTO sessions (token_hash, user_id, role, created_at_seconds, "
-        "last_activity_at_seconds, expires_at_seconds, peer_ip) VALUES "
-        "(?1, ?2, ?3, 1720000003, 1720000003, 1720003603, ?4);");
+        "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+        "management_expires_at_seconds) VALUES "
+        "(?1, ?2, ?3, 1720000003, 1720000003, 1720003603, ?4, 0);");
     const std::string_view role_text =
         role == UserRole::kAdministrator ? "administrator" : "viewer";
     if (::sqlite3_bind_blob(statement.get(), 1, identity.bytes.data(),

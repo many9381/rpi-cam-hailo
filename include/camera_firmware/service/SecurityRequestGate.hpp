@@ -41,6 +41,8 @@ struct ParsedSetupRequest {
 
 [[nodiscard]] common::Result<void> AuthorizeSecurityRequest(
     const SecurityRequestContext& context);
+[[nodiscard]] bool RouteRefreshesManagementDeadline(std::string_view path,
+                                                    std::string_view method);
 [[nodiscard]] common::Result<std::string> NormalizePeerIp(
     std::string_view peer_ip);
 [[nodiscard]] common::Result<common::SecureBytes> ParseSessionCookie(
@@ -51,6 +53,9 @@ struct ParsedSetupRequest {
     std::string_view body,
     std::string_view content_type);
 [[nodiscard]] common::Result<ParsedLoginRequest> ParseLoginJson(
+    common::SecureBytes body,
+    std::string_view content_type);
+[[nodiscard]] common::Result<common::SecureBytes> ParseReauthenticateJson(
     common::SecureBytes body,
     std::string_view content_type);
 [[nodiscard]] common::Result<ParsedSetupRequest> ParseSetupJson(

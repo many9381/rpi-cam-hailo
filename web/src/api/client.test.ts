@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApiClient, ApiError, UnauthorizedError } from './client';
-import { parseLoginResult, parsePrincipal } from './contracts';
+import { parseLoginResult, parsePrincipal, parseReauthenticateResult } from './contracts';
 
 const jsonResponse = (value: unknown, status = 200) => new Response(
   JSON.stringify(value),
@@ -224,5 +224,44 @@ describe('ApiClient', () => {
     await expect(client.getBlob('/api/v1/cameras/main/snapshot.jpg'))
       .rejects.toEqual(new UnauthorizedError());
     expect(currentHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws without invoking the unauthorized handler when management authority lapses', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ code: 'E_MANAGEMENT_REAUTHENTICATION_REQUIRED' }, 401),
+    );
+    const handler = vi.fn();
+    const client = new ApiClient(fetchMock, handler);
+
+    await expect(client.getJson('/api/v1/auth/me', parsePrincipal))
+      .rejects.toEqual(new UnauthorizedError('E_MANAGEMENT_REAUTHENTICATION_REQUIRED'));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('throws without invoking the unauthorized handler when a reauthentication password is rejected', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ code: 'E_AUTHENTICATION_FAILED' }, 401),
+    );
+    const handler = vi.fn();
+    const client = new ApiClient(fetchMock, handler);
+
+    await expect(client.postJson(
+      '/api/v1/auth/reauthenticate',
+      { password: 'WrongPass9!' },
+      parseReauthenticateResult,
+    )).rejects.toEqual(new UnauthorizedError('E_AUTHENTICATION_FAILED'));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('still invokes the unauthorized handler when authentication is genuinely required', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ code: 'E_AUTHENTICATION_REQUIRED' }, 401),
+    );
+    const handler = vi.fn();
+    const client = new ApiClient(fetchMock, handler);
+
+    await expect(client.getJson('/api/v1/auth/me', parsePrincipal))
+      .rejects.toEqual(new UnauthorizedError('E_AUTHENTICATION_REQUIRED'));
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

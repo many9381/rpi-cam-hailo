@@ -23,7 +23,7 @@ class AuditLogService;
 class AuditLogServiceTestAccess;
 class UserManagementService;
 
-inline constexpr int kSecuritySchemaRevision = 4;
+inline constexpr int kSecuritySchemaRevision = 5;
 
 enum class DeviceState { kDefault, kOperational };
 
@@ -165,6 +165,7 @@ class SecurityStore {
     std::int64_t last_activity_at_seconds{0};
     std::int64_t expires_at_seconds{0};
     std::string peer_ip;
+    std::int64_t management_expires_at_seconds{0};
   };
 
   struct FirmwareLogOutboxEntry {
@@ -235,7 +236,7 @@ class SecurityStore {
 
   explicit SecurityStore(std::shared_ptr<Impl> impl) noexcept;
   common::Result<void> InitializeSchema();
-  common::Result<void> MigrateToRevisionFour(int source_revision);
+  common::Result<void> MigrateToRevisionFive(int source_revision);
   common::Result<void> RollbackSchemaTransaction();
   common::Result<Transaction> BeginReadTransaction() const;
   common::Result<AuditStatusSnapshot> ReadAuditStatus() const;
@@ -307,11 +308,21 @@ class SecurityStore {
       std::string_view role,
       std::int64_t now_seconds,
       std::int64_t expires_at_seconds,
-      std::string_view normalized_peer_ip);
+      std::string_view normalized_peer_ip,
+      std::int64_t management_expires_at_seconds);
   common::Result<void> RefreshSession(Transaction& transaction,
                                       std::int64_t session_id,
                                       std::int64_t now_seconds,
                                       std::int64_t expires_at_seconds);
+  common::Result<void> RefreshManagementDeadline(
+      Transaction& transaction,
+      std::int64_t session_id,
+      std::int64_t management_expires_at_seconds);
+  common::Result<std::optional<std::int64_t>> ReadNextManagementExpiry(
+      Transaction& transaction) const;
+  common::Result<std::size_t> ExpireLapsedManagementAuthority(
+      Transaction& transaction,
+      std::int64_t now_seconds);
   common::Result<void> DeleteSession(Transaction& transaction,
                                      std::int64_t session_id);
   common::Result<std::vector<StoredManagedUser>> ReadManagedUsers() const;

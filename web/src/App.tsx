@@ -1,8 +1,16 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { HashRouter, useLocation, useNavigate } from 'react-router-dom';
 
-import { parseSetupStatus } from './api/contracts';
-import type { CameraApiClient, SetupStatus } from './api/types';
+import { UnauthorizedError } from './api/client';
+import { parseReauthenticateResult, parseSetupStatus } from './api/contracts';
+import type { CameraApiClient, Parser, SetupStatus } from './api/types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AppShell } from './components/AppShell';
 import { ViewerShell } from './components/ViewerShell';
@@ -17,10 +25,62 @@ import {
   useAuditStatus,
   type AuditStatusController,
 } from './features/audit/useAuditStatus';
+import { ReauthenticateModal } from './features/auth/ReauthenticateModal';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
 import { useUserManagement } from './features/users/useUserManagement';
 import { useSystemProtection } from './features/protection/useSystemProtection';
 import type { SystemProtectionController } from './features/protection/useSystemProtection';
+
+const MANAGEMENT_REAUTHENTICATION_REQUIRED = 'E_MANAGEMENT_REAUTHENTICATION_REQUIRED';
+
+function isManagementReauthenticationRequired(error: unknown): boolean {
+  return error instanceof UnauthorizedError &&
+    error.code === MANAGEMENT_REAUTHENTICATION_REQUIRED;
+}
+
+/**
+ * Wraps a CameraApiClient so that any request made through it which fails
+ * because the operator's management authority has lapsed notifies the
+ * supplied callback before the UnauthorizedError continues to propagate to
+ * the original caller. Every other outcome (success or any other failure)
+ * passes through unchanged.
+ */
+function createManagementAwareClient(
+  client: CameraApiClient,
+  notifyReauthenticationRequired: () => void,
+): CameraApiClient {
+  async function guard<T>(promise: Promise<T>): Promise<T> {
+    try {
+      return await promise;
+    } catch (error) {
+      if (isManagementReauthenticationRequired(error)) {
+        notifyReauthenticationRequired();
+      }
+      throw error;
+    }
+  }
+
+  return {
+    getJson<T>(path: string, parser: Parser<T>, signal?: AbortSignal) {
+      return guard(client.getJson(path, parser, signal));
+    },
+    deleteJson<T>(path: string, parser: Parser<T>, signal?: AbortSignal) {
+      return guard(client.deleteJson(path, parser, signal));
+    },
+    putJson<B, T>(path: string, body: B, parser: Parser<T>, signal?: AbortSignal) {
+      return guard(client.putJson(path, body, parser, signal));
+    },
+    postJson<B, T>(path: string, body: B, parser: Parser<T>, signal?: AbortSignal) {
+      return guard(client.postJson(path, body, parser, signal));
+    },
+    getBlob(path: string, signal?: AbortSignal) {
+      return guard(client.getBlob(path, signal));
+    },
+    setUnauthorizedHandler(handler: (() => void) | null) {
+      client.setUnauthorizedHandler(handler);
+    },
+  };
+}
 
 type BootstrapState =
   | { kind: 'checking' }
@@ -164,31 +224,42 @@ const operationalViews: Record<string, OperationalView> = {
   '/system': 'system',
 };
 
+type RegisterViewRefresh = (refresh: (() => void) | null) => void;
+
 function AdministratorOperationalShell({
   auditStatus,
   client,
   protection,
+  registerViewRefresh,
 }: {
   auditStatus: AuditStatusController;
   client: CameraApiClient;
   protection: SystemProtectionController;
+  registerViewRefresh: RegisterViewRefresh;
 }) {
   const auth = useAuth();
   const location = useLocation();
   const controller = useOperationalData(client);
   const runtimeSettings = useRuntimeSettings(client);
   const view = operationalViews[location.pathname] ?? 'dashboard';
+  const onRefresh = useCallback(() => {
+    void controller.refresh().catch(() => undefined);
+    void runtimeSettings.refresh().catch(() => undefined);
+    void auditStatus.refresh().catch(() => undefined);
+    void protection.refresh().catch(() => undefined);
+  }, [auditStatus, controller, protection, runtimeSettings]);
+
+  useEffect(() => {
+    registerViewRefresh(onRefresh);
+    return () => registerViewRefresh(null);
+  }, [onRefresh, registerViewRefresh]);
+
   return (
     <AppShell principal={auth.principal!} logout={auth.logout} changePassword={auth.changePassword}
       runtimeSettings={runtimeSettings}
       auditStatus={auditStatus}
       protection={protection}
-      onRefresh={() => {
-        void controller.refresh().catch(() => undefined);
-        void runtimeSettings.refresh().catch(() => undefined);
-        void auditStatus.refresh().catch(() => undefined);
-        void protection.refresh().catch(() => undefined);
-      }}>
+      onRefresh={onRefresh}>
       <DashboardPage client={client} controller={controller}
         runtimeSettings={runtimeSettings} auditStatus={auditStatus}
         protection={protection}
@@ -197,13 +268,25 @@ function AdministratorOperationalShell({
   );
 }
 
-function AdministratorUsersShell({ auditStatus, client, protection }: {
+function AdministratorUsersShell({ auditStatus, client, protection, registerViewRefresh }: {
   auditStatus: AuditStatusController;
   client: CameraApiClient;
   protection: SystemProtectionController;
+  registerViewRefresh: RegisterViewRefresh;
 }) {
   const auth = useAuth();
   const controller = useUserManagement(client);
+  const onRefresh = useCallback(() => {
+    void controller.refreshAll().catch(() => undefined);
+    void auditStatus.refresh().catch(() => undefined);
+    void protection.refresh().catch(() => undefined);
+  }, [auditStatus, controller, protection]);
+
+  useEffect(() => {
+    registerViewRefresh(onRefresh);
+    return () => registerViewRefresh(null);
+  }, [onRefresh, registerViewRefresh]);
+
   return (
     <AppShell
       principal={auth.principal!}
@@ -211,26 +294,25 @@ function AdministratorUsersShell({ auditStatus, client, protection }: {
       changePassword={auth.changePassword}
       auditStatus={auditStatus}
       protection={protection}
-      onRefresh={() => {
-        void controller.refreshAll().catch(() => undefined);
-        void auditStatus.refresh().catch(() => undefined);
-        void protection.refresh().catch(() => undefined);
-      }}
+      onRefresh={onRefresh}
     >
       <UsersPage controller={controller} />
     </AppShell>
   );
 }
 
-function AdministratorDefaultApplication({ client }: { client: CameraApiClient }) {
+function AdministratorDefaultApplication({ client, registerViewRefresh }: {
+  client: CameraApiClient;
+  registerViewRefresh: RegisterViewRefresh;
+}) {
   const location = useLocation();
   const auditStatus = useAuditStatus(client);
   const protection = useSystemProtection(client);
   return location.pathname === '/users'
     ? <AdministratorUsersShell client={client} auditStatus={auditStatus}
-        protection={protection} />
+        protection={protection} registerViewRefresh={registerViewRefresh} />
     : <AdministratorOperationalShell client={client} auditStatus={auditStatus}
-        protection={protection} />;
+        protection={protection} registerViewRefresh={registerViewRefresh} />;
 }
 
 function AdministratorApplication({ child, client }: {
@@ -240,6 +322,20 @@ function AdministratorApplication({ child, client }: {
   const auth = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [reauthenticationRequired, setReauthenticationRequired] = useState(false);
+  const currentViewRefresh = useRef<(() => void) | null>(null);
+
+  const managedClient = useMemo(
+    () => createManagementAwareClient(
+      client,
+      () => setReauthenticationRequired(true),
+    ),
+    [client],
+  );
+
+  const registerViewRefresh = useCallback<RegisterViewRefresh>((refresh) => {
+    currentViewRefresh.current = refresh;
+  }, []);
 
   useEffect(() => {
     if (!administratorPaths.has(location.pathname)) {
@@ -247,14 +343,36 @@ function AdministratorApplication({ child, client }: {
     }
   }, [location.pathname, navigate]);
 
-  if (child === undefined) {
-    return <AdministratorDefaultApplication client={client} />;
-  }
+  const reauthenticate = useCallback(async (password: string) => {
+    await client.postJson(
+      '/api/v1/auth/reauthenticate',
+      { password },
+      parseReauthenticateResult,
+    );
+  }, [client]);
+
   return (
-    <AppShell principal={auth.principal!} logout={auth.logout}
-      changePassword={auth.changePassword}>
-      {child}
-    </AppShell>
+    <>
+      {child === undefined
+        ? <AdministratorDefaultApplication client={managedClient}
+            registerViewRefresh={registerViewRefresh} />
+        : (
+          <AppShell principal={auth.principal!} logout={auth.logout}
+            changePassword={auth.changePassword}>
+            {child}
+          </AppShell>
+        )}
+      {reauthenticationRequired && (
+        <ReauthenticateModal
+          reauthenticate={reauthenticate}
+          onSuccess={() => {
+            setReauthenticationRequired(false);
+            currentViewRefresh.current?.();
+          }}
+          onCancel={() => setReauthenticationRequired(false)}
+        />
+      )}
+    </>
   );
 }
 

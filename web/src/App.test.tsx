@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { UnauthorizedError } from './api/client';
+import { ApiClient, UnauthorizedError } from './api/client';
 import type { CameraApiClient, SetupStatus } from './api/types';
 import { App } from './App';
 
@@ -1081,6 +1081,172 @@ describe('App role-specific route trees', () => {
     await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/audit/status',
     )).toHaveLength(2));
+  });
+
+  it('prompts to reauthenticate when management authority lapses, then resumes the view', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/dashboard');
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/health',
+    )).toHaveLength(1));
+
+    vi.mocked(client.getJson).mockRejectedValueOnce(
+      new UnauthorizedError('E_MANAGEMENT_REAUTHENTICATION_REQUIRED'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+
+    const passwordInput = await screen.findByLabelText(/password/i);
+    vi.mocked(client.postJson).mockImplementationOnce(async (path, body, parser) => {
+      expect(path).toBe('/api/v1/auth/reauthenticate');
+      expect(body).toEqual({ password: 'NorthStar!9' });
+      return parser({ management_expires_at_seconds: 4_000 });
+    });
+
+    await user.type(passwordInput, 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /confirm/i }));
+
+    await waitFor(() => expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/health',
+    )).toHaveLength(3));
+    expect(screen.queryByRole('heading', { name: 'Camera login' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+      .toBeVisible();
+  });
+
+  it('does not prompt to reauthenticate for an ordinary authentication failure', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/dashboard');
+    await screen.findByRole('heading', { name: 'Operational dashboard' });
+
+    vi.mocked(client.getJson).mockRejectedValueOnce(
+      new UnauthorizedError('E_AUTHENTICATION_REQUIRED'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+
+    await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
+      ([path]) => path === '/api/v1/health',
+    )).toHaveLength(2));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+  });
+
+  it('leaves the operator authenticated with the modal open after a rejected reauthentication password', async () => {
+    // This test exercises the real ApiClient (not the mocked CameraApiClient used by
+    // renderRecoveredSession) against a controllable fetch, because the regression it
+    // pins lives inside ApiClient.requireSuccess: a wrong password on
+    // /api/v1/auth/reauthenticate must not invoke the unauthorized handler and must not
+    // drop the operator to the login screen.
+    const user = userEvent.setup();
+    const jsonFetchResponse = (value: unknown, status = 200) => new Response(
+      JSON.stringify(value),
+      { status, headers: { 'Content-Type': 'application/json' } },
+    );
+    let healthCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+
+      if (url === '/api/v1/setup/status') {
+        return jsonFetchResponse({ required: false });
+      }
+      if (url === '/api/v1/auth/me') {
+        return jsonFetchResponse({ username: 'administrator.one', role: 'administrator' });
+      }
+      if (url === '/api/v1/auth/reauthenticate' && method === 'POST') {
+        return jsonFetchResponse(
+          { code: 'E_AUTHENTICATION_FAILED', message: 'authentication failed' },
+          401,
+        );
+      }
+      if (url === '/api/v1/health') {
+        healthCalls += 1;
+        if (healthCalls === 2) {
+          return jsonFetchResponse({
+            code: 'E_MANAGEMENT_REAUTHENTICATION_REQUIRED',
+            message: 'management reauthentication required',
+          }, 401);
+        }
+        return jsonFetchResponse({ status: 'ok' });
+      }
+      if (url === '/api/v1/cameras') {
+        return jsonFetchResponse({
+          cameras: [],
+          ai: {
+            enabled: false, backend: 'disabled', state: 'disabled', model_count: 0,
+            runner_count: 0, reason: 'disabled', models: [], runners: [],
+          },
+        });
+      }
+      if (url === '/api/v1/stream') {
+        return jsonFetchResponse({
+          url: 'rtsp://camera.local:8555/main', control_tls: false, media_srtp: false,
+          secure_media: {
+            control_scheme: 'rtsp', media_profile: 'RTP/AVP', keying: 'none',
+            requires_tls_control_channel: false,
+          },
+        });
+      }
+      if (url === '/api/v1/settings/runtime') {
+        return jsonFetchResponse({
+          schema_version: 1,
+          revision: 0,
+          state: 'clean',
+          capabilities: {
+            camera_profiles: [], bitrate_kbps: { minimum: 500, maximum: 20_000 },
+            gop: { minimum: 1, maximum: 300 }, models: [],
+          },
+          active: { camera: { profile_id: '', bitrate_kbps: 500, gop: 1 }, models: [] },
+          pending: null,
+          last_apply: { status: 'never', code: '', restored: false },
+        });
+      }
+      if (url === '/api/v1/ai/detections') {
+        return jsonFetchResponse({ events: [] });
+      }
+      if (url === '/api/v1/audit/status') {
+        return jsonFetchResponse({
+          current_events: 10,
+          max_events: 100,
+          usage_percent: 10,
+          warning: false,
+          rotated_event_count: 0,
+          last_rotation_at_seconds: null,
+          last_rotated_sequence: null,
+        });
+      }
+      if (url.startsWith('/api/v1/audit/events')) {
+        return jsonFetchResponse({ events: [], next_cursor: null });
+      }
+      if (url === '/api/v1/system/protection') {
+        return jsonFetchResponse({
+          state: 'operational',
+          check_running: false,
+          next_periodic_at_seconds: 1_784_586_400,
+          self_test: null,
+          integrity: null,
+        });
+      }
+      throw new Error(`Unexpected fetch in test: ${method} ${url}`);
+    });
+
+    const client = new ApiClient(fetchMock as unknown as typeof fetch);
+    window.location.hash = '#/dashboard';
+    render(<App client={client} />);
+
+    expect(await screen.findByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
+
+    const passwordInput = await screen.findByLabelText(/password/i);
+    await user.type(passwordInput, 'WrongPass9!');
+    await user.click(screen.getByRole('button', { name: /confirm/i }));
+
+    const alert = await screen.findByRole('alert');
+    await waitFor(() => expect(alert).not.toHaveTextContent(''));
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Camera login' })).not.toBeInTheDocument();
   });
 
   it('loads administrator users with only the two management resources', async () => {

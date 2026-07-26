@@ -966,6 +966,7 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
           path == "/api/v1/setup/runtime" ||
           path == "/api/v1/auth/login" ||
           path == "/api/v1/auth/logout" ||
+          path == "/api/v1/auth/reauthenticate" ||
           path == "/api/v1/runtime/restart" ||
           path == "/api/v1/ai/restart" ||
           path == "/api/v1/settings/runtime/apply" ||
@@ -1302,6 +1303,9 @@ drogon::HttpResponsePtr SecurityErrorResponse(const common::Error& error) {
       error.code == "E_AUTHENTICATION_FAILED") {
     status = drogon::k401Unauthorized;
     message = "authentication required";
+  } else if (error.code == "E_MANAGEMENT_REAUTHENTICATION_REQUIRED") {
+    status = drogon::k401Unauthorized;
+    message = "management reauthentication required";
   } else if (error.code == "E_SECURITY_UNAVAILABLE" ||
              error.code == "E_AUTHENTICATION_UNAVAILABLE" ||
              error.code == "E_AUTHENTICATION_STORE") {
@@ -1755,9 +1759,14 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
               context.peer_is_management = management.value();
               if (!login && context.peer_is_management && session_token) {
                 if (session_token->size() != 0U) {
+                  const auto activity =
+                      RouteRefreshesManagementDeadline(context.path,
+                                                       context.method)
+                          ? security::ManagementActivity::kManagement
+                          : security::ManagementActivity::kNone;
                   auto principal = dependencies.auth_service->Verify(
                       {session_token->data(), session_token->size()},
-                      context.normalized_peer_ip);
+                      context.normalized_peer_ip, activity);
                   if (principal.ok()) {
                     context.principal = std::move(principal).value();
                   } else if (principal.error().code ==
@@ -3393,6 +3402,103 @@ void RegisterHandlers() {
                     }
                   });
               if (!submitted.ok()) {
+                secure_token->clear();
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Post});
+
+  app().registerHandler(
+      "/api/v1/auth/reauthenticate",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        std::shared_ptr<common::SecureBytes> secure_body;
+        std::optional<common::Error> body_error;
+        try {
+          auto copied = CopySecretRequestBody(request);
+          if (copied.ok()) {
+            secure_body = std::make_shared<common::SecureBytes>(
+                std::move(copied).value());
+          } else {
+            body_error.emplace(copied.error());
+          }
+        } catch (...) {
+          if (secure_body) {
+            secure_body->clear();
+          }
+          callback(SecurityUnavailableResponse());
+          return;
+        }
+        const std::string peer_ip = request->peerAddr().toIp();
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request, peer_ip, secure_body,
+             body_error = std::move(body_error)](
+                AuthorizedRequest, HttpCallback callback) mutable {
+              if (body_error.has_value()) {
+                callback(SecurityErrorResponse(*body_error));
+                return;
+              }
+              if (!secure_body) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto parsed = ParseReauthenticateJson(
+                  std::move(*secure_body), request->getHeader("content-type"));
+              secure_body->clear();
+              if (!parsed.ok()) {
+                callback(SecurityErrorResponse(parsed.error()));
+                return;
+              }
+              auto token =
+                  ParseSessionCookieHeaders(request->getRawCookieHeaders());
+              if (!token.ok()) {
+                callback(SecurityErrorResponse(token.error()));
+                return;
+              }
+              std::shared_ptr<security::AuthService> auth;
+              std::shared_ptr<BoundedWorker> worker;
+              {
+                std::scoped_lock lock(StateMutex());
+                auth = GlobalState().auth_service;
+                worker = GlobalState().security_worker;
+              }
+              if (!auth || !worker) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              auto secure_token = std::make_shared<common::SecureBytes>(
+                  std::move(token).value());
+              auto secure_password = std::make_shared<common::SecureBytes>(
+                  std::move(parsed).value());
+              auto submitted = worker->Submit(
+                  [secure_token, secure_password, peer_ip, auth, callback,
+                   event_loop = app().getLoop()]() mutable {
+                    try {
+                      auto renewed = auth->Reauthenticate(
+                          {secure_token->data(), secure_token->size()},
+                          peer_ip, std::move(*secure_password));
+                      secure_password->clear();
+                      secure_token->clear();
+                      if (!renewed.ok()) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityErrorResponse(renewed.error()));
+                        return;
+                      }
+                      Json::Value body(Json::objectValue);
+                      body["management_expires_at_seconds"] =
+                          static_cast<Json::Int64>(renewed.value());
+                      QueueResponse(event_loop, std::move(callback),
+                                    JsonResponse(std::move(body)));
+                    } catch (...) {
+                      secure_password->clear();
+                      secure_token->clear();
+                      QueueResponse(event_loop, std::move(callback),
+                                    SecurityUnavailableResponse());
+                    }
+                  });
+              if (!submitted.ok()) {
+                secure_password->clear();
                 secure_token->clear();
                 callback(SecurityUnavailableResponse());
               }

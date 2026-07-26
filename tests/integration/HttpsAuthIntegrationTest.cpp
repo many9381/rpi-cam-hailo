@@ -7862,4 +7862,90 @@ TEST(HttpsAuthIntegrationTest,
   _exit(124);
 }
 
+TEST(HttpsAuthIntegrationTest, MonitoringPollingDoesNotExtendManagementAuthority) {
+  TemporaryDirectory directory;
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.path().string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "camera-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory.path() / "rtsp.credentials").string();
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  args.auth_service_dependencies_provider = [] {
+    camera_firmware::security::AuthServiceDependencies dependencies;
+    dependencies.session_idle_timeout_seconds = 2;
+    return dependencies;
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  ExpectStatus(
+      Send(client, drogon::Post, "/api/v1/setup/initialize",
+           R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
+           origin, {}, true),
+      drogon::k200OK);
+  const auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {}, true);
+  ExpectStatus(login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" +
+      login.response->getCookie("camera_session").value();
+
+  for (int poll = 0; poll < 9; ++poll) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    const auto monitoring = Send(client, drogon::Get,
+                                 "/api/v1/monitoring/cameras", {}, {}, cookie);
+    ASSERT_NE(monitoring.response, nullptr);
+    EXPECT_NE(monitoring.response->statusCode(), drogon::k401Unauthorized);
+  }
+
+  const auto refused =
+      Send(client, drogon::Get, "/api/v1/security/users", {}, {}, cookie);
+  ASSERT_NE(refused.response, nullptr);
+  EXPECT_EQ(refused.response->statusCode(), drogon::k401Unauthorized);
+  ASSERT_NE(refused.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*refused.response->getJsonObject())["code"].asString(),
+            "E_MANAGEMENT_REAUTHENTICATION_REQUIRED");
+
+  const auto still_monitoring =
+      Send(client, drogon::Get, "/api/v1/monitoring/cameras", {}, {}, cookie);
+  ASSERT_NE(still_monitoring.response, nullptr);
+  EXPECT_NE(still_monitoring.response->statusCode(),
+            drogon::k401Unauthorized);
+
+  const auto reauthenticated =
+      Send(client, drogon::Post, "/api/v1/auth/reauthenticate",
+           R"({"password":"StrongPass9!"})", origin, cookie, true);
+  ExpectStatus(reauthenticated, drogon::k200OK);
+
+  const auto allowed =
+      Send(client, drogon::Get, "/api/v1/security/users", {}, {}, cookie);
+  ASSERT_NE(allowed.response, nullptr);
+  EXPECT_EQ(allowed.response->statusCode(), drogon::k200OK);
+
+  service.Stop();
+}
+
 }  // namespace
