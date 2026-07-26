@@ -673,7 +673,7 @@ TEST_F(AuthServiceTest, ViewerLoginAndVerificationUseStoredRole) {
   EXPECT_EQ(viewer.value().role, UserRole::kViewer);
   auto principal = service_->Verify(
       {viewer.value().session_token.data(), viewer.value().session_token.size()},
-      "192.0.2.10");
+      "192.0.2.10", ManagementActivity::kNone);
   ASSERT_TRUE(principal.ok()) << principal.error().message;
   EXPECT_EQ(principal.value().role, UserRole::kViewer);
   EXPECT_EQ(principal.value().username, "Viewer.One");
@@ -955,7 +955,8 @@ TEST_F(AuthServiceTest, VerifyIsPeerBoundAndRefreshesSlidingIdleDeadline) {
   EXPECT_EQ(login.value().idle_expires_at_seconds, now_seconds_ + 600);
 
   now_seconds_ += 599;
-  auto principal = service_->Verify(token, "192.0.2.10");
+  auto principal = service_->Verify(token, "192.0.2.10",
+                                    ManagementActivity::kNone);
   ASSERT_TRUE(principal.ok()) << principal.error().message;
   EXPECT_EQ(principal.value().username, "Operator.One");
   EXPECT_EQ(QueryText(store_->database_path(),
@@ -965,13 +966,17 @@ TEST_F(AuthServiceTest, VerifyIsPeerBoundAndRefreshesSlidingIdleDeadline) {
                 std::to_string(now_seconds_ + 600));
 
   now_seconds_ += 1;
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.11").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.11",
+                                ManagementActivity::kNone)
+                   .ok());
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT expires_at_seconds FROM sessions;"),
             static_cast<int>(now_seconds_ + 599));
 
   now_seconds_ += 599;
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.10").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.10",
+                                ManagementActivity::kNone)
+                   .ok());
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT COUNT(*) FROM sessions;"),
             0);
@@ -979,6 +984,198 @@ TEST_F(AuthServiceTest, VerifyIsPeerBoundAndRefreshesSlidingIdleDeadline) {
                      "SELECT COUNT(*) FROM audit_events WHERE event_type = "
                      "'session_expired';"),
             1);
+}
+
+TEST_F(AuthServiceTest, NonManagementVerifyDoesNotExtendManagementDeadline) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+  const std::int64_t management_deadline = now_seconds_ + 600;
+
+  now_seconds_ += 599;
+  auto principal = service_->Verify(token, "192.0.2.10",
+                                    ManagementActivity::kNone);
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  EXPECT_TRUE(principal.value().management_authority_valid);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT management_expires_at_seconds FROM sessions;"),
+            static_cast<int>(management_deadline));
+
+  now_seconds_ += 2;
+  auto lapsed = service_->Verify(token, "192.0.2.10",
+                                 ManagementActivity::kNone);
+  ASSERT_TRUE(lapsed.ok()) << lapsed.error().message;
+  EXPECT_FALSE(lapsed.value().management_authority_valid);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+}
+
+TEST_F(AuthServiceTest, ManagementVerifyExtendsManagementDeadline) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  now_seconds_ += 599;
+  auto principal = service_->Verify(token, "192.0.2.10",
+                                    ManagementActivity::kManagement);
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  EXPECT_TRUE(principal.value().management_authority_valid);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT management_expires_at_seconds FROM sessions;"),
+            static_cast<int>(now_seconds_ + 600));
+}
+
+TEST_F(AuthServiceTest, ExpiredManagementAuthorityIsAuditedExactlyOnce) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  for (int tick = 0; tick < 4; ++tick) {
+    now_seconds_ += 300;
+    auto principal = service_->Verify(token, "192.0.2.10",
+                                      ManagementActivity::kNone);
+    ASSERT_TRUE(principal.ok()) << principal.error().message;
+  }
+
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'management_authority_expired';"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT management_expires_at_seconds FROM sessions;"),
+            0);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+}
+
+TEST_F(AuthServiceTest, ReauthenticateRenewsLapsedManagementAuthority) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  now_seconds_ += 599;
+  auto kept_alive = service_->Verify(token, "192.0.2.10",
+                                     ManagementActivity::kNone);
+  ASSERT_TRUE(kept_alive.ok()) << kept_alive.error().message;
+
+  now_seconds_ += 2;
+  auto lapsed = service_->Verify(token, "192.0.2.10",
+                                 ManagementActivity::kNone);
+  ASSERT_TRUE(lapsed.ok()) << lapsed.error().message;
+  ASSERT_FALSE(lapsed.value().management_authority_valid);
+
+  auto renewed =
+      service_->Reauthenticate(token, "192.0.2.10", Bytes("NorthStar!9"));
+  ASSERT_TRUE(renewed.ok()) << renewed.error().message;
+  EXPECT_EQ(renewed.value(), now_seconds_ + 600);
+
+  auto principal = service_->Verify(token, "192.0.2.10",
+                                    ManagementActivity::kManagement);
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  EXPECT_TRUE(principal.value().management_authority_valid);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'management_reauthenticated';"),
+            1);
+}
+
+TEST_F(AuthServiceTest, ReauthenticateWithWrongPasswordCountsAsFailure) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  now_seconds_ += 599;
+  auto kept_alive = service_->Verify(token, "192.0.2.10",
+                                     ManagementActivity::kNone);
+  ASSERT_TRUE(kept_alive.ok()) << kept_alive.error().message;
+
+  now_seconds_ += 2;
+  auto lapsed = service_->Verify(token, "192.0.2.10",
+                                 ManagementActivity::kNone);
+  ASSERT_TRUE(lapsed.ok()) << lapsed.error().message;
+  ASSERT_FALSE(lapsed.value().management_authority_valid);
+
+  const auto refused =
+      service_->Reauthenticate(token, "192.0.2.10", Bytes("BadSecret!9"));
+
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "E_AUTHENTICATION_FAILED");
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT failed_login_count FROM users;"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE detail_code = "
+                     "'reauthentication_failed';"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT management_expires_at_seconds FROM sessions;"),
+            0);
+}
+
+TEST_F(AuthServiceTest,
+       ReauthenticateAfterLockExpiryTreatsNextFailureAsFirstNotSixth) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+
+  for (int attempt = 1; attempt <= 5; ++attempt) {
+    const auto refused =
+        service_->Reauthenticate(token, "192.0.2.10", Bytes("BadSecret!9"));
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.error().code, "E_AUTHENTICATION_FAILED");
+  }
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT failed_login_count FROM users;"),
+            5);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT lock_until_seconds FROM users;"),
+            static_cast<int>(now_seconds_ + 300));
+
+  // Keep the session's general idle deadline sliding forward while the
+  // clock crosses the lock's expiry, the same way the other Reauthenticate
+  // tests keep the session alive across a management-only lapse.
+  now_seconds_ += 299;
+  auto kept_alive = service_->Verify(token, "192.0.2.10",
+                                     ManagementActivity::kNone);
+  ASSERT_TRUE(kept_alive.ok()) << kept_alive.error().message;
+
+  now_seconds_ += 2;
+  auto still_alive = service_->Verify(token, "192.0.2.10",
+                                      ManagementActivity::kNone);
+  ASSERT_TRUE(still_alive.ok()) << still_alive.error().message;
+
+  const auto refused_after_expiry =
+      service_->Reauthenticate(token, "192.0.2.10", Bytes("BadSecret!9"));
+
+  ASSERT_FALSE(refused_after_expiry.ok());
+  EXPECT_EQ(refused_after_expiry.error().code, "E_AUTHENTICATION_FAILED");
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT failed_login_count FROM users;"),
+            1);
+  EXPECT_EQ(QueryInt(store_->database_path(),
+                     "SELECT COUNT(*) FROM users WHERE lock_until_seconds "
+                     "IS NULL;"),
+            1);
+}
+
+TEST_F(AuthServiceTest, ReauthenticateWithoutSessionRequiresAuthentication) {
+  const std::array<unsigned char, 32> unknown{};
+  const auto refused =
+      service_->Reauthenticate(unknown, "192.0.2.10", Bytes("NorthStar!9"));
+
+  ASSERT_FALSE(refused.ok());
+  EXPECT_EQ(refused.error().code, "E_AUTHENTICATION_REQUIRED");
 }
 
 TEST_F(AuthServiceTest,
@@ -1004,7 +1201,8 @@ TEST_F(AuthServiceTest,
   const auto stored_hash =
       QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
 
-  auto principal = service_->Verify(token, "192.0.2.22");
+  auto principal = service_->Verify(token, "192.0.2.22",
+                                    ManagementActivity::kNone);
 
   ASSERT_TRUE(principal.ok()) << principal.error().message;
   ASSERT_EQ(stored_hash.size(), kSessionIdentityBytes);
@@ -1013,14 +1211,18 @@ TEST_F(AuthServiceTest,
 
   ExecuteSql(store_->database_path(),
              "DELETE FROM management_ips WHERE role_scope = 'viewer';");
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22",
+                                ManagementActivity::kNone)
+                   .ok());
 
   ExecuteSql(store_->database_path(),
              "INSERT INTO management_ips "
              "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
              "('192.0.2.22', 'viewer', 1, 1720000000); "
              "UPDATE users SET enabled = 0 WHERE role = 'viewer';");
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22",
+                                ManagementActivity::kNone)
+                   .ok());
 
   ExecuteSql(store_->database_path(),
              "UPDATE users SET enabled = 1 WHERE role = 'viewer'; "
@@ -1028,7 +1230,9 @@ TEST_F(AuthServiceTest,
              "(normalized_ip, role_scope, enabled, created_at_seconds) VALUES "
              "('192.0.2.22', 'administrator', 1, 1720000000); "
              "UPDATE sessions SET role = 'administrator';");
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.22").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.22",
+                                ManagementActivity::kNone)
+                   .ok());
 }
 
 TEST_F(AuthServiceTest,
@@ -1187,7 +1391,9 @@ TEST_F(AuthServiceTest, LogoutRequiresExactPeerAndInvalidatesAtomically) {
                      "SELECT COUNT(*) FROM sessions;"),
             1);
   ASSERT_TRUE(service_->Logout(token, "192.0.2.10").ok());
-  EXPECT_FALSE(service_->Verify(token, "192.0.2.10").ok());
+  EXPECT_FALSE(service_->Verify(token, "192.0.2.10",
+                                ManagementActivity::kNone)
+                   .ok());
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT COUNT(*) FROM sessions;"),
             0);
@@ -1313,7 +1519,9 @@ TEST_F(AuthServiceTest,
 
   std::this_thread::sleep_for(std::chrono::milliseconds(1100));
   clock_seconds.store(now_seconds_ + 1, std::memory_order_relaxed);
-  ASSERT_TRUE(hooked->Verify(token, "192.0.2.10").ok());
+  ASSERT_TRUE(hooked->Verify(token, "192.0.2.10",
+                             ManagementActivity::kNone)
+                  .ok());
   EXPECT_EQ(revoked_future.wait_for(std::chrono::milliseconds(1200)),
             std::future_status::timeout);
 
@@ -1417,7 +1625,8 @@ TEST_F(AuthServiceTest, BackwardClockCannotRefreshOrBypassSessionExpiry) {
   const auto original_expiry = login.value().idle_expires_at_seconds;
 
   --now_seconds_;
-  auto backward = service_->Verify(token, "192.0.2.10");
+  auto backward = service_->Verify(token, "192.0.2.10",
+                                   ManagementActivity::kNone);
   ASSERT_FALSE(backward.ok());
   EXPECT_EQ(backward.error().code, "E_AUTHENTICATION_UNAVAILABLE");
   EXPECT_EQ(QueryInt(store_->database_path(),
@@ -1425,7 +1634,8 @@ TEST_F(AuthServiceTest, BackwardClockCannotRefreshOrBypassSessionExpiry) {
             static_cast<int>(original_expiry));
 
   now_seconds_ = original_expiry;
-  auto expired = service_->Verify(token, "192.0.2.10");
+  auto expired = service_->Verify(token, "192.0.2.10",
+                                  ManagementActivity::kNone);
   ASSERT_FALSE(expired.ok());
   EXPECT_EQ(expired.error().code, "E_AUTHENTICATION_FAILED");
   EXPECT_EQ(expired.error().message, "authentication failed");

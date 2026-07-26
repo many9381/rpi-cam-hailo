@@ -77,10 +77,12 @@ enum class RoutePolicy { kAdministrator, kViewer };
 std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
                                                  std::string_view method) {
   if (path == "/api/v1/auth/me" || path == "/api/v1/auth/logout" ||
-      path == "/api/v1/auth/password") {
+      path == "/api/v1/auth/password" ||
+      path == "/api/v1/auth/reauthenticate") {
     if ((path == "/api/v1/auth/me" && method == "GET") ||
         (path == "/api/v1/auth/logout" && method == "POST") ||
-        (path == "/api/v1/auth/password" && method == "PUT")) {
+        (path == "/api/v1/auth/password" && method == "PUT") ||
+        (path == "/api/v1/auth/reauthenticate" && method == "POST")) {
       return RoutePolicy::kViewer;
     }
     return std::nullopt;
@@ -185,6 +187,59 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
     return RoutePolicy::kAdministrator;
   }
   return std::nullopt;
+}
+
+bool RouteRefreshesManagementDeadlineImpl(std::string_view path,
+                                          std::string_view method) {
+  if (path == "/api/v1/security/users") {
+    return method == "GET" || method == "POST";
+  }
+  constexpr std::string_view users_prefix = "/api/v1/security/users/";
+  if (path.starts_with(users_prefix)) {
+    const auto remainder = path.substr(users_prefix.size());
+    if (remainder.empty()) {
+      return false;
+    }
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return method == "DELETE";
+    }
+    const auto suffix = remainder.substr(slash);
+    return method == "PUT" &&
+           (suffix == "/enabled" || suffix == "/password");
+  }
+  if (path == "/api/v1/security/management-ips") {
+    return method == "GET";
+  }
+  constexpr std::string_view ips_prefix = "/api/v1/security/management-ips/";
+  if (path.starts_with(ips_prefix)) {
+    const auto remainder = path.substr(ips_prefix.size());
+    if (remainder.empty()) {
+      return false;
+    }
+    const auto slash = remainder.find('/');
+    if (slash == std::string_view::npos) {
+      return method == "POST";
+    }
+    const auto id = remainder.substr(slash + 1U);
+    return !id.empty() && id.find('/') == std::string_view::npos &&
+           (method == "PUT" || method == "DELETE");
+  }
+  if (path == "/api/v1/audit/events") {
+    return method == "GET";
+  }
+  if (path == "/api/v1/settings/runtime") {
+    return method == "GET" || method == "PUT";
+  }
+  if (method == "POST") {
+    return path == "/api/v1/settings/runtime/apply" ||
+           path == "/api/v1/settings/runtime/discard" ||
+           path == "/api/v1/system/self-tests" ||
+           path == "/api/v1/system/integrity-checks" ||
+           path == "/api/v1/runtime/restart" ||
+           path == "/api/v1/ai/restart";
+  }
+  return false;
 }
 
 bool IsKnownProtectedRoute(std::string_view path, std::string_view method) {
@@ -364,6 +419,59 @@ class InSituCredentialParser {
     SkipWhitespace();
     return position_ == body_.size() && have_username && have_password &&
            have_peer == require_peer;
+  }
+
+  bool ParsePasswordOnly(common::SecureBytes& password) {
+    if (body_.size() == 0U ||
+        !g_utf8_validate(reinterpret_cast<const char*>(body_.data()),
+                         static_cast<gssize>(body_.size()), nullptr)) {
+      return false;
+    }
+    SkipWhitespace();
+    if (!Consume('{')) {
+      return false;
+    }
+    SkipWhitespace();
+    if (Peek('}')) {
+      return false;
+    }
+
+    bool have_password = false;
+    for (;;) {
+      DecodedJsonString key_slice;
+      bool key_was_escaped = false;
+      if (!ParseString(key_slice, &key_was_escaped) || key_was_escaped) {
+        return false;
+      }
+      const std::string key = OrdinaryString(key_slice);
+      SkipWhitespace();
+      if (!Consume(':')) {
+        return false;
+      }
+      SkipWhitespace();
+
+      DecodedJsonString value;
+      if (!ParseString(value)) {
+        return false;
+      }
+      if (key == "password" && !have_password) {
+        password.assign(body_.data() + value.offset, value.size);
+        have_password = true;
+      } else {
+        return false;
+      }
+
+      SkipWhitespace();
+      if (Consume('}')) {
+        break;
+      }
+      if (!Consume(',')) {
+        return false;
+      }
+      SkipWhitespace();
+    }
+    SkipWhitespace();
+    return position_ == body_.size() && have_password;
   }
 
  private:
@@ -594,7 +702,18 @@ common::Result<void> AuthorizeSecurityRequest(
       context.principal->role != security::UserRole::kAdministrator) {
     return GateError("E_AUTHORIZATION_REQUIRED", "authorization required");
   }
+  if (!login && RouteRefreshesManagementDeadline(context.path, method) &&
+      !context.principal->management_authority_valid) {
+    return GateError("E_MANAGEMENT_REAUTHENTICATION_REQUIRED",
+                     "management reauthentication required");
+  }
   return common::Result<void>::Ok();
+}
+
+bool RouteRefreshesManagementDeadline(std::string_view path,
+                                      std::string_view method) {
+  const std::string upper = UpperMethod(method);
+  return !upper.empty() && RouteRefreshesManagementDeadlineImpl(path, upper);
 }
 
 common::Result<std::string> NormalizePeerIp(std::string_view peer_ip) {
@@ -683,6 +802,24 @@ common::Result<ParsedLoginRequest> ParseLoginJson(
     return InvalidRequest<ParsedLoginRequest>();
   }
   return common::Result<ParsedLoginRequest>::Ok(std::move(parsed));
+}
+
+common::Result<common::SecureBytes> ParseReauthenticateJson(
+    common::SecureBytes body,
+    std::string_view content_type) {
+  if (body.size() > kMaximumSecurityBodyBytes) {
+    return InvalidRequest<common::SecureBytes>("E_REQUEST_TOO_LARGE");
+  }
+  if (!IsJsonContentType(content_type)) {
+    return InvalidRequest<common::SecureBytes>();
+  }
+  common::SecureBytes password;
+  InSituCredentialParser parser(body);
+  if (!parser.ParsePasswordOnly(password) || password.size() == 0U ||
+      password.size() > kMaximumPasswordBytes) {
+    return InvalidRequest<common::SecureBytes>();
+  }
+  return common::Result<common::SecureBytes>::Ok(std::move(password));
 }
 
 common::Result<ParsedSetupRequest> ParseSetupJson(

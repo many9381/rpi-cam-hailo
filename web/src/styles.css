@@ -1914,6 +1914,33 @@ select:focus-visible {
   opacity: 0.5;
 }
 
+.reauthenticate-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.reauthenticate-cancel {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #aeb8b2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #26343a;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.reauthenticate-cancel:hover:not(:disabled) {
+  background: #f2f5f4;
+}
+
+.reauthenticate-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .camera-preview-controls {
   display: flex;
   min-width: 0;

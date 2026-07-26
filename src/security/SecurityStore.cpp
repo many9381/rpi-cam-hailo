@@ -31,6 +31,7 @@ constexpr mode_t kDatabaseMode = 0600;
 constexpr int kBusyTimeoutMilliseconds = 1000;
 constexpr int kRevisionTwoSecuritySchema = 2;
 constexpr int kRevisionThreeSecuritySchema = 3;
+constexpr int kRevisionFourSecuritySchema = 4;
 constexpr int kMaximumViewerUsers = 32;
 constexpr int kMaximumManagementIpsPerRole = 32;
 
@@ -1148,7 +1149,11 @@ WHERE NOT (
   if (schema_revision == kRevisionThreeSecuritySchema) {
     unexpected_object_count = kRevisionThreeUnexpectedObjectCount;
     expected_count = 19;
-  } else if (schema_revision == kSecuritySchemaRevision) {
+  } else if (schema_revision == kRevisionFourSecuritySchema ||
+             schema_revision == kSecuritySchemaRevision) {
+    // Revision 5 only adds a column to `sessions`; the named table/index
+    // inventory introduced at revision 4 is unchanged, so the same
+    // allowlist applies to both revisions.
     unexpected_object_count = kRevisionFourUnexpectedObjectCount;
     expected_count = 20;
   }
@@ -1272,14 +1277,16 @@ END
 FROM device_state
 WHERE id = 1;
 )sql";
-  const char* state_invariant =
-      schema_revision == kSecuritySchemaRevision
-          ? kRevisionFourStateInvariant
-          : kLegacyStateInvariant;
+  const bool revision_four_or_later_state =
+      schema_revision == kRevisionFourSecuritySchema ||
+      schema_revision == kSecuritySchemaRevision;
+  const char* state_invariant = revision_four_or_later_state
+                                     ? kRevisionFourStateInvariant
+                                     : kLegacyStateInvariant;
   if (!QuerySingleInt(database, state_invariant, value) || value != 1) {
     return false;
   }
-  return schema_revision != kSecuritySchemaRevision ||
+  return !revision_four_or_later_state ||
          (QuerySingleInt(
               database,
               "SELECT COUNT(*) FROM audit_state WHERE id = 1 AND "
@@ -1301,6 +1308,7 @@ common::Result<void> ValidateSchema(
         ForeignKeyValidation::kStrict) {
   if (schema_revision != kRevisionTwoSecuritySchema &&
       schema_revision != kRevisionThreeSecuritySchema &&
+      schema_revision != kRevisionFourSecuritySchema &&
       schema_revision != kSecuritySchemaRevision) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
@@ -1310,9 +1318,10 @@ common::Result<void> ValidateSchema(
   // unapproved trigger cannot run from the destructive constraint probes.
   const bool revision_three_or_later =
       schema_revision >= kRevisionThreeSecuritySchema;
-  const bool revision_four = schema_revision == kSecuritySchemaRevision;
+  const bool revision_five = schema_revision == kSecuritySchemaRevision;
+  const bool revision_four = schema_revision == kRevisionFourSecuritySchema;
   const int expected_table_count =
-      revision_four ? 9 : (revision_three_or_later ? 8 : 7);
+      (revision_four || revision_five) ? 9 : (revision_three_or_later ? 8 : 7);
   const int expected_index_count = revision_three_or_later ? 11 : 9;
   if (!HasExactSchemaObjectInventory(database, schema_revision) ||
       !QuerySingleInt(database, "PRAGMA foreign_keys;", value) || value != 1 ||
@@ -1453,7 +1462,7 @@ common::Result<void> ValidateSchema(
       audit_foreign_keys !=
           std::vector<ForeignKeyInfo>{{"users", "actor_user_id", "id",
                                        "NO ACTION", "SET NULL", "NONE"}} ||
-      (revision_four &&
+      ((revision_four || revision_five) &&
        (!ReadForeignKeys(database, "audit_state", audit_state_foreign_keys) ||
         !audit_state_foreign_keys.empty())) ||
       !ReadForeignKeys(database, "firmware_log_outbox",
@@ -1519,18 +1528,30 @@ common::Result<void> ValidateSchema(
                                   {"created_at_seconds", "INTEGER", 1, 0}} ||
       !ReadColumns(database, "sessions", sessions_columns) ||
       sessions_columns !=
-          std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
-                                  {"token_hash", "BLOB", 1, 0},
-                                  {"user_id", "INTEGER", 1, 0},
-                                  {"role", "TEXT", 1, 0},
-                                  {"created_at_seconds", "INTEGER", 1, 0},
-                                  {"last_activity_at_seconds", "INTEGER", 1,
-                                   0},
-                                  {"expires_at_seconds", "INTEGER", 1, 0},
-                                  {"peer_ip", "TEXT", 1, 0}} ||
+          (revision_five
+               ? std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
+                                         {"token_hash", "BLOB", 1, 0},
+                                         {"user_id", "INTEGER", 1, 0},
+                                         {"role", "TEXT", 1, 0},
+                                         {"created_at_seconds", "INTEGER", 1, 0},
+                                         {"last_activity_at_seconds", "INTEGER",
+                                          1, 0},
+                                         {"expires_at_seconds", "INTEGER", 1, 0},
+                                         {"peer_ip", "TEXT", 1, 0},
+                                         {"management_expires_at_seconds",
+                                          "INTEGER", 1, 0}}
+               : std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
+                                         {"token_hash", "BLOB", 1, 0},
+                                         {"user_id", "INTEGER", 1, 0},
+                                         {"role", "TEXT", 1, 0},
+                                         {"created_at_seconds", "INTEGER", 1, 0},
+                                         {"last_activity_at_seconds", "INTEGER",
+                                          1, 0},
+                                         {"expires_at_seconds", "INTEGER", 1, 0},
+                                         {"peer_ip", "TEXT", 1, 0}}) ||
       !ReadColumns(database, "audit_events", audit_columns) ||
       audit_columns !=
-          (revision_four
+          ((revision_four || revision_five)
                ? std::vector<ColumnInfo>{
                      {"sequence", "INTEGER", 0, 1},
                      {"server_timestamp_seconds", "INTEGER", 1, 0},
@@ -1561,7 +1582,7 @@ common::Result<void> ValidateSchema(
                      {"actor_user_id", "INTEGER", 0, 0},
                      {"peer_ip", "TEXT", 1, 0},
                      {"detail_code", "TEXT", 1, 0}}) ||
-      (revision_four &&
+      ((revision_four || revision_five) &&
        (!ReadColumns(database, "audit_state", audit_state_columns) ||
         audit_state_columns !=
             std::vector<ColumnInfo>{
@@ -1581,39 +1602,48 @@ common::Result<void> ValidateSchema(
                                   {"lease_expires_at_seconds", "INTEGER", 0,
                                    0}} ||
       !QuerySingleInt(database,
-                      revision_four
+                      revision_five
                           ? "SELECT COUNT(*) FROM schema_version "
-                            "WHERE version = 4;"
-                          : revision_three_or_later
+                            "WHERE version = 5;"
+                          : revision_four
                                 ? "SELECT COUNT(*) FROM schema_version "
-                                  "WHERE version = 3;"
-                                : "SELECT COUNT(*) FROM schema_version "
-                                  "WHERE version = 2;",
+                                  "WHERE version = 4;"
+                                : revision_three_or_later
+                                      ? "SELECT COUNT(*) FROM schema_version "
+                                        "WHERE version = 3;"
+                                      : "SELECT COUNT(*) FROM schema_version "
+                                        "WHERE version = 2;",
                       value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM schema_version;", value) ||
       value != 1 ||
       !QuerySingleInt(
           database,
-          revision_four
+          revision_five
               ? "SELECT COUNT(*) FROM device_state "
-                "WHERE id = 1 AND schema_revision = 4 AND "
+                "WHERE id = 1 AND schema_revision = 5 AND "
                 "((state = 'default' AND setup_completed_at_seconds IS NULL) "
                 "OR (state = 'operational' AND "
                 "setup_completed_at_seconds >= 0));"
-              : revision_three_or_later
+              : revision_four
                     ? "SELECT COUNT(*) FROM device_state "
-                      "WHERE id = 1 AND schema_revision = 3 AND "
-                      "((state = 'default' AND "
-                      "setup_completed_at_seconds IS NULL) OR "
-                      "(state = 'operational' AND "
+                      "WHERE id = 1 AND schema_revision = 4 AND "
+                      "((state = 'default' AND setup_completed_at_seconds "
+                      "IS NULL) OR (state = 'operational' AND "
                       "setup_completed_at_seconds >= 0));"
-                    : "SELECT COUNT(*) FROM device_state "
-                      "WHERE id = 1 AND schema_revision = 2 AND "
-                      "((state = 'default' AND "
-                      "setup_completed_at_seconds IS NULL) OR "
-                      "(state = 'operational' AND "
-                      "setup_completed_at_seconds >= 0));",
+                    : revision_three_or_later
+                          ? "SELECT COUNT(*) FROM device_state "
+                            "WHERE id = 1 AND schema_revision = 3 AND "
+                            "((state = 'default' AND "
+                            "setup_completed_at_seconds IS NULL) OR "
+                            "(state = 'operational' AND "
+                            "setup_completed_at_seconds >= 0));"
+                          : "SELECT COUNT(*) FROM device_state "
+                            "WHERE id = 1 AND schema_revision = 2 AND "
+                            "((state = 'default' AND "
+                            "setup_completed_at_seconds IS NULL) OR "
+                            "(state = 'operational' AND "
+                            "setup_completed_at_seconds >= 0));",
           value) ||
       value != 1 ||
       !QuerySingleInt(database, "SELECT COUNT(*) FROM device_state;", value) ||
@@ -1633,6 +1663,10 @@ CREATE TABLE schema_version (
   constexpr std::string_view kRevisionFourSchemaVersionSql = R"sql(
 CREATE TABLE schema_version (
   version INTEGER NOT NULL CHECK (version = 4)
+))sql";
+  constexpr std::string_view kRevisionFiveSchemaVersionSql = R"sql(
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 5)
 ))sql";
   constexpr std::string_view kRevisionTwoDeviceStateSql = R"sql(
 CREATE TABLE device_state (
@@ -1663,6 +1697,18 @@ CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
   schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+))sql";
+  constexpr std::string_view kRevisionFiveDeviceStateSql = R"sql(
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 5),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -1757,19 +1803,51 @@ CREATE TABLE password_history (
   password_derived BLOB NOT NULL CHECK (length(password_derived) = 32),
   replaced_at_seconds INTEGER NOT NULL CHECK (replaced_at_seconds >= 0)
 ))sql";
+  constexpr std::string_view kLegacySessionsSql = R"sql(
+CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  last_activity_at_seconds INTEGER NOT NULL
+    CHECK (last_activity_at_seconds >= created_at_seconds),
+  expires_at_seconds INTEGER NOT NULL
+    CHECK (expires_at_seconds >= last_activity_at_seconds),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+))sql";
+  constexpr std::string_view kRevisionFiveSessionsSql = R"sql(
+CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  last_activity_at_seconds INTEGER NOT NULL
+    CHECK (last_activity_at_seconds >= created_at_seconds),
+  expires_at_seconds INTEGER NOT NULL
+    CHECK (expires_at_seconds >= last_activity_at_seconds),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  management_expires_at_seconds INTEGER NOT NULL
+    CHECK (management_expires_at_seconds >= 0)
+))sql";
 
   const std::array<std::pair<const char*, std::string_view>, 7>
       expected_table_definitions = {{
           {"schema_version",
-           revision_four ? kRevisionFourSchemaVersionSql
-                         : revision_three_or_later
-                               ? kRevisionThreeSchemaVersionSql
-                               : kRevisionTwoSchemaVersionSql},
+           revision_five ? kRevisionFiveSchemaVersionSql
+                         : revision_four
+                               ? kRevisionFourSchemaVersionSql
+                               : revision_three_or_later
+                                     ? kRevisionThreeSchemaVersionSql
+                                     : kRevisionTwoSchemaVersionSql},
           {"device_state",
-           revision_four ? kRevisionFourDeviceStateSql
-                         : revision_three_or_later
-                               ? kRevisionThreeDeviceStateSql
-                               : kRevisionTwoDeviceStateSql},
+           revision_five ? kRevisionFiveDeviceStateSql
+                         : revision_four
+                               ? kRevisionFourDeviceStateSql
+                               : revision_three_or_later
+                                     ? kRevisionThreeDeviceStateSql
+                                     : kRevisionTwoDeviceStateSql},
           {"users", R"sql(
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -1797,24 +1875,14 @@ CREATE TABLE users (
           {"management_ips",
            revision_three_or_later ? kRevisionThreeManagementIpsSql
                                    : kRevisionTwoManagementIpsSql},
-          {"sessions", R"sql(
-CREATE TABLE sessions (
-  id INTEGER PRIMARY KEY,
-  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
-  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
-  last_activity_at_seconds INTEGER NOT NULL
-    CHECK (last_activity_at_seconds >= created_at_seconds),
-  expires_at_seconds INTEGER NOT NULL
-    CHECK (expires_at_seconds >= last_activity_at_seconds),
-  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
-))sql"},
+          {"sessions",
+           revision_five ? kRevisionFiveSessionsSql : kLegacySessionsSql},
           {"audit_events",
-           revision_four ? kRevisionFourAuditEventsSql
-                         : revision_three_or_later
-                               ? kRevisionThreeAuditEventsSql
-                               : kRevisionTwoAuditEventsSql},
+           (revision_four || revision_five)
+               ? kRevisionFourAuditEventsSql
+               : revision_three_or_later
+                     ? kRevisionThreeAuditEventsSql
+                     : kRevisionTwoAuditEventsSql},
           {"firmware_log_outbox", R"sql(
 CREATE TABLE firmware_log_outbox (
   id INTEGER PRIMARY KEY,
@@ -1848,7 +1916,7 @@ CREATE TABLE firmware_log_outbox (
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
   }
-  if (revision_four &&
+  if ((revision_four || revision_five) &&
       !ValidateSchemaObjectSql(database, "audit_state", kAuditStateSql)) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
@@ -1888,23 +1956,29 @@ CREATE TABLE firmware_log_outbox (
           "INSERT INTO schema_version (version) VALUES (NULL);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_four
-              ? "INSERT INTO schema_version (version) VALUES (3);"
-              : revision_three_or_later
-                    ? "INSERT INTO schema_version (version) VALUES (2);"
-                    : "INSERT INTO schema_version (version) VALUES (3);") &&
+          revision_five
+              ? "INSERT INTO schema_version (version) VALUES (4);"
+              : revision_four
+                    ? "INSERT INTO schema_version (version) VALUES (3);"
+                    : revision_three_or_later
+                          ? "INSERT INTO schema_version (version) VALUES (2);"
+                          : "INSERT INTO schema_version (version) "
+                            "VALUES (3);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_four
+          revision_five
               ? "INSERT INTO device_state "
-                "(id, state, schema_revision) VALUES (2, 'default', 4);"
-              : revision_three_or_later
+                "(id, state, schema_revision) VALUES (2, 'default', 5);"
+              : revision_four
                     ? "INSERT INTO device_state "
-                      "(id, state, schema_revision) "
-                      "VALUES (2, 'default', 3);"
-                    : "INSERT INTO device_state "
-                      "(id, state, schema_revision) "
-                      "VALUES (2, 'default', 2);") &&
+                      "(id, state, schema_revision) VALUES (2, 'default', 4);"
+                    : revision_three_or_later
+                          ? "INSERT INTO device_state "
+                            "(id, state, schema_revision) "
+                            "VALUES (2, 'default', 3);"
+                          : "INSERT INTO device_state "
+                            "(id, state, schema_revision) "
+                            "VALUES (2, 'default', 2);") &&
       StatementIsRejectedByConstraint(
           database,
           "UPDATE device_state SET state = 'invalid' WHERE id = 1;") &&
@@ -2010,49 +2084,93 @@ CREATE TABLE firmware_log_outbox (
             "'pbkdf2-hmac-sha256', 600000, randomblob(16), randomblob(32), 2);"))) &&
       StatementIsRejectedByConstraint(
           database,
-          "INSERT INTO sessions "
-          "(token_hash, user_id, role, created_at_seconds, "
-          "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-          "VALUES (zeroblob(31), (SELECT id FROM users LIMIT 1), "
-          "'administrator', 1, 1, 2, '192.0.2.1');") &&
+          revision_five
+              ? "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                "management_expires_at_seconds) "
+                "VALUES (zeroblob(31), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1', 0);"
+              : "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                "VALUES (zeroblob(31), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1');") &&
       StatementSucceeds(
           database,
-          "INSERT INTO sessions "
-          "(token_hash, user_id, role, created_at_seconds, "
-          "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-          "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
-          "'administrator', 1, 1, 2, '192.0.2.1');") &&
+          revision_five
+              ? "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                "management_expires_at_seconds) "
+                "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1', 0);"
+              : "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1');") &&
       StatementIsRejectedByConstraint(
           database,
-          "INSERT INTO sessions "
-          "(token_hash, user_id, role, created_at_seconds, "
-          "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-          "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
-          "'administrator', 1, 1, 2, '192.0.2.1');") &&
+          revision_five
+              ? "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                "management_expires_at_seconds) "
+                "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1', 0);"
+              : "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                "VALUES (zeroblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1');") &&
       StatementIsRejectedByConstraint(
           database,
-          "INSERT INTO sessions "
-          "(token_hash, user_id, role, created_at_seconds, "
-          "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-          "VALUES (randomblob(32), (SELECT id FROM users LIMIT 1), "
-          "'administrator', 1, 1, 2, '192.0.2.1');") &&
+          revision_five
+              ? "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                "management_expires_at_seconds) "
+                "VALUES (randomblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1', 0);"
+              : "INSERT INTO sessions "
+                "(token_hash, user_id, role, created_at_seconds, "
+                "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                "VALUES (randomblob(32), (SELECT id FROM users LIMIT 1), "
+                "'administrator', 1, 1, 2, '192.0.2.1');") &&
       (!revision_three_or_later ||
        (StatementSucceeds(
             database,
-            "INSERT INTO sessions "
-            "(token_hash, user_id, role, created_at_seconds, "
-            "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-            "VALUES (randomblob(32), "
-            "(SELECT id FROM users WHERE role = 'viewer'), "
-            "'viewer', 1, 1, 2, '192.0.2.1');") &&
+            revision_five
+                ? "INSERT INTO sessions "
+                  "(token_hash, user_id, role, created_at_seconds, "
+                  "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                  "management_expires_at_seconds) "
+                  "VALUES (randomblob(32), "
+                  "(SELECT id FROM users WHERE role = 'viewer'), "
+                  "'viewer', 1, 1, 2, '192.0.2.1', 0);"
+                : "INSERT INTO sessions "
+                  "(token_hash, user_id, role, created_at_seconds, "
+                  "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                  "VALUES (randomblob(32), "
+                  "(SELECT id FROM users WHERE role = 'viewer'), "
+                  "'viewer', 1, 1, 2, '192.0.2.1');") &&
         StatementIsRejectedByConstraint(
             database,
-            "INSERT INTO sessions "
-            "(token_hash, user_id, role, created_at_seconds, "
-            "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-            "VALUES (randomblob(32), "
-            "(SELECT id FROM users WHERE role = 'viewer'), "
-            "'viewer', 1, 1, 2, '192.0.2.1');"))) &&
+            revision_five
+                ? "INSERT INTO sessions "
+                  "(token_hash, user_id, role, created_at_seconds, "
+                  "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+                  "management_expires_at_seconds) "
+                  "VALUES (randomblob(32), "
+                  "(SELECT id FROM users WHERE role = 'viewer'), "
+                  "'viewer', 1, 1, 2, '192.0.2.1', 0);"
+                : "INSERT INTO sessions "
+                  "(token_hash, user_id, role, created_at_seconds, "
+                  "last_activity_at_seconds, expires_at_seconds, peer_ip) "
+                  "VALUES (randomblob(32), "
+                  "(SELECT id FROM users WHERE role = 'viewer'), "
+                  "'viewer', 1, 1, 2, '192.0.2.1');"))) &&
       StatementIsRejectedByConstraint(
           database,
           "INSERT INTO audit_events "
@@ -2074,7 +2192,7 @@ CREATE TABLE firmware_log_outbox (
            "detail_code, subject_type, subject_identity) "
            "VALUES (1, 'event', 'success', '192.0.2.1', 'detail', "
            "printf('%065d', 0), 'viewer.one');")) &&
-      (!revision_four ||
+      (!(revision_four || revision_five) ||
        (StatementIsRejectedByConstraint(
             database,
             "INSERT INTO audit_events "
@@ -2295,6 +2413,59 @@ FROM audit_events_revision_three AS old;)sql",
   )
 );)sql",
     "INSERT INTO audit_state (id) VALUES (1);"};
+
+constexpr const char* kRevisionFiveMigrationStatements[] = {
+    "ALTER TABLE schema_version RENAME TO schema_version_revision_four;",
+    R"sql(CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 5)
+);)sql",
+    "INSERT INTO schema_version (version) VALUES (5);",
+    "DROP TABLE schema_version_revision_four;",
+    "ALTER TABLE device_state RENAME TO device_state_revision_four;",
+    R"sql(CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 5),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);)sql",
+    "INSERT INTO device_state "
+    "(id, state, schema_revision, setup_completed_at_seconds) "
+    "SELECT id, state, 5, setup_completed_at_seconds "
+    "FROM device_state_revision_four;",
+    "DROP TABLE device_state_revision_four;",
+    "ALTER TABLE sessions RENAME TO sessions_revision_four;",
+    R"sql(CREATE TABLE sessions (
+  id INTEGER PRIMARY KEY,
+  token_hash BLOB NOT NULL CHECK (length(token_hash) = 32),
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('administrator', 'viewer')),
+  created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0),
+  last_activity_at_seconds INTEGER NOT NULL
+    CHECK (last_activity_at_seconds >= created_at_seconds),
+  expires_at_seconds INTEGER NOT NULL
+    CHECK (expires_at_seconds >= last_activity_at_seconds),
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  management_expires_at_seconds INTEGER NOT NULL
+    CHECK (management_expires_at_seconds >= 0)
+);)sql",
+    R"sql(INSERT INTO sessions
+  (id, token_hash, user_id, role, created_at_seconds,
+   last_activity_at_seconds, expires_at_seconds, peer_ip,
+   management_expires_at_seconds)
+SELECT id, token_hash, user_id, role, created_at_seconds,
+       last_activity_at_seconds, expires_at_seconds, peer_ip, 0
+FROM sessions_revision_four;)sql",
+    "DROP TABLE sessions_revision_four;",
+    "CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);",
+    R"sql(CREATE UNIQUE INDEX sessions_single_administrator_unique
+  ON sessions(role) WHERE role = 'administrator';)sql",
+    "CREATE UNIQUE INDEX sessions_user_id_unique ON sessions(user_id);",
+    "CREATE INDEX sessions_expiry_index ON sessions(expires_at_seconds);"};
 
 }  // namespace
 
@@ -2559,22 +2730,23 @@ common::Result<void> SecurityStore::InitializeSchema() {
             impl_->database.get(),
             "SELECT version FROM schema_version;", source_revision) ||
         (source_revision != kRevisionTwoSecuritySchema &&
-         source_revision != kRevisionThreeSecuritySchema)) {
+         source_revision != kRevisionThreeSecuritySchema &&
+         source_revision != kRevisionFourSecuritySchema)) {
       return StoreError("E_SECURITY_DB_SCHEMA",
                         "security database schema is invalid");
     }
-    return MigrateToRevisionFour(source_revision);
+    return MigrateToRevisionFive(source_revision);
   }
 
   constexpr const char* kSchema = R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 4)
+  version INTEGER NOT NULL CHECK (version = 5)
 );
-INSERT INTO schema_version (version) VALUES (4);
+INSERT INTO schema_version (version) VALUES (5);
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 4),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 5),
   setup_completed_at_seconds INTEGER,
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
@@ -2583,7 +2755,7 @@ CREATE TABLE device_state (
   )
 );
 INSERT INTO device_state (id, state, schema_revision)
-VALUES (1, 'default', 4);
+VALUES (1, 'default', 5);
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -2648,7 +2820,9 @@ CREATE TABLE sessions (
     CHECK (last_activity_at_seconds >= created_at_seconds),
   expires_at_seconds INTEGER NOT NULL
     CHECK (expires_at_seconds >= last_activity_at_seconds),
-  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45)
+  peer_ip TEXT NOT NULL CHECK (length(peer_ip) BETWEEN 2 AND 45),
+  management_expires_at_seconds INTEGER NOT NULL
+    CHECK (management_expires_at_seconds >= 0)
 );
 CREATE UNIQUE INDEX sessions_token_hash_unique ON sessions(token_hash);
 CREATE UNIQUE INDEX sessions_single_administrator_unique
@@ -2752,7 +2926,7 @@ common::Result<void> SecurityStore::RollbackSchemaTransaction() {
   return rollback;
 }
 
-common::Result<void> SecurityStore::MigrateToRevisionFour(int source_revision) {
+common::Result<void> SecurityStore::MigrateToRevisionFive(int source_revision) {
   auto begin = Execute(impl_->database.get(), "BEGIN IMMEDIATE;",
                        "E_SECURITY_DB_SCHEMA",
                        "failed to migrate security database");
@@ -2800,7 +2974,29 @@ common::Result<void> SecurityStore::MigrateToRevisionFour(int source_revision) {
     }
   }
 
-  for (const char* statement : kRevisionFourMigrationStatements) {
+  if (source_revision < kRevisionFourSecuritySchema) {
+    for (const char* statement : kRevisionFourMigrationStatements) {
+      auto migrated = Execute(impl_->database.get(), statement,
+                              "E_SECURITY_DB_SCHEMA",
+                              "failed to migrate security database");
+      if (!migrated.ok()) {
+        (void)RollbackSchemaTransaction();
+        return migrated;
+      }
+    }
+  }
+
+  if (source_revision <= kRevisionFourSecuritySchema) {
+    auto revision_four_validated = ValidateSchema(
+        impl_->database.get(), kRevisionFourSecuritySchema,
+        ForeignKeyValidation::kAllowLegacyAuditActorOrphans);
+    if (!revision_four_validated.ok()) {
+      (void)RollbackSchemaTransaction();
+      return revision_four_validated;
+    }
+  }
+
+  for (const char* statement : kRevisionFiveMigrationStatements) {
     auto migrated = Execute(impl_->database.get(), statement,
                             "E_SECURITY_DB_SCHEMA",
                             "failed to migrate security database");
@@ -2810,11 +3006,11 @@ common::Result<void> SecurityStore::MigrateToRevisionFour(int source_revision) {
     }
   }
 
-  auto revision_four =
+  auto revision_five_validated =
       ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
-  if (!revision_four.ok()) {
+  if (!revision_five_validated.ok()) {
     (void)RollbackSchemaTransaction();
-    return revision_four;
+    return revision_five_validated;
   }
 
   auto commit = Execute(impl_->database.get(), "COMMIT;",
@@ -4180,7 +4376,8 @@ SecurityStore::ReadSessionByUserId(Transaction& transaction,
       "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
       "users.display_username, sessions.role, sessions.created_at_seconds, "
       "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
-      "sessions.peer_ip FROM sessions JOIN users ON users.id = "
+      "sessions.peer_ip, sessions.management_expires_at_seconds "
+      "FROM sessions JOIN users ON users.id = "
       "sessions.user_id WHERE sessions.user_id = ?1;";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
@@ -4221,6 +4418,7 @@ SecurityStore::ReadSessionByUserId(Transaction& transaction,
   session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
   session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
   session.peer_ip = reinterpret_cast<const char*>(peer);
+  session.management_expires_at_seconds = ::sqlite3_column_int64(statement, 9);
   if (::sqlite3_step(statement) != SQLITE_DONE ||
       ::sqlite3_finalize(statement) != SQLITE_OK) {
     return failure();
@@ -4248,7 +4446,8 @@ SecurityStore::ReadSessionByTokenHash(
       "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
       "users.display_username, sessions.role, sessions.created_at_seconds, "
       "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
-      "sessions.peer_ip FROM sessions JOIN users ON users.id = "
+      "sessions.peer_ip, sessions.management_expires_at_seconds "
+      "FROM sessions JOIN users ON users.id = "
       "sessions.user_id JOIN management_ips ON "
       "management_ips.normalized_ip = ?2 AND "
       "management_ips.role_scope = sessions.role AND "
@@ -4300,6 +4499,7 @@ SecurityStore::ReadSessionByTokenHash(
   session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
   session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
   session.peer_ip = reinterpret_cast<const char*>(peer);
+  session.management_expires_at_seconds = ::sqlite3_column_int64(statement, 9);
   if (::sqlite3_step(statement) != SQLITE_DONE ||
       ::sqlite3_finalize(statement) != SQLITE_OK) {
     return failure();
@@ -4347,7 +4547,8 @@ common::Result<void> SecurityStore::InsertSession(
     std::string_view role,
     std::int64_t now_seconds,
     std::int64_t expires_at_seconds,
-    std::string_view normalized_peer_ip) {
+    std::string_view normalized_peer_ip,
+    std::int64_t management_expires_at_seconds) {
   if (!transaction.active_ || transaction.impl_ != impl_ ||
       impl_->database == nullptr) {
     return StoreError("E_AUTHENTICATION_STORE",
@@ -4357,8 +4558,9 @@ common::Result<void> SecurityStore::InsertSession(
   constexpr const char* kSql =
       "INSERT INTO sessions "
       "(token_hash, user_id, role, created_at_seconds, "
-      "last_activity_at_seconds, expires_at_seconds, peer_ip) "
-      "VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6);";
+      "last_activity_at_seconds, expires_at_seconds, peer_ip, "
+      "management_expires_at_seconds) "
+      "VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7);";
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_blob(statement, 1, token_hash.data(),
@@ -4373,6 +4575,8 @@ common::Result<void> SecurityStore::InsertSession(
       ::sqlite3_bind_text(statement, 6, normalized_peer_ip.data(),
                           static_cast<int>(normalized_peer_ip.size()),
                           SQLITE_TRANSIENT) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 7, management_expires_at_seconds) !=
+          SQLITE_OK ||
       ::sqlite3_step(statement) != SQLITE_DONE) {
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
@@ -4419,6 +4623,145 @@ common::Result<void> SecurityStore::RefreshSession(
              ? common::Result<void>::Ok()
              : StoreError("E_AUTHENTICATION_STORE",
                           "authentication transaction failed");
+}
+
+common::Result<void> SecurityStore::RefreshManagementDeadline(
+    Transaction& transaction,
+    std::int64_t session_id,
+    std::int64_t management_expires_at_seconds) {
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr || management_expires_at_seconds < 0) {
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "UPDATE sessions SET management_expires_at_seconds = ?1 WHERE id = ?2;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 1, management_expires_at_seconds) !=
+          SQLITE_OK ||
+      ::sqlite3_bind_int64(statement, 2, session_id) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_DONE) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return StoreError("E_AUTHENTICATION_STORE",
+                      "authentication transaction failed");
+  }
+  return ::sqlite3_finalize(statement) == SQLITE_OK
+             ? common::Result<void>::Ok()
+             : StoreError("E_AUTHENTICATION_STORE",
+                          "authentication transaction failed");
+}
+
+common::Result<std::optional<std::int64_t>>
+SecurityStore::ReadNextManagementExpiry(Transaction& transaction) const {
+  const auto failure = [] {
+    return StoreError<std::optional<std::int64_t>>(
+        "E_AUTHENTICATION_STORE", "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr) {
+    return failure();
+  }
+  sqlite3_stmt* statement = nullptr;
+  constexpr const char* kSql =
+      "SELECT MIN(management_expires_at_seconds) FROM sessions "
+      "WHERE management_expires_at_seconds > 0;";
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                           nullptr) != SQLITE_OK ||
+      ::sqlite3_step(statement) != SQLITE_ROW) {
+    if (statement != nullptr) {
+      (void)::sqlite3_finalize(statement);
+    }
+    return failure();
+  }
+  std::optional<std::int64_t> next;
+  if (::sqlite3_column_type(statement, 0) != SQLITE_NULL) {
+    next = ::sqlite3_column_int64(statement, 0);
+  }
+  if (::sqlite3_finalize(statement) != SQLITE_OK) {
+    return failure();
+  }
+  return common::Result<std::optional<std::int64_t>>::Ok(next);
+}
+
+common::Result<std::size_t> SecurityStore::ExpireLapsedManagementAuthority(
+    Transaction& transaction,
+    std::int64_t now_seconds) {
+  const auto failure = [] {
+    return StoreError<std::size_t>("E_AUTHENTICATION_STORE",
+                                   "authentication transaction failed");
+  };
+  if (!transaction.active_ || transaction.impl_ != impl_ ||
+      impl_->database == nullptr || now_seconds < 0) {
+    return failure();
+  }
+  std::vector<std::pair<std::int64_t, std::string>> lapsed;
+  {
+    sqlite3_stmt* statement = nullptr;
+    constexpr const char* kSql =
+        "SELECT sessions.user_id, sessions.peer_ip FROM sessions "
+        "WHERE sessions.management_expires_at_seconds > 0 "
+        "AND sessions.management_expires_at_seconds <= ?1 "
+        "ORDER BY sessions.id;";
+    if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                             nullptr) != SQLITE_OK ||
+        ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK) {
+      if (statement != nullptr) {
+        (void)::sqlite3_finalize(statement);
+      }
+      return failure();
+    }
+    int step = ::sqlite3_step(statement);
+    while (step == SQLITE_ROW) {
+      const auto* peer = ::sqlite3_column_text(statement, 1);
+      if (peer == nullptr) {
+        (void)::sqlite3_finalize(statement);
+        return failure();
+      }
+      lapsed.emplace_back(::sqlite3_column_int64(statement, 0),
+                          reinterpret_cast<const char*>(peer));
+      step = ::sqlite3_step(statement);
+    }
+    if (step != SQLITE_DONE) {
+      (void)::sqlite3_finalize(statement);
+      return failure();
+    }
+    if (::sqlite3_finalize(statement) != SQLITE_OK) {
+      return failure();
+    }
+  }
+  for (const auto& [user_id, peer_ip] : lapsed) {
+    auto audit = InsertAuditEvent(transaction, now_seconds,
+                                  "management_authority_expired", "success",
+                                  user_id, peer_ip,
+                                  "management_idle_timeout");
+    if (!audit.ok()) {
+      return failure();
+    }
+  }
+  if (!lapsed.empty()) {
+    sqlite3_stmt* statement = nullptr;
+    constexpr const char* kSql =
+        "UPDATE sessions SET management_expires_at_seconds = 0 "
+        "WHERE management_expires_at_seconds > 0 "
+        "AND management_expires_at_seconds <= ?1;";
+    if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+                             nullptr) != SQLITE_OK ||
+        ::sqlite3_bind_int64(statement, 1, now_seconds) != SQLITE_OK ||
+        ::sqlite3_step(statement) != SQLITE_DONE) {
+      if (statement != nullptr) {
+        (void)::sqlite3_finalize(statement);
+      }
+      return failure();
+    }
+    if (::sqlite3_finalize(statement) != SQLITE_OK) {
+      return failure();
+    }
+  }
+  return common::Result<std::size_t>::Ok(lapsed.size());
 }
 
 common::Result<void> SecurityStore::DeleteSession(Transaction& transaction,

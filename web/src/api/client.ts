@@ -123,7 +123,11 @@ export class ApiClient implements CameraApiClient {
 
     const code = await this.readErrorCode(response);
     if (response.status === 401) {
-      this.unauthorizedHandler?.();
+      const suppressesLogout = code === 'E_MANAGEMENT_REAUTHENTICATION_REQUIRED' ||
+        code === 'E_AUTHENTICATION_FAILED';
+      if (!suppressesLogout) {
+        this.unauthorizedHandler?.();
+      }
       throw new UnauthorizedError(code ?? undefined);
     }
     throw new ApiError(response.status, code ?? 'E_REQUEST_FAILED');

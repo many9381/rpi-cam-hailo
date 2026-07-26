@@ -36,11 +36,14 @@ struct LoginResult {
   std::int64_t idle_expires_at_seconds{0};
 };
 
+enum class ManagementActivity { kNone, kManagement };
+
 struct Principal {
   std::int64_t user_id{0};
   std::string username;
   UserRole role{UserRole::kAdministrator};
   SessionIdentity session_identity;
+  bool management_authority_valid{false};
 };
 
 using AuthClockCallback = std::function<std::int64_t()>;
@@ -76,9 +79,14 @@ class AuthService {
 
   common::Result<LoginResult> Login(LoginRequest request);
   common::Result<Principal> Verify(std::span<const unsigned char> token,
-                                   std::string_view peer_ip);
+                                   std::string_view peer_ip,
+                                   ManagementActivity activity);
   common::Result<void> Logout(std::span<const unsigned char> token,
                               std::string_view peer_ip);
+  common::Result<std::int64_t> Reauthenticate(
+      std::span<const unsigned char> token,
+      std::string_view peer_ip,
+      common::SecureBytes password);
 
  private:
   friend class AuthServiceTestAccess;
