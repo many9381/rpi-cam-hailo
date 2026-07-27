@@ -5037,7 +5037,7 @@ common::Result<void> ValidateHttpTlsConfigShape(
 }  // namespace
 
 common::Result<void> ValidateHttpTlsConfigFiles(
-    const config::HttpConfig& http_config) {
+    const config::HttpConfig& http_config, crypto::CryptoProvider& provider) {
   auto shape = ValidateHttpTlsConfigShape(http_config);
   if (!shape.ok()) {
     return shape;
@@ -5047,7 +5047,7 @@ common::Result<void> ValidateHttpTlsConfigFiles(
     return shape;
   }
 
-  auto resolved = security::ResolveTlsMaterial(http_config.tls, {});
+  auto resolved = security::ResolveTlsMaterial(http_config.tls, {}, provider);
   if (!resolved.ok()) {
     return common::Result<void>::Err(
         {"E_HTTP_TLS_CERT",
@@ -5074,9 +5074,21 @@ SelectServiceTlsMaterial(const ServiceInitArgs& args) {
         std::optional<security::ResolvedTlsMaterial>>::Ok(args.tls_material);
   }
 
+  // ServiceApp does not own a CryptoProvider and must never construct one of
+  // its own (that provider would be un-self-tested-before-boot-gated and
+  // have no established owner/lifetime). The provider main.cpp constructs
+  // and self-tests at boot must already be threaded through args.provider;
+  // if it is not, fail closed rather than silently self-provisioning.
+  if (args.provider == nullptr) {
+    return common::Result<std::optional<security::ResolvedTlsMaterial>>::Err(
+        {"E_CRYPTO_UNAVAILABLE",
+         "no cryptographic provider was supplied for TLS material "
+         "resolution"});
+  }
   auto resolved = security::ResolveTlsMaterial(
       args.app_config->http.tls,
-      args.app_config->security.state_directory);
+      args.app_config->security.state_directory,
+      *args.provider);
   if (!resolved.ok()) {
     return common::Result<
         std::optional<security::ResolvedTlsMaterial>>::Err(resolved.error());

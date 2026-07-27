@@ -92,6 +92,18 @@ target_link_libraries(camera_firmware_common_tests
 include(GoogleTest)
 gtest_discover_tests(camera_firmware_common_tests)
 
+add_executable(camera_firmware_crypto_tests
+    unit/crypto/CryptoProviderTest.cpp
+)
+
+target_link_libraries(camera_firmware_crypto_tests
+    PRIVATE
+        camera_firmware_crypto
+        GTest::gtest_main
+)
+
+gtest_discover_tests(camera_firmware_crypto_tests)
+
 add_executable(camera_firmware_config_tests
     unit/config/AppConfigTest.cpp
 )

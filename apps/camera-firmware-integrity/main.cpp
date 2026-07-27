@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/integrity/IntegrityManifest.hpp"
 #include "camera_firmware/integrity/SafeFileDigest.hpp"
 
@@ -218,12 +219,14 @@ Result<void> CreateManifest(CreateOptions options) {
   return WriteIntegrityArtifactAtomically(options.output, bytes);
 }
 
-Result<void> SignManifest(const SignOptions& options) {
+Result<void> SignManifest(const SignOptions& options,
+                          camera_firmware::crypto::CryptoProvider& provider) {
   const auto manifest = ReadIntegrityManifestForSigning(options.manifest);
   if (!manifest.ok()) {
     return Result<void>::Err(manifest.error());
   }
-  const auto signature = SignIntegrityManifest(manifest.value(), options.private_key);
+  const auto signature =
+      SignIntegrityManifest(manifest.value(), options.private_key, provider);
   if (!signature.ok()) {
     return Result<void>::Err(signature.error());
   }
@@ -262,7 +265,14 @@ int main(int argc, char** argv) {
       PrintError(options.error());
       return 2;
     }
-    const auto signed_manifest = SignManifest(options.value());
+    camera_firmware::crypto::OpenSslCryptoProvider provider;
+    auto self_test = provider.SelfTest();
+    if (!self_test.ok() || !self_test.value().passed) {
+      PrintError({"E_CRYPTO_UNAVAILABLE",
+                 "cryptographic provider self-test failed"});
+      return 1;
+    }
+    const auto signed_manifest = SignManifest(options.value(), provider);
     if (!signed_manifest.ok()) {
       PrintError(signed_manifest.error());
       return 1;

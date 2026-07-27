@@ -41,6 +41,7 @@
 #include <json/reader.h>
 #include <openssl/ssl.h>
 
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
 #include "camera_firmware/security/SystemProtectionService.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
@@ -89,6 +90,25 @@ bool ReplaceAuditAuthorizationShutdownForTesting(bool shutting_down) noexcept;
 }  // namespace camera_firmware::service::internal
 
 namespace {
+
+// A single self-tested provider shared by every in-process ServiceApp test in
+// this file (as opposed to the FirmwareProcess-based tests, which exercise
+// the real camera-firmware(-integration) binary and its own main.cpp-owned
+// provider). ServiceInitArgs::provider must be set explicitly by every test
+// that enables HTTP TLS without a pre-resolved tls_material, because
+// ServiceApp itself never constructs a CryptoProvider of its own.
+camera_firmware::crypto::CryptoProvider& TestCryptoProvider() {
+  static camera_firmware::crypto::OpenSslCryptoProvider provider;
+  static const bool initialized = [] {
+    const auto self_test = provider.SelfTest();
+    if (!self_test.ok() || !self_test.value().passed) {
+      throw std::runtime_error("crypto provider self-test failed");
+    }
+    return true;
+  }();
+  (void)initialized;
+  return provider;
+}
 
 class TemporaryDirectory {
  public:
@@ -1029,6 +1049,7 @@ int RunRuntimeSettingsPersistenceLifecycle(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.runtime_start_callback = [] {
@@ -1809,6 +1830,81 @@ TEST(FirmwareProcessSignalIntegrationTest,
   EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
+TEST(FirmwareProcessCryptoSelfTestIntegrationTest,
+     ForcedSelfTestFailureExitsNonZeroWithoutOpeningSetupService) {
+  TemporaryDirectory directory;
+  const auto state_directory = directory.path() / "security";
+  const auto config_path = directory.path() / "firmware.yaml";
+  const std::uint16_t port = ReserveLoopbackPort();
+  (void)WriteManagedFirmwareConfig(config_path, state_directory, port, port);
+
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    if (::setenv("CAMERA_FIRMWARE_FORCE_CRYPTO_SELF_TEST_FAILURE", "1", 1) !=
+        0) {
+      _exit(126);
+    }
+    ::execl(CF_CAMERA_FIRMWARE_BIN, CF_CAMERA_FIRMWARE_BIN,
+            config_path.c_str(), nullptr);
+    _exit(127);
+  }
+
+  EXPECT_FALSE(WaitForSetupService(port));
+
+  int status = 0;
+  bool exited = false;
+  const auto exit_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < exit_deadline) {
+    const pid_t waited = ::waitpid(child, &status, WNOHANG);
+    if (waited == child) {
+      exited = true;
+      break;
+    }
+    ASSERT_GE(waited, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (!exited) {
+    (void)::kill(child, SIGKILL);
+    (void)::waitpid(child, &status, 0);
+  }
+
+  ASSERT_TRUE(exited);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_NE(WEXITSTATUS(status), 0);
+}
+
+// security.enabled=false takes RunFirmware's "if (security_store) {...}"
+// branch out of play entirely, so this configuration is the one place TLS
+// material generation (SelectServiceTlsMaterial, via ServiceApp::Init) can
+// be reached without ever touching that branch. Before main.cpp threaded
+// crypto_provider into service_args.provider unconditionally, ServiceApp had
+// its own ad hoc, un-owned CryptoProvider it constructed just for this case;
+// now that ad hoc construction is gone and SelectServiceTlsMaterial fails
+// closed without an injected provider, so this configuration only starts at
+// all if main.cpp's single boot-gated provider is the one actually reaching
+// ServiceApp. If it is not threaded through, the HTTPS listener never opens
+// and this test's WaitForSetupService call times out, exactly like the
+// forced-self-test-failure test above.
+TEST(FirmwareProcessCryptoSelfTestIntegrationTest,
+     SecurityDisabledDevelopmentTlsUsesMainOwnedProvider) {
+  TemporaryDirectory directory;
+  const auto state_directory = directory.path() / "development-state";
+  const auto config_path = directory.path() / "firmware.yaml";
+  const std::uint16_t port = ReserveLoopbackPort();
+  ASSERT_TRUE(std::filesystem::create_directory(state_directory));
+  std::filesystem::permissions(
+      state_directory, std::filesystem::perms::owner_all,
+      std::filesystem::perm_options::replace);
+  (void)WriteManagedFirmwareConfig(config_path, state_directory, port, port,
+                                   /*security_enabled=*/false);
+
+  FirmwareProcess process(config_path);
+
+  ASSERT_TRUE(WaitForSetupService(port, "/api/v1/health"));
+}
+
 TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
   TemporaryDirectory directory;
   const pid_t child = ::fork();
@@ -1836,6 +1932,7 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     std::atomic<int> runtime_start_calls{0};
@@ -1913,6 +2010,7 @@ TEST(HttpsAuthIntegrationTest,
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     args.runtime_start_callback = [] {
@@ -2010,6 +2108,7 @@ TEST(HttpsAuthIntegrationTest,
         std::move(opened).value());
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     args.security_store = store;
@@ -2187,6 +2286,7 @@ void RunAdministratorUserLifecycleScenario(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.security_store = store;
@@ -2671,6 +2771,7 @@ void RunAdministratorManagementIpLifecycleScenario(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -3159,6 +3260,7 @@ void RunViewerOwnPasswordLifecycleScenario(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [&runtime_restart_calls] {
@@ -3511,6 +3613,7 @@ TEST(HttpsAuthIntegrationTest, DefaultWebRootServesProductionArtifacts) {
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     camera_firmware::service::ServiceApp service;
     auto started = service.Init(args);
     if (!started.ok()) {
@@ -3565,6 +3668,7 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
     camera_firmware::service::ServiceApp service;
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     args.camera_status_provider = [&] {
@@ -3708,6 +3812,7 @@ void RunQueuedAuthorizationShutdownScenario(
       std::make_shared<camera_firmware::service::SessionStreamRegistry>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -3900,6 +4005,7 @@ void RunNoLeaseLiveShutdownScenario(
   auto stream_state = std::make_shared<StreamState>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback = [stream_state](const std::string&) {
@@ -3994,6 +4100,7 @@ void RunConcurrentLiveShutdownBarrierScenario(
   auto stream_state = std::make_shared<StreamState>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback = [stream_state](const std::string&) {
@@ -4098,6 +4205,7 @@ void RunConcurrentShutdownDuringLiveStartPublicationScenario(
   auto stream_state = std::make_shared<StreamState>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback = [stream_state](const std::string&) {
@@ -4229,6 +4337,7 @@ void RunBlockedLiveOpenShutdownScenario(
   auto open_state = std::make_shared<OpenState>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback = [open_state](const std::string&) {
@@ -4328,6 +4437,7 @@ void RunLiveOpenStopsServiceScenario(
   camera_firmware::service::ServiceApp service;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback =
@@ -4399,6 +4509,7 @@ void RunRuntimeCallbackLeaseAllocationFailureScenario(
   camera_firmware::service::ServiceApp service;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback = [](const std::string&) {
@@ -4478,6 +4589,7 @@ void RunLiveReadStopsServiceScenario(
   camera_firmware::service::ServiceApp service;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback =
@@ -4596,6 +4708,7 @@ void RunLiveCancelStopsBeforeUnblockingReadScenario(
   camera_firmware::service::ServiceApp service;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.cancellable_live_stream_callback =
@@ -4683,6 +4796,7 @@ void RunServiceInitLiveCallbackSelectionScenario(
   std::atomic<unsigned int> cancellable_cancels{0U};
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   camera_firmware::service::LiveMp4OpenCallback legacy =
@@ -4801,6 +4915,7 @@ void RunSecurityDisabledSseShutdownScenario(
   std::atomic<unsigned int> delivered_events{0U};
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.detection_snapshot_provider = [subscription_state] {
@@ -4911,6 +5026,7 @@ TEST(HttpsAuthIntegrationTest,
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = config.http.public_base_url;
     args.detection_snapshot_provider = [] {
@@ -4976,6 +5092,7 @@ void RunDetectionSseMarkedRevokeWinsEventScenario(
   std::atomic_size_t provider_calls{0U};
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.stream_registry = registry;
@@ -5111,6 +5228,7 @@ void RunDetectionSseShutdownBarrierScenario(
   std::atomic<unsigned int> delivered_events{0U};
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.stream_registry = registry;
@@ -5308,6 +5426,7 @@ void RunDetectionSseStopsServiceScenario(
   };
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.detection_snapshot_provider = [&, reentry_point] {
@@ -5407,6 +5526,7 @@ void RunDetectionSseMergeFailureScenario(
   camera_firmware::ai::DetectionBus detection_bus;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.detection_snapshot_provider = [callback_state] {
@@ -5552,6 +5672,7 @@ void RunAuthenticatedLiveMp4Scenario(
   camera_firmware::service::ServiceApp* service_for_cancel = nullptr;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -5914,6 +6035,7 @@ void RunSessionExpiryRevokesBlockedLiveStreamScenario(
   auto live_state = std::make_shared<BlockingLiveState>();
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -6101,6 +6223,7 @@ void RunProtectionStartShutdownDrainScenario(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -6257,6 +6380,7 @@ void RunProtectionBusyAdmissionScenario(
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {
@@ -6393,6 +6517,7 @@ TEST(HttpsAuthIntegrationTest,
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.runtime_start_callback = [] {
@@ -6755,6 +6880,7 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
                                            std::string_view) {};
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = config.http.public_base_url;
   args.camera_status_provider = [&] {
@@ -7218,6 +7344,7 @@ TEST(HttpsAuthIntegrationTest, RuntimeSettingsAreUnavailableWithoutSecurity) {
     camera_firmware::settings::RuntimeSettingsSnapshot snapshot;
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.runtime_settings_snapshot_callback = [snapshot] { return snapshot; };
     args.runtime_settings_save_callback =
         [snapshot](std::uint64_t,
@@ -7355,6 +7482,7 @@ TEST(HttpsAuthIntegrationTest,
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     args.runtime_start_callback = [] {
@@ -7487,6 +7615,7 @@ TEST(HttpsAuthIntegrationTest,
 
     camera_firmware::service::ServiceInitArgs args;
     args.app_config = &config;
+    args.provider = &TestCryptoProvider();
     args.document_root = config.http.web_root;
     args.public_base_url = origin;
     args.runtime_start_callback = [] {
@@ -7884,6 +8013,7 @@ TEST(HttpsAuthIntegrationTest, MonitoringPollingDoesNotExtendManagementAuthority
 
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   args.document_root = config.http.web_root;
   args.public_base_url = origin;
   args.runtime_start_callback = [] {

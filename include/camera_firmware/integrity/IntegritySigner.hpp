@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "camera_firmware/common/Result.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 #include "camera_firmware/integrity/IntegrityManifest.hpp"
 
 namespace camera_firmware::integrity {
@@ -17,7 +18,8 @@ namespace camera_firmware::integrity {
 ReadIntegrityManifestForSigning(const std::filesystem::path& path);
 [[nodiscard]] common::Result<std::array<unsigned char, 64U>> SignIntegrityManifest(
     std::span<const unsigned char> bytes,
-    const std::filesystem::path& private_key_path);
+    const std::filesystem::path& private_key_path,
+    crypto::CryptoProvider& provider);
 [[nodiscard]] common::Result<void> WriteIntegrityArtifactAtomically(
     const std::filesystem::path& output, std::span<const unsigned char> bytes);
 

@@ -1,3 +1,4 @@
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/integrity/IntegrityManifest.hpp"
 #include "camera_firmware/integrity/IntegrityVerifier.hpp"
 #include "unit/integrity/IntegrityTestSupport.hpp"
@@ -271,8 +272,10 @@ TEST_F(IntegrityToolTest, SignsExactManifestBytesAndRoundTripsRuntimeVerifier) {
   EXPECT_TRUE(result.output.empty());
   EXPECT_EQ(ReadBytes(signature).size(), 64U);
   ExpectMode0600(signature);
+  camera_firmware::crypto::OpenSslCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
   const auto verified = VerifyIntegrityManifest(manifest, signature, key.PublicPem(),
-                                                firmware_, configuration_);
+                                                firmware_, configuration_, provider);
   ASSERT_TRUE(verified.ok()) << verified.error().code;
   EXPECT_TRUE(verified.value().passed);
 }

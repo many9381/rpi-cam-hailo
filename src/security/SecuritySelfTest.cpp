@@ -32,16 +32,14 @@ constexpr std::array<unsigned char, 32> kHmacSha256CaseOne{
     0x5cU, 0xa8U, 0xafU, 0xceU, 0xafU, 0x0bU, 0xf1U, 0x2bU,
     0x88U, 0x1dU, 0xc2U, 0x00U, 0xc9U, 0x83U, 0x3dU, 0xa7U,
     0x26U, 0xe9U, 0x37U, 0x6cU, 0x2eU, 0x32U, 0xcfU, 0xf7U};
-constexpr std::array<unsigned char, 32> kAes256Key{};
-constexpr std::array<unsigned char, 12> kAesGcmIv{};
-constexpr std::array<unsigned char, 16> kAesGcmPlaintext{};
-constexpr std::array<unsigned char, 16> kAesGcmCiphertext{
-    0xceU, 0xa7U, 0x40U, 0x3dU, 0x4dU, 0x60U, 0x6bU, 0x6eU,
-    0x07U, 0x4eU, 0xc5U, 0xd3U, 0xbaU, 0xf3U, 0x9dU, 0x18U};
-constexpr std::array<unsigned char, 16> kAesGcmTag{
-    0xd0U, 0xd1U, 0xc8U, 0xa7U, 0x99U, 0x99U, 0x6bU, 0xf0U,
-    0x26U, 0x5bU, 0x98U, 0xb5U, 0xd4U, 0x8aU, 0xb9U, 0x19U};
 
+// AES-256-GCM's known-answer test used to live here; it now runs inside
+// crypto::CryptoProvider::SelfTest() (see src/crypto/OpenSslCryptoProvider.cpp,
+// which carries the exact same vectors) and its "aes_256_gcm" item is folded
+// into this report by RunSecuritySelfTests below. kAes256Gcm stays in
+// CryptoOperation/CryptoSelfTestOperation purely so the existing
+// CAMERA_FIRMWARE_SECURITY_SELF_TESTING fault-injection hook can still force
+// that folded-in item to fail.
 enum class CryptoOperation { kSha256, kHmacSha256, kAes256Gcm };
 enum class SensitiveBuffer {
   kHmacKey,
@@ -50,12 +48,6 @@ enum class SensitiveBuffer {
   kAesCiphertext,
   kAesDecryptedPlaintext,
   kAesRejectedPlaintext,
-};
-
-struct CipherContextDeleter {
-  void operator()(EVP_CIPHER_CTX* context) const noexcept {
-    EVP_CIPHER_CTX_free(context);
-  }
 };
 
 struct MacContextDeleter {
@@ -217,84 +209,6 @@ bool RunHmacSha256Kat() noexcept {
   }
 }
 
-bool DecryptAesGcm(const SensitiveBytes& key,
-                   const SensitiveBytes& ciphertext,
-                   const std::array<unsigned char, 16>& tag,
-                   SensitiveBytes& plaintext) noexcept {
-  std::unique_ptr<EVP_CIPHER_CTX, CipherContextDeleter> context(
-      EVP_CIPHER_CTX_new());
-  int written = 0;
-  int final_written = 0;
-  return context != nullptr &&
-         EVP_DecryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr,
-                            nullptr) == 1 &&
-         EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
-                             static_cast<int>(kAesGcmIv.size()), nullptr) == 1 &&
-         EVP_DecryptInit_ex(context.get(), nullptr, nullptr, key.data(),
-                            kAesGcmIv.data()) == 1 &&
-         EVP_DecryptUpdate(context.get(), plaintext.data(), &written,
-                           ciphertext.data(),
-                           static_cast<int>(ciphertext.size())) == 1 &&
-         static_cast<std::size_t>(written) == ciphertext.size() &&
-         EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_TAG,
-                             static_cast<int>(tag.size()),
-                             const_cast<unsigned char*>(tag.data())) == 1 &&
-         EVP_DecryptFinal_ex(context.get(), plaintext.data() + written,
-                             &final_written) == 1 &&
-         final_written == 0;
-}
-
-bool RunAes256GcmKat() noexcept {
-  try {
-    SensitiveBytes key(SensitiveBuffer::kAesKey);
-    SensitiveBytes plaintext(SensitiveBuffer::kAesPlaintext);
-    SensitiveBytes ciphertext(SensitiveBuffer::kAesCiphertext);
-    SensitiveBytes decrypted(SensitiveBuffer::kAesDecryptedPlaintext);
-    key.assign(kAes256Key.data(), kAes256Key.size());
-    plaintext.assign(kAesGcmPlaintext.data(), kAesGcmPlaintext.size());
-    ciphertext.resize(kAesGcmPlaintext.size());
-    decrypted.resize(kAesGcmPlaintext.size());
-    std::array<unsigned char, 16> tag{};
-    std::unique_ptr<EVP_CIPHER_CTX, CipherContextDeleter> context(
-        EVP_CIPHER_CTX_new());
-    int written = 0;
-    int final_written = 0;
-    if (context == nullptr ||
-        ShouldInjectFailure(CryptoOperation::kAes256Gcm) ||
-        EVP_EncryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr,
-                           nullptr) != 1 ||
-        EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
-                            static_cast<int>(kAesGcmIv.size()), nullptr) != 1 ||
-        EVP_EncryptInit_ex(context.get(), nullptr, nullptr, key.data(),
-                           kAesGcmIv.data()) != 1 ||
-        EVP_EncryptUpdate(context.get(), ciphertext.data(), &written,
-                          plaintext.data(),
-                          static_cast<int>(plaintext.size())) != 1 ||
-        static_cast<std::size_t>(written) != plaintext.size() ||
-        EVP_EncryptFinal_ex(context.get(), ciphertext.data() + written,
-                            &final_written) != 1 ||
-        final_written != 0 ||
-        EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_GET_TAG,
-                            static_cast<int>(tag.size()), tag.data()) != 1 ||
-        CRYPTO_memcmp(ciphertext.data(), kAesGcmCiphertext.data(),
-                      ciphertext.size()) != 0 ||
-        CRYPTO_memcmp(tag.data(), kAesGcmTag.data(), tag.size()) != 0 ||
-        !DecryptAesGcm(key, ciphertext, tag, decrypted) ||
-        CRYPTO_memcmp(decrypted.data(), plaintext.data(), plaintext.size()) !=
-            0) {
-      return false;
-    }
-
-    tag.front() ^= 0x01U;
-    SensitiveBytes rejected_plaintext(
-        SensitiveBuffer::kAesRejectedPlaintext);
-    rejected_plaintext.resize(kAesGcmPlaintext.size());
-    return !DecryptAesGcm(key, ciphertext, tag, rejected_plaintext);
-  } catch (...) {
-    return false;
-  }
-}
-
 bool RunDependency(const std::function<common::Result<void>()>& dependency) {
   try {
     return dependency && dependency().ok();
@@ -309,7 +223,7 @@ common::Result<SelfTestReport> RunSecuritySelfTests(
     const SecuritySelfTestDependencies& dependencies) {
   try {
     SelfTestReport report;
-    report.items.reserve(6U);
+    report.items.reserve(9U);
     const auto append = [&report](std::string id, bool passed,
                                   std::string failure_code) {
       report.items.push_back(
@@ -317,8 +231,6 @@ common::Result<SelfTestReport> RunSecuritySelfTests(
     };
     append("crypto.sha256", RunSha256Kat(), "E_SELF_TEST_SHA256");
     append("crypto.hmac_sha256", RunHmacSha256Kat(), "E_SELF_TEST_HMAC_SHA256");
-    append("crypto.aes_256_gcm", RunAes256GcmKat(),
-           "E_SELF_TEST_AES_256_GCM");
     append("security.database", RunDependency(dependencies.database_check),
            "E_SELF_TEST_DATABASE");
     append("security.tls_identity",
@@ -326,6 +238,32 @@ common::Result<SelfTestReport> RunSecuritySelfTests(
            "E_SELF_TEST_TLS_IDENTITY");
     append("security.audit_append", RunDependency(dependencies.audit_append_check),
            "E_SELF_TEST_AUDIT_APPEND");
+
+    // The AES-256-GCM known-answer test moved into crypto::CryptoProvider
+    // (Task 1). Hand off to it here instead of shrinking the report if it is
+    // missing: a null or failing provider must fail the self-test, not
+    // silently produce a smaller passing one.
+    if (dependencies.provider == nullptr) {
+      append("crypto_provider", false, "E_CRYPTO_UNAVAILABLE");
+    } else {
+      auto provider_report = dependencies.provider->SelfTest();
+      if (!provider_report.ok()) {
+        append("crypto_provider", false, provider_report.error().code);
+      } else {
+        for (const auto& item : provider_report.value().items) {
+          bool passed = item.passed;
+          std::string code = item.code;
+          if (item.id == "aes_256_gcm" &&
+              ShouldInjectFailure(CryptoOperation::kAes256Gcm)) {
+            passed = false;
+            code = "E_SELF_TEST_AES_256_GCM";
+          }
+          report.items.push_back(
+              {item.id, passed, passed ? "OK" : std::move(code)});
+        }
+      }
+    }
+
     report.passed = true;
     for (const auto& item : report.items) {
       report.passed = report.passed && item.passed;

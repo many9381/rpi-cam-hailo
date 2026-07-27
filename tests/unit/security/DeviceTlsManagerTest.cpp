@@ -33,6 +33,8 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
+
 extern "C" int __real_fstat(int descriptor, struct stat* status);
 extern "C" int __real_close(int descriptor);
 extern "C" int __real_fsync(int descriptor);
@@ -84,6 +86,24 @@ class TemporaryDirectory {
 using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using KeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
+
+// A single self-tested provider shared by every test in this file (magic
+// statics make first-use initialization thread- and fork-safe: children
+// spawned by the fork()-based tests below inherit an already-initialized
+// copy, and any child that forks before the parent has touched this
+// function initializes its own independently).
+camera_firmware::crypto::CryptoProvider& TestCryptoProvider() {
+  static camera_firmware::crypto::OpenSslCryptoProvider provider;
+  static const bool initialized = [] {
+    const auto self_test = provider.SelfTest();
+    if (!self_test.ok() || !self_test.value().passed) {
+      throw std::runtime_error("crypto provider self-test failed");
+    }
+    return true;
+  }();
+  (void)initialized;
+  return provider;
+}
 
 camera_firmware::config::HttpTlsConfig DevelopmentTls() {
   camera_firmware::config::HttpTlsConfig tls;
@@ -499,24 +519,36 @@ std::filesystem::path CreateStaleTemporaryIdentity(
   return temporary;
 }
 
+TEST(DeviceTlsManagerTest, GenerationRefusesWhenProviderNotSelfTestedWithoutLeakingProviderCode) {
+  TemporaryDirectory state;
+  camera_firmware::crypto::OpenSslCryptoProvider provider;  // deliberately not self-tested
+
+  const auto result = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path(), provider);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().code, "E_CRYPTO_UNAVAILABLE")
+      << "the provider error must be folded into a TLS error";
+}
+
 TEST(DeviceTlsManagerTest, ProductionMissingOrIncompletePairFailsClosed) {
   TemporaryDirectory state;
   auto missing = camera_firmware::security::ResolveTlsMaterial(
-      ProductionTls(), state.path());
+      ProductionTls(), state.path(), TestCryptoProvider());
   ASSERT_FALSE(missing.ok());
   EXPECT_EQ(missing.error().code, "E_HTTP_TLS_REQUIRED");
 
   auto incomplete_tls = DevelopmentTls();
   incomplete_tls.certificate_path = "/configured/certificate.pem";
   auto incomplete = camera_firmware::security::ResolveTlsMaterial(
-      incomplete_tls, state.path());
+      incomplete_tls, state.path(), TestCryptoProvider());
   ASSERT_FALSE(incomplete.ok());
   EXPECT_EQ(incomplete.error().code, "E_HTTP_TLS_REQUIRED");
 
   auto disabled_tls = ProductionTls();
   disabled_tls.enabled = false;
   auto disabled = camera_firmware::security::ResolveTlsMaterial(
-      disabled_tls, state.path());
+      disabled_tls, state.path(), TestCryptoProvider());
   ASSERT_FALSE(disabled.ok());
   EXPECT_EQ(disabled.error().code, "E_HTTP_TLS_REQUIRED");
 }
@@ -524,7 +556,7 @@ TEST(DeviceTlsManagerTest, ProductionMissingOrIncompletePairFailsClosed) {
 TEST(DeviceTlsManagerTest, GeneratesAndReusesProtectedDevelopmentIdentity) {
   TemporaryDirectory state;
   auto first = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(first.ok()) << first.error().message;
   ASSERT_TRUE(first.value().generated_for_development);
   EXPECT_EQ(FileMode(first.value().private_key_path), 0600);
@@ -536,7 +568,7 @@ TEST(DeviceTlsManagerTest, GeneratesAndReusesProtectedDevelopmentIdentity) {
   ASSERT_FALSE(fingerprint.empty());
 
   auto second = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(second.ok()) << second.error().message;
   EXPECT_TRUE(second.value().generated_for_development);
   EXPECT_EQ(CertificateFingerprint(second.value().certificate_path),
@@ -572,34 +604,34 @@ TEST(DeviceTlsManagerTest, ConstructsProcPathsBeforeMovingDescriptorOwner) {
 TEST(DeviceTlsManagerTest, ConfiguredIdentityRequiresProtectedMetadata) {
   TemporaryDirectory state;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(generated.ok()) << generated.error().message;
 
   auto configured_tls = ProductionTls();
   configured_tls.certificate_path = LiveCertificate(state).string();
   configured_tls.private_key_path = LivePrivateKey(state).string();
   auto configured = camera_firmware::security::ResolveTlsMaterial(
-      configured_tls, {});
+      configured_tls, {}, TestCryptoProvider());
   ASSERT_TRUE(configured.ok()) << configured.error().message;
   EXPECT_FALSE(configured.value().generated_for_development);
 
   ASSERT_EQ(::chmod(LivePrivateKey(state).c_str(), 0400), 0);
   auto narrow_key_mode = camera_firmware::security::ResolveTlsMaterial(
-      configured_tls, {});
+      configured_tls, {}, TestCryptoProvider());
   ASSERT_FALSE(narrow_key_mode.ok());
   EXPECT_EQ(narrow_key_mode.error().code, "E_HTTP_TLS_IDENTITY");
   ASSERT_EQ(::chmod(LivePrivateKey(state).c_str(), 0600), 0);
 
   ASSERT_EQ(::chmod(LiveCertificate(state).c_str(), 0664), 0);
   auto broad_certificate_mode = camera_firmware::security::ResolveTlsMaterial(
-      configured_tls, {});
+      configured_tls, {}, TestCryptoProvider());
   ASSERT_FALSE(broad_certificate_mode.ok());
   EXPECT_EQ(broad_certificate_mode.error().code, "E_HTTP_TLS_IDENTITY");
   ASSERT_EQ(::chmod(LiveCertificate(state).c_str(), 0644), 0);
 
   spoofed_owner_inode = FileStatus(LivePrivateKey(state)).st_ino;
   auto wrong_owner = camera_firmware::security::ResolveTlsMaterial(
-      configured_tls, {});
+      configured_tls, {}, TestCryptoProvider());
   spoofed_owner_inode.reset();
   ASSERT_FALSE(wrong_owner.ok());
   EXPECT_EQ(wrong_owner.error().code, "E_HTTP_TLS_IDENTITY");
@@ -609,9 +641,9 @@ TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement)
   TemporaryDirectory generated_state;
   TemporaryDirectory replacement_state;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), generated_state.path());
+      DevelopmentTls(), generated_state.path(), TestCryptoProvider());
   auto replacement = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), replacement_state.path());
+      DevelopmentTls(), replacement_state.path(), TestCryptoProvider());
   ASSERT_TRUE(generated.ok()) << generated.error().message;
   ASSERT_TRUE(replacement.ok()) << replacement.error().message;
   const int certificate_descriptor =
@@ -642,7 +674,7 @@ TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement)
       (generated_state.path() / "validated-device-tls" / "private-key.pem")
           .string();
   auto configured = camera_firmware::security::ResolveTlsMaterial(
-      configured_tls, {});
+      configured_tls, {}, TestCryptoProvider());
   ASSERT_TRUE(configured.ok()) << configured.error().message;
   std::filesystem::rename(generated_state.path() / "validated-device-tls",
                           replacement_state.path() / "configured-original");
@@ -654,7 +686,7 @@ TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement)
 TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   const auto now = std::chrono::system_clock::now();
 
@@ -681,7 +713,7 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) 
 TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthIncludesExactValidityBounds) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   constexpr std::time_t kNowSeconds = 1700000000;
   const auto now = std::chrono::system_clock::from_time_t(kNowSeconds);
@@ -704,7 +736,7 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMalformedValidityTimes) 
   for (const bool malformed_not_before : {true, false}) {
     TemporaryDirectory state;
     auto material = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(material.ok()) << material.error().message;
     RewriteCertificateWithMalformedTime(material.value(), malformed_not_before,
                                         kNowSeconds);
@@ -721,9 +753,9 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) 
   TemporaryDirectory state;
   TemporaryDirectory replacement;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   auto replacement_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), replacement.path());
+      DevelopmentTls(), replacement.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   ASSERT_TRUE(replacement_material.ok()) << replacement_material.error().message;
 
@@ -735,7 +767,7 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) 
 
   TemporaryDirectory trailing_state;
   auto trailing_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), trailing_state.path());
+      DevelopmentTls(), trailing_state.path(), TestCryptoProvider());
   ASSERT_TRUE(trailing_material.ok()) << trailing_material.error().message;
   const int descriptor = ::open(LiveCertificate(trailing_state).c_str(),
                                 O_WRONLY | O_APPEND | O_CLOEXEC);
@@ -754,7 +786,7 @@ TEST(DeviceTlsManagerTest,
      CheckTlsMaterialHealthRejectsEncryptedKeyInBoundedSubprocess) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   RewritePrivateKeyAsEncrypted(material.value());
 
@@ -770,7 +802,7 @@ TEST(DeviceTlsManagerTest,
   {
     TemporaryDirectory state;
     auto material = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(material.ok()) << material.error().message;
     AppendText(material.value().private_key_path, "trailing private data");
     const auto health = camera_firmware::security::CheckTlsMaterialHealth(
@@ -782,7 +814,7 @@ TEST(DeviceTlsManagerTest,
   {
     TemporaryDirectory state;
     auto material = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(material.ok()) << material.error().message;
     AppendFileContents(LiveCertificate(state),
                        material.value().certificate_path);
@@ -795,7 +827,7 @@ TEST(DeviceTlsManagerTest,
   {
     TemporaryDirectory state;
     auto material = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(material.ok()) << material.error().message;
     AppendFileContents(LivePrivateKey(state),
                        material.value().private_key_path);
@@ -809,7 +841,7 @@ TEST(DeviceTlsManagerTest,
 TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsOversizedSnapshot) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   MakePrivateKeySnapshotOversized(material.value());
 
@@ -825,7 +857,7 @@ TEST(DeviceTlsManagerTest,
   const auto expect_cleansed = [](auto&& prepare, bool expect_success) {
     TemporaryDirectory state;
     auto material = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(material.ok()) << material.error().message;
     prepare(state, material.value());
     const std::size_t allocation_size =
@@ -852,7 +884,7 @@ TEST(DeviceTlsManagerTest,
         TemporaryDirectory replacement;
         auto replacement_material =
             camera_firmware::security::ResolveTlsMaterial(
-                DevelopmentTls(), replacement.path());
+                DevelopmentTls(), replacement.path(), TestCryptoProvider());
         ASSERT_TRUE(replacement_material.ok())
             << replacement_material.error().message;
         ReplaceFileContents(replacement_material.value().private_key_path,
@@ -871,11 +903,11 @@ TEST(DeviceTlsManagerTest,
      CheckTlsMaterialHealthCleansesTrailingPrivatePemInspectionBuffer) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   TemporaryDirectory second_state;
   auto second_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), second_state.path());
+      DevelopmentTls(), second_state.path(), TestCryptoProvider());
   ASSERT_TRUE(second_material.ok()) << second_material.error().message;
   AppendFileContents(second_material.value().private_key_path,
                      material.value().private_key_path);
@@ -894,7 +926,7 @@ TEST(DeviceTlsManagerTest, InterruptedLinuxCloseIsNeverRetried) {
   TemporaryDirectory state;
   {
     auto resolved = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(resolved.ok()) << resolved.error().message;
     interrupted_close_descriptor =
         std::stoi(resolved.value().certificate_path.filename().string());
@@ -908,7 +940,7 @@ TEST(DeviceTlsManagerTest, InterruptedLinuxCloseIsNeverRetried) {
 TEST(DeviceTlsManagerTest, GeneratedIdentityUsesEcP256MatchingKeyAndDeviceSans) {
   TemporaryDirectory state;
   auto resolved = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(resolved.ok()) << resolved.error().message;
 
   auto certificate = LoadCertificate(resolved.value().certificate_path);
@@ -933,21 +965,21 @@ TEST(DeviceTlsManagerTest, GeneratedIdentityUsesEcP256MatchingKeyAndDeviceSans) 
 TEST(DeviceTlsManagerTest, RejectsGeneratedIdentityWithWrongModeOrOwner) {
   TemporaryDirectory mode_state;
   auto mode_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), mode_state.path());
+      DevelopmentTls(), mode_state.path(), TestCryptoProvider());
   ASSERT_TRUE(mode_material.ok()) << mode_material.error().message;
   ASSERT_EQ(::chmod(LivePrivateKey(mode_state).c_str(), 0640), 0);
   auto wrong_mode = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), mode_state.path());
+      DevelopmentTls(), mode_state.path(), TestCryptoProvider());
   ASSERT_FALSE(wrong_mode.ok());
   EXPECT_EQ(wrong_mode.error().code, "E_HTTP_TLS_IDENTITY");
 
   TemporaryDirectory owner_state;
   auto owner_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), owner_state.path());
+      DevelopmentTls(), owner_state.path(), TestCryptoProvider());
   ASSERT_TRUE(owner_material.ok()) << owner_material.error().message;
   spoofed_owner_inode = FileStatus(LivePrivateKey(owner_state)).st_ino;
   auto wrong_owner = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), owner_state.path());
+      DevelopmentTls(), owner_state.path(), TestCryptoProvider());
   spoofed_owner_inode.reset();
   ASSERT_FALSE(wrong_owner.ok());
   EXPECT_EQ(wrong_owner.error().code, "E_HTTP_TLS_IDENTITY");
@@ -956,31 +988,31 @@ TEST(DeviceTlsManagerTest, RejectsGeneratedIdentityWithWrongModeOrOwner) {
 TEST(DeviceTlsManagerTest, RejectsSymlinkWrongTypeAndMalformedGeneratedFiles) {
   TemporaryDirectory symlink_state;
   auto symlink_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), symlink_state.path());
+      DevelopmentTls(), symlink_state.path(), TestCryptoProvider());
   ASSERT_TRUE(symlink_material.ok()) << symlink_material.error().message;
   ASSERT_TRUE(std::filesystem::remove(LivePrivateKey(symlink_state)));
   ASSERT_EQ(::symlink(LiveCertificate(symlink_state).c_str(),
                       LivePrivateKey(symlink_state).c_str()),
             0);
   auto symlinked = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), symlink_state.path());
+      DevelopmentTls(), symlink_state.path(), TestCryptoProvider());
   ASSERT_FALSE(symlinked.ok());
   EXPECT_EQ(symlinked.error().code, "E_HTTP_TLS_IDENTITY");
 
   TemporaryDirectory type_state;
   auto type_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), type_state.path());
+      DevelopmentTls(), type_state.path(), TestCryptoProvider());
   ASSERT_TRUE(type_material.ok()) << type_material.error().message;
   ASSERT_TRUE(std::filesystem::remove(LiveCertificate(type_state)));
   ASSERT_TRUE(std::filesystem::create_directory(LiveCertificate(type_state)));
   auto wrong_type = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), type_state.path());
+      DevelopmentTls(), type_state.path(), TestCryptoProvider());
   ASSERT_FALSE(wrong_type.ok());
   EXPECT_EQ(wrong_type.error().code, "E_HTTP_TLS_IDENTITY");
 
   TemporaryDirectory malformed_state;
   auto malformed_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), malformed_state.path());
+      DevelopmentTls(), malformed_state.path(), TestCryptoProvider());
   ASSERT_TRUE(malformed_material.ok()) << malformed_material.error().message;
   const int descriptor = ::open(LiveCertificate(malformed_state).c_str(),
                                 O_WRONLY | O_TRUNC | O_CLOEXEC);
@@ -990,7 +1022,7 @@ TEST(DeviceTlsManagerTest, RejectsSymlinkWrongTypeAndMalformedGeneratedFiles) {
             static_cast<ssize_t>(malformed.size()));
   ASSERT_EQ(::close(descriptor), 0);
   auto rejected = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), malformed_state.path());
+      DevelopmentTls(), malformed_state.path(), TestCryptoProvider());
   ASSERT_FALSE(rejected.ok());
   EXPECT_EQ(rejected.error().code, "E_HTTP_TLS_IDENTITY");
   EXPECT_TRUE(TemporaryIdentityEntries(malformed_state.path()).empty());
@@ -1000,9 +1032,9 @@ TEST(DeviceTlsManagerTest, RejectsMismatchedAndExpiredGeneratedPairs) {
   TemporaryDirectory first_state;
   TemporaryDirectory second_state;
   auto first = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), first_state.path());
+      DevelopmentTls(), first_state.path(), TestCryptoProvider());
   auto second = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), second_state.path());
+      DevelopmentTls(), second_state.path(), TestCryptoProvider());
   ASSERT_TRUE(first.ok()) << first.error().message;
   ASSERT_TRUE(second.ok()) << second.error().message;
   std::filesystem::copy_file(LivePrivateKey(second_state),
@@ -1010,17 +1042,17 @@ TEST(DeviceTlsManagerTest, RejectsMismatchedAndExpiredGeneratedPairs) {
                              std::filesystem::copy_options::overwrite_existing);
   ASSERT_EQ(::chmod(LivePrivateKey(first_state).c_str(), 0600), 0);
   auto mismatched = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), first_state.path());
+      DevelopmentTls(), first_state.path(), TestCryptoProvider());
   ASSERT_FALSE(mismatched.ok());
   EXPECT_EQ(mismatched.error().code, "E_HTTP_TLS_IDENTITY");
 
   TemporaryDirectory expired_state;
   auto expired_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), expired_state.path());
+      DevelopmentTls(), expired_state.path(), TestCryptoProvider());
   ASSERT_TRUE(expired_material.ok()) << expired_material.error().message;
   RewriteCertificateAsExpired(expired_material.value());
   auto expired = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), expired_state.path());
+      DevelopmentTls(), expired_state.path(), TestCryptoProvider());
   ASSERT_FALSE(expired.ok());
   EXPECT_EQ(expired.error().code, "E_HTTP_TLS_IDENTITY");
 }
@@ -1083,7 +1115,7 @@ TEST(DeviceTlsManagerTest, RejectsAlteredGeneratedCertificateProfile) {
     SCOPED_TRACE(alteration.name);
     TemporaryDirectory state;
     auto generated = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
     ASSERT_TRUE(generated.ok()) << generated.error().message;
     RewriteGeneratedCertificate(state, alteration.alter, alteration.digest);
     if (std::string_view(alteration.name) == "not X509v3") {
@@ -1093,7 +1125,7 @@ TEST(DeviceTlsManagerTest, RejectsAlteredGeneratedCertificateProfile) {
     }
 
     auto reused = camera_firmware::security::ResolveTlsMaterial(
-        DevelopmentTls(), state.path());
+        DevelopmentTls(), state.path(), TestCryptoProvider());
 
     ASSERT_FALSE(reused.ok());
     EXPECT_EQ(reused.error().code, "E_HTTP_TLS_IDENTITY");
@@ -1110,7 +1142,7 @@ TEST(DeviceTlsManagerTest, ConcurrentGenerationPublishesOneReusableIdentity) {
     calls.push_back(std::async(std::launch::async, [&] {
       start.arrive_and_wait();
       auto result = camera_firmware::security::ResolveTlsMaterial(
-          DevelopmentTls(), state.path());
+          DevelopmentTls(), state.path(), TestCryptoProvider());
       if (!result.ok()) {
         return std::vector<unsigned char>{};
       }
@@ -1152,7 +1184,7 @@ TEST(DeviceTlsManagerTest, ForkedGeneratorsReuseOneStableIdentity) {
       ChildResult child_result;
       if (::read(start_pipe[0], &start, 1U) == 1) {
         auto resolved = camera_firmware::security::ResolveTlsMaterial(
-            DevelopmentTls(), state.path());
+            DevelopmentTls(), state.path(), TestCryptoProvider());
         if (resolved.ok()) {
           const auto fingerprint =
               CertificateFingerprint(resolved.value().certificate_path);
@@ -1200,7 +1232,7 @@ TEST(DeviceTlsManagerTest, UnsupportedAtomicRenameFailsClosedWithoutResidue) {
   fail_rename_noreplace = true;
 
   auto result = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
 
   fail_rename_noreplace = false;
   ASSERT_FALSE(result.ok());
@@ -1212,21 +1244,21 @@ TEST(DeviceTlsManagerTest, UnsupportedAtomicRenameFailsClosedWithoutResidue) {
 TEST(DeviceTlsManagerTest, RestartScavengesCompleteAndPrivateOnlyStaleTemps) {
   TemporaryDirectory source;
   auto source_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), source.path());
+      DevelopmentTls(), source.path(), TestCryptoProvider());
   ASSERT_TRUE(source_material.ok()) << source_material.error().message;
 
   TemporaryDirectory fresh_state;
   const auto complete = CreateStaleTemporaryIdentity(
       fresh_state, source, "00112233445566778899aabb", true, true);
   auto generated = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), fresh_state.path());
+      DevelopmentTls(), fresh_state.path(), TestCryptoProvider());
   ASSERT_TRUE(generated.ok()) << generated.error().message;
   EXPECT_FALSE(std::filesystem::exists(complete));
 
   const auto private_only = CreateStaleTemporaryIdentity(
       fresh_state, source, "ffeeddccbbaa998877665544", false, true);
   auto reused = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), fresh_state.path());
+      DevelopmentTls(), fresh_state.path(), TestCryptoProvider());
   ASSERT_TRUE(reused.ok()) << reused.error().message;
   EXPECT_FALSE(std::filesystem::exists(private_only));
   EXPECT_TRUE(TemporaryIdentityEntries(fresh_state.path()).empty());
@@ -1235,7 +1267,7 @@ TEST(DeviceTlsManagerTest, RestartScavengesCompleteAndPrivateOnlyStaleTemps) {
 TEST(DeviceTlsManagerTest, RetriesInterruptedStaleCleanupDirectoryAndParentSyncs) {
   TemporaryDirectory state;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(generated.ok()) << generated.error().message;
   const auto stale = CreateStaleTemporaryIdentity(
       state, state, "1234567890abcdef12345678", true, true);
@@ -1246,7 +1278,7 @@ TEST(DeviceTlsManagerTest, RetriesInterruptedStaleCleanupDirectoryAndParentSyncs
   interrupted_close_calls = 0;
   interrupt_cleanup_fsync = true;
   auto reused = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
   interrupt_cleanup_fsync = false;
 
   ASSERT_TRUE(reused.ok()) << reused.error().message;
@@ -1261,7 +1293,7 @@ TEST(DeviceTlsManagerTest, RetriesInterruptedStaleCleanupDirectoryAndParentSyncs
 TEST(DeviceTlsManagerTest, UnsafeStaleTemporaryIdentityFailsClosed) {
   TemporaryDirectory source;
   auto source_material = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), source.path());
+      DevelopmentTls(), source.path(), TestCryptoProvider());
   ASSERT_TRUE(source_material.ok()) << source_material.error().message;
 
   TemporaryDirectory state;
@@ -1274,7 +1306,7 @@ TEST(DeviceTlsManagerTest, UnsafeStaleTemporaryIdentityFailsClosed) {
             0);
 
   auto result = camera_firmware::security::ResolveTlsMaterial(
-      DevelopmentTls(), state.path());
+      DevelopmentTls(), state.path(), TestCryptoProvider());
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_HTTP_TLS_IDENTITY");
@@ -1290,7 +1322,7 @@ TEST(DeviceTlsManagerTest, PublicationFailureRemovesWrittenTemporaryIdentity) {
 
   auto generation = std::async(std::launch::async, [&] {
     return camera_firmware::security::ResolveTlsMaterial(DevelopmentTls(),
-                                                         state.path());
+                                                         state.path(), TestCryptoProvider());
   });
 
   struct pollfd notification_poll {

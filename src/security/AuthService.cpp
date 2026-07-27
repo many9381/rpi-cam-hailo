@@ -151,6 +151,16 @@ common::Result<common::SecureBytes> DefaultRandom(std::size_t output_size) {
   return common::Result<common::SecureBytes>::Ok(std::move(output));
 }
 
+// Draws from the provider's private DRBG (RandomBytesPrivate), not the
+// public one (RandomBytes), matching DefaultRandom's use of RAND_priv_bytes
+// below: session tokens and firmware-log nonces must not be downgraded to a
+// randomness pool shared with everything else in the process.
+AuthRandomCallback ProviderRandomCallback(crypto::CryptoProvider* provider) {
+  return [provider](std::size_t output_size) {
+    return provider->RandomBytesPrivate(output_size);
+  };
+}
+
 common::Result<common::SecureBytes> HashToken(
     std::span<const unsigned char> token) {
   common::SecureBytes digest;
@@ -557,7 +567,10 @@ AuthService::AuthService(
     dependencies_.now_seconds = DefaultNowSeconds;
   }
   if (!dependencies_.random_bytes) {
-    dependencies_.random_bytes = DefaultRandom;
+    dependencies_.random_bytes =
+        dependencies_.provider
+            ? ProviderRandomCallback(dependencies_.provider)
+            : AuthRandomCallback(DefaultRandom);
   }
   if (!dependencies_.verify_password) {
     dependencies_.verify_password = VerifyPassword;
@@ -579,7 +592,10 @@ AuthService::AuthService(
         };
   }
   if (!dependencies_.firmware_log_random_bytes) {
-    dependencies_.firmware_log_random_bytes = DefaultRandom;
+    dependencies_.firmware_log_random_bytes =
+        dependencies_.provider
+            ? ProviderRandomCallback(dependencies_.provider)
+            : AuthRandomCallback(DefaultRandom);
   }
   if (!login_role_validator_) {
     login_role_validator_ = [](UserRole role) {

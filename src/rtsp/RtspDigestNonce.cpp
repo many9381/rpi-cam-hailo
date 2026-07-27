@@ -352,6 +352,14 @@ std::uint64_t DefaultNowSeconds() {
   return seconds <= 0 ? 0U : static_cast<std::uint64_t>(seconds);
 }
 
+std::function<common::Result<common::SecureBytes>(std::size_t)>
+ResolveRandomBytes(crypto::CryptoProvider* provider) {
+  if (provider != nullptr) {
+    return [provider](std::size_t size) { return provider->RandomBytes(size); };
+  }
+  return RtspDigestRandomBytes;
+}
+
 }  // namespace
 
 struct RtspDigestNonceManager::Impl {
@@ -427,7 +435,7 @@ RtspDigestNonceManager::Create(std::chrono::seconds ttl,
       dependencies.now_seconds = DefaultNowSeconds;
     }
     if (!dependencies.random_bytes) {
-      dependencies.random_bytes = RtspDigestRandomBytes;
+      dependencies.random_bytes = ResolveRandomBytes(dependencies.provider);
     }
 
     auto key = dependencies.random_bytes(kNonceKeyBytes);

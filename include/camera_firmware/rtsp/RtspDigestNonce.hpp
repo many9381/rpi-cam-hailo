@@ -2,6 +2,7 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 
 #include <array>
 #include <chrono>
@@ -18,6 +19,7 @@ struct RtspDigestNonceDependencies {
   std::function<std::uint64_t()> now_seconds;
   std::function<common::Result<common::SecureBytes>(std::size_t)>
       random_bytes;
+  crypto::CryptoProvider* provider{nullptr};
 };
 
 enum class RtspDigestNonceStatus { kValid, kExpired, kInvalid };

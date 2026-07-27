@@ -1,6 +1,7 @@
 #include "IntegritySignerTestAccess.hpp"
 #include "IntegrityTestSupport.hpp"
 
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/integrity/IntegritySigner.hpp"
 
 #include <array>
@@ -65,11 +66,15 @@ TEST(IntegritySignerTest, CleansesTrailingPrivatePemInspectionBuffer) {
   ASSERT_EQ(::chmod(private_key_path.c_str(), 0600), 0);
   const std::array<unsigned char, 4U> manifest{'t', 'e', 's', 't'};
 
+  camera_firmware::crypto::OpenSslCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
   pem_remainder_cleanse_calls = 0U;
   observe_pem_remainder_cleanse = true;
   const auto signed_manifest =
       camera_firmware::integrity::SignIntegrityManifest(manifest,
-                                                        private_key_path);
+                                                        private_key_path,
+                                                        provider);
   observe_pem_remainder_cleanse = false;
 
   EXPECT_FALSE(signed_manifest.ok());

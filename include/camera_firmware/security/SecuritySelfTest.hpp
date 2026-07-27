@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "camera_firmware/common/Result.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 
 namespace camera_firmware::security {
 
@@ -24,6 +25,7 @@ struct SecuritySelfTestDependencies {
   std::function<common::Result<void>()> database_check;
   std::function<common::Result<void>()> tls_identity_check;
   std::function<common::Result<void>()> audit_append_check;
+  crypto::CryptoProvider* provider{nullptr};
 };
 
 common::Result<SelfTestReport> RunSecuritySelfTests(

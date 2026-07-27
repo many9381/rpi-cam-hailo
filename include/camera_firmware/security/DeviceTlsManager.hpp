@@ -6,6 +6,7 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 
 namespace camera_firmware::security {
 
@@ -29,7 +30,8 @@ class ResolvedTlsMaterial {
  private:
   friend common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
       const config::HttpTlsConfig&,
-      const std::filesystem::path&);
+      const std::filesystem::path&,
+      crypto::CryptoProvider&);
   friend common::Result<void> CheckTlsMaterialHealth(
       const ResolvedTlsMaterial&, std::chrono::system_clock::time_point);
   ResolvedTlsMaterial(
@@ -43,7 +45,8 @@ class ResolvedTlsMaterial {
 
 common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
     const config::HttpTlsConfig& tls,
-    const std::filesystem::path& protected_state_directory);
+    const std::filesystem::path& protected_state_directory,
+    crypto::CryptoProvider& provider);
 common::Result<void> CheckTlsMaterialHealth(
     const ResolvedTlsMaterial& material,
     std::chrono::system_clock::time_point now);

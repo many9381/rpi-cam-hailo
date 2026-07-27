@@ -12,9 +12,13 @@
 
 #include <gtest/gtest.h>
 
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
+
 namespace {
 
 using camera_firmware::common::Result;
+using camera_firmware::crypto::CryptoProvider;
+using camera_firmware::crypto::OpenSslCryptoProvider;
 using camera_firmware::security::CryptoSelfTestOperation;
 using camera_firmware::security::ResetSecuritySelfTestHooksForTest;
 using camera_firmware::security::RunSecuritySelfTests;
@@ -22,6 +26,23 @@ using camera_firmware::security::SecuritySelfTestDependencies;
 using camera_firmware::security::SecuritySelfTestSensitiveBuffer;
 using camera_firmware::security::SetSecuritySelfTestCryptoFailureForTest;
 using camera_firmware::security::SecuritySelfTestZeroizationObservationsForTest;
+
+// A single self-tested provider, shared by every test in this file. Its
+// self-test is real OpenSSL work (PBKDF2/Ed25519/AES-GCM known-answer
+// checks), so it is initialized exactly once (C++11 "magic statics" make
+// this thread-safe) rather than repeated per test.
+CryptoProvider& TestCryptoProvider() {
+  static OpenSslCryptoProvider provider;
+  static const bool initialized = [] {
+    const auto self_test = provider.SelfTest();
+    if (!self_test.ok() || !self_test.value().passed) {
+      throw std::runtime_error("crypto provider self-test failed");
+    }
+    return true;
+  }();
+  (void)initialized;
+  return provider;
+}
 
 SecuritySelfTestDependencies PassingDependencies(
     std::vector<std::string>* calls = nullptr) {
@@ -31,13 +52,19 @@ SecuritySelfTestDependencies PassingDependencies(
     }
     return Result<void>::Ok();
   };
-  return {
-      [passed] { return passed("database"); },
-      [passed] { return passed("tls"); },
-      [passed] { return passed("audit"); },
-  };
+  SecuritySelfTestDependencies dependencies;
+  dependencies.database_check = [passed] { return passed("database"); };
+  dependencies.tls_identity_check = [passed] { return passed("tls"); };
+  dependencies.audit_append_check = [passed] { return passed("audit"); };
+  dependencies.provider = &TestCryptoProvider();
+  return dependencies;
 }
 
+// Stable item order: the five checks this file still owns directly (SHA-256,
+// HMAC-SHA256, then the three dependency checks), followed by whatever
+// crypto::CryptoProvider::SelfTest() reports (pbkdf2_hmac_sha256,
+// random_bytes, random_bytes_private, ed25519, aes_256_gcm), appended in the
+// order it returns them.
 TEST(SecuritySelfTestTest, ReportsEveryCheckInThePublishedStableOrder) {
   ResetSecuritySelfTestHooksForTest();
   std::vector<std::string> calls;
@@ -46,10 +73,12 @@ TEST(SecuritySelfTestTest, ReportsEveryCheckInThePublishedStableOrder) {
 
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_TRUE(result.value().passed);
-  ASSERT_EQ(result.value().items.size(), 6U);
-  const std::array<std::string, 6> expected_ids{
-      "crypto.sha256", "crypto.hmac_sha256", "crypto.aes_256_gcm",
-      "security.database", "security.tls_identity", "security.audit_append"};
+  ASSERT_EQ(result.value().items.size(), 10U);
+  const std::array<std::string, 10> expected_ids{
+      "crypto.sha256",      "crypto.hmac_sha256",   "security.database",
+      "security.tls_identity", "security.audit_append",
+      "pbkdf2_hmac_sha256", "random_bytes",         "random_bytes_private",
+      "ed25519",            "aes_256_gcm"};
   for (std::size_t index = 0; index < expected_ids.size(); ++index) {
     EXPECT_EQ(result.value().items[index].id, expected_ids[index]);
     EXPECT_TRUE(result.value().items[index].passed);
@@ -58,11 +87,59 @@ TEST(SecuritySelfTestTest, ReportsEveryCheckInThePublishedStableOrder) {
   EXPECT_EQ(calls, (std::vector<std::string>{"database", "tls", "audit"}));
 }
 
+TEST(SecuritySelfTestTest, ReportIncludesProviderItemsExactlyOnce) {
+  OpenSslCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  SecuritySelfTestDependencies dependencies;
+  dependencies.provider = &provider;
+  dependencies.database_check = [] { return Result<void>::Ok(); };
+  dependencies.tls_identity_check = [] { return Result<void>::Ok(); };
+  dependencies.audit_append_check = [] { return Result<void>::Ok(); };
+
+  const auto report = RunSecuritySelfTests(dependencies);
+  ASSERT_TRUE(report.ok()) << report.error().message;
+  EXPECT_TRUE(report.value().passed);
+
+  const auto count_id = [&report](std::string_view id) {
+    return std::count_if(report.value().items.begin(),
+                         report.value().items.end(),
+                         [id](const auto& item) { return item.id == id; });
+  };
+  EXPECT_EQ(count_id("aes_256_gcm"), 1);
+  EXPECT_EQ(count_id("pbkdf2_hmac_sha256"), 1);
+  EXPECT_EQ(count_id("ed25519"), 1);
+  EXPECT_EQ(count_id("random_bytes"), 1);
+  EXPECT_EQ(count_id("random_bytes_private"), 1);
+  EXPECT_GE(count_id("crypto.sha256"), 1);
+  EXPECT_GE(count_id("crypto.hmac_sha256"), 1);
+}
+
+TEST(SecuritySelfTestTest, MissingProviderFailsRatherThanShrinkingTheReport) {
+  ResetSecuritySelfTestHooksForTest();
+  std::vector<std::string> calls;
+
+  auto dependencies = PassingDependencies(&calls);
+  dependencies.provider = nullptr;
+  const auto result = RunSecuritySelfTests(dependencies);
+
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_FALSE(result.value().passed);
+  ASSERT_EQ(result.value().items.size(), 6U);
+  EXPECT_EQ(result.value().items[5].id, "crypto_provider");
+  EXPECT_FALSE(result.value().items[5].passed);
+  EXPECT_EQ(result.value().items[5].code, "E_CRYPTO_UNAVAILABLE");
+  for (std::size_t index = 0; index < 5U; ++index) {
+    EXPECT_TRUE(result.value().items[index].passed) << index;
+  }
+  EXPECT_EQ(calls, (std::vector<std::string>{"database", "tls", "audit"}));
+}
+
 TEST(SecuritySelfTestTest, ContinuesAfterEachInjectedCryptoFailure) {
   const std::array<std::pair<CryptoSelfTestOperation, std::size_t>, 3>
       operations{{{CryptoSelfTestOperation::kSha256, 0U},
                   {CryptoSelfTestOperation::kHmacSha256, 1U},
-                  {CryptoSelfTestOperation::kAes256Gcm, 2U}}};
+                  {CryptoSelfTestOperation::kAes256Gcm, 9U}}};
 
   for (const auto [operation, failed_index] : operations) {
     ResetSecuritySelfTestHooksForTest();
@@ -72,7 +149,7 @@ TEST(SecuritySelfTestTest, ContinuesAfterEachInjectedCryptoFailure) {
     const auto result = RunSecuritySelfTests(PassingDependencies(&calls));
 
     ASSERT_TRUE(result.ok()) << result.error().message;
-    ASSERT_EQ(result.value().items.size(), 6U);
+    ASSERT_EQ(result.value().items.size(), 10U);
     EXPECT_FALSE(result.value().passed);
     EXPECT_FALSE(result.value().items[failed_index].passed);
     EXPECT_NE(result.value().items[failed_index].code, "OK");
@@ -105,8 +182,8 @@ TEST(SecuritySelfTestTest,
     };
     const auto result = RunSecuritySelfTests(dependencies);
     ASSERT_TRUE(result.ok()) << result.error().message;
-    EXPECT_FALSE(result.value().items[3].passed);
-    EXPECT_EQ(result.value().items[3].code, "E_SELF_TEST_DATABASE");
+    EXPECT_FALSE(result.value().items[2].passed);
+    EXPECT_EQ(result.value().items[2].code, "E_SELF_TEST_DATABASE");
     EXPECT_TRUE(tls_called);
     EXPECT_TRUE(audit_called);
   }
@@ -123,8 +200,8 @@ TEST(SecuritySelfTestTest,
     };
     const auto result = RunSecuritySelfTests(dependencies);
     ASSERT_TRUE(result.ok()) << result.error().message;
-    EXPECT_FALSE(result.value().items[4].passed);
-    EXPECT_EQ(result.value().items[4].code, "E_SELF_TEST_TLS_IDENTITY");
+    EXPECT_FALSE(result.value().items[3].passed);
+    EXPECT_EQ(result.value().items[3].code, "E_SELF_TEST_TLS_IDENTITY");
     EXPECT_TRUE(audit_called);
   }
 
@@ -133,8 +210,8 @@ TEST(SecuritySelfTestTest,
     dependencies.audit_append_check = {};
     const auto result = RunSecuritySelfTests(dependencies);
     ASSERT_TRUE(result.ok()) << result.error().message;
-    EXPECT_FALSE(result.value().items[5].passed);
-    EXPECT_EQ(result.value().items[5].code, "E_SELF_TEST_AUDIT_APPEND");
+    EXPECT_FALSE(result.value().items[4].passed);
+    EXPECT_EQ(result.value().items[4].code, "E_SELF_TEST_AUDIT_APPEND");
   }
 }
 
@@ -158,6 +235,19 @@ void ExpectZeroized(SecuritySelfTestSensitiveBuffer expected_buffer,
   EXPECT_TRUE(observation->all_zero);
 }
 
+// AES buffer zeroization (kAesKey/kAesPlaintext/kAesCiphertext/
+// kAesDecryptedPlaintext/kAesRejectedPlaintext) used to be asserted here
+// because the AES-256-GCM known-answer test ran in this file. That test, and
+// the buffers it scratched into, moved to
+// crypto::CryptoProvider::SelfTest() (src/crypto/OpenSslCryptoProvider.cpp's
+// RunAes256GcmSelfTest), which does cleanse its own ciphertext/tag/decrypted
+// scratch via common::SecureBytes. But this file's assertion did not move
+// with it: crypto::CryptoProvider is a deliberately clean leaf library (see
+// Task 1) with no CAMERA_FIRMWARE_SECURITY_SELF_TESTING-style test hook, so
+// there is no way to observe that cleansing from outside the library, here
+// or from tests/unit/crypto/CryptoProviderTest.cpp. This file now only ever
+// allocates the HMAC-SHA256 key buffer itself, so that is the only buffer
+// left to assert zeroized below.
 TEST(SecuritySelfTestTest, CleansesEverySensitiveCryptoBufferOnSuccess) {
   ResetSecuritySelfTestHooksForTest();
 
@@ -165,11 +255,6 @@ TEST(SecuritySelfTestTest, CleansesEverySensitiveCryptoBufferOnSuccess) {
 
   ASSERT_TRUE(success.ok()) << success.error().message;
   ExpectZeroized(SecuritySelfTestSensitiveBuffer::kHmacKey, 20U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesKey, 32U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesPlaintext, 16U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesCiphertext, 16U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesDecryptedPlaintext, 16U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesRejectedPlaintext, 16U);
 }
 
 TEST(SecuritySelfTestTest,
@@ -182,23 +267,16 @@ TEST(SecuritySelfTestTest,
   EXPECT_FALSE(hmac_failure.value().items[1].passed);
   ExpectZeroized(SecuritySelfTestSensitiveBuffer::kHmacKey, 20U);
 
+  // The injected AES failure now only overrides the folded-in provider item
+  // (see RunSecuritySelfTests); it does not run any local AES buffer code,
+  // so there is nothing of this file's own to assert zeroized here.
   ResetSecuritySelfTestHooksForTest();
   SetSecuritySelfTestCryptoFailureForTest(CryptoSelfTestOperation::kAes256Gcm);
   const auto aes_failure = RunSecuritySelfTests(PassingDependencies());
   ASSERT_TRUE(aes_failure.ok()) << aes_failure.error().message;
-  EXPECT_FALSE(aes_failure.value().items[2].passed);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesKey, 32U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesPlaintext, 16U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesCiphertext, 16U);
-  ExpectZeroized(SecuritySelfTestSensitiveBuffer::kAesDecryptedPlaintext, 16U);
-  const auto observations =
-      SecuritySelfTestZeroizationObservationsForTest();
-  EXPECT_EQ(std::count_if(
-                observations.begin(), observations.end(), [](const auto& item) {
-                  return item.buffer == SecuritySelfTestSensitiveBuffer::
-                                            kAesRejectedPlaintext;
-                }),
-            0U);
+  ASSERT_EQ(aes_failure.value().items.size(), 10U);
+  EXPECT_EQ(aes_failure.value().items[9].id, "aes_256_gcm");
+  EXPECT_FALSE(aes_failure.value().items[9].passed);
 }
 
 }  // namespace

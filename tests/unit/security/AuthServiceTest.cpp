@@ -31,6 +31,7 @@
 #include <gtest/gtest.h>
 
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
 #include "camera_firmware/security/SecurityTypes.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
@@ -2345,6 +2346,155 @@ TEST_F(AuthServiceTest, AuditAndHighSeverityLogContainNoSubmittedSecrets) {
                                       submitted_username));
   EXPECT_FALSE(StateDirectoryContains(temporary_.path() / "security",
                                       submitted_password));
+}
+
+// A crypto::CryptoProvider double that records which operations were
+// actually invoked. Unlike crypto::OpenSslCryptoProvider, whose output is
+// indistinguishable in shape from the inline OpenSSL fallback, this fake
+// lets a test prove the provider branch specifically ran (as opposed to the
+// callback or the inline path producing an equally well-shaped result).
+class FakeCryptoProvider : public crypto::CryptoProvider {
+ public:
+  [[nodiscard]] common::Result<crypto::SelfTestReport> SelfTest() override {
+    status_ = crypto::ProviderStatus::kOperational;
+    crypto::SelfTestReport report;
+    report.passed = true;
+    return common::Result<crypto::SelfTestReport>::Ok(std::move(report));
+  }
+
+  [[nodiscard]] crypto::ProviderStatus Status() const noexcept override {
+    return status_;
+  }
+
+  [[nodiscard]] common::Result<common::SecureBytes> RandomBytes(
+      std::size_t output_size) override {
+    random_bytes_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0x5cU));
+  }
+
+  [[nodiscard]] common::Result<common::SecureBytes> RandomBytesPrivate(
+      std::size_t output_size) override {
+    random_bytes_private_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0x5eU));
+  }
+
+  [[nodiscard]] common::Result<common::SecureBytes> DeriveKeyPbkdf2(
+      const common::SecureBytes&,
+      std::span<const unsigned char>,
+      std::uint32_t,
+      std::size_t output_size) override {
+    derive_key_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0xa3U));
+  }
+
+  [[nodiscard]] common::Result<
+      std::array<unsigned char, crypto::kEd25519SignatureBytes>>
+  SignEd25519(std::span<const unsigned char>,
+              std::span<const unsigned char>) override {
+    return common::Result<
+        std::array<unsigned char, crypto::kEd25519SignatureBytes>>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<bool> VerifyEd25519(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>) override {
+    return common::Result<bool>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<void> SealAesGcm(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<unsigned char>,
+      std::span<unsigned char>) override {
+    return common::Result<void>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<void> OpenAesGcm(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<unsigned char>) override {
+    return common::Result<void>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  bool random_bytes_called{false};
+  bool random_bytes_private_called{false};
+  bool derive_key_called{false};
+
+ private:
+  crypto::ProviderStatus status_{crypto::ProviderStatus::kUninitialized};
+};
+
+// Session tokens must come from the private DRBG (RandomBytesPrivate), not
+// the public one (RandomBytes) — see AuthService.cpp's ProviderRandomCallback
+// and its use of RAND_priv_bytes in DefaultRandom. Proves the wiring reaches
+// the provider at all (empty random_bytes falls back to it) *and* reaches
+// the correct operation on it, rather than merely producing a well-shaped
+// result via the wrong DRBG.
+TEST_F(AuthServiceTest, EmptyRandomBytesFallsBackToInjectedProviderPrivateDrbg) {
+  FakeCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  AuthServiceDependencies dependencies;
+  dependencies.now_seconds = [this] { return now_seconds_; };
+  dependencies.verify_password =
+      [](const SecureBytes&, const PasswordRecord&) {
+        return common::Result<bool>::Ok(true);
+      };
+  dependencies.provider = &provider;  // random_bytes left empty
+
+  auto service =
+      AuthServiceTestAccess::Create(*store_, std::move(dependencies));
+  EXPECT_TRUE(service->Login(Login()).ok());
+  EXPECT_TRUE(provider.random_bytes_private_called);
+  EXPECT_FALSE(provider.random_bytes_called);
+}
+
+TEST_F(AuthServiceTest, SuppliedRandomBytesCallbackStillWinsOverProvider) {
+  crypto::OpenSslCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  bool callback_ran = false;
+  AuthServiceDependencies dependencies;
+  dependencies.now_seconds = [this] { return now_seconds_; };
+  dependencies.verify_password =
+      [](const SecureBytes&, const PasswordRecord&) {
+        return common::Result<bool>::Ok(true);
+      };
+  dependencies.provider = &provider;
+  dependencies.random_bytes = [&callback_ran](std::size_t size) {
+    callback_ran = true;
+    return common::Result<SecureBytes>::Ok(FilledBytes(size, 0x77U));
+  };
+
+  auto service =
+      AuthServiceTestAccess::Create(*store_, std::move(dependencies));
+  EXPECT_TRUE(service->Login(Login()).ok());
+  EXPECT_TRUE(callback_ran);
 }
 
 }  // namespace
