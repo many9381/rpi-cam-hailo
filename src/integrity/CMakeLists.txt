@@ -14,6 +14,7 @@ function(camera_firmware_configure_integrity_target target)
     target_link_libraries(${target}
         PUBLIC
             camera_firmware_common
+            camera_firmware_crypto
             yaml-cpp::yaml-cpp
         PRIVATE
             OpenSSL::Crypto

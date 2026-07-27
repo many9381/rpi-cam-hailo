@@ -21,6 +21,7 @@
 #include "camera_firmware/ai/AiTypes.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 #include "camera_firmware/security/AuthService.hpp"
 #include "camera_firmware/security/BootstrapService.hpp"
 #include "camera_firmware/security/DeviceTlsManager.hpp"
@@ -156,6 +157,11 @@ struct ServiceListenerConfig {
 
 struct ServiceInitArgs {
   const config::AppConfig* app_config{nullptr};
+  // Owned by the caller (main.cpp constructs and self-tests exactly one,
+  // before opening the security store, and it outlives this ServiceApp).
+  // ServiceApp must never construct its own CryptoProvider: see
+  // SelectServiceTlsMaterial, which fails closed rather than doing so.
+  crypto::CryptoProvider* provider{nullptr};
   std::string bind_address{"0.0.0.0"};
   std::uint16_t port{8080};
   std::string document_root{"web/dist"};
@@ -219,7 +225,7 @@ ServiceListenerConfig BuildServiceListenerConfig(
     const config::HttpConfig& http_config,
     const security::ResolvedTlsMaterial& tls_material);
 common::Result<void> ValidateHttpTlsConfigFiles(
-    const config::HttpConfig& http_config);
+    const config::HttpConfig& http_config, crypto::CryptoProvider& provider);
 drogon::HttpResponsePtr BuildSnapshotResponse(
     const SnapshotCallback& snapshot_callback,
     const std::string& camera_id);

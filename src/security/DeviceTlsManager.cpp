@@ -992,18 +992,16 @@ std::string SubjectAlternativeNames() {
 }
 
 common::Result<std::pair<std::vector<unsigned char>, common::SecureBytes>>
-GeneratePemIdentity() {
+GeneratePemIdentity(crypto::CryptoProvider& provider) {
   KeyPtr private_key(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256"),
                      EVP_PKEY_free);
   X509Ptr certificate(X509_new(), X509_free);
-  common::SecureBytes serial_bytes;
-  serial_bytes.resize(16U);
-  if (!private_key || !certificate ||
-      RAND_bytes(serial_bytes.data(), static_cast<int>(serial_bytes.size())) !=
-          1) {
+  auto serial_random = provider.RandomBytes(16U);
+  if (!private_key || !certificate || !serial_random.ok()) {
     return TlsError<std::pair<std::vector<unsigned char>, common::SecureBytes>>(
         "E_HTTP_TLS_GENERATE", "failed to initialize development TLS identity");
   }
+  common::SecureBytes serial_bytes = std::move(serial_random).value();
   serial_bytes.data()[0] &= 0x7fU;
   serial_bytes.data()[serial_bytes.size() - 1U] |= 0x01U;
   BnPtr serial(BN_bin2bn(serial_bytes.data(),
@@ -1133,8 +1131,9 @@ common::Result<std::string> CreateTemporaryDirectory(int state_directory) {
                                "failed to reserve temporary TLS directory");
 }
 
-common::Result<void> PublishGeneratedIdentity(int state_directory) {
-  auto generated = GeneratePemIdentity();
+common::Result<void> PublishGeneratedIdentity(int state_directory,
+                                              crypto::CryptoProvider& provider) {
+  auto generated = GeneratePemIdentity(provider);
   if (!generated.ok()) {
     return TlsError(generated.error().code, generated.error().message);
   }
@@ -1196,7 +1195,8 @@ common::Result<void> PublishGeneratedIdentity(int state_directory) {
 }
 
 common::Result<PreparedTlsMaterial> ResolveGeneratedIdentity(
-    const std::filesystem::path& state_directory) {
+    const std::filesystem::path& state_directory,
+    crypto::CryptoProvider& provider) {
   auto protected_directory = OpenProtectedStateDirectory(state_directory);
   if (!protected_directory.ok()) {
     return TlsError<PreparedTlsMaterial>(protected_directory.error().code,
@@ -1220,7 +1220,7 @@ common::Result<PreparedTlsMaterial> ResolveGeneratedIdentity(
                 &identity_status, AT_SYMLINK_NOFOLLOW) != 0) {
     if (errno == ENOENT) {
       auto published =
-          PublishGeneratedIdentity(protected_directory.value().get());
+          PublishGeneratedIdentity(protected_directory.value().get(), provider);
       if (!published.ok()) {
         return TlsError<PreparedTlsMaterial>(published.error().code,
                                              published.error().message);
@@ -1256,7 +1256,8 @@ ResolvedTlsMaterial::ResolvedTlsMaterial(
 
 common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
     const config::HttpTlsConfig& tls,
-    const std::filesystem::path& protected_state_directory) {
+    const std::filesystem::path& protected_state_directory,
+    crypto::CryptoProvider& provider) {
   try {
     const auto finalize = [](PreparedTlsMaterial prepared) {
       auto handles = std::make_shared<detail::ResolvedTlsHandles>();
@@ -1294,7 +1295,7 @@ common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
       return TlsError<ResolvedTlsMaterial>(
           "E_HTTP_TLS_REQUIRED", "configured HTTP TLS material is required");
     }
-    auto prepared = ResolveGeneratedIdentity(protected_state_directory);
+    auto prepared = ResolveGeneratedIdentity(protected_state_directory, provider);
     if (!prepared.ok()) {
       return TlsError<ResolvedTlsMaterial>(prepared.error().code,
                                            prepared.error().message);

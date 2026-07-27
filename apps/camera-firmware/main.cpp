@@ -29,6 +29,7 @@
 #include "camera_firmware/boot/FirmwareBootCoordinator.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
@@ -142,6 +143,14 @@ void SignalProtectionRuntimeStartForTesting() noexcept {
 }
 #endif
 
+#if defined(CAMERA_FIRMWARE_TEST_CRYPTO_SELF_TEST_HOOK)
+bool ForceCryptoSelfTestFailureForTesting() noexcept {
+  const char* forced =
+      std::getenv("CAMERA_FIRMWARE_FORCE_CRYPTO_SELF_TEST_FAILURE");
+  return forced != nullptr && *forced != '\0';
+}
+#endif
+
 void InstallSignalHandlers() {
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
@@ -159,6 +168,16 @@ int ValidateConfig(const std::string& config_path) {
   auto cfg = camera_firmware::config::LoadConfigFile(config_path);
   if (!cfg.ok()) {
     return PrintError(cfg.error());
+  }
+
+  // Mirrors RunFirmware's gate: no cryptographic operation (including the
+  // HTTP TLS material validation below) may run before the provider has
+  // proved itself, even on the --validate-config path.
+  camera_firmware::crypto::OpenSslCryptoProvider crypto_provider;
+  auto crypto_self_test = crypto_provider.SelfTest();
+  if (!crypto_self_test.ok() || !crypto_self_test.value().passed) {
+    return PrintError({"E_CRYPTO_UNAVAILABLE",
+                       "cryptographic provider self-test failed"});
   }
 
   auto plugin = camera_firmware::rtsp::RegisterBuildTreeSecureSrtpPluginPath(
@@ -183,7 +202,7 @@ int ValidateConfig(const std::string& config_path) {
     return PrintError(secure_files.error());
   }
   auto http_tls = camera_firmware::service::ValidateHttpTlsConfigFiles(
-      cfg.value().http);
+      cfg.value().http, crypto_provider);
   if (!http_tls.ok()) {
     return PrintError(http_tls.error());
   }
@@ -325,6 +344,25 @@ int RunFirmware(const std::string& config_path) {
     return PrintError(cfg.error());
   }
 
+  // The crypto provider must be constructed and proven (via SelfTest) before
+  // any subsystem that could perform a cryptographic operation is created —
+  // in particular before the security store is opened and before integrity
+  // verification (the boot trust root) runs. No cryptographic operation may
+  // execute against an unproven provider.
+  camera_firmware::crypto::OpenSslCryptoProvider crypto_provider;
+  auto crypto_self_test = crypto_provider.SelfTest();
+  bool crypto_self_test_failed =
+      !crypto_self_test.ok() || !crypto_self_test.value().passed;
+#if defined(CAMERA_FIRMWARE_TEST_CRYPTO_SELF_TEST_HOOK)
+  if (ForceCryptoSelfTestFailureForTesting()) {
+    crypto_self_test_failed = true;
+  }
+#endif
+  if (crypto_self_test_failed) {
+    return PrintError({"E_CRYPTO_UNAVAILABLE",
+                       "cryptographic provider self-test failed"});
+  }
+
   auto plugin = camera_firmware::rtsp::RegisterBuildTreeSecureSrtpPluginPath(
       CF_SECURE_SRTP_PLUGIN_DIR);
   if (!plugin.ok()) {
@@ -361,7 +399,8 @@ int RunFirmware(const std::string& config_path) {
             *security_store);
     if (base_config.http.tls.enabled) {
       auto resolved = camera_firmware::security::ResolveTlsMaterial(
-          base_config.http.tls, base_config.security.state_directory);
+          base_config.http.tls, base_config.security.state_directory,
+          crypto_provider);
       if (!resolved.ok()) {
         return PrintError(resolved.error());
       }
@@ -369,6 +408,7 @@ int RunFirmware(const std::string& config_path) {
     }
 
     camera_firmware::security::SecuritySelfTestDependencies self_test;
+    self_test.provider = &crypto_provider;
     self_test.database_check = [security_store] {
       return security_store->CheckHealth();
     };
@@ -407,10 +447,10 @@ int RunFirmware(const std::string& config_path) {
         [manifest_path = base_config.self_protection.manifest_path,
          signature_path = base_config.self_protection.signature_path,
          active_executable, active_config,
-         public_key_pem = IntegrityPublicKeyPem()] {
+         public_key_pem = IntegrityPublicKeyPem(), &crypto_provider] {
       return camera_firmware::integrity::VerifyIntegrityManifest(
           manifest_path, signature_path, public_key_pem,
-          active_executable, active_config);
+          active_executable, active_config, crypto_provider);
     };
     protection_dependencies.append_system_audit_record =
         [audit_log_service = audit_log_service.get()](
@@ -487,6 +527,12 @@ int RunFirmware(const std::string& config_path) {
 
   camera_firmware::service::ServiceInitArgs service_args;
   service_args.app_config = &base_config;
+  // Threaded unconditionally (not only inside `if (security_store)` below):
+  // ServiceApp can need to resolve TLS material (SelectServiceTlsMaterial)
+  // whenever HTTP TLS is enabled, regardless of whether security/the
+  // security store is enabled, and it must always be the one provider
+  // main.cpp constructed and self-tested above, never one of its own.
+  service_args.provider = &crypto_provider;
   service_args.bind_address = base_config.http.bind_ip;
   service_args.port = base_config.http.port;
   service_args.document_root = base_config.http.web_root;
@@ -549,6 +595,11 @@ int RunFirmware(const std::string& config_path) {
   if (security_store) {
     service_args.security_store = security_store;
     service_args.tls_material = tls_material;
+    service_args.auth_service_dependencies_provider = [&crypto_provider] {
+      camera_firmware::security::AuthServiceDependencies auth_dependencies;
+      auth_dependencies.provider = &crypto_provider;
+      return auth_dependencies;
+    };
     service_args.protection_snapshot_callback = [system_protection_ptr =
                                                      system_protection.get()] {
       return system_protection_ptr->Snapshot();

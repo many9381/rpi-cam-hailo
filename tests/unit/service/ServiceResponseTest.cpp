@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "camera_firmware/ai/AiTypes.hpp"
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/service/SessionStreamRegistry.hpp"
 
 namespace camera_firmware::service::internal {
@@ -58,6 +59,22 @@ void InstallDefaultProtectionRuntimeAllowedCallback(
 }
 
 namespace {
+
+// A single self-tested provider shared by every test in this file that
+// resolves TLS material directly (rather than through ServiceApp's own
+// internal provider construction).
+camera_firmware::crypto::CryptoProvider& TestCryptoProvider() {
+  static camera_firmware::crypto::OpenSslCryptoProvider provider;
+  static const bool initialized = [] {
+    const auto self_test = provider.SelfTest();
+    if (!self_test.ok() || !self_test.value().passed) {
+      throw std::runtime_error("crypto provider self-test failed");
+    }
+    return true;
+  }();
+  (void)initialized;
+  return provider;
+}
 
 template <typename T>
 concept HasCompletedAuthServiceInjection = requires(T value) {
@@ -1070,7 +1087,7 @@ TEST(ServiceResponseTest, TlsListenerConfigUsesResolvedMaterial) {
   struct stat validated_certificate {};
   {
     auto resolved = camera_firmware::security::ResolveTlsMaterial(
-        config.http.tls, state.path());
+        config.http.tls, state.path(), TestCryptoProvider());
     ASSERT_TRUE(resolved.ok()) << resolved.error().message;
     listener = camera_firmware::service::BuildServiceListenerConfig(
         config.http, resolved.value());
@@ -1107,7 +1124,7 @@ TEST(ServiceResponseTest,
   development_tls.enabled = true;
   development_tls.allow_development_self_signed_tls = true;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
-      development_tls, state.path());
+      development_tls, state.path(), TestCryptoProvider());
   ASSERT_TRUE(generated.ok()) << generated.error().message;
 
   camera_firmware::config::AppConfig config;
@@ -1118,7 +1135,7 @@ TEST(ServiceResponseTest,
   config.http.tls.private_key_path =
       (state.path() / "device-tls" / "private-key.pem").string();
   auto pinned = camera_firmware::security::ResolveTlsMaterial(
-      config.http.tls, state.path());
+      config.http.tls, state.path(), TestCryptoProvider());
   ASSERT_TRUE(pinned.ok()) << pinned.error().message;
   struct stat pinned_certificate {};
   ASSERT_EQ(::stat(pinned.value().certificate_path.c_str(),
@@ -1144,6 +1161,24 @@ TEST(ServiceResponseTest,
   EXPECT_TRUE(std::filesystem::exists(selected.value()->private_key_path));
 }
 
+// SelectServiceTlsMaterial must never construct its own CryptoProvider (see
+// its comment): if args.provider is unset, it must fail closed rather than
+// silently self-provisioning one.
+TEST(ServiceResponseTest, SelectServiceTlsMaterialFailsClosedWithoutInjectedProvider) {
+  camera_firmware::config::AppConfig config;
+  config.http.enabled = true;
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;  // provider deliberately left unset
+
+  const auto selected =
+      camera_firmware::service::internal::SelectServiceTlsMaterial(args);
+
+  ASSERT_FALSE(selected.ok());
+  EXPECT_EQ(selected.error().code, "E_CRYPTO_UNAVAILABLE");
+}
+
 TEST(ServiceResponseTest, HttpTlsValidationPermitsMissingExplicitDevelopmentPair) {
   camera_firmware::config::HttpConfig http;
   http.enabled = true;
@@ -1151,7 +1186,7 @@ TEST(ServiceResponseTest, HttpTlsValidationPermitsMissingExplicitDevelopmentPair
   http.tls.allow_development_self_signed_tls = true;
 
   const auto validated =
-      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http, TestCryptoProvider());
 
   ASSERT_TRUE(validated.ok()) << validated.error().message;
 }
@@ -1162,7 +1197,7 @@ TEST(ServiceResponseTest, HttpTlsValidationRejectsMissingProductionPair) {
   http.tls.enabled = true;
 
   const auto validated =
-      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http, TestCryptoProvider());
 
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_HTTP_TLS_REQUIRED");
@@ -1176,7 +1211,7 @@ TEST(ServiceResponseTest, HttpTlsValidationRejectsIncompleteDevelopmentPair) {
   http.tls.certificate_path = "/configured/http.crt";
 
   const auto validated =
-      camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+      camera_firmware::service::ValidateHttpTlsConfigFiles(http, TestCryptoProvider());
 
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_HTTP_TLS_REQUIRED");
@@ -1228,6 +1263,7 @@ TEST(ServiceResponseTest,
   config.http.tls.allow_development_self_signed_tls = true;
   camera_firmware::service::ServiceInitArgs args;
   args.app_config = &config;
+  args.provider = &TestCryptoProvider();
   camera_firmware::service::ServiceApp service;
 
   const auto initialized = service.Init(args);
@@ -1241,7 +1277,7 @@ TEST(ServiceResponseTest, TlsDescriptorOwnerSurvivesTimeoutUntilSafeJoin) {
   camera_firmware::config::HttpTlsConfig tls;
   tls.enabled = true;
   tls.allow_development_self_signed_tls = true;
-  auto resolved = camera_firmware::security::ResolveTlsMaterial(tls, state.path());
+  auto resolved = camera_firmware::security::ResolveTlsMaterial(tls, state.path(), TestCryptoProvider());
   ASSERT_TRUE(resolved.ok()) << resolved.error().message;
   const auto certificate_path = resolved.value().certificate_path;
   const auto private_key_path = resolved.value().private_key_path;
@@ -1300,7 +1336,7 @@ TEST(ServiceResponseTest, HttpTlsValidationRejectsUnreadableOrInvalidFiles) {
   http.tls.certificate_path = cert_path.string();
   http.tls.private_key_path = key_path.string();
 
-  auto validated = camera_firmware::service::ValidateHttpTlsConfigFiles(http);
+  auto validated = camera_firmware::service::ValidateHttpTlsConfigFiles(http, TestCryptoProvider());
 
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_HTTP_TLS_CERT");

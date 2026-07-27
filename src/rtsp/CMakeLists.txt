@@ -25,6 +25,7 @@ target_link_libraries(camera_firmware_rtsp
     PUBLIC
         camera_firmware_common
         camera_firmware_config
+        camera_firmware_crypto
         camera_firmware_media
         PkgConfig::GSTREAMER
         PkgConfig::GSTREAMER_APP

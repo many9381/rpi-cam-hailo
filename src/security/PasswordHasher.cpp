@@ -139,7 +139,10 @@ common::Result<PasswordRecord> DerivePassword(
   try {
     auto random = dependencies.random_bytes
                       ? dependencies.random_bytes(kPasswordSaltBytes)
-                      : DefaultRandom(kPasswordSaltBytes);
+                      : dependencies.provider
+                            ? dependencies.provider->RandomBytes(
+                                  kPasswordSaltBytes)
+                            : DefaultRandom(kPasswordSaltBytes);
     if (!random.ok()) {
       return HasherError<PasswordRecord>("E_PASSWORD_RANDOM",
                                          "password salt generation failed");
@@ -156,8 +159,13 @@ common::Result<PasswordRecord> DerivePassword(
                        ? dependencies.derive_bytes(
                              password, salt, kPasswordKdfIterations,
                              kPasswordDerivedBytes)
-                       : DefaultDerive(password, salt, kPasswordKdfIterations,
-                                       kPasswordDerivedBytes);
+                       : dependencies.provider
+                             ? dependencies.provider->DeriveKeyPbkdf2(
+                                   password, salt, kPasswordKdfIterations,
+                                   kPasswordDerivedBytes)
+                             : DefaultDerive(password, salt,
+                                             kPasswordKdfIterations,
+                                             kPasswordDerivedBytes);
     if (!derived.ok()) {
       return HasherError<PasswordRecord>("E_PASSWORD_HASH",
                                          "password derivation failed");

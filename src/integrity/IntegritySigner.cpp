@@ -40,7 +40,6 @@ constexpr std::size_t kMaximumTemporaryAttempts = 128U;
 constexpr unsigned int kMaximumEintrRetries = 3U;
 
 using EvpPkey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
-using EvpMdContext = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
 
 class UniqueFd {
@@ -419,24 +418,35 @@ common::Result<std::vector<unsigned char>> ReadIntegrityManifestForSigning(
 
 common::Result<std::array<unsigned char, 64U>> SignIntegrityManifest(
     std::span<const unsigned char> bytes,
-    const std::filesystem::path& private_key_path) {
+    const std::filesystem::path& private_key_path,
+    crypto::CryptoProvider& provider) {
   const auto private_key = ReadEd25519PrivateKey(private_key_path);
   if (!private_key.ok()) {
     return common::Result<std::array<unsigned char, 64U>>::Err(private_key.error());
   }
-  EvpMdContext context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  std::array<unsigned char, 64U> signature{};
-  std::size_t signature_size = signature.size();
-  if (!context ||
-      EVP_DigestSignInit(context.get(), nullptr, nullptr, nullptr,
-                         private_key.value().get()) != 1 ||
-      EVP_DigestSign(context.get(), signature.data(), &signature_size, bytes.data(),
-                     bytes.size()) != 1 ||
-      signature_size != signature.size()) {
+  // The PEM decode above stays exactly as it was; only the signing operation
+  // itself moves behind the crypto provider, which takes a raw 32-byte seed
+  // rather than an EVP_PKEY. Ed25519 PEM keys (PKCS8) are wrappers around
+  // that same seed, so extracting it here is lossless. The seed is signing
+  // key material: CleanseGuard zeroizes it on every exit from this function,
+  // including error returns.
+  std::array<unsigned char, crypto::kEd25519SeedBytes> seed{};
+  const CleanseGuard seed_cleanse(seed.data(), seed.size());
+  std::size_t seed_size = seed.size();
+  if (EVP_PKEY_get_raw_private_key(private_key.value().get(), seed.data(),
+                                   &seed_size) != 1 ||
+      seed_size != seed.size()) {
     return common::Result<std::array<unsigned char, 64U>>::ErrFromStaticLifetime(
         kPrivateKeyError);
   }
-  return common::Result<std::array<unsigned char, 64U>>::Ok(signature);
+  const auto signature = provider.SignEd25519(bytes, seed);
+  // Do not propagate E_CRYPTO_UNAVAILABLE (or any other provider error): fold
+  // it into the same error this function already returned for a failed sign.
+  if (!signature.ok()) {
+    return common::Result<std::array<unsigned char, 64U>>::ErrFromStaticLifetime(
+        kPrivateKeyError);
+  }
+  return common::Result<std::array<unsigned char, 64U>>::Ok(signature.value());
 }
 
 namespace {

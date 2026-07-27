@@ -34,6 +34,7 @@ VerifyIntegrityManifestWithArtifactReadHook(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     ArtifactReadHook hook);
 
 [[nodiscard]] common::Result<IntegrityVerificationReport>
@@ -43,6 +44,7 @@ VerifyIntegrityManifestWithTestHooks(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     IntegrityVerifierTestHooks hooks);
 
 }  // namespace camera_firmware::integrity::testing

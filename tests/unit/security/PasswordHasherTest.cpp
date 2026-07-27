@@ -13,6 +13,7 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 
 namespace camera_firmware::security {
 namespace {
@@ -64,6 +65,111 @@ struct CleanseAuditLog {
       last_verified = audit.count > 0U && audit.last_verified;
     };
   }
+};
+
+// A crypto::CryptoProvider double that records which operations were
+// actually invoked. Unlike crypto::OpenSslCryptoProvider, whose output is
+// indistinguishable in shape from the inline OpenSSL fallback, this fake
+// lets a test prove the provider branch specifically ran (as opposed to the
+// callback or the inline path producing an equally well-shaped result).
+class FakeCryptoProvider : public crypto::CryptoProvider {
+ public:
+  [[nodiscard]] common::Result<crypto::SelfTestReport> SelfTest() override {
+    status_ = crypto::ProviderStatus::kOperational;
+    crypto::SelfTestReport report;
+    report.passed = true;
+    return common::Result<crypto::SelfTestReport>::Ok(std::move(report));
+  }
+
+  [[nodiscard]] crypto::ProviderStatus Status() const noexcept override {
+    return status_;
+  }
+
+  [[nodiscard]] common::Result<common::SecureBytes> RandomBytes(
+      std::size_t output_size) override {
+    random_bytes_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0x5cU));
+  }
+
+  // PasswordHasher does not use the private-DRBG operation (only
+  // AuthService's session tokens and firmware-log nonces do); this override
+  // exists solely to satisfy crypto::CryptoProvider's pure virtual interface,
+  // recording invocation the same way the other operations here do.
+  [[nodiscard]] common::Result<common::SecureBytes> RandomBytesPrivate(
+      std::size_t output_size) override {
+    random_bytes_private_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0x5eU));
+  }
+
+  [[nodiscard]] common::Result<common::SecureBytes> DeriveKeyPbkdf2(
+      const common::SecureBytes&,
+      std::span<const unsigned char>,
+      std::uint32_t,
+      std::size_t output_size) override {
+    derive_key_called = true;
+    if (status_ != crypto::ProviderStatus::kOperational) {
+      return common::Result<common::SecureBytes>::Err(
+          {"E_CRYPTO_UNAVAILABLE", "fake provider is not operational"});
+    }
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(output_size, 0xa3U));
+  }
+
+  [[nodiscard]] common::Result<
+      std::array<unsigned char, crypto::kEd25519SignatureBytes>>
+  SignEd25519(std::span<const unsigned char>,
+              std::span<const unsigned char>) override {
+    return common::Result<
+        std::array<unsigned char, crypto::kEd25519SignatureBytes>>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<bool> VerifyEd25519(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>) override {
+    return common::Result<bool>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<void> SealAesGcm(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<unsigned char>,
+      std::span<unsigned char>) override {
+    return common::Result<void>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  [[nodiscard]] common::Result<void> OpenAesGcm(
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<const unsigned char>,
+      std::span<unsigned char>) override {
+    return common::Result<void>::Err(
+        {"E_NOT_IMPLEMENTED", "unused by this test"});
+  }
+
+  bool random_bytes_called{false};
+  bool random_bytes_private_called{false};
+  bool derive_key_called{false};
+
+ private:
+  crypto::ProviderStatus status_{crypto::ProviderStatus::kUninitialized};
 };
 
 PasswordRecord RecordWithIterations(std::uint32_t iterations) {
@@ -236,6 +342,75 @@ TEST(PasswordHasherTest, RejectsEveryInvalidNonIterationRecordField) {
   record.derived.resize(kPasswordDerivedBytes - 1U);
   EXPECT_EQ(VerifyPassword(Bytes("NorthStar!9"), record).error().code,
             "E_PASSWORD_RECORD");
+}
+
+TEST(PasswordHasherTest, EmptyCallbacksFallBackToInjectedProvider) {
+  FakeCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  PasswordHasherDependencies dependencies;
+  dependencies.provider = &provider;   // callbacks left empty
+
+  auto record = DerivePassword(Bytes("NorthStar!9"), dependencies);
+  ASSERT_TRUE(record.ok()) << record.error().message;
+  EXPECT_EQ(record.value().salt.size(), kPasswordSaltBytes);
+  EXPECT_EQ(record.value().derived.size(), kPasswordDerivedBytes);
+  EXPECT_EQ(record.value().algorithm, "pbkdf2-hmac-sha256");
+  EXPECT_TRUE(provider.random_bytes_called);
+  EXPECT_TRUE(provider.derive_key_called);
+}
+
+TEST(PasswordHasherTest, SuppliedCallbackStillWinsOverProvider) {
+  crypto::OpenSslCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  bool callback_ran = false;
+  PasswordHasherDependencies dependencies;
+  dependencies.provider = &provider;
+  dependencies.random_bytes = [&callback_ran](std::size_t size) {
+    callback_ran = true;
+    common::SecureBytes value;
+    value.resize(size);
+    return common::Result<common::SecureBytes>::Ok(std::move(value));
+  };
+
+  ASSERT_TRUE(DerivePassword(Bytes("NorthStar!9"), dependencies).ok());
+  EXPECT_TRUE(callback_ran);
+}
+
+TEST(PasswordHasherTest, SuppliedDeriveCallbackStillWinsOverProvider) {
+  FakeCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  bool callback_ran = false;
+  PasswordHasherDependencies dependencies;
+  dependencies.provider = &provider;
+  dependencies.derive_bytes =
+      [&callback_ran](const common::SecureBytes&,
+                      std::span<const unsigned char>, std::uint32_t,
+                      std::size_t size) {
+        callback_ran = true;
+        return common::Result<common::SecureBytes>::Ok(
+            FilledBytes(size, 0x77U));
+      };
+
+  ASSERT_TRUE(DerivePassword(Bytes("NorthStar!9"), dependencies).ok());
+  EXPECT_TRUE(callback_ran);
+  EXPECT_FALSE(provider.derive_key_called);
+}
+
+TEST(PasswordHasherTest, EmptyDeriveCallbackFallsBackToInjectedProvider) {
+  FakeCryptoProvider provider;
+  ASSERT_TRUE(provider.SelfTest().ok());
+
+  DeterministicRandom random;
+  PasswordHasherDependencies dependencies;
+  dependencies.provider = &provider;
+  dependencies.random_bytes = random.Callback();  // derive_bytes left empty
+
+  auto record = DerivePassword(Bytes("NorthStar!9"), dependencies);
+  ASSERT_TRUE(record.ok()) << record.error().message;
+  EXPECT_TRUE(provider.derive_key_called);
 }
 
 }  // namespace

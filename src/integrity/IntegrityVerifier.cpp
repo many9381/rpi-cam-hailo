@@ -46,7 +46,6 @@ struct VerificationHooks {
 };
 
 using EvpPkey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
-using EvpMdContext = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
 
 class UniqueFd {
@@ -269,7 +268,8 @@ bool HasOnlyPemWhitespace(BIO* bio) {
 common::Result<void> VerifyEd25519Signature(
     std::span<const unsigned char> manifest,
     std::span<const unsigned char> signature,
-    std::string_view public_key_pem) {
+    std::string_view public_key_pem,
+    crypto::CryptoProvider& provider) {
   if (signature.size() != kExpectedSignatureBytes) {
     return common::Result<void>::Err(SignatureFormatError());
   }
@@ -285,13 +285,22 @@ common::Result<void> VerifyEd25519Signature(
       !EVP_PKEY_is_a(key.get(), "ED25519")) {
     return common::Result<void>::Err(PublicKeyError());
   }
-  EvpMdContext context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  if (!context ||
-      EVP_DigestVerifyInit(context.get(), nullptr, nullptr, nullptr, key.get()) != 1) {
+  // The PEM decode above stays exactly as it was; only the signature check
+  // itself moves behind the crypto provider. Ed25519 PEM keys (PKCS8/SPKI)
+  // are wrappers around the same raw bytes the provider's contract takes, so
+  // extracting them here is lossless.
+  std::array<unsigned char, crypto::kEd25519PublicKeyBytes> raw_public_key{};
+  std::size_t raw_public_key_size = raw_public_key.size();
+  if (EVP_PKEY_get_raw_public_key(key.get(), raw_public_key.data(),
+                                  &raw_public_key_size) != 1 ||
+      raw_public_key_size != raw_public_key.size()) {
     return common::Result<void>::Err(PublicKeyError());
   }
-  if (EVP_DigestVerify(context.get(), signature.data(), signature.size(), manifest.data(),
-                       manifest.size()) != 1) {
+  const auto verified = provider.VerifyEd25519(manifest, signature, raw_public_key);
+  // Do not propagate E_CRYPTO_UNAVAILABLE (or any other provider error): fold
+  // it into the same signature-invalid error a genuine mismatch returns, so
+  // callers see exactly the error set they saw before this migration.
+  if (!verified.ok() || !verified.value()) {
     return common::Result<void>::Err(SignatureInvalidError());
   }
   return common::Result<void>::Ok();
@@ -305,6 +314,7 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestImpl(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     const VerificationHooks& hooks) {
   if (!IsAbsoluteNormalizedPath(manifest_path) ||
       !IsAbsoluteNormalizedPath(signature_path)) {
@@ -325,8 +335,8 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestImpl(
   if (!signature_bytes.ok()) {
     return common::Result<IntegrityVerificationReport>::Err(signature_bytes.error());
   }
-  const auto signature = VerifyEd25519Signature(manifest_bytes.value(),
-                                                 signature_bytes.value(), public_key_pem);
+  const auto signature = VerifyEd25519Signature(
+      manifest_bytes.value(), signature_bytes.value(), public_key_pem, provider);
   if (!signature.ok()) {
     return common::Result<IntegrityVerificationReport>::Err(signature.error());
   }
@@ -377,11 +387,12 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestBoundary(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     const VerificationHooks& hooks) {
   try {
     return VerifyIntegrityManifestImpl(
         manifest_path, signature_path, public_key_pem, active_executable,
-        active_config, hooks);
+        active_config, provider, hooks);
   } catch (const std::exception&) {
     return common::Result<IntegrityVerificationReport>::ErrFromStaticLifetime(
         kResourceError);
@@ -395,10 +406,11 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifest(
     const std::filesystem::path& signature_path,
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
-    const std::filesystem::path& active_config) {
+    const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider) {
   return VerifyIntegrityManifestBoundary(manifest_path, signature_path,
                                          public_key_pem, active_executable,
-                                         active_config, {});
+                                         active_config, provider, {});
 }
 
 #if defined(CAMERA_FIRMWARE_INTEGRITY_TESTING)
@@ -412,12 +424,13 @@ VerifyIntegrityManifestWithArtifactReadHook(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     ArtifactReadHook hook) {
   VerificationHooks hooks;
   hooks.before_artifact_read = std::move(hook);
   return VerifyIntegrityManifestBoundary(
       manifest_path, signature_path, public_key_pem, active_executable,
-      active_config, hooks);
+      active_config, provider, hooks);
 }
 
 common::Result<IntegrityVerificationReport>
@@ -427,6 +440,7 @@ VerifyIntegrityManifestWithTestHooks(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
+    crypto::CryptoProvider& provider,
     IntegrityVerifierTestHooks test_hooks) {
   VerificationHooks hooks;
   hooks.before_artifact_read = std::move(test_hooks.before_artifact_read);
@@ -450,7 +464,7 @@ VerifyIntegrityManifestWithTestHooks(
   }
   return VerifyIntegrityManifestBoundary(
       manifest_path, signature_path, public_key_pem, active_executable,
-      active_config, hooks);
+      active_config, provider, hooks);
 }
 
 }  // namespace testing

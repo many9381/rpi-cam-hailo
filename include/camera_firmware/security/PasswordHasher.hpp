@@ -9,6 +9,7 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 
 namespace camera_firmware::security {
 
@@ -36,6 +37,7 @@ struct PasswordHasherDependencies {
   PasswordRandomCallback random_bytes;
   PasswordKdfCallback derive_bytes;
   PasswordScratchAuditCallback scratch_audit;
+  crypto::CryptoProvider* provider{nullptr};
 };
 
 struct PasswordRecord {

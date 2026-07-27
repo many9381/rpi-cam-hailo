@@ -22,6 +22,7 @@ target_link_libraries(camera_firmware_security
     PUBLIC
         camera_firmware_common
         camera_firmware_config
+        camera_firmware_crypto
     PRIVATE
         camera_firmware_integrity
         camera_firmware_rtsp

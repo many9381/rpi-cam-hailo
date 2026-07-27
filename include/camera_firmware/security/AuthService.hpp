@@ -10,6 +10,7 @@
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/common/SecureBytes.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
 #include "camera_firmware/security/SecurityTypes.hpp"
 
@@ -64,6 +65,7 @@ struct AuthServiceDependencies {
   AuthRandomCallback firmware_log_random_bytes;
   std::int64_t session_idle_timeout_seconds{
       kDefaultSessionIdleTimeoutSeconds};
+  crypto::CryptoProvider* provider{nullptr};
 };
 
 struct AuthServiceRuntimeHooks {
