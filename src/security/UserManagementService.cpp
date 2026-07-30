@@ -79,27 +79,6 @@ struct GCharDeleter {
   void operator()(gchar* value) const noexcept { g_free(value); }
 };
 
-common::Result<std::string> NormalizeManagementIp(std::string_view input) {
-  if (input.empty() || input.find('\0') != std::string_view::npos) {
-    return common::Result<std::string>::Err(
-        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
-  }
-  const std::string text(input);
-  std::unique_ptr<GInetAddress, InetAddressDeleter> address(
-      g_inet_address_new_from_string(text.c_str()));
-  if (!address || g_inet_address_get_is_any(address.get())) {
-    return common::Result<std::string>::Err(
-        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
-  }
-  std::unique_ptr<gchar, GCharDeleter> normalized(
-      g_inet_address_to_string(address.get()));
-  if (!normalized) {
-    return common::Result<std::string>::Err(
-        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
-  }
-  return common::Result<std::string>::Ok(normalized.get());
-}
-
 std::string ManagementIpAuditSubject(std::string_view input) {
   const auto nul = input.find('\0');
   return BoundedSubject(input.substr(0U, nul));
@@ -165,6 +144,33 @@ common::Result<bool> VerifyWithCallback(
 }
 
 }  // namespace
+
+// Deliberately not file-local: BootstrapService applies the same rule to the
+// addresses submitted through the setup wizard. A management IP is a single
+// host and nothing else — g_inet_address_new_from_string parses only a literal
+// address, so CIDR, ranges, wildcards and hostnames all fail here, and the
+// is_any check is what rejects 0.0.0.0 and ::, which parse but name every
+// interface rather than one host.
+common::Result<std::string> NormalizeManagementIp(std::string_view input) {
+  if (input.empty() || input.find('\0') != std::string_view::npos) {
+    return common::Result<std::string>::Err(
+        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
+  }
+  const std::string text(input);
+  std::unique_ptr<GInetAddress, InetAddressDeleter> address(
+      g_inet_address_new_from_string(text.c_str()));
+  if (!address || g_inet_address_get_is_any(address.get())) {
+    return common::Result<std::string>::Err(
+        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
+  }
+  std::unique_ptr<gchar, GCharDeleter> normalized(
+      g_inet_address_to_string(address.get()));
+  if (!normalized) {
+    return common::Result<std::string>::Err(
+        {"E_MANAGEMENT_IP_INVALID", "management IP address is invalid"});
+  }
+  return common::Result<std::string>::Ok(normalized.get());
+}
 
 UserManagementService::UserManagementService(
     SecurityStore& store,

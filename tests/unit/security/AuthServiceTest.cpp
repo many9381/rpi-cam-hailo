@@ -183,6 +183,28 @@ void ExecuteSql(const std::filesystem::path& database_path, const char* sql) {
   }
 }
 
+// Inserts a user row directly, bypassing the services that would normally
+// refuse to create one. Used to seed the initial account into a store that is
+// still in `default` state, and to plant the second row that would otherwise be
+// impossible there.
+void InsertUser(const std::filesystem::path& database_path,
+                std::string_view canonical_username,
+                std::string_view display_username,
+                std::string_view role) {
+  const std::string sql =
+      std::string(
+          "INSERT INTO users "
+          "(canonical_username, display_username, role, enabled, "
+          "password_algorithm, password_iterations, password_salt, "
+          "password_derived, password_changed_at_seconds, "
+          "failed_login_count, created_at_seconds) VALUES ('") +
+      std::string(canonical_username) + "', '" +
+      std::string(display_username) + "', '" + std::string(role) +
+      "', 1, 'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), "
+      "1720000000, 0, 1720000000);";
+  ExecuteSql(database_path, sql.c_str());
+}
+
 int QueryInt(const std::filesystem::path& database_path, const char* sql) {
   sqlite3* database = nullptr;
   if (::sqlite3_open_v2(database_path.c_str(), &database,
@@ -472,6 +494,31 @@ class AuthServiceTest : public ::testing::Test {
     return dependencies;
   }
 
+  // Opens a second store that is never initialized, so it stays in `default`
+  // state, and seeds it the way first boot does: one enabled viewer row and no
+  // management_ips entry at all. `initial_account_username` is what
+  // ServiceApp injects after BootstrapService mints the account; pass
+  // std::nullopt to model a service that has none.
+  std::unique_ptr<AuthService> OpenDefaultStateService(
+      std::optional<std::string> initial_account_username = "InitialAccount") {
+    default_root_ = std::make_unique<TemporaryDirectory>();
+    auto opened = SecurityStore::Open({default_root_->path() / "security"});
+    EXPECT_TRUE(opened.ok()) << opened.error().message;
+    default_store_ = std::move(opened).value();
+    EXPECT_EQ(default_store_->State().value(), DeviceState::kDefault);
+    InsertUser(default_store_->database_path(), "initialaccount",
+               "InitialAccount", "viewer");
+    auto dependencies = Dependencies();
+    dependencies.initial_account_username =
+        std::move(initial_account_username);
+    return AuthServiceTestAccess::Create(*default_store_,
+                                         std::move(dependencies));
+  }
+
+  [[nodiscard]] std::filesystem::path DefaultStateDatabasePath() const {
+    return default_store_->database_path();
+  }
+
   std::unique_ptr<AuthService> DecisionFailureService(
       bool password_matches,
       bool rollback_failure) {
@@ -535,6 +582,8 @@ class AuthServiceTest : public ::testing::Test {
   std::vector<std::string> high_severity_logs_;
   std::unique_ptr<SecurityStore> store_;
   std::unique_ptr<AuthService> service_;
+  std::unique_ptr<TemporaryDirectory> default_root_;
+  std::unique_ptr<SecurityStore> default_store_;
   std::int64_t now_seconds_{1720000100};
   int kdf_calls_{0};
   int random_calls_{0};
@@ -638,6 +687,179 @@ TEST_F(AuthServiceTest, RequiresOperationalStateAndRegisteredNormalizedPeer) {
                   ->Login(Login("Operator.One", "NorthStar!9",
                                 "2001:0db8:0:0:0:0:0:10"))
                   .ok());
+}
+
+TEST_F(AuthServiceTest, InitialAccountSignsInWhileTheDeviceIsInDefaultState) {
+  auto service = OpenDefaultStateService();
+
+  // 192.0.2.55 is not registered anywhere, and cannot be: an uninitialized
+  // device has no management_ips row until InitializeDevice writes one.
+  auto login =
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"));
+
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  EXPECT_EQ(login.value().role, UserRole::kViewer);
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM management_ips;"),
+            0);
+  auto principal = service->Verify(
+      {login.value().session_token.data(),
+       login.value().session_token.size()},
+      "192.0.2.55", ManagementActivity::kNone);
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  EXPECT_EQ(principal.value().username, "InitialAccount");
+  EXPECT_EQ(principal.value().role, UserRole::kViewer);
+  EXPECT_TRUE(service
+                  ->Logout({login.value().session_token.data(),
+                            login.value().session_token.size()},
+                           "192.0.2.55")
+                  .ok());
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'authentication_succeeded' AND detail_code = "
+                     "'authenticated_login';"),
+            1);
+}
+
+TEST_F(AuthServiceTest, DefaultStateAdmitsOnlyTheMintedInitialAccount) {
+  auto service = OpenDefaultStateService();
+  // A second row cannot reach `users` in default state through any supported
+  // path — creating one needs an authenticated administrator, and having one
+  // means the device is operational. It is planted here so this test measures
+  // the identity pin rather than the fact that `users` happens to hold exactly
+  // one row.
+  InsertUser(DefaultStateDatabasePath(), "intruder", "Intruder", "viewer");
+
+  const auto intruder =
+      service->Login(Login("Intruder", "NorthStar!9", "192.0.2.55"));
+  const auto initial =
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"));
+
+  ExpectAuthenticationFailure(intruder);
+  ASSERT_TRUE(initial.ok()) << initial.error().message;
+  // The rejected account is outside the accepted branch entirely, so it is
+  // treated like an unregistered operational peer: generic failure, no failure
+  // counter movement, no session.
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT failed_login_count FROM users WHERE "
+                     "canonical_username = 'intruder';"),
+            0);
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions s JOIN users u ON "
+                     "u.id = s.user_id WHERE u.canonical_username = "
+                     "'initialaccount';"),
+            1);
+}
+
+TEST_F(AuthServiceTest, DefaultStateLoginIsClosedWithoutAnInitialAccount) {
+  // An operational service carries no initial-account identity, so this also
+  // covers a service that reached default state without one.
+  auto service = OpenDefaultStateService(std::nullopt);
+
+  ExpectAuthenticationFailure(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55")));
+
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
+}
+
+TEST_F(AuthServiceTest, InitialAccountLockoutMatchesTheOperationalPath) {
+  auto service = OpenDefaultStateService();
+
+  for (int attempt = 1; attempt <= 4; ++attempt) {
+    ExpectAuthenticationFailure(
+        service->Login(Login("InitialAccount", "BadSecret!9", "192.0.2.55")));
+    EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                       "SELECT failed_login_count FROM users;"),
+              attempt);
+    EXPECT_TRUE(HighSeverityLogs().empty());
+  }
+
+  ExpectAuthenticationFailure(
+      service->Login(Login("InitialAccount", "BadSecret!9", "192.0.2.55")));
+
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT failed_login_count FROM users;"),
+            5);
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'authentication_limit_reached';"),
+            1);
+  ASSERT_TRUE(WaitForHighSeverityLogCount(1U));
+  EXPECT_EQ(HighSeverityLogs().front(),
+            "authentication_limit_reached|192.0.2.55");
+  ExpectAuthenticationFailure(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55")));
+  now_seconds_ += 300;
+  EXPECT_TRUE(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"))
+          .ok());
+}
+
+TEST_F(AuthServiceTest, InitialAccountSessionDiesWhenSetupCompletes) {
+  auto service = OpenDefaultStateService();
+  auto login =
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"));
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  ASSERT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            1);
+
+  // The transaction that creates the administrator also deletes the initial
+  // account and flips the device to operational.
+  ASSERT_TRUE(default_store_
+                  ->InitializeDevice(AdministratorRecord("192.0.2.55"),
+                                     [] { return common::Result<void>::Ok(); })
+                  .ok());
+
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM users WHERE canonical_username = "
+                     "'initialaccount';"),
+            0);
+  // sessions.user_id is ON DELETE CASCADE and the connection runs with
+  // PRAGMA foreign_keys = 1, so the session went with the row.
+  EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
+                     "SELECT COUNT(*) FROM sessions;"),
+            0);
+  const auto verified = service->Verify(
+      {login.value().session_token.data(),
+       login.value().session_token.size()},
+      "192.0.2.55", ManagementActivity::kNone);
+  ASSERT_FALSE(verified.ok());
+  EXPECT_EQ(verified.error().code, "E_AUTHENTICATION_FAILED");
+  // The identity injected at construction is now stale, and the device is
+  // operational: the default-state branch is closed on both counts.
+  ExpectAuthenticationFailure(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55")));
+}
+
+TEST_F(AuthServiceTest, OperationalLoginIgnoresTheInitialAccountIdentity) {
+  InsertUser(store_->database_path(), "initialaccount", "InitialAccount",
+             "viewer");
+  ExecuteSql(store_->database_path(),
+             "INSERT INTO management_ips "
+             "(normalized_ip, role_scope, enabled, created_at_seconds) "
+             "VALUES ('192.0.2.10', 'viewer', 1, 1720000000);");
+  auto dependencies = Dependencies();
+  dependencies.initial_account_username = "InitialAccount";
+  auto service =
+      AuthServiceTestAccess::Create(*store_, std::move(dependencies));
+
+  // Same account, same injected identity, but the device is operational: the
+  // registered-peer requirement still applies and is not waived.
+  ExpectAuthenticationFailure(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55")));
+
+  EXPECT_TRUE(
+      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.10"))
+          .ok());
 }
 
 TEST_F(AuthServiceTest, DisabledAccountUsesGenericFailure) {
@@ -2296,9 +2518,11 @@ TEST_F(AuthServiceTest, RollbackFailurePoisonsStoreAndDiscardsDecision) {
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT failed_login_count FROM users;"),
             0);
+  // The two rows setup left behind — the grant of the confirming peer and
+  // bootstrap_completed — and nothing from the discarded login.
   EXPECT_EQ(QueryInt(store_->database_path(),
                      "SELECT COUNT(*) FROM audit_events;"),
-            1);
+            2);
 }
 
 TEST_F(AuthServiceTest, SchemaValidationAcceptsCommittedSessionAndAuditRows) {

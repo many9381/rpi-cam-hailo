@@ -26,6 +26,7 @@
 #include "camera_firmware/rtsp/RtspDigestCredentials.hpp"
 #include "camera_firmware/rtsp/RtspDigestCrypto.hpp"
 #include "camera_firmware/security/PasswordHasher.hpp"
+#include "camera_firmware/security/PasswordPolicy.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
@@ -74,6 +75,20 @@ SecureBytes Bytes(std::string_view value) {
   return bytes;
 }
 
+std::string StringFromBytes(const SecureBytes& bytes) {
+  return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+std::vector<std::string_view> ReservedViews(
+    const std::vector<std::string>& identities) {
+  std::vector<std::string_view> views;
+  views.reserve(identities.size());
+  for (const auto& identity : identities) {
+    views.emplace_back(identity);
+  }
+  return views;
+}
+
 config::AppConfig BootstrapConfig(const std::filesystem::path& state,
                                   const std::filesystem::path& credential) {
   config::AppConfig config;
@@ -92,6 +107,15 @@ BootstrapRequest Request(std::string username,
                          std::string actual_peer) {
   return {std::move(username), Bytes(password), std::move(confirmed_peer),
           std::move(actual_peer)};
+}
+
+BootstrapRequest RequestWithIps(std::string username,
+                                std::string_view password,
+                                std::string confirmed_peer,
+                                std::string actual_peer,
+                                std::vector<std::string> management_ips) {
+  return {std::move(username), Bytes(password), std::move(confirmed_peer),
+          std::move(actual_peer), std::move(management_ips)};
 }
 
 mode_t FileMode(const std::filesystem::path& path) {
@@ -227,10 +251,15 @@ TEST(BootstrapServiceTest,
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT normalized_ip FROM management_ips;"),
             "192.0.2.10");
+  // Two rows, not one: registering the confirming peer is a grant of
+  // management access and is recorded as one, ahead of the completion record.
+  // Widened from asserting only the first row so the whole trail is pinned.
   EXPECT_EQ(QueryText(store.value()->database_path(),
-                      "SELECT event_type || '|' || outcome || '|' || peer_ip "
-                      "FROM audit_events;"),
-            "bootstrap_completed|success|192.0.2.10");
+                      "SELECT group_concat(event_type || '|' || outcome || "
+                      "'|' || peer_ip || '|' || subject_identity, ' ') "
+                      "FROM (SELECT * FROM audit_events ORDER BY sequence);"),
+            "management_ip_created|success|192.0.2.10|192.0.2.10 "
+            "bootstrap_completed|success|192.0.2.10|");
 
   auto credential_store = RtspDigestCredentialStore::Create(
       RtspDigestCredentialPolicy{config.secure_rtsp.client_auth.realm,
@@ -411,9 +440,11 @@ TEST(BootstrapServiceTest, ConcurrentInitializationHasOneWinner) {
   EXPECT_EQ(QueryText(first_store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
             "1");
+  // The winner's grant of the confirming peer plus its completion record. The
+  // point of the assertion is unchanged: the loser wrote nothing.
   EXPECT_EQ(QueryText(first_store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM audit_events;"),
-            "1");
+            "2");
   EXPECT_EQ(first_store.value()->State().value(), DeviceState::kOperational);
   EXPECT_EQ(second_store.value()->State().value(), DeviceState::kOperational);
 }
@@ -643,6 +674,438 @@ TEST(BootstrapServiceTest, ReservedIdentitiesIncludeProductAndCameraTerms) {
     EXPECT_NE(std::find(identities.begin(), identities.end(), required),
               identities.end())
         << required;
+  }
+}
+
+TEST(BootstrapServiceTest, FirstBootCreatesInitialViewerAccount) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  const auto reserved_identities = BuildReservedIdentities(config);
+  BootstrapService service(*store.value(), config, reserved_identities);
+
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT role FROM users;"),
+            "viewer");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(enabled AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT state FROM device_state;"),
+            "default");
+
+  // The generated name must satisfy the same policy a human name must, against
+  // the reserved list this very service enforces.
+  const auto reserved = ReservedViews(reserved_identities);
+  EXPECT_TRUE(
+      ValidateInitialUsername(credential.value().username, reserved).ok());
+
+  // The generated password must satisfy the product's own policy.
+  EXPECT_TRUE(ValidatePassword(credential.value().username,
+                               credential.value().password)
+                  .ok());
+
+  // The stored hash must verify against the plaintext handed back, otherwise
+  // the account the operator is shown is not the account that exists.
+  auto password_record = LoadPasswordRecord(store.value()->database_path());
+  auto verified = VerifyPassword(credential.value().password, password_record);
+  ASSERT_TRUE(verified.ok()) << verified.error().message;
+  EXPECT_TRUE(verified.value());
+}
+
+TEST(BootstrapServiceTest, InitialPasswordIsNeverPersistedInPlaintext) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  const std::string plaintext = StringFromBytes(credential.value().password);
+  EXPECT_FALSE(StateDirectoryContains(state, plaintext));
+}
+
+TEST(BootstrapServiceTest, SecondCallReplacesTheInitialAccount) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  const auto first = service.EnsureInitialAccount();
+  ASSERT_TRUE(first.ok()) << first.error().message;
+  const auto second = service.EnsureInitialAccount();
+  ASSERT_TRUE(second.ok()) << second.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_NE(StringFromBytes(first.value().password),
+            StringFromBytes(second.value().password));
+  EXPECT_NE(first.value().username, second.value().username);
+}
+
+TEST(BootstrapServiceTest, SetupDeletesTheInitialAccountAtomically) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+  ASSERT_TRUE(service.EnsureInitialAccount().ok());
+
+  auto initialized = service.Initialize(Request(
+      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT canonical_username FROM users;"),
+            "operator.one");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT state FROM device_state;"),
+            "operational");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM audit_events "
+                      "WHERE event_type = 'initial_account_deleted' "
+                      "AND outcome = 'success';"),
+            "1");
+}
+
+TEST(BootstrapServiceTest, FailedSetupLeavesTheInitialAccountUsable) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  // "short" fails the password policy, so setup must abort before any write.
+  auto rejected = service.Initialize(Request(
+      "Operator.One", "short", "192.0.2.10", "192.0.2.10"));
+  EXPECT_FALSE(rejected.ok());
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT role FROM users;"),
+            "viewer");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT state FROM device_state;"),
+            "default");
+
+  // Usable means the credential still authenticates, not merely that a row
+  // survived.
+  auto password_record = LoadPasswordRecord(store.value()->database_path());
+  auto verified = VerifyPassword(credential.value().password, password_record);
+  ASSERT_TRUE(verified.ok()) << verified.error().message;
+  EXPECT_TRUE(verified.value());
+}
+
+TEST(BootstrapServiceTest, StoreFailureDuringSetupKeepsTheInitialAccount) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  // A commit failure part way through setup must roll the deletion back too.
+  // The submitted address is here so the audit assertion below covers the
+  // grant records as well: a record of access that was never granted is as
+  // wrong as a grant that was never recorded.
+  common::Result<BootstrapResult> failed = [&] {
+    ScopedTransactionFailures failures(true, false);
+    return service.Initialize(RequestWithIps(
+        "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+        {"198.51.100.7"}));
+  }();
+
+  ASSERT_FALSE(failed.ok());
+  EXPECT_EQ(failed.error().code, "E_BOOTSTRAP_STORE");
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT role FROM users;"),
+            "viewer");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM audit_events;"),
+            "0");
+
+  auto password_record = LoadPasswordRecord(store.value()->database_path());
+  auto verified = VerifyPassword(credential.value().password, password_record);
+  ASSERT_TRUE(verified.ok()) << verified.error().message;
+  EXPECT_TRUE(verified.value());
+}
+
+TEST(BootstrapServiceTest, RegistersEverySubmittedManagementIpAtSetup) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  auto initialized = service.Initialize(RequestWithIps(
+      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+      {"198.51.100.7", "2001:0db8:0:0:0:0:0:2"}));
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  // Order is the confirming peer first, then the submitted list in the order
+  // the operator entered it. Normalization is the same one the post-setup
+  // management-IP routes apply, so 2001:0db8:... lands compressed.
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT group_concat(normalized_ip || '/' || role_scope "
+                      "|| '/' || enabled, ' ') FROM "
+                      "(SELECT * FROM management_ips ORDER BY id);"),
+            "192.0.2.10/administrator/1 198.51.100.7/administrator/1 "
+            "2001:db8::2/administrator/1");
+  EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
+}
+
+// The anti-lockout rule. If the operator's list names only addresses they do
+// not hold, registering the list alone would leave the device operational and
+// unreachable, with no password reset and no recovery short of reflashing it.
+TEST(BootstrapServiceTest, RegistersTheConfirmingPeerEvenWhenTheListOmitsIt) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  auto initialized = service.Initialize(RequestWithIps(
+      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+      {"198.51.100.7"}));
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT group_concat(normalized_ip, ' ') FROM "
+                      "(SELECT * FROM management_ips ORDER BY id);"),
+            "192.0.2.10 198.51.100.7");
+  // Registered is not enough on its own: the peer must satisfy the same lookup
+  // the request gate runs on every operational request.
+  auto reachable = store.value()->IsManagementPeer("192.0.2.10");
+  ASSERT_TRUE(reachable.ok()) << reachable.error().message;
+  EXPECT_TRUE(reachable.value());
+}
+
+TEST(BootstrapServiceTest, DeduplicatesManagementIpsIncludingTheSetupPeer) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  // The wizard shows the current peer as already registered, so an operator
+  // re-entering it is expected rather than exceptional. Both the literal repeat
+  // and the differently-spelled repeat must collapse instead of tripping
+  // management_ips_role_ip_unique and aborting the whole transaction.
+  auto initialized = service.Initialize(RequestWithIps(
+      "Operator.One", "NorthStar!9", "2001:db8::1", "2001:0db8::1",
+      {"2001:0db8:0:0:0:0:0:1", "198.51.100.7", "198.51.100.7",
+       "2001:db8::1"}));
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
+            "2");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT group_concat(normalized_ip, ' ') FROM "
+                      "(SELECT * FROM management_ips ORDER BY id);"),
+            "2001:db8::1 198.51.100.7");
+}
+
+TEST(BootstrapServiceTest, RejectsManagementIpsThatAreNotSingleHosts) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  // The browser rejects all of these with a visible reason, but the browser is
+  // a convenience. Nothing stops a caller posting the body directly.
+  const std::vector<std::string> not_single_hosts = {
+      "198.51.100.0/24", "198.51.100.*", "198.51.100.1-198.51.100.9",
+      "0.0.0.0",         "::",           "any",
+      "",                "localhost",    "198.51.100.7 ",
+  };
+  for (const auto& entry : not_single_hosts) {
+    // A valid entry first, so the failure is proven to abort the whole
+    // submission rather than to stop at the first element.
+    auto rejected = service.Initialize(RequestWithIps(
+        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+        {"198.51.100.7", entry}));
+    ASSERT_FALSE(rejected.ok()) << entry;
+    EXPECT_EQ(rejected.error().code, "E_MANAGEMENT_IP_INVALID") << entry;
+
+    // Setup stays all-or-nothing: no administrator, no management_ips row, no
+    // state change, and the initial account still standing.
+    EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault) << entry;
+    EXPECT_EQ(QueryText(store.value()->database_path(),
+                        "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
+              "0")
+        << entry;
+    EXPECT_EQ(QueryText(store.value()->database_path(),
+                        "SELECT role FROM users;"),
+              "viewer")
+        << entry;
+  }
+
+  auto password_record = LoadPasswordRecord(store.value()->database_path());
+  auto verified = VerifyPassword(credential.value().password, password_record);
+  ASSERT_TRUE(verified.ok()) << verified.error().message;
+  EXPECT_TRUE(verified.value());
+
+  // And the rejections left setup runnable rather than poisoned.
+  auto accepted = service.Initialize(RequestWithIps(
+      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+      {"198.51.100.7"}));
+  ASSERT_TRUE(accepted.ok()) << accepted.error().message;
+}
+
+TEST(BootstrapServiceTest, AuditsEveryManagementIpGrantedDuringSetup) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+  ASSERT_TRUE(service.EnsureInitialAccount().ok());
+
+  auto initialized = service.Initialize(RequestWithIps(
+      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+      {"198.51.100.7", "2001:0db8:0:0:0:0:0:2", "198.51.100.7"}));
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  // Each granted address in its own row, named in subject_identity, in the
+  // order it was granted — not a count, and not one summary row standing in
+  // for all of them. Same event type, detail code, subject type and actor
+  // columns the post-setup grant writes, so one query over the audit trail
+  // answers "which addresses were ever allowed in" for the life of the device.
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT group_concat(event_type || '|' || outcome || "
+                      "'|' || actor_identity || '|' || peer_ip || '|' || "
+                      "detail_code || '|' || subject_type || '|' || "
+                      "subject_identity, ' ') FROM (SELECT * FROM audit_events "
+                      "WHERE event_type = 'management_ip_created' "
+                      "ORDER BY sequence);"),
+            "management_ip_created|success|operator.one|192.0.2.10|created|"
+            "management_ip|192.0.2.10 "
+            "management_ip_created|success|operator.one|192.0.2.10|created|"
+            "management_ip|198.51.100.7 "
+            "management_ip_created|success|operator.one|192.0.2.10|created|"
+            "management_ip|2001:db8::2");
+
+  // No grant without a record and no record without a grant, stated as the
+  // property rather than as a row count: a duplicate that collapsed must not
+  // leave a record of an address that was never registered.
+  EXPECT_EQ(
+      QueryText(store.value()->database_path(),
+                "SELECT (SELECT COUNT(*) FROM management_ips AS ip WHERE NOT "
+                "EXISTS (SELECT 1 FROM audit_events AS event WHERE "
+                "event.event_type = 'management_ip_created' AND "
+                "event.subject_identity = ip.normalized_ip)) || '/' || "
+                "(SELECT COUNT(*) FROM audit_events AS event WHERE "
+                "event.event_type = 'management_ip_created' AND NOT EXISTS "
+                "(SELECT 1 FROM management_ips AS ip WHERE ip.normalized_ip = "
+                "event.subject_identity));"),
+      "0/0");
+
+  // bootstrap_completed stays the terminal record of the transaction, so the
+  // grants read as things setup did on its way to completing.
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT event_type FROM audit_events "
+                      "ORDER BY sequence DESC LIMIT 1;"),
+            "bootstrap_completed");
+}
+
+TEST(BootstrapServiceTest, BoundsRegisteredManagementIpsAtThePerRoleLimit) {
+  const auto addresses = [](std::size_t count) {
+    std::vector<std::string> entries;
+    entries.reserve(count);
+    for (std::size_t index = 0U; index < count; ++index) {
+      entries.push_back("198.51.100." + std::to_string(index + 1U));
+    }
+    return entries;
+  };
+
+  {
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    auto config = BootstrapConfig(state, state / "rtsp.credentials");
+    BootstrapService service(*store.value(), config,
+                             BuildReservedIdentities(config));
+
+    // 32 distinct entries plus the confirming peer is 33 administrator rows,
+    // one past what SecurityStore allows per role scope. The peer is never the
+    // one dropped to make room.
+    auto rejected = service.Initialize(RequestWithIps(
+        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+        addresses(32U)));
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, "E_MANAGEMENT_IP_LIMIT");
+    EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
+    EXPECT_EQ(QueryText(store.value()->database_path(),
+                        "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
+              "0");
+  }
+
+  {
+    TemporaryDirectory root;
+    const auto state = root.Path("security");
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    auto config = BootstrapConfig(state, state / "rtsp.credentials");
+    BootstrapService service(*store.value(), config,
+                             BuildReservedIdentities(config));
+
+    auto accepted = service.Initialize(RequestWithIps(
+        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+        addresses(31U)));
+    ASSERT_TRUE(accepted.ok()) << accepted.error().message;
+    EXPECT_EQ(QueryText(store.value()->database_path(),
+                        "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
+              "32");
   }
 }
 

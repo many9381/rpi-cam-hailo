@@ -276,6 +276,8 @@ describe('parseSetupStatus', () => {
       phase: 'administrator',
       tls: 'ready',
       peer_ip: '192.0.2.10',
+      initial_username: null,
+      initial_password: null,
     });
     expect(parseSetupStatus({
       required: true,
@@ -287,8 +289,28 @@ describe('parseSetupStatus', () => {
       phase: 'runtime_pending',
       tls: 'ready',
       peer_ip: '192.0.2.10',
+      initial_username: null,
+      initial_password: null,
     });
     expect(parseSetupStatus({ required: false })).toEqual({ required: false });
+  });
+
+  it('parses the initial credential while the device is uninitialized in the administrator phase', () => {
+    expect(parseSetupStatus({
+      required: true,
+      phase: 'administrator',
+      tls: 'ready',
+      peer_ip: '192.0.2.10',
+      initial_username: 'setup.x7k2q',
+      initial_password: 'T4m#pR9vLw',
+    })).toEqual({
+      required: true,
+      phase: 'administrator',
+      tls: 'ready',
+      peer_ip: '192.0.2.10',
+      initial_username: 'setup.x7k2q',
+      initial_password: 'T4m#pR9vLw',
+    });
   });
 
   it.each([
@@ -300,6 +322,19 @@ describe('parseSetupStatus', () => {
     { required: true, tls: 'ready', peer_ip: 42 },
     { required: true, phase: 'unknown', tls: 'ready', peer_ip: '192.0.2.10' },
     { required: false, peer_ip: '192.0.2.10' },
+    { required: true, phase: 'administrator', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_username: 'setup.x7k2q' },
+    { required: true, phase: 'administrator', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_password: 'T4m#pR9vLw' },
+    { required: true, phase: 'administrator', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_username: '', initial_password: 'T4m#pR9vLw' },
+    { required: true, phase: 'administrator', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_username: 'setup.x7k2q', initial_password: '' },
+    { required: true, phase: 'administrator', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_username: 42, initial_password: 'T4m#pR9vLw' },
+    { required: true, phase: 'runtime_pending', tls: 'ready', peer_ip: '192.0.2.10',
+      initial_username: 'setup.x7k2q', initial_password: 'T4m#pR9vLw' },
+    { required: false, initial_username: 'setup.x7k2q', initial_password: 'T4m#pR9vLw' },
   ])('rejects malformed setup status %#', (value) => {
     expect(() => parseSetupStatus(value)).toThrow('Invalid setup status response');
   });

@@ -39,6 +39,11 @@ struct BootstrapRecord {
   PasswordRecord password;
   std::string normalized_peer_ip;
   std::int64_t completed_at_seconds{0};
+  // Already normalized, already validated. InitializeDevice registers
+  // `normalized_peer_ip` from its own field regardless of what this holds, so
+  // an entry repeating the peer is redundant rather than harmful, and an empty
+  // vector still leaves the device reachable.
+  std::vector<std::string> additional_management_ips;
 };
 
 using CredentialInstaller = std::function<common::Result<void>()>;
@@ -366,6 +371,17 @@ class SecurityStore {
       UserRole role,
       std::int64_t now_seconds,
       const SecurityMutationContext& context);
+  // Replaces the device's initial account in one transaction. Only valid while
+  // the device is in `default` state, where the initial account is the only row
+  // `users` can hold: every other account is created by an authenticated
+  // administrator, which cannot exist until setup completes. The account is
+  // stored with role 'viewer' so it never occupies the single-administrator
+  // slot guarded by users_single_administrator_unique.
+  common::Result<void> ReplaceInitialAccount(
+      std::string canonical_username,
+      std::string display_username,
+      PasswordRecord password,
+      std::int64_t now_seconds);
   common::Result<void> InstallBootstrapRtspCredential(
       const std::filesystem::path& configured_path,
       std::string_view username,

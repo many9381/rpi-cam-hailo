@@ -1,12 +1,18 @@
 import { type FormEvent, useState } from 'react';
 
+export interface InitialCredential {
+  username: string;
+  password: string;
+}
+
 interface LoginPageProps {
   login(username: string, password: string): Promise<void>;
+  initialCredential?: InitialCredential | null;
 }
 
 const GENERIC_FAILURE = 'Sign in failed. Check your credentials and try again.';
 
-export function LoginPage({ login }: LoginPageProps) {
+export function LoginPage({ login, initialCredential = null }: LoginPageProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [failure, setFailure] = useState<string | null>(null);
@@ -61,6 +67,28 @@ export function LoginPage({ login }: LoginPageProps) {
           </button>
         </form>
       </section>
+      {initialCredential && (
+        <section
+          className="auth-panel initial-credential-panel"
+          aria-labelledby="initial-credential-heading"
+        >
+          <h2 id="initial-credential-heading">Initial setup account</h2>
+          <p>
+            This account is for initial setup only and is removed once setup
+            completes.
+          </p>
+          <dl className="initial-credential-list">
+            <div className="initial-credential-row">
+              <dt>Username</dt>
+              <dd>{initialCredential.username}</dd>
+            </div>
+            <div className="initial-credential-row">
+              <dt>Password</dt>
+              <dd>{initialCredential.password}</dd>
+            </div>
+          </dl>
+        </section>
+      )}
     </main>
   );
 }

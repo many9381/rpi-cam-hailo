@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -66,6 +67,13 @@ struct AuthServiceDependencies {
   std::int64_t session_idle_timeout_seconds{
       kDefaultSessionIdleTimeoutSeconds};
   crypto::CryptoProvider* provider{nullptr};
+  // The account BootstrapService minted for this boot, and the only account
+  // Login() will accept while the device is in `default` state. Engaged only
+  // on a device that has never been set up; a device that boots operational
+  // has no initial account and leaves this empty, which closes the
+  // default-state branch a second time. Canonicalized by the constructor, so
+  // callers may pass the display form.
+  std::optional<std::string> initial_account_username;
 };
 
 struct AuthServiceRuntimeHooks {

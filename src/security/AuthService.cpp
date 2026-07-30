@@ -118,6 +118,20 @@ common::Result<std::string> NormalizePeerIp(std::string_view input) {
   return common::Result<std::string>::Ok(normalized.get());
 }
 
+// Compares two canonical usernames without an early exit. The initial
+// account's username is generated rather than chosen, so its length tells an
+// attacker nothing, but a byte-at-a-time timing signal would let one recover
+// it and spend all five lockout attempts on the right name.
+bool CanonicalIdentityMatches(std::string_view canonical_username,
+                              std::string_view expected) {
+  if (canonical_username.empty() ||
+      canonical_username.size() != expected.size()) {
+    return false;
+  }
+  return ::CRYPTO_memcmp(canonical_username.data(), expected.data(),
+                         canonical_username.size()) == 0;
+}
+
 std::string CanonicalUsername(std::string_view username) {
   std::string canonical(username);
   std::transform(canonical.begin(), canonical.end(), canonical.begin(),
@@ -602,6 +616,13 @@ AuthService::AuthService(
       return !UserRoleName(role).empty();
     };
   }
+  // Canonicalized once here so Login() compares like against like: the
+  // identity arrives in its display form, and the username a request submits
+  // is canonicalized before the store lookup.
+  if (dependencies_.initial_account_username.has_value()) {
+    *dependencies_.initial_account_username =
+        CanonicalUsername(*dependencies_.initial_account_username);
+  }
   firmware_log_worker_ = std::make_unique<FirmwareLogWorker>(
       store_, dependencies_.now_seconds,
       std::move(dependencies_.firmware_log_random_bytes),
@@ -741,16 +762,45 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
     if (immutable_context_current && !clock_valid) {
       return rollback_unavailable();
     }
-    const bool accepted = operational && peer_registered && enabled &&
-                          user_role.has_value() && !lock_active &&
-                          password_matches && decision_state_current;
+    // An uninitialized device has no registered management IP, by definition:
+    // the first management_ips row is written by InitializeDevice. What takes
+    // the place of that check is the pair below.
+    //
+    // `state` comes from the same transaction as the user row, and
+    // InitializeDevice sets it to operational and deletes the initial account
+    // in one transaction. So this arm closes at the instant setup commits,
+    // and it closes because of the same write that removes the account it
+    // admits — not because of a runtime flag that could go stale, and not on
+    // a subsequent request that might race the transition.
+    //
+    // The identity is the account BootstrapService minted for this boot. It
+    // makes the arm admit one named account rather than "whatever row `users`
+    // happens to hold", and it is absent on a device that boots operational,
+    // which closes the arm a second time and independently.
+    const bool default_state = context.value().state == DeviceState::kDefault;
+    const bool initial_account =
+        default_state && has_user && user_role.has_value() &&
+        *user_role == UserRole::kViewer &&
+        dependencies_.initial_account_username.has_value() &&
+        CanonicalIdentityMatches(canonical_username,
+                                 *dependencies_.initial_account_username);
+    // DeviceState has two values, so exactly one arm is live per attempt.
+    // Everything downstream — lockout, failure counting, the
+    // duplicate-session check, and every audit record — reads this one
+    // predicate, so the initial account cannot silently acquire different
+    // handling from an operational account.
+    const bool peer_authorized =
+        operational ? peer_registered : initial_account;
+    const bool accepted = peer_authorized && enabled && user_role.has_value() &&
+                          !lock_active && password_matches &&
+                          decision_state_current;
 
     const std::optional<std::int64_t> actor_user_id =
         has_user ? std::optional<std::int64_t>(context.value().user->id)
                  : std::nullopt;
     const bool duplicate_check_allowed =
-        operational && peer_registered && enabled && user_role.has_value() &&
-        !lock_active && password_matches && immutable_context_current;
+        peer_authorized && enabled && user_role.has_value() && !lock_active &&
+        password_matches && immutable_context_current;
     std::vector<SessionIdentity> expired_identities;
     const auto publish_expired = [this, &expired_identities] {
       PublishSessionRevocations(expired_identities, hooks_.revoke_sessions,
@@ -789,10 +839,9 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       }
     }
     if (!accepted) {
-      const bool counts_as_failure = operational && peer_registered && enabled &&
-                                     user_role.has_value() && !lock_active &&
-                                     !password_matches &&
-                                     immutable_context_current;
+      const bool counts_as_failure =
+          peer_authorized && enabled && user_role.has_value() &&
+          !lock_active && !password_matches && immutable_context_current;
       if (counts_as_failure) {
         const bool prior_lock_expired =
             context.value().user->lock_until_seconds.has_value() &&

@@ -4,6 +4,8 @@ export type SetupStatus =
       phase: 'administrator' | 'runtime_pending';
       tls: 'ready';
       peer_ip: string;
+      initial_username: string | null;
+      initial_password: string | null;
     }
   | { required: false };
 
