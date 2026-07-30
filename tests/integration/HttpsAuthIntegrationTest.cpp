@@ -361,6 +361,70 @@ void ExpectStatus(const HttpResult& result, drogon::HttpStatusCode status) {
       << result.response->getBody();
 }
 
+// The initial account's password is drawn at random from the printable ASCII
+// range, so it can legitimately contain a quote or a backslash. Building the
+// login body by concatenation without this would produce a malformed request
+// on roughly one boot in three.
+std::string JsonQuoted(std::string_view value) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string quoted = "\"";
+  for (const char character : value) {
+    const auto byte = static_cast<unsigned char>(character);
+    if (character == '"' || character == '\\') {
+      quoted.push_back('\\');
+      quoted.push_back(character);
+    } else if (byte < 0x20U) {
+      quoted += "\\u00";
+      quoted.push_back(kHex[(byte >> 4) & 0x0FU]);
+      quoted.push_back(kHex[byte & 0x0FU]);
+    } else {
+      quoted.push_back(character);
+    }
+  }
+  quoted.push_back('"');
+  return quoted;
+}
+
+std::string InitialAccountLoginBody(std::string_view username,
+                                    std::string_view password) {
+  return "{\"username\":" + JsonQuoted(username) +
+         ",\"password\":" + JsonQuoted(password) + "}";
+}
+
+// Signs in with the per-device account the firmware minted at first boot and
+// returns the Cookie header for the session, or an empty string if any step
+// failed. POST /api/v1/setup/initialize requires that session, so every caller
+// that expects setup to run goes through this first; an empty return surfaces
+// as the caller's own status assertion failing.
+std::string InitialAccountCookie(const drogon::HttpClientPtr& client,
+                                 const std::string& origin) {
+  const auto status = Send(client, drogon::Get, "/api/v1/setup/status");
+  if (status.result != drogon::ReqResult::Ok || !status.response ||
+      status.response->statusCode() != drogon::k200OK ||
+      status.response->getJsonObject() == nullptr) {
+    return {};
+  }
+  const auto& body = *status.response->getJsonObject();
+  if (!body.isMember("initial_username") ||
+      !body.isMember("initial_password")) {
+    return {};
+  }
+  const auto login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      InitialAccountLoginBody(body["initial_username"].asString(),
+                              body["initial_password"].asString()),
+      origin, {}, true);
+  if (login.result != drogon::ReqResult::Ok || !login.response ||
+      login.response->statusCode() != drogon::k200OK) {
+    return {};
+  }
+  const auto& cookie = login.response->getCookie("camera_session");
+  if (cookie.value().empty()) {
+    return {};
+  }
+  return "camera_session=" + cookie.value();
+}
+
 void ExpectJsonKeys(const Json::Value& value,
                     std::initializer_list<std::string_view> expected) {
   ASSERT_TRUE(value.isObject());
@@ -899,6 +963,34 @@ RawHttpsResponse RawHttpsJsonRequest(
   return RawHttpsExchange(port, request);
 }
 
+// InitialAccountCookie for the callers that drive a real firmware process over
+// raw TLS instead of a drogon client. Same contract: empty string on failure.
+std::string RawInitialAccountCookie(std::uint16_t port,
+                                    const std::string& origin) {
+  const auto status = RawHttpsGet(port, "/api/v1/setup/status", {});
+  if (status.status != 200) {
+    return {};
+  }
+  const auto body = DecodeRawJsonBody(status);
+  if (!body.has_value() || !body->isMember("initial_username") ||
+      !body->isMember("initial_password")) {
+    return {};
+  }
+  const auto login = RawHttpsJsonRequest(
+      port, "POST", "/api/v1/auth/login",
+      InitialAccountLoginBody((*body)["initial_username"].asString(),
+                              (*body)["initial_password"].asString()),
+      origin, {}, true);
+  if (login.status != 200) {
+    return {};
+  }
+  const std::string set_cookie = login.Header("Set-Cookie");
+  if (!set_cookie.starts_with("camera_session=")) {
+    return {};
+  }
+  return set_cookie.substr(0U, set_cookie.find(';'));
+}
+
 void ExpectRawSecurityHeaders(const RawHttpsResponse& response) {
   EXPECT_EQ(response.Header("Cache-Control"), "no-store");
   EXPECT_EQ(response.Header("Strict-Transport-Security"),
@@ -1093,7 +1185,9 @@ int RunRuntimeSettingsPersistenceLifecycle(
     const auto setup = Send(
         client, drogon::Post, "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        config.http.public_base_url, {}, true);
+        config.http.public_base_url,
+        InitialAccountCookie(client, config.http.public_base_url),
+        true);
     if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
       return fail(7);
     }
@@ -1387,7 +1481,7 @@ bool InitializeOperationalFirmwareState(
   const auto setup = RawHttpsJsonRequest(
       port, "POST", "/api/v1/setup/initialize",
       R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-      origin, {}, true);
+      origin, RawInitialAccountCookie(port, origin), true);
   return setup.status == 503;
 }
 
@@ -1465,7 +1559,7 @@ TEST(FirmwareProcessRuntimeSettingsIntegrationTest,
     const auto setup = RawHttpsJsonRequest(
         https_port, "POST", "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        origin, {}, true);
+        origin, RawInitialAccountCookie(https_port, origin), true);
     ASSERT_EQ(setup.status, 503) << setup.bytes;
   }
 
@@ -1954,7 +2048,8 @@ TEST(HttpsAuthIntegrationTest, ProductionDefaultsWireSecurityServices) {
     const std::string setup_body =
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
     auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
-                      setup_body, origin, {}, true);
+                      setup_body, origin,
+                      InitialAccountCookie(client, origin), true);
     if (setup.result != drogon::ReqResult::Ok || !setup.response ||
         setup.response->statusCode() != drogon::k200OK ||
         setup.response->getJsonObject() == nullptr ||
@@ -2028,7 +2123,7 @@ TEST(HttpsAuthIntegrationTest,
     const auto setup = Send(
         client, drogon::Post, "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        origin, {}, true);
+        origin, InitialAccountCookie(client, origin), true);
     if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
       fail(3);
     }
@@ -2133,7 +2228,7 @@ TEST(HttpsAuthIntegrationTest,
     const auto setup = Send(
         client, drogon::Post, "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        origin, {}, true);
+        origin, InitialAccountCookie(client, origin), true);
     if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
       fail(5);
     }
@@ -2351,7 +2446,7 @@ void RunAdministratorUserLifecycleScenario(
   auto setup = Send(
       client, drogon::Post, "/api/v1/setup/initialize",
       R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-      origin, {}, true);
+      origin, InitialAccountCookie(client, origin), true);
   ExpectStatus(setup, drogon::k200OK);
 
   auto administrator_login = Send(
@@ -2877,7 +2972,7 @@ void RunAdministratorManagementIpLifecycleScenario(
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto administrator_login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -3347,7 +3442,7 @@ void RunViewerOwnPasswordLifecycleScenario(
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto administrator_login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -3694,7 +3789,8 @@ TEST(HttpsAuthIntegrationTest, EventLoopStopDeliversAcceptedResponseAndExits) {
     const std::string setup_body =
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
     auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
-                      setup_body, origin, {}, true);
+                      setup_body, origin,
+                      InitialAccountCookie(client, origin), true);
     if (setup.result != drogon::ReqResult::Ok || !setup.response ||
         setup.response->statusCode() != drogon::k200OK) {
       _exit(3);
@@ -3859,7 +3955,8 @@ void RunQueuedAuthorizationShutdownScenario(
   const std::string setup_body =
       R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
   ExpectStatus(Send(client, drogon::Post, "/api/v1/setup/initialize",
-                    setup_body, origin, {}, true),
+                    setup_body, origin,
+                    InitialAccountCookie(client, origin), true),
                drogon::k200OK);
   auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -5787,7 +5884,8 @@ void RunAuthenticatedLiveMp4Scenario(
   const std::string setup_body =
       R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
   auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
-                    setup_body, origin, {}, true);
+                    setup_body, origin,
+                    InitialAccountCookie(client, origin), true);
   ExpectStatus(setup, drogon::k200OK);
   auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -6074,7 +6172,7 @@ void RunSessionExpiryRevokesBlockedLiveStreamScenario(
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -6263,7 +6361,7 @@ void RunProtectionStartShutdownDrainScenario(
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -6407,7 +6505,7 @@ void RunProtectionBusyAdmissionScenario(
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -6534,7 +6632,7 @@ TEST(HttpsAuthIntegrationTest,
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto unauthenticated =
       Send(client, drogon::Get, "/api/v1/audit/status");
@@ -6974,6 +7072,87 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
             "administrator");
   EXPECT_EQ((*setup_status.response->getJsonObject())["peer_ip"].asString(),
             "127.0.0.1");
+  // The administrator phase serves the per-device initial account so the
+  // operator can sign in to run setup.
+  ASSERT_TRUE(
+      setup_status.response->getJsonObject()->isMember("initial_username"));
+  ASSERT_TRUE(
+      setup_status.response->getJsonObject()->isMember("initial_password"));
+  EXPECT_FALSE(
+      (*setup_status.response->getJsonObject())["initial_username"]
+          .asString()
+          .empty());
+  EXPECT_FALSE(
+      (*setup_status.response->getJsonObject())["initial_password"]
+          .asString()
+          .empty());
+
+  const std::string initial_username =
+      (*setup_status.response->getJsonObject())["initial_username"].asString();
+  const std::string initial_password =
+      (*setup_status.response->getJsonObject())["initial_password"].asString();
+
+  // The credential the login screen shows is the only one that opens a session
+  // on an uninitialized device. The administrator account this setup is about
+  // to create does not exist yet, and no account other than the initial one
+  // can sign in even once it does.
+  auto unknown_account_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {}, true);
+  ExpectStatus(unknown_account_login, drogon::k401Unauthorized);
+
+  auto wrong_password_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      InitialAccountLoginBody(initial_username, "NotTheMintedPassword9!"),
+      origin, {}, true);
+  ExpectStatus(wrong_password_login, drogon::k401Unauthorized);
+
+  auto initial_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      InitialAccountLoginBody(initial_username, initial_password), origin, {},
+      true);
+  ExpectStatus(initial_login, drogon::k200OK);
+  ASSERT_NE(initial_login.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*initial_login.response->getJsonObject())["role"].asString(),
+            "viewer");
+  const auto& initial_session = initial_login.response->getCookie(
+      "camera_session");
+  ASSERT_FALSE(initial_session.value().empty());
+  const std::string initial_cookie =
+      "camera_session=" + initial_session.value();
+
+  auto initial_me =
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, initial_cookie);
+  ExpectStatus(initial_me, drogon::k200OK);
+  ASSERT_NE(initial_me.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*initial_me.response->getJsonObject())["username"].asString(),
+            initial_username);
+  EXPECT_EQ((*initial_me.response->getJsonObject())["role"].asString(),
+            "viewer");
+
+  // The initial account's session is real and authenticated, but the
+  // administrative surface is not part of the six-route default-state
+  // allowlist at all: GET /api/v1/security/users is refused with the same
+  // E_ACCESS_DENIED a wholly unauthenticated caller would get for any path
+  // outside that list (compare denied_health below), not the
+  // E_AUTHORIZATION_REQUIRED an operational device would give a viewer role
+  // hitting an administrator-only route. The initial account never has a
+  // credential that reaches further than setup itself.
+  auto initial_security_users = Send(client, drogon::Get,
+                                     "/api/v1/security/users", {}, {},
+                                     initial_cookie);
+  ExpectStatus(initial_security_users, drogon::k403Forbidden);
+  ASSERT_NE(initial_security_users.response->getJsonObject(), nullptr);
+  EXPECT_EQ(
+      (*initial_security_users.response->getJsonObject())["code"].asString(),
+      "E_ACCESS_DENIED");
+
+  auto initial_logout = Send(client, drogon::Post, "/api/v1/auth/logout", {},
+                             origin, initial_cookie, true);
+  ExpectStatus(initial_logout, drogon::k200OK);
+  auto me_after_logout =
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, initial_cookie);
+  ExpectStatus(me_after_logout, drogon::k401Unauthorized);
 
   auto denied_health = Send(client, drogon::Get, "/api/v1/health");
   ExpectStatus(denied_health, drogon::k403Forbidden);
@@ -7001,14 +7180,33 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   ExpectStatus(setup_without_csrf, drogon::k403Forbidden);
   EXPECT_EQ(runtime_start_calls.load(), 0);
 
+  // Without this, the displayed credential would protect nothing: any peer that
+  // can reach the device could claim the administrator account without ever
+  // knowing it. The session just logged out is no longer usable either.
+  auto setup_without_session = Send(client, drogon::Post,
+                                    "/api/v1/setup/initialize", setup_body,
+                                    origin, {}, true);
+  ExpectStatus(setup_without_session, drogon::k401Unauthorized);
+  EXPECT_EQ(runtime_start_calls.load(), 0);
+
+  auto setup_with_ended_session = Send(client, drogon::Post,
+                                       "/api/v1/setup/initialize", setup_body,
+                                       origin, initial_cookie, true);
+  ExpectStatus(setup_with_ended_session, drogon::k401Unauthorized);
+  EXPECT_EQ(runtime_start_calls.load(), 0);
+
+  const std::string setup_cookie = InitialAccountCookie(client, origin);
+  ASSERT_FALSE(setup_cookie.empty());
+
   auto oversized_setup = Send(client, drogon::Post,
                               "/api/v1/setup/initialize",
-                              std::string(4097U, 'x'), origin, {}, true);
+                              std::string(4097U, 'x'), origin, setup_cookie,
+                              true);
   ExpectStatus(oversized_setup, drogon::k413RequestEntityTooLarge);
   EXPECT_EQ(runtime_start_calls.load(), 0);
 
   auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
-                    setup_body, origin, {}, true);
+                    setup_body, origin, setup_cookie, true);
   ExpectStatus(setup, drogon::k503ServiceUnavailable);
   ExpectSecurityHeaders(setup.response);
   EXPECT_EQ(setup.response->getBody().find("runtime failure detail"),
@@ -7024,6 +7222,15 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
             "runtime_pending");
   EXPECT_EQ((*pending_status.response->getJsonObject())["peer_ip"].asString(),
             "127.0.0.1");
+  // The administrator already exists and the initial account is deleted by this
+  // point, so the credential must not be served even though `required` is still
+  // true. This is the only site that exercises the phase half of the handler's
+  // guard: once the device is operational `required` is false and the whole
+  // block is skipped, so the operational assertions below cannot catch its loss.
+  EXPECT_FALSE(
+      pending_status.response->getJsonObject()->isMember("initial_username"));
+  EXPECT_FALSE(
+      pending_status.response->getJsonObject()->isMember("initial_password"));
 
   auto different_peer = NewClient(port, "127.0.0.2");
   auto rejected_peer = Send(different_peer, drogon::Post,
@@ -7035,6 +7242,68 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   EXPECT_EQ(rejected_peer.response->getBody().find("127.0.0.2"),
             std::string_view::npos);
   EXPECT_EQ(runtime_start_calls.load(), 1);
+
+  // The device already has the real administrator account and management-ip
+  // entry Initialize() created, and the setup surface admits auth/login,
+  // auth/logout and auth/me while runtime_pending_peer is set. A peer other
+  // than the one who confirmed setup must not be able to reach any of them:
+  // otherwise, until this operator retries runtime start (which may never
+  // happen if the failure persists), any host on the network can flood
+  // /api/v1/auth/login, paying for a password verification and writing an
+  // audit row per attempt without rate limiting, potentially evicting the
+  // bootstrap_completed / initial_account_deleted rows from the audit ring
+  // buffer. None of this should even reach AuthService for a non-pinned peer.
+  auto rejected_login = Send(
+      different_peer, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {}, true);
+  ExpectStatus(rejected_login, drogon::k403Forbidden);
+
+  auto rejected_me =
+      Send(different_peer, drogon::Get, "/api/v1/auth/me");
+  ExpectStatus(rejected_me, drogon::k403Forbidden);
+
+  auto rejected_logout = Send(different_peer, drogon::Post,
+                              "/api/v1/auth/logout", {}, origin, {}, true);
+  ExpectStatus(rejected_logout, drogon::k403Forbidden);
+
+  // The other half of that pin: the peer who confirmed setup keeps all three
+  // auth routes while the runtime is still pending, so an operator whose
+  // runtime start failed is not locked out of the device they just set up.
+  // Initialize() has already created the administrator and its management-ip
+  // entry, so this is the ordinary operational credential path reached through
+  // a state the gate still reports as default.
+  auto runtime_pending_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {}, true);
+  ExpectStatus(runtime_pending_login, drogon::k200OK);
+  const auto& runtime_pending_session =
+      runtime_pending_login.response->getCookie("camera_session");
+  ASSERT_FALSE(runtime_pending_session.value().empty());
+  const std::string runtime_pending_cookie =
+      "camera_session=" + runtime_pending_session.value();
+
+  auto runtime_pending_me = Send(client, drogon::Get, "/api/v1/auth/me", {},
+                                 {}, runtime_pending_cookie);
+  ExpectStatus(runtime_pending_me, drogon::k200OK);
+  ASSERT_NE(runtime_pending_me.response->getJsonObject(), nullptr);
+  EXPECT_EQ(
+      (*runtime_pending_me.response->getJsonObject())["username"].asString(),
+      "owner1");
+  EXPECT_EQ((*runtime_pending_me.response->getJsonObject())["role"].asString(),
+            "administrator");
+
+  // The initial account is gone, so no session can satisfy setup/initialize
+  // any more — not even the administrator's.
+  auto runtime_pending_setup =
+      Send(client, drogon::Post, "/api/v1/setup/initialize", setup_body,
+           origin, runtime_pending_cookie, true);
+  ExpectStatus(runtime_pending_setup, drogon::k403Forbidden);
+  EXPECT_EQ(runtime_start_calls.load(), 1);
+
+  auto runtime_pending_logout =
+      Send(client, drogon::Post, "/api/v1/auth/logout", {}, origin,
+           runtime_pending_cookie, true);
+  ExpectStatus(runtime_pending_logout, drogon::k200OK);
 
   runtime_start_should_fail.store(false);
   auto retry = Send(client, drogon::Post, "/api/v1/setup/runtime",
@@ -7056,6 +7325,27 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
       operational_status.response->getJsonObject()->isMember("peer_ip"));
   EXPECT_FALSE(
       operational_status.response->getJsonObject()->isMember("phase"));
+  // The initial account was deleted when setup completed: both members must be
+  // absent from the object, not present and empty, so no live credential can be
+  // read from this unauthenticated endpoint afterwards.
+  EXPECT_FALSE(operational_status.response->getJsonObject()->isMember(
+      "initial_username"));
+  EXPECT_FALSE(operational_status.response->getJsonObject()->isMember(
+      "initial_password"));
+
+  // The session that ran setup belonged to the initial account, and that
+  // account was deleted inside Initialize()'s transaction. This is the
+  // end-to-end end of that: the cookie an operator still holds in their
+  // browser when the device goes operational buys them nothing. The row-level
+  // proof that the session went with the account is
+  // AuthServiceTest.InitialAccountSessionDiesWhenSetupCompletes.
+  auto setup_session_after_transition =
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, setup_cookie);
+  ExpectStatus(setup_session_after_transition, drogon::k401Unauthorized);
+  auto setup_after_transition =
+      Send(client, drogon::Post, "/api/v1/setup/initialize", setup_body,
+           origin, setup_cookie, true);
+  ExpectStatus(setup_after_transition, drogon::k403Forbidden);
 
   ResetUserManagementBodyCleanupForTesting();
   camera_firmware::service::internal::
@@ -7507,7 +7797,7 @@ TEST(HttpsAuthIntegrationTest,
     const auto setup = Send(
         client, drogon::Post, "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        origin, {}, true);
+        origin, InitialAccountCookie(client, origin), true);
     if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
       _exit(3);
     }
@@ -7709,7 +7999,8 @@ TEST(HttpsAuthIntegrationTest,
     const std::string setup_body =
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})";
     const auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
-                            setup_body, origin, {}, true);
+                            setup_body, origin,
+                            InitialAccountCookie(client, origin), true);
     if (!setup.response || setup.response->statusCode() != drogon::k200OK) {
       _exit(4);
     }
@@ -7991,6 +8282,114 @@ TEST(HttpsAuthIntegrationTest,
   _exit(124);
 }
 
+// The initial account is deleted inside Initialize()'s transaction, so the
+// process must drop its copy of the credential there and not at the end of the
+// transition: when runtime_start() fails, the runtime_pending window never
+// closes on its own.
+//
+// The observable consequence is the setup/initialize identity check. An
+// operator may name the administrator after the credential the login screen
+// displayed — 12 lowercase alphanumerics is a legal username, and Initialize()
+// removes the initial row in the same transaction, so there is no collision to
+// stop them. If the process is still holding that name, the administrator's own
+// session satisfies a check whose whole point is that no session can satisfy it
+// once the account is gone. A malformed body separates the two outcomes:
+// reaching the body parse at all proves the identity check let the session
+// through. The request is refused downstream either way by transition_allowed,
+// so this was never exploitable — the guard had simply stopped meaning
+// anything.
+TEST(HttpsAuthIntegrationTest, InitialAccountIdentityDiesWithTheAccount) {
+  TemporaryDirectory directory;
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.path().string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "initial-identity-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory.path() / "rtsp.credentials").string();
+
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.provider = &TestCryptoProvider();
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  // Fails, so the device stays in runtime_pending: that is the window under
+  // test, and it is the one that never closes by itself.
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Err(
+        {"E_RUNTIME_START", "runtime failure detail"});
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  const auto status = Send(client, drogon::Get, "/api/v1/setup/status");
+  ExpectStatus(status, drogon::k200OK);
+  ASSERT_NE(status.response->getJsonObject(), nullptr);
+  const std::string initial_username =
+      (*status.response->getJsonObject())["initial_username"].asString();
+  const std::string initial_password =
+      (*status.response->getJsonObject())["initial_password"].asString();
+  ASSERT_FALSE(initial_username.empty());
+
+  const auto initial_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      InitialAccountLoginBody(initial_username, initial_password), origin, {},
+      true);
+  ExpectStatus(initial_login, drogon::k200OK);
+  const std::string initial_cookie =
+      "camera_session=" +
+      initial_login.response->getCookie("camera_session").value();
+
+  const std::string setup_body =
+      "{\"username\":" + JsonQuoted(initial_username) +
+      ",\"password\":\"StrongPass9!\",\"peer_ip\":\"127.0.0.1\"}";
+  const auto setup = Send(client, drogon::Post, "/api/v1/setup/initialize",
+                          setup_body, origin, initial_cookie, true);
+  ExpectStatus(setup, drogon::k503ServiceUnavailable);
+
+  const auto pending_status =
+      Send(client, drogon::Get, "/api/v1/setup/status");
+  ExpectStatus(pending_status, drogon::k200OK);
+  ASSERT_NE(pending_status.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*pending_status.response->getJsonObject())["phase"].asString(),
+            "runtime_pending");
+
+  const auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      InitialAccountLoginBody(initial_username, "StrongPass9!"), origin, {},
+      true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  ASSERT_NE(administrator_login.response->getJsonObject(), nullptr);
+  EXPECT_EQ(
+      (*administrator_login.response->getJsonObject())["role"].asString(),
+      "administrator");
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+
+  const auto refused = Send(client, drogon::Post, "/api/v1/setup/initialize",
+                            "{", origin, administrator_cookie, true);
+  ExpectStatus(refused, drogon::k403Forbidden);
+  ASSERT_NE(refused.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*refused.response->getJsonObject())["code"].asString(),
+            "E_ACCESS_DENIED");
+
+  service.Stop();
+}
+
 TEST(HttpsAuthIntegrationTest, MonitoringPollingDoesNotExtendManagementAuthority) {
   TemporaryDirectory directory;
   const std::uint16_t port = ReserveLoopbackPort();
@@ -8033,7 +8432,7 @@ TEST(HttpsAuthIntegrationTest, MonitoringPollingDoesNotExtendManagementAuthority
   ExpectStatus(
       Send(client, drogon::Post, "/api/v1/setup/initialize",
            R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-           origin, {}, true),
+           origin, InitialAccountCookie(client, origin), true),
       drogon::k200OK);
   const auto login = Send(
       client, drogon::Post, "/api/v1/auth/login",
@@ -8074,6 +8473,123 @@ TEST(HttpsAuthIntegrationTest, MonitoringPollingDoesNotExtendManagementAuthority
       Send(client, drogon::Get, "/api/v1/security/users", {}, {}, cookie);
   ASSERT_NE(allowed.response, nullptr);
   EXPECT_EQ(allowed.response->statusCode(), drogon::k200OK);
+
+  service.Stop();
+}
+
+std::vector<std::string> ListedManagementIps(const Json::Value& body) {
+  std::vector<std::string> addresses;
+  if (!body.isObject() || !body["management_ips"].isArray()) {
+    return addresses;
+  }
+  for (const auto& entry : body["management_ips"]) {
+    addresses.push_back(entry["address"].asString() + "/" +
+                        entry["role"].asString());
+  }
+  std::sort(addresses.begin(), addresses.end());
+  return addresses;
+}
+
+TEST(HttpsAuthIntegrationTest, SetupRegistersEveryConfirmedManagementIp) {
+  TemporaryDirectory directory;
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  camera_firmware::config::AppConfig config;
+  config.security.enabled = true;
+  config.security.state_directory = directory.path().string();
+  config.http.enabled = true;
+  config.http.bind_ip = "127.0.0.1";
+  config.http.port = port;
+  config.http.public_base_url = origin;
+  config.http.web_root = std::string(CF_SOURCE_DIR) + "/web/dist";
+  config.http.tls.enabled = true;
+  config.http.tls.allow_development_self_signed_tls = true;
+  config.secure_rtsp.client_auth.enabled = true;
+  config.secure_rtsp.client_auth.realm = "management-ip-setup-test";
+  config.secure_rtsp.client_auth.algorithms = {"sha-256"};
+  config.secure_rtsp.client_auth.credential_file =
+      (directory.path() / "rtsp.credentials").string();
+
+  std::atomic<int> runtime_start_calls{0};
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.provider = &TestCryptoProvider();
+  args.document_root = config.http.web_root;
+  args.public_base_url = origin;
+  args.runtime_start_callback = [&runtime_start_calls] {
+    runtime_start_calls.fetch_add(1);
+    return camera_firmware::common::Result<void>::Ok();
+  };
+
+  camera_firmware::service::ServiceApp service;
+  const auto started = service.Init(args);
+  ASSERT_TRUE(started.ok()) << started.error().message;
+  auto client = NewClient(port);
+
+  // One session for the whole wizard, as the browser has: the operator signs
+  // in with the initial account once and stays signed in across a correction.
+  const std::string setup_cookie = InitialAccountCookie(client, origin);
+  ASSERT_FALSE(setup_cookie.empty());
+
+  // A valid entry ahead of an invalid one: setup is all-or-nothing, so the
+  // valid entry must not survive the rejection either.
+  const auto rejected = Send(
+      client, drogon::Post, "/api/v1/setup/initialize",
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1",)"
+      R"("management_ips":["198.51.100.7","198.51.100.0/24"]})",
+      origin, setup_cookie, true);
+  ExpectStatus(rejected, drogon::k400BadRequest);
+  ASSERT_NE(rejected.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*rejected.response->getJsonObject())["code"].asString(),
+            "E_MANAGEMENT_IP_INVALID");
+  EXPECT_EQ(runtime_start_calls.load(), 0);
+
+  // The device is still in default state with the initial account intact, so
+  // the operator can correct the entry and try again.
+  const auto still_required =
+      Send(client, drogon::Get, "/api/v1/setup/status");
+  ExpectStatus(still_required, drogon::k200OK);
+  ASSERT_NE(still_required.response->getJsonObject(), nullptr);
+  EXPECT_TRUE((*still_required.response->getJsonObject())["required"].asBool());
+  EXPECT_TRUE(still_required.response->getJsonObject()->isMember(
+      "initial_username"));
+
+  // The submitted list names neither 127.0.0.1 nor anything else this client
+  // holds, and repeats one address. Setup must still complete, and the peer
+  // that confirmed it must still be able to reach the device afterwards.
+  const auto setup = Send(
+      client, drogon::Post, "/api/v1/setup/initialize",
+      R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1",)"
+      R"("management_ips":["198.51.100.7","198.51.100.8","198.51.100.7"]})",
+      origin, setup_cookie, true);
+  ExpectStatus(setup, drogon::k200OK);
+  ASSERT_NE(setup.response->getJsonObject(), nullptr);
+  EXPECT_FALSE((*setup.response->getJsonObject())["required"].asBool());
+  EXPECT_EQ(runtime_start_calls.load(), 1);
+
+  // This login is the anti-lockout assertion. The device is operational now,
+  // so the request gate refuses every peer that is not a registered management
+  // IP — including this one, had the submitted list been taken as the whole
+  // truth. A 403 here is a bricked device, not a failed test case.
+  const auto administrator_login = Send(
+      client, drogon::Post, "/api/v1/auth/login",
+      R"({"username":"owner1","password":"StrongPass9!"})", origin, {}, true);
+  ExpectStatus(administrator_login, drogon::k200OK);
+  const std::string administrator_cookie =
+      "camera_session=" +
+      administrator_login.response->getCookie("camera_session").value();
+
+  const auto listed =
+      Send(client, drogon::Get, "/api/v1/security/management-ips", {}, {},
+           administrator_cookie);
+  ExpectStatus(listed, drogon::k200OK);
+  ASSERT_NE(listed.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*listed.response->getJsonObject())["current_peer_ip"].asString(),
+            "127.0.0.1");
+  EXPECT_EQ(ListedManagementIps(*listed.response->getJsonObject()),
+            (std::vector<std::string>{"127.0.0.1/administrator",
+                                      "198.51.100.7/administrator",
+                                      "198.51.100.8/administrator"}));
 
   service.Stop();
 }

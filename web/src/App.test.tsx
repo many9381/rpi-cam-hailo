@@ -148,6 +148,16 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 
+// A first-boot device that is still serving the initial account's credential.
+const uninitializedStatus = {
+  required: true,
+  phase: 'administrator',
+  tls: 'ready',
+  peer_ip: '192.0.2.10',
+  initial_username: 'setup.x7k2q',
+  initial_password: 'T4m#pR9vLw',
+};
+
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),
   deleteJson: vi.fn(),
@@ -189,24 +199,229 @@ describe('App bootstrap gate', () => {
     expect(screen.queryByText('Checking session...')).not.toBeInTheDocument();
   });
 
-  it('renders setup and synchronizes the setup hash only when the server requires it', async () => {
+  it('renders the login page for an uninitialized device instead of a setup form', async () => {
     const client = makeClient();
-    vi.mocked(client.getJson).mockResolvedValue({
-      required: true,
-      phase: 'administrator',
-      tls: 'ready',
-      peer_ip: '192.0.2.10',
+    vi.mocked(client.getJson).mockImplementation(async (path) => {
+      // Nobody has signed in yet, so the resume probe is answered the way
+      // every first boot answers it. That is the ordinary path, not a fault:
+      // the operator must see the credential panel and no error.
+      if (path === '/api/v1/auth/me') {
+        throw new UnauthorizedError();
+      }
+      return uninitializedStatus as never;
     });
 
     render(<App client={client} />);
 
-    expect(await screen.findByRole('heading', { name: /create administrator/i })).toBeVisible();
-    expect(window.location.hash).toBe('#/setup');
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /create administrator/i })).not.toBeInTheDocument();
+    expect(window.location.hash).not.toBe('#/setup');
+    expect(await screen.findByText('setup.x7k2q')).toBeInTheDocument();
+    expect(screen.getByText('T4m#pR9vLw')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(client.getJson).toHaveBeenCalledWith(
       '/api/v1/setup/status',
       expect.any(Function),
       expect.any(AbortSignal),
     );
+  });
+
+  it('resumes the setup wizard on reload while the initial session is still live', async () => {
+    const client = makeClient();
+    vi.mocked(client.getJson).mockImplementation(async (path, parser) => {
+      // The operator signed in before reloading the tab, so the session the
+      // wizard needs still exists. Signing in again is not an option: the
+      // duplicate-session rule in AuthService refuses a second concurrent
+      // session for the same account and reports it as a bad credential.
+      if (path === '/api/v1/auth/me') {
+        return parser({ username: 'setup.x7k2q', role: 'viewer' }) as never;
+      }
+      return parser(uninitializedStatus) as never;
+    });
+
+    render(<App client={client} />);
+
+    expect(await screen.findByRole('heading', { name: /create administrator/i }))
+      .toBeVisible();
+    expect(screen.queryByRole('heading', { name: /camera login/i }))
+      .not.toBeInTheDocument();
+    expect(client.getJson).toHaveBeenCalledWith(
+      '/api/v1/auth/me',
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('renders the setup wizard after signing in with the initial account, then returns to login once initialization succeeds', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    // Modelled on the device: no session until login, and both the initial
+    // account and the session it owned are gone once initialize commits.
+    let authenticated = false;
+    let setupRequired = true;
+    vi.mocked(client.getJson).mockImplementation(async (path) => {
+      if (path === '/api/v1/auth/me') {
+        if (!authenticated) {
+          throw new UnauthorizedError();
+        }
+        return { username: 'setup.x7k2q', role: 'viewer' } as never;
+      }
+      return (setupRequired ? uninitializedStatus : { required: false }) as never;
+    });
+    vi.mocked(client.postJson).mockImplementation(async (path, body, parser) => {
+      if (path === '/api/v1/auth/login') {
+        authenticated = true;
+        return parser({ role: 'viewer', idle_expires_at_seconds: 300 });
+      }
+      if (path === '/api/v1/setup/initialize') {
+        setupRequired = false;
+        authenticated = false;
+        return parser({ required: false, runtime: 'running' });
+      }
+      throw new Error(`unexpected postJson call: ${path}`);
+    });
+
+    render(<App client={client} />);
+
+    await user.type(await screen.findByLabelText(/^username$/i), 'setup.x7k2q');
+    await user.type(screen.getByLabelText(/^password$/i), 'T4m#pR9vLw');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    expect(client.postJson).toHaveBeenCalledWith(
+      '/api/v1/auth/login',
+      { username: 'setup.x7k2q', password: 'T4m#pR9vLw' },
+      expect.any(Function),
+    );
+    await screen.findByRole('heading', { name: /create administrator/i });
+    expect(screen.queryByRole('heading', { name: /camera login/i })).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^username$/i), 'operator.one');
+    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
+    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await screen.findByRole('heading', { name: /management access/i });
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByRole('heading', { name: /review/i });
+
+    await user.click(screen.getByRole('button', { name: /complete setup/i }));
+
+    expect(client.postJson).toHaveBeenCalledWith(
+      '/api/v1/setup/initialize',
+      {
+        username: 'operator.one',
+        password: 'NorthStar!9',
+        peer_ip: '192.0.2.10',
+        management_ips: [],
+      },
+      expect.any(Function),
+    );
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /create administrator/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('uses the refreshed peer address on a retry after a failed submission changes it', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    let authenticated = false;
+    let setupRequired = true;
+    // The reconciliation that follows the failed submission reports the same
+    // phase (not advanced) with a different peer — e.g. the operator is
+    // behind a proxy whose outbound address changed.
+    let peerIp = '192.0.2.10';
+    vi.mocked(client.getJson).mockImplementation(async (path) => {
+      if (path === '/api/v1/auth/me') {
+        if (!authenticated) {
+          throw new UnauthorizedError();
+        }
+        return { username: 'setup.x7k2q', role: 'viewer' } as never;
+      }
+      return (setupRequired
+        ? { ...uninitializedStatus, peer_ip: peerIp }
+        : { required: false }) as never;
+    });
+    let failInitialize = true;
+    vi.mocked(client.postJson).mockImplementation(async (path, body, parser) => {
+      if (path === '/api/v1/auth/login') {
+        authenticated = true;
+        return parser({ role: 'viewer', idle_expires_at_seconds: 300 });
+      }
+      if (path === '/api/v1/setup/initialize') {
+        if (failInitialize) {
+          peerIp = '192.0.2.11';
+          throw new Error('policy detail');
+        }
+        setupRequired = false;
+        authenticated = false;
+        return parser({ required: false, runtime: 'running' });
+      }
+      throw new Error(`unexpected postJson call: ${path}`);
+    });
+
+    render(<App client={client} />);
+    await user.type(await screen.findByLabelText(/^username$/i), 'setup.x7k2q');
+    await user.type(screen.getByLabelText(/^password$/i), 'T4m#pR9vLw');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+    await screen.findByRole('heading', { name: /create administrator/i });
+
+    await user.type(screen.getByLabelText(/^username$/i), 'operator.one');
+    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
+    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await screen.findByRole('heading', { name: /management access/i });
+    expect(screen.getByLabelText(/current management address/i)).toHaveValue('192.0.2.10');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByRole('heading', { name: /review/i });
+
+    await user.click(screen.getByRole('button', { name: /complete setup/i }));
+
+    // Reconciliation reported the same phase with a new peer_ip: the
+    // wizard stays up, the operator is sent back to re-enter the cleared
+    // password, and the IP step must show the UPDATED address, not the
+    // stale one captured when the wizard first rendered.
+    await screen.findByRole('heading', { name: /create administrator/i });
+    expect(screen.getByRole('alert')).toBeVisible();
+    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
+    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await screen.findByRole('heading', { name: /management access/i });
+    expect(screen.getByLabelText(/current management address/i)).toHaveValue('192.0.2.11');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByRole('heading', { name: /review/i });
+
+    failInitialize = false;
+    await user.click(screen.getByRole('button', { name: /complete setup/i }));
+
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
+    const initializeCalls = vi.mocked(client.postJson).mock.calls
+      .filter(([path]) => path === '/api/v1/setup/initialize');
+    // The first (failed) attempt legitimately used the address the wizard
+    // was told about at the time — that is not the bug being guarded here.
+    // What matters is that the retry, after peer_ip changed underneath it,
+    // used the fresh value rather than a value captured in a stale closure.
+    expect(initializeCalls).toHaveLength(2);
+    expect(initializeCalls[0][1]).toMatchObject({ peer_ip: '192.0.2.10' });
+    expect(initializeCalls[1][1]).toMatchObject({ peer_ip: '192.0.2.11' });
+  });
+
+  it('does not render a credential panel when the server withholds the initial credential', async () => {
+    const client = makeClient();
+    vi.mocked(client.getJson).mockImplementation(async (path) => {
+      if (path === '/api/v1/auth/me') {
+        throw new UnauthorizedError();
+      }
+      return {
+        required: true,
+        phase: 'administrator',
+        tls: 'ready',
+        peer_ip: '192.0.2.10',
+      } as never;
+    });
+
+    render(<App client={client} />);
+
+    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
+    expect(screen.queryByText(/초기 설정|initial setup/i)).not.toBeInTheDocument();
   });
 
   it('recovers authentication only after the operational bootstrap gate', async () => {
@@ -373,27 +588,6 @@ describe('App bootstrap gate', () => {
     expect(client.getJson).toHaveBeenCalledTimes(3);
   });
 
-  it('rechecks server status after setup and transitions without claiming authentication', async () => {
-    const user = userEvent.setup();
-    const client = makeClient();
-    vi.mocked(client.getJson)
-      .mockResolvedValueOnce({ required: true, phase: 'administrator',
-        tls: 'ready', peer_ip: '192.0.2.10' })
-      .mockResolvedValueOnce({ required: false })
-      .mockRejectedValueOnce(new UnauthorizedError());
-    vi.mocked(client.postJson).mockResolvedValue({ required: false, runtime: 'running' });
-
-    render(<App client={client} />);
-    await user.type(await screen.findByLabelText(/^username$/i), 'operator.one');
-    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
-    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
-    await user.click(screen.getByRole('button', { name: /initialize camera/i }));
-
-    expect(await screen.findByRole('heading', { name: /camera login/i })).toBeVisible();
-    expect(client.getJson).toHaveBeenCalledTimes(3);
-    expect(window.location.hash).toBe('#/login');
-  });
-
   it('retries a pending runtime transition without requesting credentials', async () => {
     const user = userEvent.setup();
     const client = makeClient();
@@ -473,93 +667,19 @@ describe('App bootstrap gate', () => {
     expect(button).toHaveTextContent('Starting runtime...');
   });
 
-  it('switches from administrator setup to runtime recovery after a transition failure', async () => {
-    const user = userEvent.setup();
+  it('re-enables runtime recovery after bounded reconciliation when status never settles', async () => {
     const client = makeClient();
     vi.mocked(client.getJson)
-      .mockResolvedValueOnce({ required: true, phase: 'administrator',
-        tls: 'ready', peer_ip: '192.0.2.10' })
       .mockResolvedValueOnce({ required: true, phase: 'runtime_pending',
-        tls: 'ready', peer_ip: '192.0.2.10' });
-    vi.mocked(client.postJson).mockRejectedValue(new Error('runtime detail'));
-
-    render(<App client={client} />);
-    await user.type(await screen.findByLabelText(/^username$/i), 'operator.one');
-    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
-    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
-    await user.click(screen.getByRole('button', { name: 'Initialize camera' }));
-
-    expect(await screen.findByRole('heading', { name: 'Start camera runtime' }))
-      .toBeVisible();
-    expect(screen.queryByText(/runtime detail/i)).not.toBeInTheDocument();
-    expect(client.getJson).toHaveBeenCalledTimes(2);
-  });
-
-  it('preserves generic setup feedback when authoritative phase does not advance', async () => {
-    const user = userEvent.setup();
-    const client = makeClient();
-    const administrator = { required: true as const, phase: 'administrator' as const,
-      tls: 'ready' as const, peer_ip: '192.0.2.10' };
-    vi.mocked(client.getJson)
-      .mockResolvedValueOnce(administrator)
-      .mockResolvedValueOnce(administrator);
-    vi.mocked(client.postJson).mockRejectedValue(new Error('policy detail'));
-
-    render(<App client={client} />);
-    await user.type(await screen.findByLabelText(/^username$/i), 'operator.one');
-    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
-    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
-    await user.click(screen.getByRole('button', { name: 'Initialize camera' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Camera initialization failed. Check the credentials and try again.',
-    );
-    expect(screen.getByRole('heading', { name: 'Create administrator' })).toBeVisible();
-    expect(screen.queryByText(/policy detail/i)).not.toBeInTheDocument();
-  });
-
-  it('updates the peer address while preserving same-phase setup feedback', async () => {
-    const user = userEvent.setup();
-    const client = makeClient();
-    vi.mocked(client.getJson)
-      .mockResolvedValueOnce({ required: true, phase: 'administrator',
-        tls: 'ready', peer_ip: '192.0.2.10' })
-      .mockResolvedValueOnce({ required: true, phase: 'administrator',
-        tls: 'ready', peer_ip: '192.0.2.11' });
-    vi.mocked(client.postJson).mockRejectedValue(new Error('policy detail'));
-
-    render(<App client={client} />);
-    await user.type(await screen.findByLabelText(/^username$/i), 'operator.one');
-    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
-    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
-    await user.click(screen.getByRole('button', { name: 'Initialize camera' }));
-
-    expect(await screen.findByRole('alert')).toBeVisible();
-    expect(screen.getByLabelText(/management peer address/i))
-      .toHaveValue('192.0.2.11');
-  });
-
-  it('re-enables setup after bounded reconciliation when status never settles', async () => {
-    const client = makeClient();
-    vi.mocked(client.getJson)
-      .mockResolvedValueOnce({ required: true, phase: 'administrator',
         tls: 'ready', peer_ip: '192.0.2.10' })
       .mockReturnValueOnce(new Promise(() => {}));
     vi.mocked(client.postJson).mockRejectedValue(new Error('offline'));
 
     render(<App client={client} />);
-    fireEvent.change(await screen.findByLabelText(/^username$/i), {
-      target: { value: 'operator.one' },
-    });
-    fireEvent.change(screen.getByLabelText(/^password$/i), {
-      target: { value: 'NorthStar!9' },
-    });
-    fireEvent.change(screen.getByLabelText(/confirm password/i), {
-      target: { value: 'NorthStar!9' },
-    });
+    const startButton = await screen.findByRole('button', { name: 'Start runtime' });
 
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole('button', { name: 'Initialize camera' }));
+    fireEvent.click(startButton);
     await act(async () => {
       await Promise.resolve();
       vi.advanceTimersByTime(5_000);
@@ -567,9 +687,9 @@ describe('App bootstrap gate', () => {
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Camera initialization failed. Check the credentials and try again.',
+      'Camera runtime could not be started. Try again.',
     );
-    expect(screen.getByRole('button', { name: 'Initialize camera' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Start runtime' })).toBeEnabled();
   });
 
   it('leaves runtime recovery when the command response is lost after startup', async () => {
@@ -611,6 +731,8 @@ describe('App bootstrap gate', () => {
       phase: 'administrator',
       tls: 'ready',
       peer_ip: '198.51.100.20',
+      initial_username: null,
+      initial_password: null,
     }));
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: /create administrator/i }))

@@ -356,10 +356,14 @@ class InSituCredentialParser {
  public:
   explicit InSituCredentialParser(common::SecureBytes& body) : body_(body) {}
 
+  // `management_ips` is the one key whose value is not a string. Passing
+  // nullptr for it keeps the key rejected outright, which is what every caller
+  // but setup wants: an unrecognized key still fails the whole parse.
   bool Parse(bool require_peer,
              std::string& username,
              common::SecureBytes& password,
-             std::string& peer_ip) {
+             std::string& peer_ip,
+             std::vector<std::string>* management_ips = nullptr) {
     if (body_.size() == 0U ||
         !g_utf8_validate(reinterpret_cast<const char*>(body_.data()),
                          static_cast<gssize>(body_.size()), nullptr)) {
@@ -377,6 +381,7 @@ class InSituCredentialParser {
     bool have_username = false;
     bool have_password = false;
     bool have_peer = false;
+    bool have_management_ips = false;
     for (;;) {
       DecodedJsonString key_slice;
       bool key_was_escaped = false;
@@ -390,21 +395,29 @@ class InSituCredentialParser {
       }
       SkipWhitespace();
 
-      DecodedJsonString value;
-      if (!ParseString(value)) {
-        return false;
-      }
-      if (key == "username" && !have_username) {
-        username = OrdinaryString(value);
-        have_username = true;
-      } else if (key == "password" && !have_password) {
-        password.assign(body_.data() + value.offset, value.size);
-        have_password = true;
-      } else if (require_peer && key == "peer_ip" && !have_peer) {
-        peer_ip = OrdinaryString(value);
-        have_peer = true;
+      if (management_ips != nullptr && key == "management_ips" &&
+          !have_management_ips) {
+        if (!ParseStringArray(*management_ips)) {
+          return false;
+        }
+        have_management_ips = true;
       } else {
-        return false;
+        DecodedJsonString value;
+        if (!ParseString(value)) {
+          return false;
+        }
+        if (key == "username" && !have_username) {
+          username = OrdinaryString(value);
+          have_username = true;
+        } else if (key == "password" && !have_password) {
+          password.assign(body_.data() + value.offset, value.size);
+          have_password = true;
+        } else if (require_peer && key == "peer_ip" && !have_peer) {
+          peer_ip = OrdinaryString(value);
+          have_peer = true;
+        } else {
+          return false;
+        }
       }
 
       SkipWhitespace();
@@ -475,6 +488,38 @@ class InSituCredentialParser {
   }
 
  private:
+  // A flat array of strings, decoded in situ element by element exactly as
+  // ParseString does for a scalar value. Nesting, numbers, objects and a
+  // trailing comma all fail, and the element count is capped so the parse
+  // stays bounded whatever the body claims.
+  bool ParseStringArray(std::vector<std::string>& values) {
+    if (!Consume('[')) {
+      return false;
+    }
+    SkipWhitespace();
+    if (Consume(']')) {
+      return true;
+    }
+    for (;;) {
+      if (values.size() >= kMaximumSetupManagementIps) {
+        return false;
+      }
+      DecodedJsonString element;
+      if (!ParseString(element)) {
+        return false;
+      }
+      values.push_back(OrdinaryString(element));
+      SkipWhitespace();
+      if (Consume(']')) {
+        return true;
+      }
+      if (!Consume(',')) {
+        return false;
+      }
+      SkipWhitespace();
+    }
+  }
+
   bool ParseString(DecodedJsonString& decoded, bool* was_escaped = nullptr) {
     if (!Consume('"')) {
       return false;
@@ -659,17 +704,39 @@ common::Result<void> AuthorizeSecurityRequest(
   }
 
   if (context.state == security::DeviceState::kDefault) {
-    const bool setup_command =
-        context.path == "/api/v1/setup/initialize" ||
-        context.path == "/api/v1/setup/runtime";
-    if (!setup_command || method != "POST") {
+    // The setup surface: while the device is uninitialized, an operator can
+    // read setup status, sign in with the per-device initial account, check
+    // or drop that session, and drive the setup wizard. Nothing else is
+    // reachable. GET /api/v1/setup/status is handled unconditionally above;
+    // it is listed here too for documentation.
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 6>
+        kDefaultStateRoutes = {{
+            {"/api/v1/setup/status", "GET"},
+            {"/api/v1/auth/login", "POST"},
+            {"/api/v1/auth/me", "GET"},
+            {"/api/v1/auth/logout", "POST"},
+            {"/api/v1/setup/initialize", "POST"},
+            {"/api/v1/setup/runtime", "POST"},
+        }};
+    const bool permitted_route =
+        std::any_of(kDefaultStateRoutes.begin(), kDefaultStateRoutes.end(),
+                    [&](const auto& route) {
+                      return context.path == route.first &&
+                             method == route.second;
+                    });
+    if (!permitted_route) {
       return GateError("E_ACCESS_DENIED", "request denied");
     }
-    if (!SameOrigin(context.origin, context.expected_origin)) {
-      return GateError("E_REQUEST_ORIGIN", "request denied");
-    }
-    if (!context.has_management_header) {
-      return GateError("E_REQUEST_HEADER", "request denied");
+    // Mirror the operational branch: only state-changing methods carry
+    // CSRF risk, so only they require a same-origin check and the
+    // management header. The two GET routes above are safe reads.
+    if (IsStateChanging(method)) {
+      if (!SameOrigin(context.origin, context.expected_origin)) {
+        return GateError("E_REQUEST_ORIGIN", "request denied");
+      }
+      if (!context.has_management_header) {
+        return GateError("E_REQUEST_HEADER", "request denied");
+      }
     }
     return common::Result<void>::Ok();
   }
@@ -844,7 +911,7 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
   ParsedSetupRequest parsed;
   InSituCredentialParser parser(body);
   if (!parser.Parse(true, parsed.username, parsed.password,
-                    parsed.confirmed_peer_ip) ||
+                    parsed.confirmed_peer_ip, &parsed.management_ips) ||
       parsed.username.empty() ||
       parsed.username.size() > kMaximumUsernameBytes ||
       parsed.password.size() == 0U ||
@@ -852,6 +919,14 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
       parsed.confirmed_peer_ip.empty() ||
       parsed.confirmed_peer_ip.size() > kMaximumPeerIpBytes) {
     return InvalidRequest<ParsedSetupRequest>();
+  }
+  // Same bounds the confirmed peer gets. Whether the text names a single host
+  // is decided later, by the one validator that already answers that question
+  // for the post-setup management-IP routes; this is only the wire shape.
+  for (const auto& management_ip : parsed.management_ips) {
+    if (management_ip.empty() || management_ip.size() > kMaximumPeerIpBytes) {
+      return InvalidRequest<ParsedSetupRequest>();
+    }
   }
   return common::Result<ParsedSetupRequest>::Ok(std::move(parsed));
 }

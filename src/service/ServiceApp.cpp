@@ -860,6 +860,12 @@ struct ServiceState {
   std::shared_ptr<internal::RuntimeCallbackLifecycle> runtime_lifecycle;
   security::DeviceState device_state{security::DeviceState::kDefault};
   std::optional<std::string> runtime_pending_peer;
+  // The plaintext of the per-device initial account, held for setup/status to
+  // serve while the device is uninitialized. Guarded by StateMutex() like every
+  // other member here, which is what makes it safe to read from Drogon's
+  // several handler threads. Cleared once setup completes; never written to the
+  // store, a log line, or an audit record.
+  std::optional<security::InitialAccountCredential> initial_account;
   bool shutting_down{false};
 };
 
@@ -1329,10 +1335,15 @@ drogon::HttpResponsePtr SecurityUnavailableResponse() {
 }
 
 drogon::HttpResponsePtr BootstrapErrorResponse(const common::Error& error) {
+  // E_MANAGEMENT_IP_INVALID and E_MANAGEMENT_IP_LIMIT come from the submitted
+  // management-IP list and are the operator's to fix, so they answer 400 with
+  // their own code rather than collapsing into a 503 the wizard would report
+  // as a device fault.
   const bool validation =
       error.code == "E_BOOTSTRAP_PEER" ||
       error.code.starts_with("E_USERNAME_") ||
-      error.code.starts_with("E_PASSWORD_");
+      error.code.starts_with("E_PASSWORD_") ||
+      error.code.starts_with("E_MANAGEMENT_IP_");
   if (!validation && error.code != "E_BOOTSTRAP_UNAVAILABLE") {
     return SecurityUnavailableResponse();
   }
@@ -1739,7 +1750,22 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
                 context.path == "/api/v1/setup/initialize";
             const bool setup_runtime =
                 context.path == "/api/v1/setup/runtime";
-            if ((setup_initialize || setup_runtime) &&
+            // While runtime_pending_peer is set, the gate's kDefault block
+            // also admits auth/login, auth/logout and auth/me (Task 2). By
+            // this point Initialize() has already created the real
+            // administrator account and its management-ip entry, so those
+            // routes act on live credentials, not the discarded initial
+            // account. They get the same peer pin as setup/initialize and
+            // setup/runtime: only the peer who confirmed setup may use them
+            // until the runtime finishes starting. A non-pinned peer is
+            // denied here, before AuthService spends a password
+            // verification and an unconditional audit-trail write on it.
+            const bool runtime_pending_scoped_route =
+                setup_initialize || setup_runtime ||
+                context.path == "/api/v1/auth/login" ||
+                context.path == "/api/v1/auth/logout" ||
+                context.path == "/api/v1/auth/me";
+            if (runtime_pending_scoped_route &&
                 runtime_pending_peer.has_value() &&
                 context.normalized_peer_ip != *runtime_pending_peer) {
               completion->Deny({"E_ACCESS_DENIED", "request denied"});
@@ -1776,6 +1802,39 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
                     return;
                   }
                 }
+              }
+            } else if (context.state == security::DeviceState::kDefault &&
+                       !login && session_token &&
+                       session_token->size() != 0U) {
+              // The other arm of the same two-valued state. Without it
+              // auth/me and setup/initialize have no principal to check and
+              // deny every request in default state, including the initial
+              // account's own.
+              //
+              // The management-peer precondition the operational arm applies
+              // is not repeated here, and cannot be: an uninitialized device
+              // has no management_ips row. Nothing is given up by dropping it.
+              // A genuinely uninitialized device has no management peers to
+              // distinguish, and during the runtime_pending window the peer
+              // pin above has already narrowed this to the single peer that
+              // confirmed setup — which is the management peer Initialize()
+              // just registered.
+              //
+              // ManagementActivity::kNone: none of the four routes reachable
+              // here is a management operation, so none should extend a
+              // management-authority deadline. Verify() still refuses a
+              // session whose deadline has already lapsed.
+              auto principal = dependencies.auth_service->Verify(
+                  {session_token->data(), session_token->size()},
+                  context.normalized_peer_ip,
+                  security::ManagementActivity::kNone);
+              if (principal.ok()) {
+                context.principal = std::move(principal).value();
+              } else if (principal.error().code ==
+                         "E_AUTHENTICATION_UNAVAILABLE") {
+                completion->Deny({"E_SECURITY_UNAVAILABLE",
+                                  "security service unavailable"});
+                return;
               }
             }
             auto authorized = AuthorizeSecurityRequest(context);
@@ -2085,12 +2144,21 @@ void RegisterHandlers() {
         security::DeviceState state;
         bool runtime_pending = false;
         bool security_enabled = false;
+        std::string initial_username;
+        std::string initial_password;
         {
           std::scoped_lock lock(StateMutex());
           state = GlobalState().device_state;
           runtime_pending = GlobalState().runtime_pending_peer.has_value();
           security_enabled = GlobalState().args.app_config != nullptr &&
                              GlobalState().args.app_config->security.enabled;
+          if (GlobalState().initial_account.has_value()) {
+            const auto& account = *GlobalState().initial_account;
+            initial_username = account.username;
+            initial_password.assign(
+                reinterpret_cast<const char*>(account.password.data()),
+                account.password.size());
+          }
         }
         if (!security_enabled) {
           callback(SecurityErrorResponse(
@@ -2111,6 +2179,12 @@ void RegisterHandlers() {
           body["peer_ip"] = std::move(peer).value();
           body["phase"] = runtime_pending ? "runtime_pending"
                                            : "administrator";
+          // Only the administrator phase shows the initial credential; once the
+          // device is operational both members are absent, not empty.
+          if (!runtime_pending && !initial_username.empty()) {
+            body["initial_username"] = initial_username;
+            body["initial_password"] = initial_password;
+          }
         }
         callback(JsonResponse(std::move(body)));
       },
@@ -2142,7 +2216,62 @@ void RegisterHandlers() {
             request, std::move(callback),
             [request, actual_peer, secure_body,
              body_error = std::move(body_error)](
-                AuthorizedRequest, HttpCallback callback) mutable {
+                AuthorizedRequest authorized_request,
+                HttpCallback callback) mutable {
+              // Claiming the administrator account requires proving you can
+              // read the device's login screen. The generated password is the
+              // whole of this feature's security value; if this endpoint stayed
+              // sessionless, any peer that can reach the device could claim the
+              // account without ever knowing it and the login screen would be
+              // decorative.
+              //
+              // Checked before the body is parsed: an unauthenticated peer's
+              // JSON is not worth reading.
+              //
+              // setup/runtime deliberately does not acquire this requirement.
+              // It is the recovery path for a failed runtime_start(), and by
+              // the time it runs the initial account has been deleted inside
+              // Initialize()'s transaction, so no session could satisfy it.
+              std::optional<std::string> initial_username;
+              std::shared_ptr<security::BootstrapService> bootstrap;
+              std::shared_ptr<BoundedWorker> worker;
+              RuntimeStartCallback runtime_start;
+              ProtectionRuntimeControlGate runtime_control_gate;
+              {
+                std::scoped_lock lock(StateMutex());
+                bootstrap = GlobalState().args.bootstrap_service;
+                worker = GlobalState().security_worker;
+                runtime_start = GlobalState().args.runtime_start_callback;
+                runtime_control_gate =
+                    GlobalState().args.protection_runtime_control_gate;
+                if (GlobalState().initial_account.has_value()) {
+                  initial_username = GlobalState().initial_account->username;
+                }
+              }
+              // Read and answered before the session check, not after it: with
+              // security disabled the whole authorization path is skipped and
+              // no request carries a principal, so checking the session first
+              // would turn this route's "security unavailable" into a
+              // misleading "authentication required".
+              if (!bootstrap || !worker || actual_peer.empty()) {
+                callback(SecurityUnavailableResponse());
+                return;
+              }
+              if (!authorized_request.principal.has_value()) {
+                callback(SecurityErrorResponse(
+                    {"E_AUTHENTICATION_REQUIRED", "authentication required"}));
+                return;
+              }
+              // Authenticated but not the account this endpoint belongs to.
+              // Reachable only during the runtime_pending window, where the
+              // administrator now exists and the initial account does not; an
+              // empty `initial_username` fails closed for the same reason.
+              if (!initial_username.has_value() ||
+                  authorized_request.principal->username != *initial_username) {
+                callback(SecurityErrorResponse(
+                    {"E_ACCESS_DENIED", "request denied"}));
+                return;
+              }
               if (body_error.has_value()) {
                 callback(SecurityErrorResponse(*body_error));
                 return;
@@ -2156,22 +2285,6 @@ void RegisterHandlers() {
               secure_body->clear();
               if (!parsed.ok()) {
                 callback(SecurityErrorResponse(parsed.error()));
-                return;
-              }
-              std::shared_ptr<security::BootstrapService> bootstrap;
-              std::shared_ptr<BoundedWorker> worker;
-              RuntimeStartCallback runtime_start;
-              ProtectionRuntimeControlGate runtime_control_gate;
-              {
-                std::scoped_lock lock(StateMutex());
-                bootstrap = GlobalState().args.bootstrap_service;
-                worker = GlobalState().security_worker;
-                runtime_start = GlobalState().args.runtime_start_callback;
-                runtime_control_gate =
-                    GlobalState().args.protection_runtime_control_gate;
-              }
-              if (!bootstrap || !worker || actual_peer.empty()) {
-                callback(SecurityUnavailableResponse());
                 return;
               }
               auto parsed_request =
@@ -2188,6 +2301,8 @@ void RegisterHandlers() {
                       bootstrap_request.confirmed_peer_ip =
                           parsed_request->confirmed_peer_ip;
                       bootstrap_request.actual_peer_ip = actual_peer;
+                      bootstrap_request.management_ips =
+                          std::move(parsed_request->management_ips);
                       bool transition_allowed = false;
                       {
                         std::scoped_lock lock(StateMutex());
@@ -2216,6 +2331,17 @@ void RegisterHandlers() {
                         GlobalState().runtime_pending_peer = actual_peer;
                         GlobalState().device_state =
                             security::DeviceState::kDefault;
+                        // Initialize() deleted the initial account inside the
+                        // transaction that just committed, so the plaintext is
+                        // dead here, not at transition_completed below. If
+                        // runtime_start() fails the device stays in
+                        // runtime_pending indefinitely, and keeping it that
+                        // long would both leave a dead credential resident and
+                        // leave the setup/initialize guard above comparing
+                        // against a name that no longer identifies anything —
+                        // an administrator who took the initial account's name
+                        // would match it.
+                        GlobalState().initial_account.reset();
                       }
                       if (!runtime_start) {
                         QueueResponse(event_loop, std::move(callback),
@@ -2244,6 +2370,10 @@ void RegisterHandlers() {
                           GlobalState().device_state =
                               security::DeviceState::kOperational;
                           GlobalState().runtime_pending_peer.reset();
+                          // The account behind this plaintext was deleted in
+                          // Initialize's transaction; drop the in-memory copy
+                          // so setup/status stops serving it.
+                          GlobalState().initial_account.reset();
                           transition_completed = true;
                         }
                       }
@@ -2341,6 +2471,10 @@ void RegisterHandlers() {
                           state.device_state =
                               security::DeviceState::kOperational;
                           state.runtime_pending_peer.reset();
+                          // Setup completed through the runtime-retry path; the
+                          // initial account was already deleted by Initialize,
+                          // so drop the plaintext here too.
+                          state.initial_account.reset();
                           transition_completed = true;
                         }
                       }
@@ -5260,6 +5394,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         std::make_shared<internal::RuntimeCallbackLifecycle>();
     security::DeviceState initial_device_state =
         security::DeviceState::kDefault;
+    std::optional<security::InitialAccountCredential> initial_account;
     std::shared_ptr<security::UserManagementService> user_management_service;
     std::shared_ptr<security::AuditLogService> audit_log_service;
     std::shared_ptr<security::AuthService> auth_service;
@@ -5294,6 +5429,16 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
                 *effective_args.security_store, *args.app_config,
                 security::BuildReservedIdentities(*args.app_config));
       }
+      // First boot: mint the per-device account the operator signs in with to
+      // run setup. The plaintext returned here is held in memory only.
+      if (initial_device_state == security::DeviceState::kDefault) {
+        auto credential =
+            effective_args.bootstrap_service->EnsureInitialAccount();
+        if (!credential.ok()) {
+          return common::Result<void>::Err(credential.error());
+        }
+        initial_account = std::move(credential).value();
+      }
       std::weak_ptr weak_registry = effective_args.stream_registry;
       const auto revoke_sessions =
           [weak_registry](
@@ -5315,6 +5460,15 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         auth_dependencies =
             effective_args.auth_service_dependencies_provider();
       }
+      // The account Login() accepts while the device is uninitialized. Assigned
+      // rather than merged, and assigned from the same optional that decides
+      // whether an initial account was minted at all: a device that booted
+      // operational leaves it empty, and no test provider can supply one on its
+      // behalf.
+      auth_dependencies.initial_account_username =
+          initial_account.has_value()
+              ? std::optional<std::string>(initial_account->username)
+              : std::nullopt;
       auth_service = std::shared_ptr<security::AuthService>(
           new security::AuthService(
               *effective_args.security_store, std::move(auth_dependencies),
@@ -5354,6 +5508,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       GlobalState().live_pump_manager = live_pump_manager;
       GlobalState().runtime_lifecycle = runtime_lifecycle;
       GlobalState().device_state = initial_device_state;
+      GlobalState().initial_account = std::move(initial_account);
       GlobalState().runtime_pending_peer.reset();
       GlobalState().shutting_down = false;
       security_worker_ = security_worker;
@@ -5597,6 +5752,11 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
     GlobalState().runtime_lifecycle.reset();
     GlobalState().device_state = security::DeviceState::kDefault;
     GlobalState().runtime_pending_peer.reset();
+    // GlobalState() is a function-local static, so without this the SecureBytes
+    // cleansing destructor would not run until a later Init() overwrites it or
+    // the process exits, leaving a live credential resident in a stopped
+    // service.
+    GlobalState().initial_account.reset();
   }
   security_worker_.reset();
   runtime_settings_worker_.reset();

@@ -565,6 +565,11 @@ async function installApiMocks(
     if (path === '/api/v1/setup/initialize' && request.method() === 'POST') {
       initializeRequests.push(request);
       setupRequired = false;
+      // The account behind the session that called this endpoint is deleted
+      // inside the same transaction that creates the administrator (see
+      // src/service/ServiceApp.cpp), so that session cannot survive it. The
+      // operator must sign in again as the administrator they just created.
+      authenticated = false;
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({ required: false, runtime: 'running' }),
@@ -1088,24 +1093,27 @@ async function canvasChecksum(canvas: Locator): Promise<number> {
   });
 }
 
-test('first boot creates an administrator then shows login', async ({ page }) => {
+test('first boot signs in with the initial account, runs the setup wizard, then shows login', async ({ page }) => {
   const api = await installApiMocks(page, {
     setupRequired: true,
     authenticated: false,
   });
 
-  await page.goto('/#/setup');
+  await page.goto('/#/login');
+  await expect(page.getByRole('heading', { name: 'Camera login' })).toBeVisible();
+  await page.getByLabel('Username').fill('setup.x7k2q');
+  await page.getByLabel('Password', { exact: true }).fill('T4m#pR9vLw');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
   const panel = page.getByRole('region', { name: 'Create administrator' });
   await expect(panel).toBeVisible();
   await expect(panel).toHaveClass(/auth-panel/);
   await expect(panel.locator('xpath=..')).toHaveClass(/auth-surface/);
   await expect(panel.locator('.brand-mark')).toHaveText('CF');
-  await expect(panel.locator('.field')).toHaveCount(4);
-  await expect(page.getByRole('button', { name: 'Initialize camera' }))
-    .toHaveClass(/primary-button/);
+  await expect(panel.locator('.field')).toHaveCount(3);
   const desktopPanel = await panel.boundingBox();
   expect(desktopPanel).not.toBeNull();
-  expect(desktopPanel!.width).toBeLessThanOrEqual(390);
+  expect(desktopPanel!.width).toBeLessThanOrEqual(440);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoHorizontalOverflow(page);
@@ -1115,15 +1123,33 @@ test('first boot creates an administrator then shows login', async ({ page }) =>
   await page.getByLabel('Username').fill('operator.one');
   await page.getByLabel('Password', { exact: true }).fill('Short!9A');
   await page.getByLabel('Confirm password').fill('Short!9A');
-  await page.getByRole('button', { name: 'Initialize camera' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
 
-  const passwordError = page.getByText('Password must be 9 to 128 characters.');
-  await expect(passwordError).toBeVisible();
-  await expect(passwordError).toHaveClass(/form-error/);
+  const lengthRequirement = page.getByText('Between 9 and 128 characters');
+  await expect(lengthRequirement).toHaveAttribute('aria-invalid', 'true');
+  await expect(lengthRequirement).toContainText('not met');
+  await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByRole('heading', { name: 'Create administrator' })).toBeVisible();
   expect(api.initializeRequests).toHaveLength(0);
+
   await page.getByLabel('Password', { exact: true }).fill('NorthStar!9');
   await page.getByLabel('Confirm password').fill('NorthStar!9');
-  await page.getByRole('button', { name: 'Initialize camera' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Register management access' })).toBeVisible();
+  await expect(page.getByLabel('Current management address')).toHaveValue('192.0.2.44');
+  await page.getByLabel('Add a management address').fill('198.51.100.20/24');
+  await page.getByRole('button', { name: 'Add host' }).click();
+  await expect(page.getByText('Only single hosts may be registered.')).toBeVisible();
+  await page.getByLabel('Add a management address').fill('198.51.100.20');
+  await page.getByRole('button', { name: 'Add host' }).click();
+  await expect(page.getByText('198.51.100.20')).toBeVisible();
+  await page.getByRole('button', { name: 'Next' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Review and confirm' })).toBeVisible();
+  await expect(page.getByText('operator.one')).toBeVisible();
+  await expect(page.getByText('NorthStar!9')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Complete setup' }).click();
 
   await expect(page.getByRole('heading', { name: 'Camera login' })).toBeVisible();
   expect(api.initializeRequests).toHaveLength(1);
@@ -1131,6 +1157,7 @@ test('first boot creates an administrator then shows login', async ({ page }) =>
     username: 'operator.one',
     password: 'NorthStar!9',
     peer_ip: '192.0.2.44',
+    management_ips: ['198.51.100.20'],
   });
   expect(api.initializeRequests[0].headers()['content-type']).toBe('application/json');
   expect(api.initializeRequests[0].headers()['x-camera-request']).toBe('management');

@@ -22,6 +22,14 @@ class SecurityStore;
 inline constexpr std::size_t kMaximumViewerUsers = 32U;
 inline constexpr std::size_t kMaximumManagementIpsPerRole = 32U;
 
+// The single answer to "is this text one management host?", shared by the
+// administrator-only management-IP routes and by setup. Returns the canonical
+// spelling of `input`, or E_MANAGEMENT_IP_INVALID for anything that is not a
+// literal single address — CIDR, ranges, wildcards, hostnames, and the
+// wildcard addresses 0.0.0.0 and :: included.
+[[nodiscard]] common::Result<std::string> NormalizeManagementIp(
+    std::string_view input);
+
 struct ManagedUser {
   std::int64_t id{0};
   std::string username;

@@ -527,6 +527,49 @@ std::optional<std::string> Login(const ProcessFixture& fixture,
   return set_cookie.substr(0U, set_cookie.find(';'));
 }
 
+// Signs in with the per-device account the firmware mints at first boot.
+// POST /api/v1/setup/initialize requires that session, so the setup call below
+// has to obtain one first. The generated password is drawn from the printable
+// ASCII range and can contain a quote or a backslash, so the request body is
+// escaped rather than concatenated the way Login() above can afford to be.
+std::optional<std::string> InitialAccountCookie(
+    const ProcessFixture& fixture) {
+  const auto status = Request(fixture.port, "GET", "/api/v1/setup/status");
+  if (status.status != 200) {
+    return std::nullopt;
+  }
+  const auto json = status.JsonBody();
+  if (!json.has_value() || !json->isMember("initial_username") ||
+      !json->isMember("initial_password")) {
+    return std::nullopt;
+  }
+  const auto quoted = [](std::string_view value) {
+    std::string escaped = "\"";
+    for (const char character : value) {
+      if (character == '"' || character == '\\') {
+        escaped.push_back('\\');
+      }
+      escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
+  };
+  const auto response = Request(
+      fixture.port, "POST", "/api/v1/auth/login",
+      "{\"username\":" + quoted((*json)["initial_username"].asString()) +
+          ",\"password\":" + quoted((*json)["initial_password"].asString()) +
+          "}",
+      fixture.origin, {}, true);
+  if (response.status != 200) {
+    return std::nullopt;
+  }
+  const std::string set_cookie = response.Header("Set-Cookie");
+  if (!set_cookie.starts_with("camera_session=")) {
+    return std::nullopt;
+  }
+  return set_cookie.substr(0U, set_cookie.find(';'));
+}
+
 void ExpectExactKeys(const Json::Value& json,
                      std::initializer_list<std::string_view> keys) {
   ASSERT_TRUE(json.isObject());
@@ -561,10 +604,12 @@ TEST(SystemProtectionIntegrationTest,
   {
     FirmwareProcess process(fixture.config_path, fixture.public_key);
     ASSERT_TRUE(WaitForService(fixture));
+    const auto setup_cookie = InitialAccountCookie(fixture);
+    ASSERT_TRUE(setup_cookie.has_value());
     const auto setup = Request(
         fixture.port, "POST", "/api/v1/setup/initialize",
         R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1"})",
-        fixture.origin, {}, true);
+        fixture.origin, *setup_cookie, true);
     ASSERT_EQ(setup.status, 503) << setup.bytes;
   }
 

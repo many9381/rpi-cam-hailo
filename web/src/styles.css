@@ -140,6 +140,52 @@ select:focus-visible {
   line-height: 1.45;
 }
 
+.initial-credential-panel {
+  margin-top: 20px;
+}
+
+.initial-credential-panel h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.initial-credential-panel p {
+  margin: 0 0 16px;
+  color: #44515d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.initial-credential-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.initial-credential-row {
+  display: grid;
+  gap: 4px;
+}
+
+.initial-credential-row dt {
+  color: #34434b;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.initial-credential-row dd {
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid #aeb8b2;
+  border-radius: 6px;
+  background: #f4f5f3;
+  color: #17212b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  word-break: break-all;
+}
+
 .primary-button {
   width: 100%;
   margin-top: 2px;
@@ -153,6 +199,142 @@ select:focus-visible {
 .primary-button:disabled {
   cursor: wait;
   opacity: 0.65;
+}
+
+.wizard-panel {
+  width: min(100%, 440px);
+}
+
+.wizard-progress {
+  margin: -14px 0 20px;
+  color: #6a7a72;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.password-requirements {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.password-requirement {
+  color: #44515d;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.password-requirement::before {
+  content: '\2022';
+  margin-right: 6px;
+  color: #8a958f;
+}
+
+.password-requirement-unmet {
+  color: #7a2626;
+  font-weight: 650;
+}
+
+.password-requirement-unmet::before {
+  content: '\2717';
+  color: #a63535;
+}
+
+.password-requirement-marker {
+  font-weight: 650;
+}
+
+.management-host-list {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.management-host-list li {
+  padding: 8px 11px;
+  border: 1px solid #d7dde3;
+  border-radius: 6px;
+  background: #f4f5f3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.management-host-tag {
+  margin-left: 6px;
+  color: #6a7a72;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.wizard-actions .secondary-button,
+.wizard-actions .primary-button {
+  flex: 1;
+  margin-top: 0;
+}
+
+.secondary-button {
+  min-height: 40px;
+  border: 1px solid #aeb8b2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17212b;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #6f7f77;
+  background: #f4f5f3;
+}
+
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.wizard-review-list {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 8px;
+}
+
+.wizard-review-row {
+  display: grid;
+  gap: 4px;
+}
+
+.wizard-review-row dt {
+  color: #34434b;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.wizard-review-row dd {
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid #aeb8b2;
+  border-radius: 6px;
+  background: #f4f5f3;
+  color: #17212b;
+  font-size: 14px;
+}
+
+.wizard-review-row .management-host-list {
+  margin: 0;
 }
 
 .icon-button {

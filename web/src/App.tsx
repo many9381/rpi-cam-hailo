@@ -9,14 +9,19 @@ import {
 import { HashRouter, useLocation, useNavigate } from 'react-router-dom';
 
 import { UnauthorizedError } from './api/client';
-import { parseReauthenticateResult, parseSetupStatus } from './api/contracts';
+import {
+  parseLoginResult,
+  parsePrincipal,
+  parseReauthenticateResult,
+  parseSetupStatus,
+} from './api/contracts';
 import type { CameraApiClient, Parser, SetupStatus } from './api/types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AppShell } from './components/AppShell';
 import { ViewerShell } from './components/ViewerShell';
 import { LoginPage } from './pages/LoginPage';
-import { SetupPage } from './pages/SetupPage';
 import { RuntimeRecoveryPage } from './pages/RuntimeRecoveryPage';
+import { SetupWizard } from './pages/setup/SetupWizard';
 import { DashboardPage, type OperationalView } from './pages/DashboardPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { UsersPage } from './pages/UsersPage';
@@ -82,6 +87,33 @@ function createManagementAwareClient(
   };
 }
 
+/**
+ * True when the caller already holds a session the device accepts.
+ *
+ * A reload during setup throws away the component state that remembered the
+ * operator had signed in, but not the session cookie. Signing in again is not
+ * a recovery: AuthService refuses a second concurrent session for one account
+ * and reports the refusal as E_AUTHENTICATION_FAILED, so a correct credential
+ * looks wrong until the first session idles out. Asking who we are instead
+ * costs one request and resumes exactly where the reload interrupted.
+ *
+ * Every failure — E_AUTHENTICATION_REQUIRED on a device nobody has signed in
+ * to yet, an abort, an unreachable camera — means the same thing here and is
+ * answered the same way, by leaving the operator on the login page. None of
+ * them is an error to report: not holding a session is the normal first boot.
+ */
+async function holdsLiveSession(
+  client: CameraApiClient,
+  signal: AbortSignal,
+): Promise<boolean> {
+  try {
+    await client.getJson('/api/v1/auth/me', parsePrincipal, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type BootstrapState =
   | { kind: 'checking' }
   | { kind: 'required'; status: Extract<SetupStatus, { required: true }> }
@@ -103,6 +135,11 @@ export function BootstrapGate({
   const navigate = useNavigate();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<BootstrapState>({ kind: 'checking' });
+  // Set once the initial account signs in successfully, so the wizard that
+  // claims the administrator account renders in the session that login
+  // established. /api/v1/setup/initialize requires that session now — see
+  // SetupWizard.tsx.
+  const [wizardActive, setWizardActive] = useState(false);
 
   const reconcilePhase = async (
     expected: Extract<SetupStatus, { required: true }>['phase'],
@@ -149,15 +186,29 @@ export function BootstrapGate({
     setState({ kind: 'checking' });
 
     client.getJson('/api/v1/setup/status', parseSetupStatus, controller.signal)
-      .then((status) => {
+      .then(async (status) => {
         if (cancelled) {
           return;
         }
-        if (status.required) {
-          setState({ kind: 'required', status });
-        } else {
+        if (!status.required) {
           setState({ kind: 'operational' });
+          return;
         }
+        // Resume a wizard a reload interrupted. Only the administrator phase
+        // has a wizard to resume, and only there can a session predate this
+        // mount: runtime_pending is reached after the initial account and its
+        // session are already gone.
+        if (status.phase === 'administrator' &&
+            await holdsLiveSession(client, controller.signal)) {
+          if (cancelled) {
+            return;
+          }
+          setWizardActive(true);
+        }
+        if (cancelled) {
+          return;
+        }
+        setState({ kind: 'required', status });
       })
       .catch(() => {
         if (!cancelled) {
@@ -171,12 +222,23 @@ export function BootstrapGate({
     };
   }, [attempt, client]);
 
+  const requiresRuntimeRecovery = state.kind === 'required' &&
+    state.status.phase === 'runtime_pending';
+
   useEffect(() => {
-    const destination = state.kind === 'required' ? '/setup' : null;
-    if (destination !== null && location.pathname !== destination) {
-      navigate(destination, { replace: true });
+    if (requiresRuntimeRecovery && location.pathname !== '/setup') {
+      navigate('/setup', { replace: true });
     }
-  }, [location.pathname, navigate, state.kind]);
+  }, [location.pathname, navigate, requiresRuntimeRecovery]);
+
+  const bootstrapLogin = useCallback(async (username: string, password: string) => {
+    await client.postJson(
+      '/api/v1/auth/login',
+      { username, password },
+      parseLoginResult,
+    );
+    setWizardActive(true);
+  }, [client]);
 
   if (state.kind === 'checking') {
     return <main className="loading-surface">Checking camera setup...</main>;
@@ -204,13 +266,28 @@ export function BootstrapGate({
         />
       );
     }
+    if (wizardActive) {
+      return (
+        <SetupWizard
+          client={client}
+          peerIp={state.status.peer_ip}
+          onInitialized={() => {
+            setWizardActive(false);
+            setAttempt((value) => value + 1);
+          }}
+          onInitializationFailed={() => reconcilePhase('administrator')}
+        />
+      );
+    }
+    const initialCredential = typeof state.status.initial_username === 'string' &&
+        typeof state.status.initial_password === 'string'
+      ? {
+          username: state.status.initial_username,
+          password: state.status.initial_password,
+        }
+      : null;
     return (
-      <SetupPage
-        client={client}
-        peerIp={state.status.peer_ip}
-        onInitialized={() => setAttempt((value) => value + 1)}
-        onInitializationFailed={() => reconcilePhase('administrator')}
-      />
+      <LoginPage login={bootstrapLogin} initialCredential={initialCredential} />
     );
   }
   return operationalChild;

@@ -1493,8 +1493,7 @@ INSERT INTO audit_events
 VALUES
   (1720000001, 'seed_one', 'success', NULL, 'system', '192.0.2.1', ''),
   (1720000002, 'seed_two', 'success', NULL, 'system', '192.0.2.2', ''),
-  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', ''),
-  (1720000004, 'seed_four', 'success', NULL, 'system', '192.0.2.4', '');
+  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', '');
 )sql");
   if (retention_trigger[0] != '\0') {
     ExecuteDatabaseSql(store.value()->database_path(), retention_trigger);
@@ -1542,9 +1541,9 @@ VALUES
                 store.value()->database_path(),
                 "SELECT sequence || '|' || event_type FROM audit_events "
                 "ORDER BY sequence;"),
-            (std::vector<std::string>{"1|bootstrap_completed", "2|seed_one",
-                                      "3|seed_two", "4|seed_three",
-                                      "5|seed_four"}));
+            (std::vector<std::string>{"1|management_ip_created",
+                                      "2|bootstrap_completed", "3|seed_one",
+                                      "4|seed_two", "5|seed_three"}));
   EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
                              "SELECT rotated_event_count FROM audit_state;"),
             0);
@@ -1588,8 +1587,7 @@ INSERT INTO audit_events
 VALUES
   (1720000001, 'seed_one', 'success', NULL, 'system', '192.0.2.1', ''),
   (1720000002, 'seed_two', 'success', NULL, 'system', '192.0.2.2', ''),
-  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', ''),
-  (1720000004, 'seed_four', 'success', NULL, 'system', '192.0.2.4', '');
+  (1720000003, 'seed_three', 'success', NULL, 'system', '192.0.2.3', '');
 )sql");
   auto second_store = SecurityStore::Open({state, 5U, 80U});
   ASSERT_TRUE(second_store.ok()) << second_store.error().message;
@@ -2105,6 +2103,34 @@ TEST(SecurityStoreTest, RollbackFailurePoisonsStoreAndHidesLocalState) {
   EXPECT_EQ(transaction.error().code, "E_SECURITY_DB_POISONED");
 }
 
+TEST(SecurityStoreTest, InitializeDeviceAlwaysWritesThePeerAndSkipsRepeats) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+
+  // Deliberately not pre-deduplicated: the peer appears in the list as well as
+  // in its own field, and one address repeats. Both would violate
+  // management_ips_role_ip_unique and abort setup if InitializeDevice inserted
+  // the list verbatim, and the peer's row is written from normalized_peer_ip
+  // before the list is read at all.
+  BootstrapRecord record = MakeBootstrapRecord();
+  record.additional_management_ips = {"2001:db8::10", "198.51.100.7",
+                                      "198.51.100.7", "2001:db8::10"};
+  auto initialized = store.value()->InitializeDevice(std::move(record), [] {
+    return camera_firmware::common::Result<void>::Ok();
+  });
+  ASSERT_TRUE(initialized.ok()) << initialized.error().message;
+
+  EXPECT_EQ(QueryDatabaseTextRows(
+                state / "security.db",
+                "SELECT normalized_ip || '|' || role_scope || '|' || enabled "
+                "FROM management_ips ORDER BY id;"),
+            (std::vector<std::string>{"2001:db8::10|administrator|1",
+                                      "198.51.100.7|administrator|1"}));
+}
+
 TEST(SecurityStoreTest, TransactionCanCommitAfterStoreIsDestroyed) {
   ResetSqliteHooks();
   TemporaryDirectory root;
@@ -2520,10 +2546,14 @@ TEST(SecurityStoreTest,
                        "SELECT COUNT(*) FROM audit_events WHERE event_type = "
                        "'bootstrap_completed' AND outcome = 'success';"),
               0);
+    // Two rotations, not one: setup writes its grant of the confirming peer
+    // and then bootstrap_completed, which at capacity 1 rotates the grant out
+    // during setup itself. The failed login then rotates bootstrap_completed
+    // out in turn, which is the state this test exists to reopen from.
     EXPECT_EQ(QueryTextRows(last_opened_database,
                             "SELECT rotated_event_count || '|' || "
                             "last_rotated_sequence FROM audit_state;"),
-              std::vector<std::string>({"1|1"}));
+              std::vector<std::string>({"2|2"}));
   }
 
   auto reopened = SecurityStore::Open({state, 1U, 80U});
@@ -3342,16 +3372,20 @@ TEST(SecurityStoreTest,
       "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
       "event_type || '|' || outcome || '|' || actor_identity || '|' || "
       "subject_identity FROM audit_events ORDER BY sequence;");
+  // Sequences 1 and 2 are the two rows setup writes — the grant of the
+  // confirming peer and bootstrap_completed — and both rotate out under the
+  // two concurrent viewer insertions, exactly as the single bootstrap row did
+  // before setup began recording its grants.
   const std::vector<std::string> first_then_second{
-      "3|1720000002|seed_two|success|system|",
-      "4|1720000003|seed_three|success|system|",
-      "5|1720000004|seed_four|success|system|",
+      "3|1720000001|seed_one|success|system|",
+      "4|1720000002|seed_two|success|system|",
+      "5|1720000003|seed_three|success|system|",
       "6|1720000101|viewer_created|success|operator.one|monitor.east",
       "7|1720000102|viewer_created|success|operator.one|monitor.west"};
   const std::vector<std::string> second_then_first{
-      "3|1720000002|seed_two|success|system|",
-      "4|1720000003|seed_three|success|system|",
-      "5|1720000004|seed_four|success|system|",
+      "3|1720000001|seed_one|success|system|",
+      "4|1720000002|seed_two|success|system|",
+      "5|1720000003|seed_three|success|system|",
       "6|1720000102|viewer_created|success|operator.one|monitor.west",
       "7|1720000101|viewer_created|success|operator.one|monitor.east"};
   ASSERT_EQ(retained.size(), 5U);

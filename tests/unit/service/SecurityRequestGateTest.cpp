@@ -1,6 +1,7 @@
 #include "camera_firmware/service/BoundedWorker.hpp"
 #include "camera_firmware/service/SecurityRequestGate.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -112,6 +113,153 @@ TEST(SecurityRequestGateTest, DefaultStateAllowsOnlyExactSetupSurface) {
     ASSERT_FALSE(result.ok()) << path;
     EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
   }
+}
+
+TEST(SecurityRequestGateTest, DefaultStateAdmitsOnlyTheSetupSurface) {
+  // Reuses the existing Request() helper (state = kDefault, normalized_peer_ip
+  // and expected_origin pre-filled) rather than building a second raw
+  // SecurityRequestContext literal.
+  const auto context = [](std::string path, std::string method) {
+    auto value = Request(std::move(path), std::move(method));
+    value.origin = std::string(kOrigin);
+    value.has_management_header = true;
+    return value;
+  };
+
+  const std::vector<std::pair<std::string, std::string>> allowed = {
+      {"/api/v1/setup/status", "GET"},
+      {"/api/v1/auth/login", "POST"},
+      {"/api/v1/auth/me", "GET"},
+      {"/api/v1/auth/logout", "POST"},
+      {"/api/v1/setup/initialize", "POST"},
+      {"/api/v1/setup/runtime", "POST"}};
+  for (const auto& [path, method] : allowed) {
+    EXPECT_TRUE(AuthorizeSecurityRequest(context(path, method)).ok())
+        << path << " " << method;
+  }
+
+  const std::vector<std::pair<std::string, std::string>> denied = {
+      {"/api/v1/security/users", "GET"},
+      {"/api/v1/settings/runtime", "GET"},
+      {"/api/v1/audit/events", "GET"},
+      {"/api/v1/monitoring/cameras", "GET"},
+      {"/api/v1/cameras", "GET"},
+      {"/api/v1/system/protection", "GET"},
+      {"/api/v1/auth/password", "PUT"},
+      {"/api/v1/setup/status", "POST"}};
+  for (const auto& [path, method] : denied) {
+    const auto result = AuthorizeSecurityRequest(context(path, method));
+    ASSERT_FALSE(result.ok()) << path << " " << method;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path << " " << method;
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     DefaultStateGateDeniesFullRouteMethodMatrixExceptTheSix) {
+  // The fixed-list check above only proves the paths someone thought to
+  // write down. This crosses every route path known to the operational
+  // branch (administrator and viewer routes, audit, settings, camera,
+  // security-management, monitoring, ai) plus near-miss variants of the six
+  // admitted paths (trailing slash, suffix, prefix, parent) against every
+  // HTTP method, and asserts denial for every pair that is not exactly one
+  // of the six. Static-asset paths ("/", "/index.html", ...) are excluded:
+  // they bypass the device-state gate entirely, before and independent of
+  // this task, and are covered by DefaultStateAllowsOnlyExactSetupSurface.
+  const auto context = [](std::string path, std::string method) {
+    auto value = Request(std::move(path), std::move(method));
+    value.origin = std::string(kOrigin);
+    value.has_management_header = true;
+    return value;
+  };
+
+  const std::vector<std::pair<std::string, std::string>> allowed = {
+      {"/api/v1/setup/status", "GET"},
+      {"/api/v1/auth/login", "POST"},
+      {"/api/v1/auth/me", "GET"},
+      {"/api/v1/auth/logout", "POST"},
+      {"/api/v1/setup/initialize", "POST"},
+      {"/api/v1/setup/runtime", "POST"}};
+
+  const std::vector<std::string> paths = {
+      // The six admitted paths themselves (every method but the admitted
+      // one for each must still be denied).
+      "/api/v1/setup/status",
+      "/api/v1/auth/login",
+      "/api/v1/auth/me",
+      "/api/v1/auth/logout",
+      "/api/v1/setup/initialize",
+      "/api/v1/setup/runtime",
+      // Every other known route surface, operational or not.
+      "/api/v1/auth/password",
+      "/api/v1/auth/reauthenticate",
+      "/api/v1/security/users",
+      "/api/v1/security/users/7",
+      "/api/v1/security/users/7/enabled",
+      "/api/v1/security/users/7/password",
+      "/api/v1/security/management-ips",
+      "/api/v1/security/management-ips/viewer",
+      "/api/v1/security/management-ips/viewer/7",
+      "/api/v1/audit/status",
+      "/api/v1/audit/events",
+      "/api/v1/system/protection",
+      "/api/v1/system/self-tests",
+      "/api/v1/system/integrity-checks",
+      "/api/v1/health",
+      "/api/v1/cameras",
+      "/api/v1/cameras/main/snapshot.jpg",
+      "/api/v1/cameras/main/live.mp4",
+      "/api/v1/stream",
+      "/api/v1/settings/runtime",
+      "/api/v1/settings/runtime/apply",
+      "/api/v1/settings/runtime/discard",
+      "/api/v1/monitoring/cameras",
+      "/api/v1/ai/detections",
+      "/api/v1/ai/detections/stream",
+      "/api/v1/ai/restart",
+      "/api/v1/runtime/restart",
+      // Near-miss variants of the six admitted paths: a route table keyed
+      // on prefix or substring matching would wrongly admit these.
+      "/api/v1/setup/status/",
+      "/api/v1/setup/status/extra",
+      "/api/v1/setup/statusx",
+      "/api/v1/auth/login/",
+      "/api/v1/auth/loginx",
+      "/api/v1/auth/me/",
+      "/api/v1/auth/mex",
+      "/api/v1/auth/logout/",
+      "/api/v1/auth/logoutx",
+      "/api/v1/setup/initialize/",
+      "/api/v1/setup/initializex",
+      "/api/v1/setup/runtime/",
+      "/api/v1/setup/runtimex",
+      "/api/v1/setup",
+      "/api/v1/setup/",
+      "/api/v1/auth",
+  };
+
+  constexpr std::array<const char*, 5> methods = {"GET", "POST", "PUT",
+                                                   "PATCH", "DELETE"};
+
+  std::size_t checked = 0U;
+  for (const auto& path : paths) {
+    for (const auto* method : methods) {
+      const bool is_allowed =
+          std::find(allowed.begin(), allowed.end(),
+                    std::pair<std::string, std::string>{path, method}) !=
+          allowed.end();
+      if (is_allowed) {
+        continue;
+      }
+      ++checked;
+      const auto result = AuthorizeSecurityRequest(context(path, method));
+      ASSERT_FALSE(result.ok()) << path << " " << method;
+      EXPECT_EQ(result.error().code, "E_ACCESS_DENIED")
+          << path << " " << method;
+    }
+  }
+  // Sanity check that the matrix actually exercised a large number of
+  // pairs and did not silently collapse to a near-empty loop.
+  EXPECT_GT(checked, 200U);
 }
 
 TEST(SecurityRequestGateTest, DefaultGateChecksAllowlistBeforeCsrf) {
@@ -812,6 +960,129 @@ TEST(SecurityRequestGateTest, SetupJsonRequiresExactPeerFieldAndBounds) {
       "application/json");
   ASSERT_FALSE(oversized_ip.ok());
   EXPECT_EQ(oversized_ip.error().code, "E_INVALID_REQUEST");
+}
+
+TEST(SecurityRequestGateTest, SetupJsonAcceptsAnOptionalManagementIpArray) {
+  // Omitted entirely: the wizard's step 2 may add nothing at all, and every
+  // body written before this field existed must keep parsing.
+  auto absent = ParseSetupJson(
+      R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10"})",
+      "application/json");
+  ASSERT_TRUE(absent.ok()) << absent.error().message;
+  EXPECT_TRUE(absent.value().management_ips.empty());
+
+  auto empty = ParseSetupJson(
+      R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10",)"
+      R"("management_ips":[]})",
+      "application/json");
+  ASSERT_TRUE(empty.ok()) << empty.error().message;
+  EXPECT_TRUE(empty.value().management_ips.empty());
+
+  // Key order is not fixed by the parser, so the array is exercised first as
+  // well as last.
+  auto listed = ParseSetupJson(
+      SecureBody(
+          R"({"management_ips":["198.51.100.7","2001:db8::2"],)"
+          R"("username":"operator","password":"ValidPass1!",)"
+          R"("peer_ip":"192.0.2.10"})"),
+      "application/json");
+  ASSERT_TRUE(listed.ok()) << listed.error().message;
+  EXPECT_EQ(listed.value().confirmed_peer_ip, "192.0.2.10");
+  EXPECT_EQ(listed.value().management_ips,
+            (std::vector<std::string>{"198.51.100.7", "2001:db8::2"}));
+
+  // Elements decode in situ, into the same buffer the elements after them
+  // have not been read out of yet. That aliasing exists nowhere else in this
+  // parser: every other string it decodes is the last thing it decodes from
+  // its own region. So the escapes here are deliberately in the elements that
+  // are NOT last — a decoded element has to still be intact after its
+  // successors have been decoded over the bytes that followed it. A single
+  // element, or escapes only in the final one, cannot show that at all.
+  auto escaped = ParseSetupJson(
+      SecureBody(
+          R"({"username":"operator","password":"ValidPass1!",)"
+          R"("peer_ip":"192.0.2.10","management_ips":[)"
+          R"("198.51.100.\u0037","2001:db8:\u003a2","203.0.113.94"]})"),
+      "application/json");
+  ASSERT_TRUE(escaped.ok()) << escaped.error().message;
+  EXPECT_EQ(escaped.value().management_ips,
+            (std::vector<std::string>{"198.51.100.7", "2001:db8::2",
+                                      "203.0.113.94"}));
+
+  // Duplicates survive the parser: deduplication is a setup-time decision, not
+  // a wire-shape one, and rejecting them here would abort setup over something
+  // harmless.
+  auto duplicated = ParseSetupJson(
+      R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10",)"
+      R"("management_ips":["192.0.2.10","192.0.2.10"]})",
+      "application/json");
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error().message;
+  EXPECT_EQ(duplicated.value().management_ips,
+            (std::vector<std::string>{"192.0.2.10", "192.0.2.10"}));
+}
+
+TEST(SecurityRequestGateTest, SetupJsonRejectsMalformedOrUnboundedIpArrays) {
+  const std::string prefix =
+      R"({"username":"operator","password":"ValidPass1!",)"
+      R"("peer_ip":"192.0.2.10","management_ips":)";
+  const std::vector<std::string> invalid = {
+      prefix + R"("198.51.100.7"})",
+      prefix + R"(7})",
+      prefix + R"(null})",
+      prefix + R"([7]})",
+      prefix + R"([""]})",
+      prefix + R"([["198.51.100.7"]]})",
+      prefix + R"({"0":"198.51.100.7"}})",
+      prefix + R"(["198.51.100.7",]})",
+      prefix + R"([,"198.51.100.7"]})",
+      prefix + R"(["198.51.100.7"})",
+      prefix + R"(["198.51.100.7"]} trailing)",
+      R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10",)"
+      R"("management_ips":["198.51.100.7"],"management_ips":["198.51.100.8"]})",
+  };
+  for (const auto& body : invalid) {
+    auto result = ParseSetupJson(body, "application/json");
+    ASSERT_FALSE(result.ok()) << body;
+    EXPECT_EQ(result.error().code, "E_INVALID_REQUEST") << body;
+  }
+
+  auto oversized_entry = ParseSetupJson(
+      R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10",)"
+      "\"management_ips\":[\"" + std::string(46U, '1') + "\"]}",
+      "application/json");
+  ASSERT_FALSE(oversized_entry.ok());
+  EXPECT_EQ(oversized_entry.error().code, "E_INVALID_REQUEST");
+
+  // 32 is the store's per-role ceiling on management_ips rows; a body naming
+  // more addresses than the device could ever hold is refused before any of it
+  // is trusted.
+  const auto body_with = [](std::size_t count) {
+    std::string body =
+        R"({"username":"operator","password":"ValidPass1!",)"
+        R"("peer_ip":"192.0.2.10","management_ips":[)";
+    for (std::size_t index = 0U; index < count; ++index) {
+      body += (index == 0U ? "\"198.51.100." : ",\"198.51.100.") +
+              std::to_string(index + 1U) + "\"";
+    }
+    body += "]}";
+    return body;
+  };
+  auto at_limit = ParseSetupJson(body_with(32U), "application/json");
+  ASSERT_TRUE(at_limit.ok()) << at_limit.error().message;
+  EXPECT_EQ(at_limit.value().management_ips.size(), 32U);
+
+  auto over_limit = ParseSetupJson(body_with(33U), "application/json");
+  ASSERT_FALSE(over_limit.ok());
+  EXPECT_EQ(over_limit.error().code, "E_INVALID_REQUEST");
+
+  // The list belongs to setup only. Login has no use for it and must keep
+  // rejecting every key it does not name.
+  auto login_with_list = ParseLoginJson(
+      R"({"username":"operator","password":"ValidPass1!",)"
+      R"("management_ips":["198.51.100.7"]})",
+      "application/json");
+  ASSERT_FALSE(login_with_list.ok());
+  EXPECT_EQ(login_with_list.error().code, "E_INVALID_REQUEST");
 }
 
 TEST(SecurityRequestGateTest, ReauthenticateJsonRequiresStrictBoundedObject) {

@@ -39,4 +39,18 @@ describe('LoginPage', () => {
     expect(screen.queryByText(/private identity detail/i)).not.toBeInTheDocument();
     expect(password).toHaveValue('');
   });
+
+  it('shows the initial credential panel when the server supplies one', async () => {
+    render(<LoginPage login={vi.fn()} initialCredential={{
+      username: 'setup.x7k2q', password: 'T4m#pR9vLw' }} />);
+
+    expect(await screen.findByText('setup.x7k2q')).toBeInTheDocument();
+    expect(screen.getByText('T4m#pR9vLw')).toBeInTheDocument();
+  });
+
+  it('shows no credential panel when the server supplies none', () => {
+    render(<LoginPage login={vi.fn()} initialCredential={null} />);
+
+    expect(screen.queryByText(/초기 설정|initial setup/i)).not.toBeInTheDocument();
+  });
 });

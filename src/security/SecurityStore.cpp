@@ -22,6 +22,7 @@
 
 #include "camera_firmware/common/SecureBytes.hpp"
 #include "camera_firmware/rtsp/RtspDigestCredentials.hpp"
+#include "camera_firmware/security/UserManagementService.hpp"
 
 namespace camera_firmware::security {
 namespace {
@@ -32,13 +33,75 @@ constexpr int kBusyTimeoutMilliseconds = 1000;
 constexpr int kRevisionTwoSecuritySchema = 2;
 constexpr int kRevisionThreeSecuritySchema = 3;
 constexpr int kRevisionFourSecuritySchema = 4;
-constexpr int kMaximumViewerUsers = 32;
-constexpr int kMaximumManagementIpsPerRole = 32;
 
 enum class ForeignKeyValidation {
   kStrict,
   kAllowLegacyAuditActorOrphans,
 };
+
+// Every statement that yields a StoredSession selects exactly these columns in
+// exactly this order, because one reader unpacks all of them by position.
+// Statements differ only in what follows: an extra join, a different WHERE.
+// Written out three times, adding a column to one of them compiled, ran, and
+// read peer_ip out of the role column with no test failing; there is now one
+// list to add it to and one reader that sees the addition.
+constexpr char kStoredSessionSelect[] =
+    "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
+    "users.display_username, sessions.role, sessions.created_at_seconds, "
+    "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
+    "sessions.peer_ip, sessions.management_expires_at_seconds "
+    "FROM sessions JOIN users ON users.id = sessions.user_id ";
+
+// Joins that column list to one statement's own tail at compile time. The
+// result is NUL-terminated, so it prepares with the -1 length the hand-written
+// literals it replaces used.
+template <std::size_t TailSize>
+constexpr auto StoredSessionSql(const char (&tail)[TailSize]) {
+  std::array<char, sizeof(kStoredSessionSelect) - 1U + TailSize> sql{};
+  std::size_t offset = 0U;
+  for (std::size_t index = 0U; index + 1U < sizeof(kStoredSessionSelect);
+       ++index) {
+    sql[offset++] = kStoredSessionSelect[index];
+  }
+  for (std::size_t index = 0U; index < TailSize; ++index) {
+    sql[offset++] = tail[index];
+  }
+  return sql;
+}
+
+// Unpacks one row of kStoredSessionSelect into the fields it names. Returns
+// false when a column the schema declares NOT NULL came back null, which is
+// the caller's cue to fail the transaction.
+//
+// A template only so that it can take SecurityStore's private StoredSession
+// without naming that type from this namespace, and without putting
+// sqlite3_stmt into a header that has stayed free of sqlite3 so far.
+template <typename Session>
+[[nodiscard]] bool ReadStoredSessionRow(sqlite3_stmt* statement,
+                                        Session& session) {
+  const auto* token_hash =
+      static_cast<const unsigned char*>(::sqlite3_column_blob(statement, 1));
+  const int token_hash_size = ::sqlite3_column_bytes(statement, 1);
+  const auto* username = ::sqlite3_column_text(statement, 3);
+  const auto* role = ::sqlite3_column_text(statement, 4);
+  const auto* peer = ::sqlite3_column_text(statement, 8);
+  if (token_hash == nullptr || token_hash_size < 0 || username == nullptr ||
+      role == nullptr || peer == nullptr) {
+    return false;
+  }
+  session.id = ::sqlite3_column_int64(statement, 0);
+  session.token_hash.assign(token_hash,
+                            static_cast<std::size_t>(token_hash_size));
+  session.user_id = ::sqlite3_column_int64(statement, 2);
+  session.username = reinterpret_cast<const char*>(username);
+  session.role = reinterpret_cast<const char*>(role);
+  session.created_at_seconds = ::sqlite3_column_int64(statement, 5);
+  session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
+  session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
+  session.peer_ip = reinterpret_cast<const char*>(peer);
+  session.management_expires_at_seconds = ::sqlite3_column_int64(statement, 9);
+  return true;
+}
 
 class UniqueFd {
  public:
@@ -1188,7 +1251,7 @@ bool HasValidCommittedState(sqlite3* database,
        (!QuerySingleInt(database,
                         "SELECT COUNT(*) FROM users WHERE role = 'viewer';",
                         value) ||
-        value > kMaximumViewerUsers ||
+        value > static_cast<int>(kMaximumViewerUsers) ||
         !QuerySingleInt(
             database,
             "SELECT COUNT(*) FROM (SELECT role_scope FROM management_ips "
@@ -3440,6 +3503,91 @@ SecurityStore::ReadAuditEvents(const AuditEventQuery& query) const {
   return common::Result<AuditEventQueryResult>::Ok(std::move(result));
 }
 
+common::Result<void> SecurityStore::ReplaceInitialAccount(
+    std::string canonical_username,
+    std::string display_username,
+    PasswordRecord password,
+    std::int64_t now_seconds) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError(started.error().code == "E_SECURITY_DB_POISONED"
+                          ? "E_SECURITY_DB_POISONED"
+                          : "E_BOOTSTRAP_STORE",
+                      started.error().code == "E_SECURITY_DB_POISONED"
+                          ? "security store is unavailable"
+                          : "initial account transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  const auto fail = [&transaction](std::string code, std::string message) {
+    auto rollback = transaction.Rollback();
+    if (!rollback.ok()) {
+      return StoreError("E_BOOTSTRAP_STORE",
+                        "initial account rollback failed");
+    }
+    return StoreError(std::move(code), std::move(message));
+  };
+
+  try {
+    auto state = StateUnderConnectionLease();
+    if (!state.ok()) {
+      return fail("E_BOOTSTRAP_STORE", "initial account transaction failed");
+    }
+    if (state.value() != DeviceState::kDefault) {
+      return fail("E_BOOTSTRAP_UNAVAILABLE", "device setup is unavailable");
+    }
+
+    // In `default` state every row in `users` is an initial account, so this
+    // clears the previous one without needing to mark it.
+    PreparedStatement removal(impl_->database.get(), "DELETE FROM users;");
+    if (!removal.valid() || ::sqlite3_step(removal.get()) != SQLITE_DONE) {
+      return fail("E_BOOTSTRAP_STORE", "initial account transaction failed");
+    }
+
+    PreparedStatement insertion(
+        impl_->database.get(),
+        "INSERT INTO users "
+        "(canonical_username, display_username, role, enabled, "
+        "password_algorithm, password_iterations, password_salt, "
+        "password_derived, password_changed_at_seconds, "
+        "failed_login_count, created_at_seconds) "
+        "VALUES (?1, ?2, 'viewer', 1, ?3, ?4, ?5, ?6, ?7, 0, ?7);");
+    if (!insertion.valid() ||
+        ::sqlite3_bind_text(insertion.get(), 1, canonical_username.data(),
+                            static_cast<int>(canonical_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_text(insertion.get(), 2, display_username.data(),
+                            static_cast<int>(display_username.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_text(insertion.get(), 3, password.algorithm.data(),
+                            static_cast<int>(password.algorithm.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_int64(insertion.get(), 4, password.iterations) !=
+            SQLITE_OK ||
+        ::sqlite3_bind_blob(insertion.get(), 5, password.salt.data(),
+                            static_cast<int>(password.salt.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_blob(insertion.get(), 6, password.derived.data(),
+                            static_cast<int>(password.derived.size()),
+                            SQLITE_TRANSIENT) != SQLITE_OK ||
+        ::sqlite3_bind_int64(insertion.get(), 7, now_seconds) != SQLITE_OK ||
+        ::sqlite3_step(insertion.get()) != SQLITE_DONE) {
+      return fail("E_BOOTSTRAP_STORE", "initial account transaction failed");
+    }
+
+    auto committed = transaction.Commit();
+    if (!committed.ok()) {
+      return fail("E_BOOTSTRAP_STORE", "initial account transaction failed");
+    }
+    return common::Result<void>::Ok();
+  } catch (...) {
+    if (transaction.active()) {
+      (void)transaction.Rollback();
+    }
+    return StoreError("E_BOOTSTRAP_STORE",
+                      "initial account transaction failed");
+  }
+}
+
 common::Result<void> SecurityStore::InitializeDevice(
     BootstrapRecord record,
     const CredentialInstaller& install_credential) {
@@ -3468,6 +3616,36 @@ common::Result<void> SecurityStore::InitializeDevice(
     }
     if (state.value() != DeviceState::kDefault) {
       return fail("E_BOOTSTRAP_UNAVAILABLE", "device setup is unavailable");
+    }
+
+    // Remove the initial account before creating the administrator. The device
+    // is still in `default` state, where every row in `users` is an initial
+    // account. The removal shares this transaction, so a failure anywhere below
+    // rolls it back and leaves the initial account usable.
+    std::string removed_initial_username;
+    {
+      PreparedStatement existing(
+          impl_->database.get(),
+          "SELECT canonical_username FROM users ORDER BY id LIMIT 1;");
+      if (!existing.valid()) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+      const int existing_step = ::sqlite3_step(existing.get());
+      if (existing_step == SQLITE_ROW) {
+        const auto* identity = ::sqlite3_column_text(existing.get(), 0);
+        if (identity == nullptr) {
+          return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+        }
+        removed_initial_username = reinterpret_cast<const char*>(identity);
+      } else if (existing_step != SQLITE_DONE) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+    }
+    if (!removed_initial_username.empty()) {
+      PreparedStatement removal(impl_->database.get(), "DELETE FROM users;");
+      if (!removal.valid() || ::sqlite3_step(removal.get()) != SQLITE_DONE) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
     }
 
     sqlite3_stmt* raw_user = nullptr;
@@ -3527,16 +3705,85 @@ common::Result<void> SecurityStore::InitializeDevice(
     }
     std::unique_ptr<sqlite3_stmt, decltype(finalize)> management_ip(
         raw_management_ip, finalize);
-    if (::sqlite3_bind_text(management_ip.get(), 1,
-                            record.normalized_peer_ip.data(),
-                            static_cast<int>(record.normalized_peer_ip.size()),
-                            SQLITE_TRANSIENT) != SQLITE_OK ||
-        ::sqlite3_bind_int64(management_ip.get(), 2,
-                             record.completed_at_seconds) != SQLITE_OK ||
-        ::sqlite3_step(management_ip.get()) != SQLITE_DONE) {
+    // One grant: the row, then its audit record, in that order and never one
+    // without the other. Both live in this transaction, so a rollback takes
+    // the pair — an audit trail that can record a grant the device did not
+    // make, or miss one it did, is worse than no trail at all.
+    //
+    // The audit columns are the ones InsertManagementIp writes for the same
+    // grant performed after setup, so the two paths are indistinguishable to
+    // anyone reading the trail. The actor is the administrator this
+    // transaction just created: InsertAuditEvent resolves actor_identity from
+    // `users`, and the account that authorized this — the initial account —
+    // was deleted a few statements ago by this same transaction, so it has no
+    // row left to name and audit_events.actor_user_id could not reference it.
+    // The two audit rows already written here made the same choice.
+    const auto grant_management_ip =
+        [&](const std::string& normalized_ip) -> common::Result<void> {
+      if (::sqlite3_reset(management_ip.get()) != SQLITE_OK ||
+          ::sqlite3_clear_bindings(management_ip.get()) != SQLITE_OK ||
+          ::sqlite3_bind_text(management_ip.get(), 1, normalized_ip.data(),
+                              static_cast<int>(normalized_ip.size()),
+                              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_bind_int64(management_ip.get(), 2,
+                               record.completed_at_seconds) != SQLITE_OK ||
+          ::sqlite3_step(management_ip.get()) != SQLITE_DONE) {
+        return StoreError("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+      return InsertAuditEvent(transaction, record.completed_at_seconds,
+                              "management_ip_created", "success", user_id,
+                              record.normalized_peer_ip, "created",
+                              "management_ip", normalized_ip);
+    };
+
+    // The confirming peer, always, before anything the operator submitted is
+    // looked at. Its address comes from record.normalized_peer_ip, which no
+    // entry in additional_management_ips can reach, and the loop below only
+    // ever adds rows. There is therefore no submission — empty, wrong, or
+    // hostile — that can leave this device without a route back to the peer
+    // that set it up, which matters because the administrator password is
+    // irrecoverable and an unreachable device needs reflashing.
+    if (!grant_management_ip(record.normalized_peer_ip).ok()) {
       return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
     }
+
+    // Deduplicated here rather than left to management_ips_role_ip_unique: a
+    // repeat is an ordinary thing for an operator to submit (the wizard shows
+    // the current peer as already registered), and a constraint violation
+    // would abort the whole transaction and fail setup over it. A collapsed
+    // duplicate writes no audit row either, so the trail names addresses the
+    // device actually granted rather than lines the operator typed.
+    std::vector<std::string> registered_ips;
+    registered_ips.reserve(record.additional_management_ips.size() + 1U);
+    registered_ips.push_back(record.normalized_peer_ip);
+    for (const auto& additional : record.additional_management_ips) {
+      if (std::find(registered_ips.begin(), registered_ips.end(),
+                    additional) != registered_ips.end()) {
+        continue;
+      }
+      if (registered_ips.size() >= kMaximumManagementIpsPerRole) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+      if (!grant_management_ip(additional).ok()) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+      registered_ips.push_back(additional);
+    }
     management_ip.reset();
+
+    // Recorded after the administrator insert because InsertAuditEvent resolves
+    // the actor identity from `users`, and the administrator completing setup is
+    // the actor. Only the account name is recorded; the initial password never
+    // reaches the audit trail.
+    if (!removed_initial_username.empty()) {
+      auto removal_audited = InsertAuditEvent(
+          transaction, record.completed_at_seconds, "initial_account_deleted",
+          "success", user_id, record.normalized_peer_ip, "deleted", "user",
+          removed_initial_username);
+      if (!removal_audited.ok()) {
+        return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
+      }
+    }
 
     auto audited = InsertAuditEvent(
         transaction, record.completed_at_seconds, "bootstrap_completed",
@@ -4372,14 +4619,8 @@ SecurityStore::ReadSessionByUserId(Transaction& transaction,
     return failure();
   }
   sqlite3_stmt* statement = nullptr;
-  constexpr const char* kSql =
-      "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
-      "users.display_username, sessions.role, sessions.created_at_seconds, "
-      "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
-      "sessions.peer_ip, sessions.management_expires_at_seconds "
-      "FROM sessions JOIN users ON users.id = "
-      "sessions.user_id WHERE sessions.user_id = ?1;";
-  if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
+  static constexpr auto kSql = StoredSessionSql("WHERE sessions.user_id = ?1;");
+  if (::sqlite3_prepare_v2(impl_->database.get(), kSql.data(), -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_int64(statement, 1, user_id) != SQLITE_OK) {
     if (statement != nullptr) {
@@ -4396,29 +4637,11 @@ SecurityStore::ReadSessionByUserId(Transaction& transaction,
     (void)::sqlite3_finalize(statement);
     return failure();
   }
-  const auto* token_hash = static_cast<const unsigned char*>(
-      ::sqlite3_column_blob(statement, 1));
-  const int token_hash_size = ::sqlite3_column_bytes(statement, 1);
-  const auto* username = ::sqlite3_column_text(statement, 3);
-  const auto* role = ::sqlite3_column_text(statement, 4);
-  const auto* peer = ::sqlite3_column_text(statement, 8);
-  if (token_hash == nullptr || token_hash_size < 0 || username == nullptr ||
-      role == nullptr || peer == nullptr) {
+  StoredSession session;
+  if (!ReadStoredSessionRow(statement, session)) {
     (void)::sqlite3_finalize(statement);
     return failure();
   }
-  StoredSession session;
-  session.id = ::sqlite3_column_int64(statement, 0);
-  session.token_hash.assign(token_hash,
-                            static_cast<std::size_t>(token_hash_size));
-  session.user_id = ::sqlite3_column_int64(statement, 2);
-  session.username = reinterpret_cast<const char*>(username);
-  session.role = reinterpret_cast<const char*>(role);
-  session.created_at_seconds = ::sqlite3_column_int64(statement, 5);
-  session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
-  session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
-  session.peer_ip = reinterpret_cast<const char*>(peer);
-  session.management_expires_at_seconds = ::sqlite3_column_int64(statement, 9);
   if (::sqlite3_step(statement) != SQLITE_DONE ||
       ::sqlite3_finalize(statement) != SQLITE_OK) {
     return failure();
@@ -4441,19 +4664,41 @@ SecurityStore::ReadSessionByTokenHash(
       impl_->database == nullptr) {
     return failure();
   }
+  // The management_ips join is what stops a session that is still inside its
+  // idle deadline from being used once its peer has stopped being a management
+  // peer for that role. An uninitialized device has no management_ips row at
+  // all — the first one is written by InitializeDevice — so on that device
+  // the join can only ever fail, which is what made the initial account's
+  // session unusable for auth/me and auth/logout.
+  //
+  // The state is read from this same transaction, so the operational statement
+  // is selected from the instant InitializeDevice commits. That is the same
+  // transaction that deletes the initial account, and sessions.user_id is
+  // ON DELETE CASCADE, so there is no session left for the default-state
+  // statement to find even if it could be selected.
+  auto state = StateUnderConnectionLease();
+  if (!state.ok()) {
+    return failure();
+  }
   sqlite3_stmt* statement = nullptr;
-  constexpr const char* kSql =
-      "SELECT sessions.id, sessions.token_hash, sessions.user_id, "
-      "users.display_username, sessions.role, sessions.created_at_seconds, "
-      "sessions.last_activity_at_seconds, sessions.expires_at_seconds, "
-      "sessions.peer_ip, sessions.management_expires_at_seconds "
-      "FROM sessions JOIN users ON users.id = "
-      "sessions.user_id JOIN management_ips ON "
+  static constexpr auto kOperationalSql = StoredSessionSql(
+      "JOIN management_ips ON "
       "management_ips.normalized_ip = ?2 AND "
       "management_ips.role_scope = sessions.role AND "
       "management_ips.enabled = 1 WHERE sessions.token_hash = ?1 AND "
       "sessions.peer_ip = ?2 AND sessions.expires_at_seconds > ?3 AND "
-      "users.enabled = 1 AND users.role = sessions.role;";
+      "users.enabled = 1 AND users.role = sessions.role;");
+  // Identical apart from the join it cannot satisfy — the shared column list
+  // makes that literal rather than a claim. Same bind parameters, and every
+  // other restriction intact: the session is still bound to the one peer that
+  // created it, to an enabled user, and to a role that matches that user's.
+  static constexpr auto kDefaultStateSql = StoredSessionSql(
+      "WHERE sessions.token_hash = ?1 AND "
+      "sessions.peer_ip = ?2 AND sessions.expires_at_seconds > ?3 AND "
+      "users.enabled = 1 AND users.role = sessions.role;");
+  const char* const kSql = state.value() == DeviceState::kOperational
+                               ? kOperationalSql.data()
+                               : kDefaultStateSql.data();
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_blob(statement, 1, token_hash.data(),
@@ -4477,29 +4722,11 @@ SecurityStore::ReadSessionByTokenHash(
     (void)::sqlite3_finalize(statement);
     return failure();
   }
-  const auto* stored_hash = static_cast<const unsigned char*>(
-      ::sqlite3_column_blob(statement, 1));
-  const int stored_hash_size = ::sqlite3_column_bytes(statement, 1);
-  const auto* username = ::sqlite3_column_text(statement, 3);
-  const auto* role = ::sqlite3_column_text(statement, 4);
-  const auto* peer = ::sqlite3_column_text(statement, 8);
-  if (stored_hash == nullptr || stored_hash_size < 0 || username == nullptr ||
-      role == nullptr || peer == nullptr) {
+  StoredSession session;
+  if (!ReadStoredSessionRow(statement, session)) {
     (void)::sqlite3_finalize(statement);
     return failure();
   }
-  StoredSession session;
-  session.id = ::sqlite3_column_int64(statement, 0);
-  session.token_hash.assign(stored_hash,
-                            static_cast<std::size_t>(stored_hash_size));
-  session.user_id = ::sqlite3_column_int64(statement, 2);
-  session.username = reinterpret_cast<const char*>(username);
-  session.role = reinterpret_cast<const char*>(role);
-  session.created_at_seconds = ::sqlite3_column_int64(statement, 5);
-  session.last_activity_at_seconds = ::sqlite3_column_int64(statement, 6);
-  session.expires_at_seconds = ::sqlite3_column_int64(statement, 7);
-  session.peer_ip = reinterpret_cast<const char*>(peer);
-  session.management_expires_at_seconds = ::sqlite3_column_int64(statement, 9);
   if (::sqlite3_step(statement) != SQLITE_DONE ||
       ::sqlite3_finalize(statement) != SQLITE_OK) {
     return failure();
@@ -5450,7 +5677,7 @@ common::Result<StoredManagementIp> SecurityStore::InsertManagementIp(
     if (duplicate) {
       return reject("E_MANAGEMENT_IP_DUPLICATE", "duplicate_ip");
     }
-    if (count >= kMaximumManagementIpsPerRole) {
+    if (count >= static_cast<sqlite3_int64>(kMaximumManagementIpsPerRole)) {
       return reject("E_MANAGEMENT_IP_LIMIT", "role_limit");
     }
     PreparedStatement insert(
@@ -5578,7 +5805,7 @@ common::Result<CommittedRevocation> SecurityStore::UpdateManagementIp(
       count = ::sqlite3_column_int64(checks.get(), 0);
       duplicate = ::sqlite3_column_int(checks.get(), 1) != 0;
     }
-    if (count > kMaximumManagementIpsPerRole) {
+    if (count > static_cast<sqlite3_int64>(kMaximumManagementIpsPerRole)) {
       return reject("E_MANAGEMENT_IP_LIMIT", "role_limit",
                     normalized_replacement);
     }
@@ -5727,7 +5954,7 @@ common::Result<CommittedRevocation> SecurityStore::DeleteManagementIp(
       }
       count = ::sqlite3_column_int64(count_statement.get(), 0);
     }
-    if (count > kMaximumManagementIpsPerRole) {
+    if (count > static_cast<sqlite3_int64>(kMaximumManagementIpsPerRole)) {
       return reject("E_MANAGEMENT_IP_LIMIT", "role_limit");
     }
     if (role == UserRole::kAdministrator &&

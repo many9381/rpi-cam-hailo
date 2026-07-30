@@ -10,6 +10,7 @@
 #include "camera_firmware/common/SecureBytes.hpp"
 #include "camera_firmware/security/AuthService.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
+#include "camera_firmware/security/UserManagementService.hpp"
 
 namespace camera_firmware::service {
 
@@ -33,10 +34,34 @@ struct ParsedLoginRequest {
   common::SecureBytes password;
 };
 
+// The largest `management_ips` array `ParseSetupJson` will read. It matches
+// security::kMaximumManagementIpsPerRole, the store's ceiling on rows per role
+// scope: setup writes administrator-scope rows only, so a body naming more
+// addresses than that could never be applied in full and is refused before any
+// of it is trusted. Bounding it here also keeps the parse allocation-bounded
+// independently of kMaximumSecurityBodyBytes.
+inline constexpr std::size_t kMaximumSetupManagementIps = 32U;
+
+// "It matches" above is a claim about two numbers in two headers, and a claim
+// is what silently stopped being true the last time one of them was edited
+// alone. Raising the store's ceiling without raising this one would make the
+// gate reject bodies the store would have accepted; lowering it without
+// lowering this one would let the gate admit a list setup cannot finish
+// applying. Either way the divergence is now a compile error rather than a
+// behaviour to discover in the field.
+static_assert(kMaximumSetupManagementIps ==
+                  security::kMaximumManagementIpsPerRole,
+              "the setup body's management_ips ceiling must track the store's "
+              "per-role limit");
+
 struct ParsedSetupRequest {
   std::string username;
   common::SecureBytes password;
   std::string confirmed_peer_ip;
+  // Additional addresses the operator asked to admit. Optional on the wire and
+  // empty when the key is absent. These are candidates, not the whole answer:
+  // `confirmed_peer_ip` is registered whatever this contains.
+  std::vector<std::string> management_ips;
 };
 
 [[nodiscard]] common::Result<void> AuthorizeSecurityRequest(

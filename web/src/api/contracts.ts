@@ -259,16 +259,31 @@ export function parseSetupStatus(value: unknown): SetupStatus {
         typeof value.peer_ip !== 'string' || value.peer_ip.length === 0) {
       throw new Error('Invalid setup status response');
     }
+    const hasInitialUsername = value.initial_username !== undefined;
+    const hasInitialPassword = value.initial_password !== undefined;
+    if (hasInitialUsername !== hasInitialPassword) {
+      throw new Error('Invalid setup status response');
+    }
+    if (hasInitialUsername && (
+      value.phase !== 'administrator' ||
+      !isNonemptyString(value.initial_username) ||
+      !isNonemptyString(value.initial_password)
+    )) {
+      throw new Error('Invalid setup status response');
+    }
     return {
       required: true,
       phase: value.phase,
       tls: 'ready',
       peer_ip: value.peer_ip,
+      initial_username: hasInitialUsername ? (value.initial_username as string) : null,
+      initial_password: hasInitialUsername ? (value.initial_password as string) : null,
     };
   }
 
   if (value.phase !== undefined || value.tls !== undefined ||
-      value.peer_ip !== undefined) {
+      value.peer_ip !== undefined || value.initial_username !== undefined ||
+      value.initial_password !== undefined) {
     throw new Error('Invalid setup status response');
   }
   return { required: false };
