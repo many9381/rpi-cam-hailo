@@ -143,6 +143,31 @@ bool StateDirectoryContains(const std::filesystem::path& state,
   return false;
 }
 
+void ExecuteDatabaseSql(const std::filesystem::path& database_path,
+                        const char* sql) {
+  sqlite3* database = nullptr;
+  if (::sqlite3_open_v2(database_path.c_str(), &database,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
+                        nullptr) != SQLITE_OK) {
+    if (database != nullptr) {
+      (void)::sqlite3_close_v2(database);
+    }
+    throw std::runtime_error("failed to open test database");
+  }
+  char* error_message = nullptr;
+  const int status = ::sqlite3_exec(database, sql, nullptr, nullptr,
+                                    &error_message);
+  std::string message;
+  if (error_message != nullptr) {
+    message = error_message;
+    ::sqlite3_free(error_message);
+  }
+  (void)::sqlite3_close_v2(database);
+  if (status != SQLITE_OK) {
+    throw std::runtime_error("test database SQL failed: " + message);
+  }
+}
+
 std::string QueryText(const std::filesystem::path& database_path,
                       const char* sql) {
   sqlite3* database = nullptr;
@@ -1107,6 +1132,88 @@ TEST(BootstrapServiceTest, BoundsRegisteredManagementIpsAtThePerRoleLimit) {
                         "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
               "32");
   }
+}
+
+// A power cycle before setup completes must not brick the device. The store's
+// committed-state validation runs on every reopen, and until this test existed
+// its default-state arm asserted zero users — written before the initial
+// account, which legitimately leaves one viewer row in default state.
+TEST(BootstrapServiceTest, ReopensTheStoreWhileTheInitialAccountExists) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+    auto config = BootstrapConfig(state, state / "rtsp.credentials");
+    BootstrapService service(*store.value(), config,
+                             BuildReservedIdentities(config));
+    ASSERT_TRUE(service.EnsureInitialAccount().ok());
+  }
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_EQ(reopened.value()->State().value(), DeviceState::kDefault);
+  EXPECT_EQ(QueryText(reopened.value()->database_path(),
+                      "SELECT role FROM users;"),
+            "viewer");
+
+  // And the next boot's replacement still works against the reopened store.
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*reopened.value(), config,
+                           BuildReservedIdentities(config));
+  ASSERT_TRUE(service.EnsureInitialAccount().ok());
+  EXPECT_EQ(QueryText(reopened.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+}
+
+// The committed-state validator admits one viewer row and one viewer session
+// in default state because this replacement destroys them at every boot,
+// before any listener exists. A planted session's token hash is
+// attacker-chosen, so if EnsureInitialAccount ever skips replacement when an
+// account already exists, that relaxation becomes a live pre-setup session.
+// This test is the pin the validator's comment points at.
+TEST(BootstrapServiceTest, EnsureInitialAccountDestroysPlantedRows) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('planted.viewer', 'Planted.Viewer', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+INSERT INTO sessions
+  (token_hash, user_id, role, created_at_seconds, last_activity_at_seconds,
+   expires_at_seconds, peer_ip, management_expires_at_seconds)
+VALUES (zeroblob(32), (SELECT id FROM users), 'viewer', 2, 2, 999999999999,
+        '192.0.2.10', 999999999999);
+)sql");
+
+  auto store = SecurityStore::Open({state});
+  ASSERT_TRUE(store.ok()) << store.error().message;
+  auto config = BootstrapConfig(state, state / "rtsp.credentials");
+  BootstrapService service(*store.value(), config,
+                           BuildReservedIdentities(config));
+
+  const auto credential = service.EnsureInitialAccount();
+  ASSERT_TRUE(credential.ok()) << credential.error().message;
+
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
+            "1");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM users "
+                      "WHERE canonical_username = 'planted.viewer';"),
+            "0");
+  EXPECT_EQ(QueryText(store.value()->database_path(),
+                      "SELECT CAST(COUNT(*) AS TEXT) FROM sessions;"),
+            "0");
 }
 
 }  // namespace

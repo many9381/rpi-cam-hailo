@@ -70,7 +70,8 @@ select:focus-visible {
   display: grid;
   min-height: 100vh;
   padding: 32px 20px;
-  place-items: center;
+  justify-items: center;
+  align-content: center;
   background: #ecefeb;
 }
 

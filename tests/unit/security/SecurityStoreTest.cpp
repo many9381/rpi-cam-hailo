@@ -2987,6 +2987,191 @@ SELECT '192.0.2.' || value, 'viewer', 1, 2 FROM numbers;
   EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
 }
 
+// The initial account leaves exactly one viewer row — and, once it has signed
+// in, one viewer session — in default state. Reopening that store is the
+// normal power-cycle path of an unconfigured device and must validate.
+TEST(SecurityStoreTest, ReopensDefaultStateWithTheInitialAccountAndItsSession) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('j4c8x84mnvui', 'j4c8x84mnvui', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+INSERT INTO sessions
+  (token_hash, user_id, role, created_at_seconds, last_activity_at_seconds,
+   expires_at_seconds, peer_ip, management_expires_at_seconds)
+VALUES (zeroblob(32), (SELECT id FROM users), 'viewer', 2, 2, 602,
+        '192.0.2.10', 0);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+}
+
+// The relaxation stops at exactly the shape the initial account produces:
+// anything beyond one enabled viewer row is still tampering.
+TEST(SecurityStoreTest, RejectsDefaultStateWithMoreThanOneUser) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('viewer.one', 'Viewer.One', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2),
+       ('viewer.two', 'Viewer.Two', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithADisabledViewer) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('j4c8x84mnvui', 'j4c8x84mnvui', 'viewer', 0,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithPasswordHistory) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('j4c8x84mnvui', 'j4c8x84mnvui', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+INSERT INTO password_history
+  (user_id, password_algorithm, password_iterations, password_salt,
+   password_derived, replaced_at_seconds)
+VALUES ((SELECT id FROM users), 'pbkdf2-hmac-sha256', 600000, zeroblob(16),
+        zeroblob(32), 2);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithAnAdministratorAccount) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('operator.one', 'Operator.One', 'administrator', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithANonViewerSession) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('j4c8x84mnvui', 'j4c8x84mnvui', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+INSERT INTO sessions
+  (token_hash, user_id, role, created_at_seconds, last_activity_at_seconds,
+   expires_at_seconds, peer_ip, management_expires_at_seconds)
+VALUES (zeroblob(32), (SELECT id FROM users), 'administrator', 2, 2, 602,
+        '192.0.2.10', 0);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
+TEST(SecurityStoreTest, RejectsDefaultStateWithARegisteredManagementIp) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok()) << store.error().message;
+  }
+  ExecuteDatabaseSql(state / "security.db", R"sql(
+INSERT INTO users
+  (canonical_username, display_username, role, enabled,
+   password_algorithm, password_iterations, password_salt, password_derived,
+   password_changed_at_seconds, failed_login_count, created_at_seconds)
+VALUES ('j4c8x84mnvui', 'j4c8x84mnvui', 'viewer', 1,
+        'pbkdf2-hmac-sha256', 600000, zeroblob(16), zeroblob(32), 2, 0, 2);
+INSERT INTO management_ips
+  (normalized_ip, role_scope, enabled, created_at_seconds)
+VALUES ('192.0.2.10', 'administrator', 1, 2);
+)sql");
+
+  auto reopened = SecurityStore::Open({state});
+
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
 TEST(SecurityStoreTest, RevisionThreeValidatorRejectsMutatedManagementIndexes) {
   ExpectReopenRejectsSchemaMutation(R"sql(
 DROP INDEX management_ips_role_ip_unique;

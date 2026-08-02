@@ -15,9 +15,8 @@ describe('SetupIpStep', () => {
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
-    expect(screen.getByText(/192\.0\.2\.44/)).toBeVisible();
-    expect(screen.getByLabelText(/current management address/i)).toHaveValue('192.0.2.44');
-    expect(screen.getByLabelText(/current management address/i)).toHaveAttribute('readonly');
+    const registered = screen.getByRole('list', { name: /registered management hosts/i });
+    expect(registered).toHaveTextContent('192.0.2.44 (current session)');
   });
 
   it.each([
