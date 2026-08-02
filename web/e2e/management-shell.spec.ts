@@ -1137,7 +1137,9 @@ test('first boot signs in with the initial account, runs the setup wizard, then 
   await page.getByRole('button', { name: 'Next' }).click();
 
   await expect(page.getByRole('heading', { name: 'Register management access' })).toBeVisible();
-  await expect(page.getByLabel('Current management address')).toHaveValue('192.0.2.44');
+  await expect(
+    page.getByRole('list', { name: 'Registered management hosts' }),
+  ).toContainText('192.0.2.44 (current session)');
   await page.getByLabel('Add a management address').fill('198.51.100.20/24');
   await page.getByRole('button', { name: 'Add host' }).click();
   await expect(page.getByText('Only single hosts may be registered.')).toBeVisible();

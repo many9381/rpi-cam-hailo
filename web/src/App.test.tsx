@@ -369,7 +369,8 @@ describe('App bootstrap gate', () => {
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /next/i }));
     await screen.findByRole('heading', { name: /management access/i });
-    expect(screen.getByLabelText(/current management address/i)).toHaveValue('192.0.2.10');
+    expect(screen.getByRole('list', { name: /registered management hosts/i }))
+      .toHaveTextContent('192.0.2.10 (current session)');
     await user.click(screen.getByRole('button', { name: /^next$/i }));
     await screen.findByRole('heading', { name: /review/i });
 
@@ -385,7 +386,8 @@ describe('App bootstrap gate', () => {
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /next/i }));
     await screen.findByRole('heading', { name: /management access/i });
-    expect(screen.getByLabelText(/current management address/i)).toHaveValue('192.0.2.11');
+    expect(screen.getByRole('list', { name: /registered management hosts/i }))
+      .toHaveTextContent('192.0.2.11 (current session)');
     await user.click(screen.getByRole('button', { name: /^next$/i }));
     await screen.findByRole('heading', { name: /review/i });
 

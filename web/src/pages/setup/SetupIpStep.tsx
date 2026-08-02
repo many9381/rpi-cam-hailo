@@ -115,11 +115,9 @@ export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupI
         Only single hosts may manage this camera &mdash; no ranges, wildcards,
         or CIDR blocks. Your current address is already registered.
       </p>
-      <div className="field">
-        <label htmlFor="wizard-current-peer">Current management address</label>
-        <input id="wizard-current-peer" value={peerIp} readOnly />
-      </div>
-      <ul className="management-host-list" aria-label="Registered management hosts">
+      {/* Explicit role: list-style none strips the implicit list role (and
+          with it the aria-label) in WebKit accessibility trees. */}
+      <ul className="management-host-list" role="list" aria-label="Registered management hosts">
         <li>
           {peerIp} <span className="management-host-tag">(current session)</span>
         </li>

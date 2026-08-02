@@ -1293,12 +1293,42 @@ END
 FROM device_state
 WHERE id = 1;
 )sql";
+  // The default arm admits exactly the shape the initial account produces: at
+  // most one enabled viewer row, and at most one viewer session belonging to
+  // it. The account is minted after this validation runs on first boot, so a
+  // default store may legitimately hold it on every later reopen; anything
+  // beyond that shape is still tampering.
+  //
+  // What makes admitting the row and session safe is NOT that they look like
+  // the product's own: this invariant cannot tell a planted pair from a
+  // legitimate one, and a planted session's token hash is attacker-chosen.
+  // Safety rests on BootstrapService::EnsureInitialAccount running at every
+  // boot in default state, before any listener exists, and unconditionally
+  // replacing all users in default state — which cascades away every session
+  // and password_history row. A refactor that makes EnsureInitialAccount
+  // skip replacement when an account already exists would silently convert
+  // this relaxation into a live pre-setup session; the replacement behaviour
+  // is pinned by BootstrapServiceTest.EnsureInitialAccountDestroysPlantedRows.
+  //
+  // kLegacyStateInvariant above keeps the zero-users arm: it validates only
+  // revisions 2-3, and the strictness matters solely for content those
+  // revisions could have committed themselves, which never included a
+  // pre-setup account. Revision-4 stores validate through this arm (also on
+  // the pre-migration check), where the relaxation is harmless for the same
+  // reason: nothing the relaxed arm admits survives the boot-time
+  // replacement.
   constexpr const char* kRevisionFourStateInvariant = R"sql(
 SELECT CASE state
   WHEN 'default' THEN
-    (SELECT COUNT(*) FROM users) = 0 AND
+    (SELECT COUNT(*) FROM users WHERE role != 'viewer' OR enabled != 1) = 0 AND
+    (SELECT COUNT(*) FROM users) <= 1 AND
+    (SELECT COUNT(*) FROM password_history) = 0 AND
     (SELECT COUNT(*) FROM management_ips) = 0 AND
-    (SELECT COUNT(*) FROM sessions) = 0 AND
+    (SELECT COUNT(*) FROM sessions WHERE role != 'viewer') = 0 AND
+    -- Redundant with the foreign-key check and sessions_user_id_unique, both
+    -- validated earlier in this function; kept as defence in depth so a
+    -- regression in either still fails closed here.
+    (SELECT COUNT(*) FROM sessions) <= (SELECT COUNT(*) FROM users) AND
     (SELECT COUNT(*) FROM audit_events
       WHERE event_type = 'bootstrap_completed' AND outcome = 'success') = 0
   WHEN 'operational' THEN
