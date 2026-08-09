@@ -29,6 +29,7 @@ struct CameraPipelineStatus {
   std::uint64_t encoded_frames{0U};
   std::uint64_t capture_error_count{0U};
   std::uint64_t encode_error_count{0U};
+  std::string ai_source{"main-fallback"};
 };
 
 class CameraPipeline {
