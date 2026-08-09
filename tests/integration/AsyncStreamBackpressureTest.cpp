@@ -89,6 +89,130 @@ SocketFd ConnectWithoutReading(std::uint16_t port) {
   return SocketFd();
 }
 
+// A trial that hit a setup problem (no free port, no connection) rather than
+// running the scenario. The child treats it as a hard failure so a broken
+// environment cannot masquerade as a clean run.
+constexpr int kTrialSetupFailedExitCode = 20;
+// The scenario reproduces within the first ~10 trials (the unguarded build
+// aborts in under 100 ms), so this is deep margin, not a tight race, while
+// staying well inside the target's ctest timeout even under a saturated
+// -j build.
+constexpr int kTeardownTrials = 64;
+
+// One teardown trial: an idle async stream (its node sits at the front of
+// the write buffer list with nothing to write, so the channel is not
+// writing) whose peer resets at the same moment the producer closes the
+// stream. The abort needs handleClose (disableAll, status -> Disconnected,
+// connectDestroyed queued) to run between the close callback being queued
+// and its execution, so that the unguarded close branch re-enables writing
+// on a connection whose channel is about to be removed. The interleaving is
+// scheduler-dependent, so the trial is repeated with a varied pre-close
+// yield; a single hit aborts the process.
+// Returns true if the trial completed without the loop wedging.
+bool RunOneAsyncStreamTeardownTrial(int index) {
+  const auto port = ReserveLoopbackPort();
+  if (port == 0U) {
+    return false;
+  }
+  trantor::EventLoopThread loop_thread;
+  loop_thread.run();
+  auto* loop = loop_thread.getLoop();
+  auto server = std::make_unique<trantor::TcpServer>(
+      loop, trantor::InetAddress("127.0.0.1", port), "async-stream-teardown");
+
+  std::promise<trantor::AsyncStreamPtr> connected;
+  auto connected_future = connected.get_future();
+  std::atomic_bool stream_published{false};
+  server->setConnectionCallback(
+      [&connected, &stream_published](const trantor::TcpConnectionPtr& peer) {
+        if (peer->connected() && !stream_published.exchange(true)) {
+          connected.set_value(peer->sendAsyncStream());
+        }
+      });
+  server->start();
+
+  auto client = ConnectWithoutReading(port);
+  if (client.get() < 0) {
+    return false;
+  }
+  if (connected_future.wait_for(std::chrono::seconds(2)) !=
+      std::future_status::ready) {
+    return false;
+  }
+  auto stream = connected_future.get();
+  if (!stream) {
+    return false;
+  }
+
+  // A small write that drains immediately: the async node stays at the
+  // front of the write buffer list with zero remaining bytes and the
+  // channel stops writing — the idle live-stream state.
+  const char marker = 'x';
+  (void)stream->send(&marker, 1U);
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+  // Reset the peer and close the stream as close together as possible so
+  // their in-loop tasks interleave. The pre-close yield count, varied per
+  // trial, walks the close callback across the handleClose/connectDestroyed
+  // boundary over successive trials.
+  struct linger hard_reset {
+    1, 0
+  };
+  (void)::setsockopt(client.get(), SOL_SOCKET, SO_LINGER, &hard_reset,
+                     sizeof(hard_reset));
+
+  std::promise<void> reset_ready;
+  auto reset_ready_future = reset_ready.get_future();
+  std::thread resetter([&client, &reset_ready] {
+    reset_ready.set_value();
+    SocketFd discard(std::move(client));
+  });
+  reset_ready_future.wait();
+  for (int spin = 0; spin < (index % 32); ++spin) {
+    std::this_thread::yield();
+  }
+  stream->close();
+  resetter.join();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+  std::promise<void> server_destroyed;
+  auto server_destroyed_future = server_destroyed.get_future();
+  loop->queueInLoop([&server, &server_destroyed] {
+    server.reset();
+    server_destroyed.set_value();
+  });
+  return server_destroyed_future.wait_for(std::chrono::seconds(2)) ==
+         std::future_status::ready;
+}
+
+// Body of the death-test child. Extracted to a function because ASSERT_EXIT
+// is a macro: an unparenthesised comma in its first argument (the linger
+// initialiser) would be read as a macro argument separator.
+[[noreturn]] void RunAsyncStreamTeardownRaceChild() {
+  for (int index = 0; index < kTeardownTrials; ++index) {
+    if (!RunOneAsyncStreamTeardownTrial(index)) {
+      // _exit, not exit: the child was forked with a running EventLoopThread,
+      // and atexit/static destructors must not run in it.
+      ::_exit(kTrialSetupFailedExitCode);
+    }
+  }
+  ::_exit(0);
+}
+
+TEST(AsyncStreamTeardownTest, PeerResetRacingAsyncCloseDoesNotAbortTheProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  // Pins the teardown race that aborted the live firmware: a cross-thread
+  // AsyncStream close whose in-loop task runs after the peer's handleClose
+  // has disabled the channel re-enables writing on the dead connection,
+  // and Channel::remove() in connectDestroyed then finds events_ !=
+  // kNoneEvent and aborts. The scenario runs in the death-test child so the
+  // abort, when the defect is present, kills the child, not the suite. Exit
+  // 0 means all trials survived; a signal exit means the assert fired.
+  ASSERT_EXIT(RunAsyncStreamTeardownRaceChild(),
+              ::testing::ExitedWithCode(0), "");
+}
+
 TEST(AsyncStreamBackpressureTest, RejectsProducerBeforeSlowPeerQueues16MiB) {
   const auto port = ReserveLoopbackPort();
   ASSERT_NE(port, 0U);

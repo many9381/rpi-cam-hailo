@@ -272,7 +272,7 @@ index 8fddf1a..8f6407b 100644
              return true;
          });
      if (loop_->isInLoopThread())
-@@ -965,54 +1049,69 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -965,54 +1049,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
      }
      return asyncStream;
  }
@@ -283,6 +283,16 @@ index 8fddf1a..8f6407b 100644
 +                                            size_t len) noexcept
  {
      loop_->assertInLoopThread();
++    if (status_ != ConnStatus::Connected)
++    {
++        // Mirror sendInLoop: once the connection has left Connected the
++        // channel must not be touched. A queued async close or send can
++        // run after the peer's handleClose has disabled the channel;
++        // re-enabling writing here would leave events_ != kNoneEvent for
++        // the Channel::remove() in connectDestroyed, whose assertion then
++        // aborts the process.
++        return false;
++    }
 -    if (data)
 +    try
      {
