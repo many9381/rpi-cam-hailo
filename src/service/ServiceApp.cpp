@@ -874,7 +874,7 @@ static_assert(kMaximumTransportBodyBytes >
               kMaximumRuntimeSettingsBodyBytes);
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
 constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
-constexpr std::uint32_t kDetectionSseReconnectMs{1000};
+constexpr std::uint32_t kDetectionSseReconnectMs{200};
 
 double SafeMilliseconds(double milliseconds) {
   return std::isfinite(milliseconds) && milliseconds >= 0.0
