@@ -804,16 +804,46 @@ common::Result<std::string> NormalizePeerIp(std::string_view peer_ip) {
 
 common::Result<common::SecureBytes> ParseSessionCookie(
     std::string_view cookie_header) {
-  const std::size_t equals = cookie_header.find('=');
-  if (cookie_header.empty() ||
-      cookie_header.find(';') != std::string_view::npos ||
-      equals == std::string_view::npos || equals == 0U ||
-      cookie_header.find('=', equals + 1U) != std::string_view::npos ||
-      cookie_header.find_first_of("\t\r\n ") != std::string_view::npos ||
-      cookie_header.substr(0, equals) != kSessionCookieName) {
+  // Browsers scope cookies per host and ignore the port, so any cookie ever
+  // set by another service on this address arrives in the same Cookie line,
+  // joined by ";" (RFC 6265 section 5.4). Select our pair and ignore the rest:
+  // rejecting the whole line locks the operator out of every authenticated
+  // route the moment an unrelated cookie exists for the host. Foreign pairs
+  // are opaque — their names and values are not ours to validate. Two
+  // camera_session pairs are ambiguous (which token reaches Verify would
+  // depend on selection order), so duplicates fail closed, and the strict
+  // 64-lowercase-hex token validation below is unchanged.
+  std::optional<std::string_view> token_view;
+  std::size_t begin = 0U;
+  while (begin <= cookie_header.size()) {
+    std::size_t end = cookie_header.find(';', begin);
+    if (end == std::string_view::npos) {
+      end = cookie_header.size();
+    }
+    std::string_view segment = cookie_header.substr(begin, end - begin);
+    while (!segment.empty() &&
+           (segment.front() == ' ' || segment.front() == '\t')) {
+      segment.remove_prefix(1U);
+    }
+    while (!segment.empty() &&
+           (segment.back() == ' ' || segment.back() == '\t')) {
+      segment.remove_suffix(1U);
+    }
+    const std::size_t equals = segment.find('=');
+    if (equals != std::string_view::npos &&
+        segment.substr(0, equals) == kSessionCookieName) {
+      if (token_view.has_value()) {
+        return InvalidRequest<common::SecureBytes>(
+            "E_AUTHENTICATION_REQUIRED");
+      }
+      token_view = segment.substr(equals + 1U);
+    }
+    begin = end + 1U;
+  }
+  if (!token_view.has_value()) {
     return InvalidRequest<common::SecureBytes>("E_AUTHENTICATION_REQUIRED");
   }
-  const std::string_view token = cookie_header.substr(equals + 1U);
+  const std::string_view token = *token_view;
   if (token.size() != kSessionTokenBytes * 2U) {
     return InvalidRequest<common::SecureBytes>("E_AUTHENTICATION_REQUIRED");
   }

@@ -836,17 +836,75 @@ TEST(SecurityRequestGateTest, SessionCookieIsStrictAndRejectsDuplicates) {
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_EQ(parsed.value().size(), 32U);
 
-  std::vector<std::string> invalid = {
-      "", "camera_session=", "camera_session=" + std::string(63U, 'a'),
+  const std::vector<std::string> invalid = {
+      "",
+      "camera_session=",
+      "camera_session=" + std::string(63U, 'a'),
       "camera_session=" + std::string(64U, 'A'),
+      // Two camera_session pairs are ambiguous: the token that reaches
+      // Verify would depend on selection order, so both identical and
+      // differing duplicates fail closed.
       "camera_session=" + token + "; camera_session=" + token,
-      "camera_session=" + token + "; broken", "camera_session =" + token};
-  invalid.push_back("camera_session=" + token + ";");
-  invalid.push_back("theme=dark; camera_session=" + token);
+      "camera_session=" + token + "; camera_session=" + std::string(64U, 'b'),
+      // Space before '=' makes the name "camera_session ", which is not our
+      // cookie: RFC 6265 permits no whitespace around '=' in a cookie-pair.
+      "camera_session =" + token,
+      // A lone foreign pair carries no session at all.
+      "theme=dark",
+      // Cookie names are case-sensitive: an attacker-planted upper-case
+      // variant must not be readable as ours.
+      "CAMERA_SESSION=" + token,
+      // The ambiguity rule counts every camera_session pair, not only ones
+      // whose value could be a token.
+      "camera_session=" + token + "; camera_session=short",
+      // Only ';' separates pairs. ',' is storable inside a browser cookie
+      // value, so a parser that also split on ',' would let a foreign
+      // cookie smuggle a camera_session pair into the line.
+      "theme=a,camera_session=" + token,
+  };
   for (const auto& cookie : invalid) {
     auto result = ParseSessionCookie(cookie);
     ASSERT_FALSE(result.ok()) << cookie;
     EXPECT_EQ(result.error().code, "E_AUTHENTICATION_REQUIRED") << cookie;
+  }
+}
+
+TEST(SecurityRequestGateTest, SessionCookieSelectsOwnPairAmongForeignCookies) {
+  // Browsers scope cookies per host and ignore the port, so any cookie ever
+  // set by another service on this address rides every request in the same
+  // Cookie line. The parser must select camera_session out of that line
+  // (RFC 6265 section 5.4 sends all pairs joined by "; "); rejecting the line
+  // outright locks the operator out of every authenticated route.
+  const std::string token(64U, 'a');
+  const std::string foreign_token(64U, 'b');
+  const std::vector<std::string> coexisting = {
+      "theme=dark; camera_session=" + token,
+      "camera_session=" + token + "; theme=dark",
+      "a=1; b=2; camera_session=" + token + "; c=3",
+      // A foreign value may itself contain '=' (e.g. a JWT or base64 pad).
+      "jwt=h.p=s; camera_session=" + token,
+      // No space after the separator.
+      "theme=dark;camera_session=" + token,
+      // Foreign junk that is not even a pair, and a trailing separator.
+      "camera_session=" + token + "; broken",
+      "camera_session=" + token + ";",
+      // A foreign pair whose value is itself a plausible 64-hex token must
+      // not be mistaken for ours.
+      "impostor_session=" + foreign_token + "; camera_session=" + token,
+      // A case-variant name is a foreign pair, not a duplicate of ours.
+      "CAMERA_SESSION=" + foreign_token + "; camera_session=" + token,
+      // Whitespace around a segment is trimmed from both edges.
+      "camera_session=" + token + " ; theme=dark",
+  };
+  for (const auto& cookie : coexisting) {
+    auto result = ParseSessionCookie(cookie);
+    ASSERT_TRUE(result.ok()) << cookie << " -> " << result.error().message;
+    ASSERT_EQ(result.value().size(), 32U) << cookie;
+    for (std::size_t index = 0; index < result.value().size(); ++index) {
+      // 'a' repeated decodes to 0xaa bytes; a wrong selection (the foreign
+      // 'b' token decodes to 0xbb) fails here.
+      ASSERT_EQ(result.value().data()[index], 0xaaU) << cookie;
+    }
   }
 }
 
