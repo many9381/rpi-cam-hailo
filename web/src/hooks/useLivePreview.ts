@@ -31,6 +31,16 @@ interface ActiveSession {
 const maximumBufferSeconds = 8;
 const backBufferSeconds = 3;
 const liveEdgeTargetSeconds = 0.35;
+// Drift between the target and this threshold is left alone; past it the
+// video plays slightly fast until the target is reached again. The band
+// keeps the rate from flapping around a single boundary.
+const catchUpThresholdSeconds = 0.5;
+// 5% is invisible on a preview with no audio track, and converges from the
+// threshold back to the target in a few seconds.
+const catchUpPlaybackRate = 1.05;
+// A hard seek is visible, so it is reserved for drift the catch-up rate
+// would take too long to absorb — a stall, a suspended tab, a burst append.
+const emergencySeekSeconds = 2.5;
 const retryDelay = (attempt: number) => Math.min(1_000 * 2 ** attempt, 5_000);
 
 const endpointUrl = (cameraId: string, generation: number) =>
@@ -92,9 +102,16 @@ async function maintainLiveBuffer(
     return;
   }
 
-  if (video.readyState > HTMLMediaElement.HAVE_NOTHING &&
-      (video.currentTime < start || end - video.currentTime > 1.5)) {
-    video.currentTime = Math.max(start, end - liveEdgeTargetSeconds);
+  if (video.readyState > HTMLMediaElement.HAVE_NOTHING) {
+    const drift = end - video.currentTime;
+    if (video.currentTime < start || drift > emergencySeekSeconds) {
+      video.currentTime = Math.max(start, end - liveEdgeTargetSeconds);
+      video.playbackRate = 1;
+    } else if (drift > catchUpThresholdSeconds) {
+      video.playbackRate = catchUpPlaybackRate;
+    } else if (drift <= liveEdgeTargetSeconds && video.playbackRate !== 1) {
+      video.playbackRate = 1;
+    }
   }
 
   const durationBound = end - maximumBufferSeconds;
