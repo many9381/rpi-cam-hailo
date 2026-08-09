@@ -196,6 +196,72 @@ void RunFragmentedMp4Smoke(const CameraHardwareProfile& profile) {
   }
 }
 
+void RunAiLoresRoutingSmoke(const CameraHardwareProfile& profile) {
+  if (!CameraHardwareSmokeEnabled()) {
+    GTEST_SKIP()
+        << "set CF_RUN_CAMERA_HARDWARE_SMOKE=1 to require camera hardware";
+  }
+
+  camera_firmware::config::AppConfig config;
+  ApplyProfile(config, profile);
+  config.camera.ai.enabled = true;
+  config.camera.ai.model_ids = {"objects"};
+  camera_firmware::config::AiModelConfig model;
+  model.id = "objects";
+  model.input.width = 640U;
+  model.input.height = 640U;
+  config.ai.models.push_back(model);
+
+  camera_firmware::media::SnapshotTap snapshot_tap;
+  camera_firmware::ai::AiFrameTap ai_frame_tap;
+  camera_firmware::media::EncodedRing encoded_ring(128U);
+  camera_firmware::media::CameraPipeline pipeline(snapshot_tap, ai_frame_tap,
+                                                  encoded_ring);
+
+  const auto started = pipeline.Start(config);
+  ASSERT_TRUE(started.ok()) << started.error().code << ": "
+                            << started.error().message;
+
+  camera_firmware::media::CameraPipelineStatus status;
+  bool reached_running = false;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const auto statuses = pipeline.Status();
+    ASSERT_EQ(statuses.size(), 1U);
+    status = statuses.front();
+    if (status.state == "running") {
+      reached_running = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  ASSERT_TRUE(reached_running) << profile.id << ": " << StatusMessage(status);
+
+  // Capture the AI tap's latest lease before Stop() so this mirrors the
+  // existing tests' Stop-then-EXPECT ordering below: Stop() does not clear
+  // AiFrameTap (it only tears down the camera/encoder/requeue state), but
+  // capturing first keeps the running-pipeline observation and the Stop()
+  // call unambiguously ordered.
+  std::optional<camera_firmware::media::FrameLease> ai_frame =
+      ai_frame_tap.Latest();
+  for (int attempt = 0; attempt < 100 && !ai_frame.has_value(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ai_frame = ai_frame_tap.Latest();
+  }
+
+  pipeline.Stop();
+
+  EXPECT_EQ(status.ai_source, "lores")
+      << profile.id << ": " << StatusMessage(status);
+  EXPECT_EQ(status.width, 1920U)
+      << profile.id << ": " << StatusMessage(status);
+  EXPECT_EQ(status.height, 1080U)
+      << profile.id << ": " << StatusMessage(status);
+  ASSERT_TRUE(ai_frame.has_value())
+      << profile.id << ": no AI lores frame observed on the tap";
+  EXPECT_EQ(ai_frame->handle().width, 640U) << profile.id;
+  EXPECT_EQ(ai_frame->handle().height, 360U) << profile.id;
+}
+
 }  // namespace
 
 TEST(CameraPipelineHardwareSmokeTest, Sustains1080p50CaptureAndEncoding) {
@@ -220,4 +286,8 @@ TEST(CameraPipelineHardwareSmokeTest, Sustains720p50CaptureAndEncoding) {
 
 TEST(CameraPipelineHardwareSmokeTest, Packages720p50AsFragmentedMp4) {
   RunFragmentedMp4Smoke(k720p50);
+}
+
+TEST(CameraPipelineHardwareSmokeTest, RoutesAiInferenceToHardwareLoresStream) {
+  RunAiLoresRoutingSmoke(k1080p50);
 }

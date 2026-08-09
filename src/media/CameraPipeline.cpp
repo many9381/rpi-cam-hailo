@@ -25,6 +25,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/media/CameraTiming.hpp"
+#include "camera_firmware/media/LoresGeometry.hpp"
 
 namespace camera_firmware::media {
 namespace {
@@ -226,7 +227,7 @@ struct CameraPipeline::Impl {
           {"E_CAMERA_ACQUIRE", "failed to acquire libcamera camera"});
     }
 
-    auto configured = ConfigureCamera();
+    auto configured = ConfigureCamera(config);
     if (!configured.ok()) {
       Stop();
       return configured;
@@ -399,22 +400,42 @@ struct CameraPipeline::Impl {
     status.encoded_frames = encoded_frames;
     status.capture_error_count = capture_error_count;
     status.encode_error_count = encode_error_count;
+    status.ai_source = ai_uses_lores ? "lores" : "main-fallback";
     return status;
   }
 
-  Result<void> ConfigureCamera() {
-    camera_config =
-        camera->generateConfiguration({libcamera::StreamRole::VideoRecording});
+  Result<void> ConfigureCamera(const config::AppConfig& config) {
+    const unsigned int model_width = ResolveAiLoresWidth(config);
+    const LoresSize lores = ComputeLoresSize(configured_camera.video.width,
+                                             configured_camera.video.height,
+                                             model_width);
+    const bool want_lores = lores.width > 0U && lores.height > 0U;
+
+    std::vector<libcamera::StreamRole> roles = {
+        libcamera::StreamRole::VideoRecording};
+    if (want_lores) {
+      roles.push_back(libcamera::StreamRole::Viewfinder);
+    }
+    camera_config = camera->generateConfiguration(roles);
     if (camera_config == nullptr || camera_config->empty()) {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "camera did not provide a video stream config"});
     }
 
-    auto& cfg = camera_config->at(0);
-    cfg.pixelFormat = libcamera::formats::NV12;
-    cfg.size.width = configured_camera.video.width;
-    cfg.size.height = configured_camera.video.height;
-    cfg.bufferCount = std::max(cfg.bufferCount, kDefaultBufferCount);
+    auto& main_cfg = camera_config->at(0);
+    main_cfg.pixelFormat = libcamera::formats::NV12;
+    main_cfg.size.width = configured_camera.video.width;
+    main_cfg.size.height = configured_camera.video.height;
+    main_cfg.bufferCount = std::max(main_cfg.bufferCount, kDefaultBufferCount);
+
+    const bool have_lores_slot = want_lores && camera_config->size() >= 2U;
+    if (have_lores_slot) {
+      auto& lores_cfg = camera_config->at(1);
+      lores_cfg.pixelFormat = libcamera::formats::NV12;
+      lores_cfg.size.width = lores.width;
+      lores_cfg.size.height = lores.height;
+      lores_cfg.bufferCount = std::max(lores_cfg.bufferCount, kDefaultBufferCount);
+    }
 
     const auto validation = camera_config->validate();
     if (validation == libcamera::CameraConfiguration::Invalid) {
@@ -426,9 +447,11 @@ struct CameraPipeline::Impl {
           {"E_CAMERA_CONFIGURE", "failed to configure libcamera for NV12 video"});
     }
 
-    stream = cfg.stream();
-    stream_config = cfg;
-    if (stream == nullptr || stream_config.pixelFormat != libcamera::formats::NV12) {
+    auto& validated_main = camera_config->at(0);
+    stream = validated_main.stream();
+    stream_config = validated_main;
+    if (stream == nullptr ||
+        stream_config.pixelFormat != libcamera::formats::NV12) {
       return Result<void>::Err(
           {"E_CAMERA_FORMAT", "libcamera did not accept NV12 video format"});
     }
@@ -437,10 +460,35 @@ struct CameraPipeline::Impl {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "libcamera returned an invalid stream geometry"});
     }
+
+    bool uses_lores = false;
+    lores_stream = nullptr;
+    if (have_lores_slot) {
+      auto& validated_lores = camera_config->at(1);
+      libcamera::Stream* candidate = validated_lores.stream();
+      if (candidate != nullptr &&
+          validated_lores.pixelFormat == libcamera::formats::NV12 &&
+          validated_lores.stride > 0U && validated_lores.size.width > 0U &&
+          validated_lores.size.height > 0U) {
+        lores_stream = candidate;
+        lores_stream_config = validated_lores;
+        lores_width = validated_lores.size.width;
+        lores_height = validated_lores.size.height;
+        uses_lores = true;
+      }
+    }
+    if (want_lores && !uses_lores) {
+      Logger::instance().log(
+          Logger::Level::kWarn,
+          "AI lores stream unavailable; falling back to downscaling the main "
+          "stream for inference");
+    }
+
     {
       std::scoped_lock lock(mutex);
       output_width = stream_config.size.width;
       output_height = stream_config.size.height;
+      ai_uses_lores = uses_lores;
     }
     return Result<void>::Ok();
   }
@@ -456,6 +504,14 @@ struct CameraPipeline::Impl {
     if (buffers.empty()) {
       return Result<void>::Err(
           {"E_CAMERA_ALLOCATE", "libcamera allocated no frame buffers"});
+    }
+    if (ai_uses_lores) {
+      const int lores_allocated = allocator->allocate(lores_stream);
+      if (lores_allocated < 0 ||
+          allocator->buffers(lores_stream).empty()) {
+        return Result<void>::Err(
+            {"E_CAMERA_ALLOCATE", "failed to allocate lores frame buffers"});
+      }
     }
     return Result<void>::Ok();
   }
@@ -531,15 +587,27 @@ struct CameraPipeline::Impl {
   }
 
   Result<void> CreateRequests() {
-    for (const auto& buffer : allocator->buffers(stream)) {
+    const auto& main_buffers = allocator->buffers(stream);
+    const std::vector<std::unique_ptr<libcamera::FrameBuffer>>* lores_buffers =
+        ai_uses_lores ? &allocator->buffers(lores_stream) : nullptr;
+    if (lores_buffers != nullptr && lores_buffers->size() != main_buffers.size()) {
+      return Result<void>::Err(
+          {"E_CAMERA_REQUEST", "main and lores buffer counts differ"});
+    }
+    for (std::size_t index = 0; index < main_buffers.size(); ++index) {
       auto request = camera->createRequest();
       if (request == nullptr) {
         return Result<void>::Err(
             {"E_CAMERA_REQUEST", "failed to create libcamera request"});
       }
-      if (request->addBuffer(stream, buffer.get()) != 0) {
+      if (request->addBuffer(stream, main_buffers[index].get()) != 0) {
         return Result<void>::Err(
             {"E_CAMERA_REQUEST", "failed to attach frame buffer to request"});
+      }
+      if (lores_buffers != nullptr &&
+          request->addBuffer(lores_stream, (*lores_buffers)[index].get()) != 0) {
+        return Result<void>::Err(
+            {"E_CAMERA_REQUEST", "failed to attach lores buffer to request"});
       }
       requests.push_back(std::move(request));
     }
@@ -553,33 +621,35 @@ struct CameraPipeline::Impl {
       return;
     }
 
-    libcamera::FrameBuffer* buffer = request->findBuffer(stream);
-    if (buffer == nullptr) {
+    libcamera::FrameBuffer* main_buffer = request->findBuffer(stream);
+    if (main_buffer == nullptr) {
       ++capture_error_count;
       RequeueRequest(requeue_context, request);
       return;
     }
-    if (buffer->metadata().status != libcamera::FrameMetadata::FrameSuccess &&
-        buffer->metadata().status != libcamera::FrameMetadata::FrameStartup) {
+    if (main_buffer->metadata().status != libcamera::FrameMetadata::FrameSuccess &&
+        main_buffer->metadata().status != libcamera::FrameMetadata::FrameStartup) {
       ++capture_error_count;
       RequeueRequest(requeue_context, request);
       return;
     }
 
     const auto frame_timestamp =
-        std::chrono::nanoseconds(buffer->metadata().timestamp);
+        std::chrono::nanoseconds(main_buffer->metadata().timestamp);
     ++captured_frames;
     capture_rate.Record(frame_timestamp);
 
-    auto frame = BuildFrameHandle(*buffer);
-    if (!frame.ok()) {
+    auto main_frame = BuildFrameHandle(*main_buffer, stream_config.size.width,
+                                       stream_config.size.height,
+                                       stream_config.stride);
+    if (!main_frame.ok()) {
       ++capture_error_count;
-      Logger::instance().log(Logger::Level::kError, frame.error().message);
+      Logger::instance().log(Logger::Level::kError, main_frame.error().message);
       RequeueRequest(requeue_context, request);
       return;
     }
 
-    auto encoded = EncodeBuffer(*buffer, frame.value());
+    auto encoded = EncodeBuffer(*main_buffer, main_frame.value());
     if (encoded.ok() && !encoded.value().bytes.empty()) {
       ++encoded_frames;
       encoded_rate.Record(frame_timestamp);
@@ -592,14 +662,45 @@ struct CameraPipeline::Impl {
     }
 
     std::weak_ptr<RequeueContext> weak_context = requeue_context;
-    FrameLease lease(std::move(frame).value(), [weak_context, request] {
-      RequeueRequest(weak_context, request);
-    });
-    snapshot_tap.Publish(lease.CloneRef(), source_epoch);
-    ai_frame_tap.PublishLatest(std::move(lease));
+    // Owns nothing; its only job is to run the requeue when the last lease
+    // that captured it drops. shared_ptr<void>(nullptr, deleter) is non-empty
+    // (use_count 1) and calls the deleter with nullptr on destruction.
+    auto requeue_guard = std::shared_ptr<void>(
+        nullptr, [weak_context, request](void*) {
+          RequeueRequest(weak_context, request);
+        });
+
+    FrameLease main_lease(std::move(main_frame).value(),
+                          [requeue_guard] {});
+    snapshot_tap.Publish(main_lease.CloneRef(), source_epoch);
+
+    if (ai_uses_lores) {
+      libcamera::FrameBuffer* lores_buffer = request->findBuffer(lores_stream);
+      if (lores_buffer != nullptr &&
+          (lores_buffer->metadata().status ==
+               libcamera::FrameMetadata::FrameSuccess ||
+           lores_buffer->metadata().status ==
+               libcamera::FrameMetadata::FrameStartup)) {
+        auto lores_frame = BuildFrameHandle(*lores_buffer, lores_width,
+                                            lores_height,
+                                            lores_stream_config.stride);
+        if (lores_frame.ok()) {
+          FrameLease lores_lease(std::move(lores_frame).value(),
+                                 [requeue_guard] {});
+          ai_frame_tap.PublishLatest(std::move(lores_lease));
+        }
+      }
+      // A missing or failed lores buffer drops this AI frame only; latest-wins
+      // tolerates it and the main frame has already been encoded.
+    } else {
+      ai_frame_tap.PublishLatest(main_lease.CloneRef());
+    }
   }
 
-  Result<FrameHandle> BuildFrameHandle(const libcamera::FrameBuffer& buffer) const {
+  Result<FrameHandle> BuildFrameHandle(const libcamera::FrameBuffer& buffer,
+                                       unsigned int width,
+                                       unsigned int height,
+                                       unsigned int stride) const {
     const auto& planes = buffer.planes();
     if (planes.empty()) {
       return Result<FrameHandle>::Err(
@@ -609,13 +710,13 @@ struct CameraPipeline::Impl {
     FrameHandle handle;
     handle.camera_id = camera_id;
     handle.format = "NV12";
-    handle.width = stream_config.size.width;
-    handle.height = stream_config.size.height;
+    handle.width = width;
+    handle.height = height;
     handle.sequence = buffer.metadata().sequence;
     handle.timestamp = std::chrono::nanoseconds(buffer.metadata().timestamp);
 
     const std::size_t y_size =
-        static_cast<std::size_t>(stream_config.stride) * handle.height;
+        static_cast<std::size_t>(stride) * handle.height;
     if (planes[0].length < y_size) {
       return Result<FrameHandle>::Err(
           {"E_CAMERA_DMABUF", "NV12 luma plane is shorter than expected"});
@@ -625,7 +726,7 @@ struct CameraPipeline::Impl {
         .dmabuf_fd = planes[0].fd.get(),
         .offset = planes[0].offset,
         .length = y_size,
-        .stride = stream_config.stride,
+        .stride = stride,
     };
 
     if (planes.size() >= 2U) {
@@ -633,7 +734,7 @@ struct CameraPipeline::Impl {
           .dmabuf_fd = planes[1].fd.get(),
           .offset = planes[1].offset,
           .length = planes[1].length,
-          .stride = stream_config.stride,
+          .stride = stride,
       };
     } else {
       const std::size_t uv_offset =
@@ -648,7 +749,7 @@ struct CameraPipeline::Impl {
           .dmabuf_fd = planes[0].fd.get(),
           .offset = uv_offset,
           .length = mapped_end - uv_offset,
-          .stride = stream_config.stride,
+          .stride = stride,
       };
     }
     handle.plane_count = 2;
@@ -724,6 +825,11 @@ struct CameraPipeline::Impl {
   std::unique_ptr<libcamera::FrameBufferAllocator> allocator;
   libcamera::Stream* stream{nullptr};
   libcamera::StreamConfiguration stream_config;
+  libcamera::Stream* lores_stream{nullptr};
+  libcamera::StreamConfiguration lores_stream_config;
+  unsigned int lores_width{0U};
+  unsigned int lores_height{0U};
+  bool ai_uses_lores{false};
   std::vector<std::unique_ptr<libcamera::Request>> requests;
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
   std::shared_ptr<RequeueContext> requeue_context;
