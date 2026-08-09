@@ -998,6 +998,10 @@ TEST(ServiceResponseTest, DetectionSseEventSerializesSnapshot) {
       camera_firmware::service::BuildDetectionSseEvent({event});
 
   EXPECT_NE(payload.find("event: detections\n"), std::string::npos);
+  // The browser's EventSource waits this many ms before reconnecting after
+  // each one-shot long-poll response, so it caps the bbox overlay refresh
+  // rate. 200 gives ~5 Hz; a change here is a visible-cadence change.
+  EXPECT_NE(payload.find("\nretry: 200\n"), std::string::npos);
   EXPECT_NE(payload.find("id: imx708-main/objects/88/decoded\n"),
             std::string::npos);
   EXPECT_NE(payload.find("\"camera_id\":\"imx708-main\""), std::string::npos);
