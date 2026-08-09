@@ -7475,9 +7475,20 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   EXPECT_EQ((*me.response->getJsonObject())["role"].asString(),
             "administrator");
 
-  auto ambiguous_cookie = Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
-                               cookie + "; theme=dark");
-  ExpectStatus(ambiguous_cookie, drogon::k401Unauthorized);
+  // Browsers scope cookies per host and ignore the port, so a cookie set by
+  // any other service on this address rides the same Cookie line; the
+  // session must survive that. Two camera_session pairs are ambiguous and
+  // still fail closed.
+  auto coexisting_cookie = Send(client, drogon::Get, "/api/v1/auth/me", {}, {},
+                                cookie + "; theme=dark");
+  ExpectStatus(coexisting_cookie, drogon::k200OK);
+  ASSERT_NE(coexisting_cookie.response->getJsonObject(), nullptr);
+  EXPECT_EQ(
+      (*coexisting_cookie.response->getJsonObject())["username"].asString(),
+      "owner1");
+  auto duplicated_session = Send(client, drogon::Get, "/api/v1/auth/me", {},
+                                 {}, cookie + "; " + cookie);
+  ExpectStatus(duplicated_session, drogon::k401Unauthorized);
 
   auto cameras =
       Send(client, drogon::Get, "/api/v1/cameras", {}, {}, cookie);
