@@ -186,6 +186,132 @@ describe('useLivePreview', () => {
     });
   });
 
+  it('speeds playback up to catch the live edge instead of seeking', async () => {
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 11 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => expect(video.playbackRate).toBe(1.05));
+    expect(video.currentTime).toBe(11);
+  });
+
+  it('returns to normal speed once the live edge target is reached', async () => {
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    video.playbackRate = 1.05;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 11.7 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => expect(video.playbackRate).toBe(1));
+    expect(video.currentTime).toBe(11.7);
+  });
+
+  it('holds the catch-up rate inside the hysteresis band', async () => {
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    video.playbackRate = 1.05;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 11.6 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => {
+      expect(MockMediaSource.instances[0].sourceBuffer.appended).toHaveLength(1);
+    });
+    expect(video.playbackRate).toBe(1.05);
+    expect(video.currentTime).toBe(11.6);
+  });
+
+  it('leaves normal speed alone at exactly the catch-up threshold', async () => {
+    // drift of exactly 0.5 (binary-exact) must not engage catch-up: the
+    // threshold is exclusive, which is what keeps the band from flapping.
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 11.5 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => {
+      expect(MockMediaSource.instances[0].sourceBuffer.appended).toHaveLength(1);
+    });
+    expect(video.playbackRate).toBe(1);
+    expect(video.currentTime).toBe(11.5);
+  });
+
+  it('catches up without seeking at exactly the emergency threshold', async () => {
+    // drift of exactly 2.5 (binary-exact) stays on the rate path: the seek
+    // threshold is exclusive too.
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 9.5 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => expect(video.playbackRate).toBe(1.05));
+    expect(video.currentTime).toBe(9.5);
+  });
+
+  it('seeks and resets the rate only past the emergency threshold', async () => {
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    video.playbackRate = 1.05;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 9 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => expect(video.currentTime).toBe(12 - 0.35));
+    expect(video.playbackRate).toBe(1);
+  });
+
+  it('snaps forward and resets the rate when playback falls out of the buffered range', async () => {
+    responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
+    render(<Probe cameraId="cam-a" />);
+    const video = screen.getByTestId('video') as HTMLVideoElement;
+    video.playbackRate = 1.05;
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
+      currentTime: { configurable: true, writable: true, value: 3 },
+    });
+    MockMediaSource.instances[0].sourceBuffer.ranges = [[10, 20]];
+
+    act(() => MockMediaSource.instances[0].open());
+
+    await waitFor(() => expect(video.currentTime).toBe(20 - 0.35));
+    expect(video.playbackRate).toBe(1);
+  });
+
   it('reconnects immediately after a clean HTTP stream rotation', async () => {
     vi.useFakeTimers();
     responseWithReader([{ done: true, value: undefined }]);
