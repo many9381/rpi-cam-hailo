@@ -56,6 +56,7 @@ describe('useDetectionStream', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('opens the exact detection stream once and starts from the initial snapshot', () => {
@@ -109,17 +110,52 @@ describe('useDetectionStream', () => {
     expect(result.current.snapshot).toEqual(live);
   });
 
-  it('reports browser connection state without creating a reconnect timer or source', () => {
-    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+  it('stays live while events keep arriving despite long-poll reconnect errors', () => {
+    vi.useFakeTimers();
     const { result } = renderHook(() => useDetectionStream(initial, true));
     const source = FakeEventSource.instances[0];
 
-    act(() => source.onopen?.(new Event('open')));
+    act(() => source.emit('detections', JSON.stringify(live)));
     expect(result.current.status).toBe('live');
+
+    act(() => source.onerror?.(new Event('error')));
+    expect(result.current.status).toBe('live');
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    act(() => vi.advanceTimersByTime(2900));
+    expect(result.current.status).toBe('live');
+
+    act(() => source.emit('detections', JSON.stringify(live)));
+    act(() => source.onerror?.(new Event('error')));
+    act(() => vi.advanceTimersByTime(2900));
+    expect(result.current.status).toBe('live');
+  });
+
+  it('reports reconnecting when no event arrives within the grace period', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useDetectionStream(initial, true));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit('detections', JSON.stringify(live)));
+    act(() => source.onerror?.(new Event('error')));
+    act(() => vi.advanceTimersByTime(3000));
+    expect(result.current.status).toBe('reconnecting');
+
+    act(() => source.emit('detections', JSON.stringify(live)));
+    expect(result.current.status).toBe('live');
+  });
+
+  it('reports reconnecting immediately when the error follows a silent gap', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useDetectionStream(initial, true));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit('detections', JSON.stringify(live)));
+    act(() => vi.advanceTimersByTime(4000));
+    expect(result.current.status).toBe('live');
+
     act(() => source.onerror?.(new Event('error')));
     expect(result.current.status).toBe('reconnecting');
-    expect(FakeEventSource.instances).toHaveLength(1);
-    expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
 
   it('closes on disable and unmount and replaces the source when enabled again', () => {

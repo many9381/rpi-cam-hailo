@@ -217,7 +217,7 @@ describe('DashboardPage', () => {
     const refresh = vi.fn(async () => undefined);
     render(<DashboardPage client={client} controller={{ ...controller, refresh }} />);
 
-    expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
     expect(screen.getByText('Connecting preview...')).toBeVisible();
     expect(screen.getByRole('combobox', { name: /camera/i })).toHaveValue('cam-a');
     expect(screen.getByLabelText('cam-a camera preview'))

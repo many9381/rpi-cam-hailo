@@ -472,7 +472,7 @@ describe('App bootstrap gate', () => {
 
     render(<App client={client} />);
 
-    expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+    expect(await screen.findByRole('heading', { name: 'Dashboard' }))
       .toBeVisible();
     expect(screen.getByRole('combobox', { name: /camera/i })).toBeDisabled();
   });
@@ -517,7 +517,7 @@ describe('App bootstrap gate', () => {
     });
 
     render(<App client={client} />);
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
     await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/settings/runtime',
     )).toHaveLength(1));
@@ -799,7 +799,7 @@ describe('App bootstrap gate', () => {
 
       render(<App client={client} />);
 
-      expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+      expect(await screen.findByRole('heading', { name: 'Dashboard' }))
         .toBeVisible();
       await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
       const firstSource = FakeEventSource.instances[0];
@@ -824,7 +824,7 @@ describe('App bootstrap gate', () => {
       await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
       await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-      expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+      expect(await screen.findByRole('heading', { name: 'Dashboard' }))
         .toBeVisible();
       await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
       expect(FakeEventSource.instances[1].url)
@@ -1055,7 +1055,7 @@ describe('App role-specific route trees', () => {
       pendingPaths: new Set(['/api/v1/audit/status']),
     });
 
-    expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+    expect(await screen.findByRole('heading', { name: 'Dashboard' }))
       .toBeVisible();
     await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/audit/status',
@@ -1114,7 +1114,7 @@ describe('App role-specific route trees', () => {
     await waitFor(() => expect(administratorHooks.auditRecordsConstructed).toBe(1));
 
     await user.click(screen.getByRole('link', { name: 'Dashboard' }));
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
 
     expect(administratorHooks.auditStatusConstructed).toBe(1);
     expect(administratorHooks.auditRecordsConstructed).toBe(1);
@@ -1172,7 +1172,7 @@ describe('App role-specific route trees', () => {
     expect(screen.getByText(warningText)).toBeVisible();
 
     await user.click(screen.getByRole('link', { name: 'Dashboard' }));
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
     expect(screen.getByText(warningText)).toBeVisible();
     expect(administratorHooks.auditStatusConstructed).toBe(1);
     expect(vi.mocked(client.getJson).mock.calls.filter(
@@ -1195,7 +1195,7 @@ describe('App role-specific route trees', () => {
   it('refreshes audit status with the administrator operational shell', async () => {
     const user = userEvent.setup();
     const client = renderRecoveredSession('administrator', '/dashboard');
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
     await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/audit/status',
     )).toHaveLength(1));
@@ -1210,7 +1210,7 @@ describe('App role-specific route trees', () => {
   it('prompts to reauthenticate when management authority lapses, then resumes the view', async () => {
     const user = userEvent.setup();
     const client = renderRecoveredSession('administrator', '/dashboard');
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
     await waitFor(() => expect(vi.mocked(client.getJson).mock.calls.filter(
       ([path]) => path === '/api/v1/health',
     )).toHaveLength(1));
@@ -1235,14 +1235,14 @@ describe('App role-specific route trees', () => {
       ([path]) => path === '/api/v1/health',
     )).toHaveLength(3));
     expect(screen.queryByRole('heading', { name: 'Camera login' })).not.toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Operational dashboard' }))
+    expect(await screen.findByRole('heading', { name: 'Dashboard' }))
       .toBeVisible();
   });
 
   it('does not prompt to reauthenticate for an ordinary authentication failure', async () => {
     const user = userEvent.setup();
     const client = renderRecoveredSession('administrator', '/dashboard');
-    await screen.findByRole('heading', { name: 'Operational dashboard' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
 
     vi.mocked(client.getJson).mockRejectedValueOnce(
       new UnauthorizedError('E_AUTHENTICATION_REQUIRED'),
@@ -1253,7 +1253,7 @@ describe('App role-specific route trees', () => {
       ([path]) => path === '/api/v1/health',
     )).toHaveLength(2));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 
   it('leaves the operator authenticated with the modal open after a rejected reauthentication password', async () => {
@@ -1359,7 +1359,7 @@ describe('App role-specific route trees', () => {
     window.location.hash = '#/dashboard';
     render(<App client={client} />);
 
-    expect(await screen.findByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Refresh device state' }));
 
     const passwordInput = await screen.findByLabelText(/password/i);
@@ -1369,7 +1369,7 @@ describe('App role-specific route trees', () => {
     const alert = await screen.findByRole('alert');
     await waitFor(() => expect(alert).not.toHaveTextContent(''));
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Operational dashboard' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Camera login' })).not.toBeInTheDocument();
   });
 
