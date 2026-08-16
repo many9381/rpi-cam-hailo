@@ -32,7 +32,7 @@ export type OperationalView = 'dashboard' | 'cameras' | 'ai' | 'system';
 
 const viewHeadings: Record<OperationalView, { title: string; subtitle: string }> = {
   dashboard: {
-    title: 'Operational dashboard',
+    title: 'Dashboard',
     subtitle: 'Camera, secure stream, and Hailo runtime status',
   },
   cameras: {

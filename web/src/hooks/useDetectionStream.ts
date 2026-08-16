@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { parseDetectionSnapshot } from '../api/contracts';
 import type { DetectionSnapshot } from '../api/types';
 
+const reconnectingGraceMs = 3000;
+
 export type DetectionStreamStatus =
   | 'connecting'
   | 'live'
@@ -36,16 +38,35 @@ export function useDetectionStream(
     }
 
     let current = true;
-    setState({ status: 'connecting', snapshot: initialSnapshotRef.current });
-    const source = new EventSource('/api/v1/ai/detections/stream');
-    source.onopen = () => {
-      if (current) {
-        setState((value) => ({ ...value, status: 'live' }));
+    let lastEventAt = Date.now();
+    let graceTimer: number | undefined;
+    const clearGraceTimer = () => {
+      if (graceTimer !== undefined) {
+        window.clearTimeout(graceTimer);
+        graceTimer = undefined;
       }
     };
+    setState({ status: 'connecting', snapshot: initialSnapshotRef.current });
+    const source = new EventSource('/api/v1/ai/detections/stream');
     source.onerror = () => {
-      if (current) {
+      if (!current) {
+        return;
+      }
+      // The server finishes the response after every long-poll event, so the
+      // browser sees a routine close here; only a sustained event gap means
+      // the stream is actually unhealthy.
+      const idleMs = Date.now() - lastEventAt;
+      if (idleMs >= reconnectingGraceMs) {
         setState((value) => ({ ...value, status: 'reconnecting' }));
+        return;
+      }
+      if (graceTimer === undefined) {
+        graceTimer = window.setTimeout(() => {
+          graceTimer = undefined;
+          if (current) {
+            setState((value) => ({ ...value, status: 'reconnecting' }));
+          }
+        }, reconnectingGraceMs - idleMs);
       }
     };
     source.addEventListener('detections', (event) => {
@@ -54,7 +75,9 @@ export function useDetectionStream(
       }
       try {
         const snapshot = parseDetectionSnapshot(JSON.parse(event.data));
-        setState((value) => ({ ...value, snapshot }));
+        lastEventAt = Date.now();
+        clearGraceTimer();
+        setState({ status: 'live', snapshot });
       } catch {
         // Keep the last validated snapshot when an event is malformed.
       }
@@ -62,6 +85,7 @@ export function useDetectionStream(
 
     return () => {
       current = false;
+      clearGraceTimer();
       source.close();
     };
   }, [active]);
