@@ -165,57 +165,59 @@ struct Nv12RgbPreprocessor::Impl {
   std::uint8_t padding;
   SwsContext* sws{nullptr};
 
-  // RGB scratch buffer reused across Convert() calls instead of allocating
-  // and fully re-padding a fresh buffer every frame. `padded_geometry`
-  // records the letterbox geometry the scratch buffer's pad bands were last
-  // established for; Convert() only re-runs the pad fill when the incoming
-  // frame's geometry (i.e. the source aspect ratio, since target dimensions
-  // are fixed for the lifetime of this object) no longer matches. sws_scale
-  // rewrites the content rectangle every frame regardless, so only the pad
-  // bands are ever at risk of going stale.
-  std::vector<std::uint8_t> rgb_scratch;
-  ModelInputGeometry padded_geometry{};
-  bool has_padded_geometry{false};
-
-  // dmabuf plane mmap cache, keyed by (fd, length). A single
-  // Nv12RgbPreprocessor is owned by one AiModelRunner worker and Convert()
-  // is only ever called from that worker's single dedicated thread (see
-  // AiModelRunner::Run()/ProcessFrame() in AiModelRunner.cpp), so this cache
-  // needs no locking.
+  // dmabuf plane mmap cache, keyed by (fd, mapping_offset, mapping_size) --
+  // i.e. the exact mmap() call this plane would otherwise repeat every
+  // frame. A single Nv12RgbPreprocessor is owned by one AiModelRunner worker
+  // and Convert() is only ever called from that worker's single dedicated
+  // thread (see AiModelRunner::Run()/ProcessFrame() in AiModelRunner.cpp),
+  // so this cache needs no locking.
   //
-  // Residual risk: the key is (fd, length) only, not the underlying dmabuf
-  // identity. If a plane's fd number is closed and later recycled by the OS
-  // for a *different* physical buffer of the exact same length, a cache hit
-  // would silently serve stale/wrong pixel data -- this collision is not
-  // detectable from (fd, length) alone. In practice this preprocessor lives
-  // inside a DefaultModelProcessor owned by an AiModelRunner, and
-  // AiRuntime::Stop() (see AiRuntime.cpp: ReleaseResourcesLocked/
-  // StopResources) destroys every AiModelRunner -- and with it this
-  // preprocessor and its cache -- on every pipeline restart. The cache never
-  // survives past a camera restart, so it never observes fd recycling
-  // across a buffer-pool rebuild in practice.
+  // Staleness defense: an (fd, mapping_offset, mapping_size) key match is
+  // only a *candidate* hit. dmabuf fd numbers are recycled by the OS once
+  // closed (e.g. after a camera buffer-pool rebuild), and a recycled fd can
+  // legitimately land back at the same offset/size for a *different*,
+  // unrelated underlying buffer -- a bare key match cannot tell the two
+  // apart and would silently serve the old, dead mapping's pixel data. So
+  // every candidate hit pays one fstat() to compare the fd's current
+  // (st_dev, st_ino) against what was captured when the mapping was
+  // inserted; on a mismatch (or if fstat() itself fails) the entry is
+  // treated as stale, unmapped, and replaced by a fresh mmap(). This is the
+  // sole defense against fd recycling and is why a "hit" still costs one
+  // syscall (~2/frame for a Y+UV pair) rather than zero -- down from the
+  // original ~8 (fcntl + fstat + mmap per plane, munmap x2).
   //
   // Note on eviction: production NV12 frames commonly map the Y and UV
   // planes onto the *same* dmabuf fd at different offsets/lengths (see
-  // CameraPipeline.cpp BuildFrameHandle, single-plane-buffer path), so "fd
-  // matches an existing entry but length differs" is the *normal*,
-  // every-frame case for a Y/UV pair sharing an fd -- not a sign of a
-  // recycled/stale fd. Evicting on that condition would unmap a sibling
-  // plane's live mapping mid-frame. Instead this cache is simply bounded: it
-  // holds at most kMaxMappedPlanes entries (comfortably above the <=8-buffer
-  // camera pool x 2 planes it needs to hold steady-state) and evicts the
-  // oldest entry, FIFO, only when an insert would exceed that cap -- which
-  // self-heals unbounded growth from fd recycling across many restarts
-  // without ever touching an entry the current Convert() call still needs
-  // (at most 2 entries are ever live within one call).
+  // CameraPipeline.cpp BuildFrameHandle, single-plane-buffer path), so two
+  // simultaneously-live entries sharing an fd is the *normal* case for a
+  // Y/UV pair, not a sign of staleness -- staleness is only decided by the
+  // fstat identity check above, never by fd alone. This cache is simply
+  // bounded: it holds at most kMaxMappedPlanes entries (comfortably above
+  // the <=8-buffer camera pool x 2 planes it needs to hold steady-state)
+  // and evicts the oldest entry, FIFO, only when an insert would exceed
+  // that cap -- which self-heals unbounded growth from fd recycling across
+  // many restarts without ever touching an entry the current Convert() call
+  // still needs (at most 2 entries are ever live within one call). Because
+  // entries are unmapped only in ~Impl() or on eviction, up to
+  // kMaxMappedPlanes dmabuf-backed (CMA) mappings stay pinned for the
+  // lifetime of this object -- acceptable given the camera buffer pool
+  // itself is bounded to the same order of magnitude.
   struct MappedPlane {
     int fd{-1};
-    std::size_t length{0};
-    void* address{nullptr};
+    std::size_t mapping_offset{0};
     std::size_t mapping_size{0};
+    void* address{nullptr};
+    dev_t backing_dev{};
+    ino_t backing_ino{};
   };
   static constexpr std::size_t kMaxMappedPlanes = 16;
   std::vector<MappedPlane> mapped_planes;
+
+  void UnmapEntry(const MappedPlane& entry) {
+    if (entry.address != nullptr && entry.address != MAP_FAILED) {
+      (void)::munmap(entry.address, entry.mapping_size);
+    }
+  }
 
   common::Result<const std::uint8_t*> MapPlaneCached(
       const media::FramePlane& plane) {
@@ -225,13 +227,25 @@ struct Nv12RgbPreprocessor::Impl {
     }
     const auto& mapping_params = params.value();
 
-    for (const auto& entry : mapped_planes) {
-      if (entry.fd == plane.dmabuf_fd && entry.length == plane.length &&
-          mapping_params.data_offset + plane.length <= entry.mapping_size) {
+    for (auto it = mapped_planes.begin(); it != mapped_planes.end(); ++it) {
+      if (it->fd != plane.dmabuf_fd ||
+          it->mapping_offset != mapping_params.mapping_offset ||
+          it->mapping_size != mapping_params.mapping_size) {
+        continue;
+      }
+      struct stat backing {};
+      if (::fstat(plane.dmabuf_fd, &backing) == 0 &&
+          backing.st_dev == it->backing_dev && backing.st_ino == it->backing_ino) {
         return common::Result<const std::uint8_t*>::Ok(
-            static_cast<const std::uint8_t*>(entry.address) +
+            static_cast<const std::uint8_t*>(it->address) +
             mapping_params.data_offset);
       }
+      // Key matched but the fd's identity didn't (fd recycled to a
+      // different underlying buffer) or fstat() failed outright -- this
+      // entry is stale. Drop it and fall through to remap fresh below.
+      UnmapEntry(*it);
+      mapped_planes.erase(it);
+      break;
     }
 
     if (::fcntl(plane.dmabuf_fd, F_GETFD) == -1) {
@@ -239,7 +253,8 @@ struct Nv12RgbPreprocessor::Impl {
           PreprocessError("NV12 plane descriptor cannot be used"));
     }
     struct stat backing {};
-    if (::fstat(plane.dmabuf_fd, &backing) == 0 && S_ISREG(backing.st_mode) &&
+    const bool have_backing_stat = ::fstat(plane.dmabuf_fd, &backing) == 0;
+    if (have_backing_stat && S_ISREG(backing.st_mode) &&
         static_cast<std::uintmax_t>(plane.offset) + plane.length >
             static_cast<std::uintmax_t>(backing.st_size)) {
       return common::Result<const std::uint8_t*>::Err(
@@ -257,17 +272,23 @@ struct Nv12RgbPreprocessor::Impl {
           PreprocessError("failed to map NV12 plane"));
     }
 
-    if (mapped_planes.size() >= kMaxMappedPlanes) {
-      const auto& oldest = mapped_planes.front();
-      if (oldest.address != nullptr && oldest.address != MAP_FAILED) {
-        (void)::munmap(oldest.address, oldest.mapping_size);
+    if (have_backing_stat) {
+      // Only cache entries we can later re-validate by identity; without a
+      // successful fstat() here there is nothing safe to compare against on
+      // a future lookup, so this mapping is used for this call only.
+      if (mapped_planes.size() >= kMaxMappedPlanes) {
+        UnmapEntry(mapped_planes.front());
+        mapped_planes.erase(mapped_planes.begin());
       }
-      mapped_planes.erase(mapped_planes.begin());
+      MappedPlane entry;
+      entry.fd = plane.dmabuf_fd;
+      entry.mapping_offset = mapping_params.mapping_offset;
+      entry.mapping_size = mapping_params.mapping_size;
+      entry.address = mapping;
+      entry.backing_dev = backing.st_dev;
+      entry.backing_ino = backing.st_ino;
+      mapped_planes.push_back(entry);
     }
-    mapped_planes.push_back(MappedPlane{plane.dmabuf_fd,
-                                        plane.length,
-                                        mapping,
-                                        mapping_params.mapping_size});
     return common::Result<const std::uint8_t*>::Ok(
         static_cast<const std::uint8_t*>(mapping) + mapping_params.data_offset);
   }
@@ -370,42 +391,32 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
         PreprocessError("failed to create NV12 conversion context"));
   }
 
-  // Re-pad only when the letterbox geometry actually changed (including the
-  // very first call): the pad bands are constant across frames sharing the
-  // same geometry, and sws_scale below rewrites the entire content
-  // rectangle every frame regardless, so re-filling the whole canvas on
-  // every call is pure waste.
-  const auto& new_geometry = geometry.value();
-  const bool geometry_changed =
-      !impl_->has_padded_geometry ||
-      impl_->rgb_scratch.size() != target_bytes.value() ||
-      impl_->padded_geometry.scaled_width != new_geometry.scaled_width ||
-      impl_->padded_geometry.scaled_height != new_geometry.scaled_height ||
-      impl_->padded_geometry.x_offset != new_geometry.x_offset ||
-      impl_->padded_geometry.y_offset != new_geometry.y_offset;
-  if (geometry_changed) {
-    impl_->has_padded_geometry = false;
-    try {
-      impl_->rgb_scratch.assign(target_bytes.value(), impl_->padding);
-    } catch (const std::bad_alloc&) {
-      return common::Result<std::vector<std::uint8_t>>::Err(
-          PreprocessError("failed to allocate AI model input buffer"));
-    } catch (const std::length_error&) {
-      return common::Result<std::vector<std::uint8_t>>::Err(
-          PreprocessError("AI model input buffer size is invalid"));
-    }
-    impl_->padded_geometry = new_geometry;
-    impl_->has_padded_geometry = true;
+  // A per-call scratch buffer (rather than a persistent, reused one) was
+  // tried and measured net *slower* on-device: the reuse still had to copy
+  // the whole canvas out to satisfy Convert()'s move-out contract (see
+  // AiModelProcessor.cpp -- the caller keeps the buffer alive through async
+  // inference submission, so the scratch can't be moved out and reused
+  // directly), and that copy cost more than the memset it was meant to
+  // avoid. Reverted to the plain per-call allocation; only the dmabuf mmap
+  // cache above is kept, which measured a real win on its own.
+  std::vector<std::uint8_t> rgb;
+  try {
+    rgb.assign(target_bytes.value(), impl_->padding);
+  } catch (const std::bad_alloc&) {
+    return common::Result<std::vector<std::uint8_t>>::Err(
+        PreprocessError("failed to allocate AI model input buffer"));
+  } catch (const std::length_error&) {
+    return common::Result<std::vector<std::uint8_t>>::Err(
+        PreprocessError("AI model input buffer size is invalid"));
   }
-
   const std::uint8_t* source_planes[2] = {mapped_y.value(), mapped_uv.value()};
   int source_strides[2] = {static_cast<int>(source.planes[0].stride),
                            static_cast<int>(source.planes[1].stride)};
   std::uint8_t* target_planes[1] = {
-      impl_->rgb_scratch.data() +
-      ((static_cast<std::size_t>(new_geometry.y_offset) * impl_->target_width +
-        new_geometry.x_offset) *
-       kRgbChannels)};
+      rgb.data() + ((static_cast<std::size_t>(geometry.value().y_offset) *
+                         impl_->target_width +
+                     geometry.value().x_offset) *
+                    kRgbChannels)};
   int target_strides[1] = {static_cast<int>(impl_->target_width * kRgbChannels)};
 
   const int scaled_rows = sws_scale(impl_->sws,
@@ -415,25 +426,9 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
                                     static_cast<int>(source.height),
                                     target_planes,
                                     target_strides);
-  if (scaled_rows != static_cast<int>(new_geometry.scaled_height)) {
+  if (scaled_rows != static_cast<int>(geometry.value().scaled_height)) {
     return common::Result<std::vector<std::uint8_t>>::Err(
         PreprocessError("failed to scale NV12 frame to model input"));
-  }
-
-  // Convert()'s external contract hands the caller an owned buffer (moved
-  // into a ModelInputBuffer -- see AiModelProcessor.cpp -- and kept alive
-  // asynchronously through inference submission), so a fresh buffer must be
-  // produced every call; impl_->rgb_scratch itself must stay resident for
-  // the next call rather than being moved out. This copy is the cost of
-  // preserving that contract without a caller-side buffer pool; the
-  // eliminated cost is the redundant full-canvas pad fill this scratch
-  // buffer no longer repeats on every frame.
-  std::vector<std::uint8_t> rgb;
-  try {
-    rgb = impl_->rgb_scratch;
-  } catch (const std::bad_alloc&) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
-        PreprocessError("failed to allocate AI model input buffer"));
   }
   return common::Result<std::vector<std::uint8_t>>::Ok(std::move(rgb));
 }
