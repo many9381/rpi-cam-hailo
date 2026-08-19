@@ -1763,6 +1763,91 @@ TEST(ServiceResponseTest, LiveMp4ResponseBoundsQueuedBytesPerConnection) {
   EXPECT_TRUE(stream_state->released.load());
 }
 
+TEST(ServiceResponseTest, LiveMp4PumpRetriesBackpressuredSendInsteadOfTerminating) {
+  // send()==false from the (patched) trantor AsyncStream can mean either
+  // "pending-byte cap reached" (transient backpressure) or "connection
+  // closed" -- the pump must retry the same chunk rather than dropping it
+  // and killing the response on the first false. This stub rejects the
+  // first 3 sends, then accepts.
+  constexpr std::size_t kRejections = 3U;
+  struct StreamState {
+    std::atomic_bool served{false};
+    std::atomic_bool released{false};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string bytes;
+    std::atomic<std::size_t> send_calls{0U};
+    bool closed{false};
+  };
+  class FlakySendStream final : public trantor::AsyncStream {
+   public:
+    explicit FlakySendStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char* data, std::size_t size) override {
+      const auto call_index = state_->send_calls.fetch_add(1U);
+      if (call_index < kRejections) {
+        return false;
+      }
+      std::lock_guard lock(state_->mutex);
+      state_->bytes.append(data, size);
+      return true;
+    }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      state_->closed = true;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+
+  auto stream_state = std::make_shared<StreamState>();
+  auto output_state = std::make_shared<OutputState>();
+
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [stream_state](const std::string&) {
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [stream_state](char* output, std::size_t capacity) {
+              if (output == nullptr) {
+                stream_state->released.store(true);
+                return std::size_t{0};
+              }
+              if (stream_state->served.exchange(true)) {
+                return std::size_t{0};  // EOF after the one chunk.
+              }
+              static constexpr std::string_view kPayload = "flaky-chunk";
+              const auto count = std::min(capacity, kPayload.size());
+              std::copy_n(kPayload.data(), count, output);
+              return count;
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      },
+      "imx708-main");
+
+  ASSERT_NE(response, nullptr);
+  ASSERT_TRUE(response->asyncStreamCallback());
+  response->asyncStreamCallback()(
+      std::make_unique<FlakySendStream>(output_state));
+
+  std::unique_lock lock(output_state->mutex);
+  ASSERT_TRUE(output_state->changed.wait_for(
+      lock, std::chrono::seconds(2), [&] { return output_state->closed; }));
+  EXPECT_GE(output_state->send_calls.load(), kRejections + 1U)
+      << "expected the pump to retry the rejected sends instead of giving "
+         "up after the first";
+  EXPECT_EQ(output_state->bytes, "flaky-chunk")
+      << "the chunk must not be dropped -- it should land after retries "
+         "succeed";
+  lock.unlock();
+}
+
 TEST(ServiceResponseTest, LiveMp4ZeroBudgetStreamsPastFormerDefaultLimit) {
   // A zero response-byte budget must mean "no budget": the pump should keep
   // streaming well past the old 16MiB hard cutoff instead of force-cutting
@@ -2101,6 +2186,15 @@ TEST(ServiceResponseTest, LiveMp4ReadExceptionCancelsAndClosesExactlyOnce) {
 
 TEST(ServiceResponseTest,
      LiveMp4SendFailureCompletesWhenCancelAndCloseThrow) {
+  // The pump now retries a backpressured send (50ms cadence, up to 10s of
+  // continuous stall) instead of terminating on the first false -- see
+  // LiveMp4PumpRetriesBackpressuredSendInsteadOfTerminating. To keep this
+  // test's send failure a *genuine disconnect* (so it still completes
+  // promptly, exercising cancel()/close() throwing during cleanup), the
+  // fake send revokes the caller's own lease before reporting failure; the
+  // retry loop's every-iteration ActiveBeforeRead check observes the
+  // revocation on its first pass and gives up immediately, so send() is
+  // still only called once.
   struct State {
     std::mutex mutex;
     std::condition_variable changed;
@@ -2109,13 +2203,23 @@ TEST(ServiceResponseTest,
     std::size_t cancel_calls{0U};
     std::size_t close_calls{0U};
   };
+  camera_firmware::service::SessionStreamRegistry registry;
+  camera_firmware::security::SessionIdentity identity;
+  identity.bytes.fill(41U);
+  auto lease = registry.Acquire(identity);
   class FailingStream final : public trantor::AsyncStream {
    public:
-    explicit FailingStream(std::shared_ptr<State> state)
-        : state_(std::move(state)) {}
+    FailingStream(std::shared_ptr<State> state,
+                  camera_firmware::service::SessionStreamRegistry& registry,
+                  camera_firmware::security::SessionIdentity identity)
+        : state_(std::move(state)),
+          registry_(registry),
+          identity_(identity) {}
     bool send(const char*, std::size_t) override {
       std::lock_guard lock(state_->mutex);
       ++state_->send_calls;
+      const std::array revoked{identity_};
+      registry_.Revoke(revoked);
       return false;
     }
     void close() override {
@@ -2127,6 +2231,8 @@ TEST(ServiceResponseTest,
 
    private:
     std::shared_ptr<State> state_;
+    camera_firmware::service::SessionStreamRegistry& registry_;
+    camera_firmware::security::SessionIdentity identity_;
   };
   auto state = std::make_shared<State>();
   auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
@@ -2148,8 +2254,10 @@ TEST(ServiceResponseTest,
             },
         });
       },
-      "imx708-main");
-  response->asyncStreamCallback()(std::make_unique<FailingStream>(state));
+      "imx708-main",
+      camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, lease);
+  response->asyncStreamCallback()(
+      std::make_unique<FailingStream>(state, registry, identity));
 
   std::unique_lock lock(state->mutex);
   ASSERT_TRUE(state->changed.wait_for(

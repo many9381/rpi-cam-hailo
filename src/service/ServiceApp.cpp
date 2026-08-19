@@ -365,6 +365,15 @@ class RuntimeCallbackLifecycle final
 
 class LiveMp4PumpManager;
 
+// trantor's AsyncStream::send() returning false conflates two situations:
+// the per-connection pending-byte cap was reached (transient backpressure)
+// or the peer connection is gone. Pump() retries the same chunk on this
+// cadence rather than dropping it, and gives up only after this much
+// continuous stall -- at which point a genuine disconnect (or lease
+// revocation, checked every retry) exits the pump promptly regardless.
+constexpr std::chrono::milliseconds kLiveMp4BackpressureRetryDelay{50};
+constexpr std::chrono::seconds kLiveMp4BackpressureGiveUpAfter{10};
+
 class LiveMp4PumpState final {
  public:
   static std::shared_ptr<LiveMp4PumpState> Create(
@@ -448,8 +457,28 @@ class LiveMp4PumpState final {
           MediaCallbackScope callback_scope(owner_manager);
           size = stream_.read(buffer.data(), capacity);
         }
-        if (size == 0U || size > capacity ||
-            !SendUnlessActive(buffer.data(), size)) {
+        if (size == 0U || size > capacity) {
+          break;
+        }
+        bool sent_ok = SendUnlessActive(buffer.data(), size);
+        auto stall_started = std::chrono::steady_clock::time_point{};
+        while (!sent_ok) {
+          std::shared_ptr<SessionStreamLease> recheck_lease;
+          LiveMp4PumpManager* recheck_manager = nullptr;
+          if (!ActiveBeforeRead(recheck_lease, recheck_manager)) {
+            stall_started = {};
+            break;  // revoked/terminal -- outer loop will observe and exit
+          }
+          const auto now = std::chrono::steady_clock::now();
+          if (stall_started == std::chrono::steady_clock::time_point{}) {
+            stall_started = now;
+          } else if (now - stall_started >= kLiveMp4BackpressureGiveUpAfter) {
+            break;  // peer genuinely dead or stalled beyond tolerance
+          }
+          std::this_thread::sleep_for(kLiveMp4BackpressureRetryDelay);
+          sent_ok = SendUnlessActive(buffer.data(), size);
+        }
+        if (!sent_ok) {
           break;
         }
         sent_bytes += size;
