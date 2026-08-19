@@ -38,8 +38,8 @@ class EventLoop;
 
 namespace camera_firmware::service {
 
-inline constexpr std::size_t kDefaultLiveMp4ResponseByteLimit =
-    16U * 1024U * 1024U;
+// 0 = no per-response byte budget; the stream ends on EOF/cancel.
+inline constexpr std::size_t kDefaultLiveMp4ResponseByteLimit = 0U;
 inline constexpr std::size_t kMaximumServiceConnections = 32U;
 inline constexpr std::size_t kMaximumServiceConnectionsPerIp =
     kMaximumServiceConnections;

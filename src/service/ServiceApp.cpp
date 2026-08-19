@@ -429,15 +429,18 @@ class LiveMp4PumpState final {
   void Pump() noexcept {
     std::array<char, 16U * 1024U> buffer{};
     std::size_t sent_bytes = 0U;
+    const bool unbounded = maximum_response_bytes_ == 0U;
     try {
-      while (sent_bytes < maximum_response_bytes_) {
+      while (unbounded || sent_bytes < maximum_response_bytes_) {
         std::shared_ptr<SessionStreamLease> callback_lease;
         LiveMp4PumpManager* owner_manager = nullptr;
         if (!ActiveBeforeRead(callback_lease, owner_manager)) {
           break;
         }
         const auto capacity =
-            std::min(buffer.size(), maximum_response_bytes_ - sent_bytes);
+            unbounded ? buffer.size()
+                      : std::min(buffer.size(),
+                                 maximum_response_bytes_ - sent_bytes);
         std::size_t size = 0U;
         {
           SessionStreamRevocationScope revocation_scope(

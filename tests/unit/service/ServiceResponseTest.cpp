@@ -1763,6 +1763,78 @@ TEST(ServiceResponseTest, LiveMp4ResponseBoundsQueuedBytesPerConnection) {
   EXPECT_TRUE(stream_state->released.load());
 }
 
+TEST(ServiceResponseTest, LiveMp4ZeroBudgetStreamsPastFormerDefaultLimit) {
+  // A zero response-byte budget must mean "no budget": the pump should keep
+  // streaming well past the old 16MiB hard cutoff instead of force-cutting
+  // the viewer mid-fragment. It only stops when the source read() reports
+  // EOF (returns 0), which this fixture triggers once it has served more
+  // than the former default limit.
+  constexpr std::size_t kFormerDefaultLimit = 16U * 1024U * 1024U;
+  struct StreamState {
+    std::atomic<std::size_t> served{0U};
+  };
+  struct OutputState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t bytes{0U};
+    bool closed{false};
+  };
+  class CountingAsyncStream final : public trantor::AsyncStream {
+   public:
+    explicit CountingAsyncStream(std::shared_ptr<OutputState> state)
+        : state_(std::move(state)) {}
+
+    bool send(const char*, std::size_t size) override {
+      std::lock_guard lock(state_->mutex);
+      state_->bytes += size;
+      return true;
+    }
+
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      state_->closed = true;
+      state_->changed.notify_all();
+    }
+
+   private:
+    std::shared_ptr<OutputState> state_;
+  };
+
+  auto stream_state = std::make_shared<StreamState>();
+  auto output_state = std::make_shared<OutputState>();
+
+  auto response = camera_firmware::service::BuildLiveMp4Response(
+      [stream_state](const std::string&) {
+        camera_firmware::service::LiveMp4StreamCallback stream =
+            [stream_state](char* output, std::size_t capacity) {
+              if (output == nullptr) {
+                return std::size_t{0};
+              }
+              if (stream_state->served.load() >
+                  kFormerDefaultLimit + (256U * 1024U)) {
+                return std::size_t{0};
+              }
+              std::fill_n(output, capacity, 'x');
+              stream_state->served += capacity;
+              return capacity;
+            };
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamCallback>::Ok(
+            std::move(stream));
+      },
+      "imx708-main", /*maximum_response_bytes=*/0U);
+
+  ASSERT_NE(response, nullptr);
+  ASSERT_TRUE(response->asyncStreamCallback());
+  response->asyncStreamCallback()(
+      std::make_unique<CountingAsyncStream>(output_state));
+
+  std::unique_lock lock(output_state->mutex);
+  ASSERT_TRUE(output_state->changed.wait_for(
+      lock, std::chrono::seconds(5), [&] { return output_state->closed; }));
+  EXPECT_GT(output_state->bytes, kFormerDefaultLimit);
+}
+
 TEST(ServiceResponseTest,
      LiveMp4RevocationClosesBlockedOutputWithoutSendingReturnedBytes) {
   struct StreamState {
