@@ -20,7 +20,7 @@
 #error "camera-firmware bounded async stream patch is required"
 #endif
 
-static_assert(trantor::kAsyncStreamPendingByteLimit == 1U * 1024U * 1024U);
+static_assert(trantor::kAsyncStreamPendingByteLimit == 4U * 1024U * 1024U);
 
 namespace {
 
