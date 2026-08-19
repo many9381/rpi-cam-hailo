@@ -491,6 +491,27 @@ target_link_libraries(camera_firmware_service_tests
 
 gtest_discover_tests(camera_firmware_service_tests)
 
+add_executable(camera_firmware_live_mp4_byte_stream_tests
+    unit/service/LiveMp4ByteStreamTest.cpp
+)
+
+target_include_directories(camera_firmware_live_mp4_byte_stream_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/apps/camera-firmware
+)
+
+target_link_libraries(camera_firmware_live_mp4_byte_stream_tests
+    PRIVATE
+        camera_firmware_media
+        GTest::gtest_main
+)
+
+gtest_discover_tests(
+    camera_firmware_live_mp4_byte_stream_tests
+    PROPERTIES
+        TIMEOUT 15
+)
+
 add_test(
     NAME ServiceProductionSurfaceTest.NoTestHooks
     COMMAND ${CMAKE_COMMAND}
