@@ -28,6 +28,7 @@
 #include <trantor/net/EventLoop.h>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 #include "camera_firmware/security/AuditLogService.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
 #include "camera_firmware/service/AuditLogHttp.hpp"
@@ -785,6 +786,7 @@ class LiveMp4PumpManager final {
           auto start = std::make_shared<std::promise<void>>();
           auto start_signal = start->get_future().share();
           std::thread thread([pump, done, start_signal] {
+            common::NameCurrentThread("live-pump");
             start_signal.wait();
             pump->Pump();
             done->store(true, std::memory_order_release);

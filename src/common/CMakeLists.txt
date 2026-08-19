@@ -1,6 +1,7 @@
 add_library(camera_firmware_common STATIC
     Logger.cpp
     SecureBytes.cpp
+    ThreadTuning.cpp
 )
 
 set_target_properties(camera_firmware_common

@@ -31,6 +31,7 @@
 #endif
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 #include "camera_firmware/rtsp/GstRtspDigestAuth.hpp"
 #include "camera_firmware/rtsp/RtspDigestVerifier.hpp"
 #include "camera_firmware/rtsp/SrtpSessionKey.hpp"
@@ -731,6 +732,7 @@ struct SecureRtspServer::Impl {
     loop = g_main_loop_new(context, FALSE);
     stop_requested.store(false, std::memory_order_release);
     thread = std::thread([this] {
+      camera_firmware::common::NameCurrentThread("rtsp-loop");
       g_main_context_push_thread_default(context);
       if (!stop_requested.load(std::memory_order_acquire)) {
         g_main_loop_run(loop);

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 
 namespace camera_firmware::ai {
 
@@ -40,6 +41,8 @@ common::Result<void> AiFramePump::Start() {
 
   worker_ = std::thread(
       [state = state_, &runtime = runtime_, interval = minimum_interval_] {
+        common::NameCurrentThread("ai-pump");
+        common::DeprioritizeCurrentThread(10);
         Run(state, runtime, interval);
       });
 
