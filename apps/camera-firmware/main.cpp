@@ -23,6 +23,8 @@
 
 #include <drogon/HttpAppFramework.h>
 
+#include "LiveMp4ByteStream.hpp"
+
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
@@ -54,47 +56,6 @@ using camera_firmware::common::Error;
 using camera_firmware::common::Logger;
 
 std::atomic_bool g_stop_requested{false};
-
-class LiveMp4ByteStream {
- public:
-  LiveMp4ByteStream(
-      camera_firmware::media::FragmentRing::Reader reader,
-      std::chrono::milliseconds stale_timeout)
-      : reader_(std::move(reader)), stale_timeout_(stale_timeout) {}
-
-  std::size_t Read(char* output, std::size_t capacity) {
-    if (capacity == 0U || !reader_.valid()) {
-      return 0U;
-    }
-
-    while (!current_bytes_ || current_offset_ >= current_bytes_->size()) {
-      current_bytes_.reset();
-      current_offset_ = 0U;
-      auto next = reader_.WaitNext(stale_timeout_);
-      if (!next.ok() || !next.value().has_value() ||
-          !next.value()->bytes || next.value()->bytes->empty()) {
-        return 0U;
-      }
-      current_bytes_ = std::move(next).value()->bytes;
-    }
-
-    const auto count =
-        std::min(capacity, current_bytes_->size() - current_offset_);
-    std::copy_n(current_bytes_->data() + current_offset_, count, output);
-    current_offset_ += count;
-    return count;
-  }
-
-  void Cancel() noexcept {
-    reader_.Cancel();
-  }
-
- private:
-  camera_firmware::media::FragmentRing::Reader reader_;
-  const std::chrono::milliseconds stale_timeout_;
-  std::shared_ptr<const std::vector<std::uint8_t>> current_bytes_;
-  std::size_t current_offset_{0U};
-};
 
 void RequestShutdown() {
   g_stop_requested.store(true);
@@ -579,8 +540,9 @@ int RunFirmware(const std::string& config_path) {
         }
         const auto stale_timeout = std::chrono::milliseconds(
             runtime->ActiveConfig().http.live.stale_timeout_ms);
+        constexpr auto maximum_idle = std::chrono::milliseconds{30000};
         auto state = std::make_shared<LiveMp4ByteStream>(
-            std::move(opened).value(), stale_timeout);
+            std::move(opened).value(), stale_timeout, maximum_idle);
         camera_firmware::service::LiveMp4StreamHandle stream{
             .read = [state](char* output, std::size_t capacity) {
               return state->Read(output, capacity);

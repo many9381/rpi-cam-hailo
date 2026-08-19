@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <future>
@@ -365,6 +366,71 @@ class RuntimeCallbackLifecycle final
 
 class LiveMp4PumpManager;
 
+// trantor's AsyncStream::send() returning false conflates two situations:
+// the per-connection pending-byte cap was reached (transient backpressure)
+// or the peer connection is gone. Pump() retries the same chunk on this
+// cadence rather than dropping it, and gives up only after this much
+// continuous stall -- at which point a genuine disconnect (or lease
+// revocation, checked every retry) exits the pump promptly regardless.
+constexpr std::chrono::milliseconds kLiveMp4BackpressureRetryDelay{50};
+constexpr std::chrono::seconds kLiveMp4BackpressureGiveUpAfter{10};
+
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+namespace {
+
+struct LiveMp4BackpressureTimingOverride {
+  std::atomic<std::int64_t> retry_delay_ms{-1};
+  std::atomic<std::int64_t> give_up_after_ms{-1};
+};
+
+LiveMp4BackpressureTimingOverride&
+LiveMp4BackpressureTimingOverrideForTesting() {
+  static LiveMp4BackpressureTimingOverride timing;
+  return timing;
+}
+
+}  // namespace
+
+void OverrideLiveMp4BackpressureTimingForTesting(
+    std::chrono::milliseconds retry_delay,
+    std::chrono::milliseconds give_up_after) noexcept {
+  auto& timing = LiveMp4BackpressureTimingOverrideForTesting();
+  timing.retry_delay_ms.store(retry_delay.count(), std::memory_order_relaxed);
+  timing.give_up_after_ms.store(give_up_after.count(),
+                                std::memory_order_relaxed);
+}
+
+void ResetLiveMp4BackpressureTimingForTesting() noexcept {
+  auto& timing = LiveMp4BackpressureTimingOverrideForTesting();
+  timing.retry_delay_ms.store(-1, std::memory_order_relaxed);
+  timing.give_up_after_ms.store(-1, std::memory_order_relaxed);
+}
+#endif
+
+std::chrono::milliseconds LiveMp4BackpressureRetryDelay() noexcept {
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+  const auto override_ms = LiveMp4BackpressureTimingOverrideForTesting()
+                               .retry_delay_ms.load(std::memory_order_relaxed);
+  if (override_ms >= 0) {
+    return std::chrono::milliseconds{override_ms};
+  }
+#endif
+  return kLiveMp4BackpressureRetryDelay;
+}
+
+std::chrono::milliseconds LiveMp4BackpressureGiveUpAfter() noexcept {
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+  const auto override_ms =
+      LiveMp4BackpressureTimingOverrideForTesting().give_up_after_ms.load(
+          std::memory_order_relaxed);
+  if (override_ms >= 0) {
+    return std::chrono::milliseconds{override_ms};
+  }
+#endif
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      kLiveMp4BackpressureGiveUpAfter);
+}
+
 class LiveMp4PumpState final {
  public:
   static std::shared_ptr<LiveMp4PumpState> Create(
@@ -429,15 +495,18 @@ class LiveMp4PumpState final {
   void Pump() noexcept {
     std::array<char, 16U * 1024U> buffer{};
     std::size_t sent_bytes = 0U;
+    const bool unbounded = maximum_response_bytes_ == 0U;
     try {
-      while (sent_bytes < maximum_response_bytes_) {
+      while (unbounded || sent_bytes < maximum_response_bytes_) {
         std::shared_ptr<SessionStreamLease> callback_lease;
         LiveMp4PumpManager* owner_manager = nullptr;
         if (!ActiveBeforeRead(callback_lease, owner_manager)) {
           break;
         }
         const auto capacity =
-            std::min(buffer.size(), maximum_response_bytes_ - sent_bytes);
+            unbounded ? buffer.size()
+                      : std::min(buffer.size(),
+                                 maximum_response_bytes_ - sent_bytes);
         std::size_t size = 0U;
         {
           SessionStreamRevocationScope revocation_scope(
@@ -445,8 +514,27 @@ class LiveMp4PumpState final {
           MediaCallbackScope callback_scope(owner_manager);
           size = stream_.read(buffer.data(), capacity);
         }
-        if (size == 0U || size > capacity ||
-            !SendUnlessActive(buffer.data(), size)) {
+        if (size == 0U || size > capacity) {
+          break;
+        }
+        bool sent_ok = SendUnlessActive(buffer.data(), size);
+        auto stall_started = std::chrono::steady_clock::time_point{};
+        while (!sent_ok) {
+          std::shared_ptr<SessionStreamLease> recheck_lease;
+          LiveMp4PumpManager* recheck_manager = nullptr;
+          if (!ActiveBeforeRead(recheck_lease, recheck_manager)) {
+            break;  // revoked/terminal -- outer loop will observe and exit
+          }
+          const auto now = std::chrono::steady_clock::now();
+          if (stall_started == std::chrono::steady_clock::time_point{}) {
+            stall_started = now;
+          } else if (now - stall_started >= LiveMp4BackpressureGiveUpAfter()) {
+            break;  // peer genuinely dead or stalled beyond tolerance
+          }
+          std::this_thread::sleep_for(LiveMp4BackpressureRetryDelay());
+          sent_ok = SendUnlessActive(buffer.data(), size);
+        }
+        if (!sent_ok) {
           break;
         }
         sent_bytes += size;

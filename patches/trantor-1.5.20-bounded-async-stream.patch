@@ -15,7 +15,7 @@ index c459f9e..c380c17 100644
  namespace trantor
  {
 +static constexpr std::size_t kAsyncStreamPendingByteLimit =
-+    1U * 1024U * 1024U;
++    4U * 1024U * 1024U;
 +
  /**
   * @brief This class represents a data stream that can be sent asynchronously.

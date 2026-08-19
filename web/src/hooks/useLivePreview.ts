@@ -30,17 +30,21 @@ interface ActiveSession {
 
 const maximumBufferSeconds = 8;
 const backBufferSeconds = 3;
-const liveEdgeTargetSeconds = 0.35;
+// Must stay above the server fragment duration (500ms, http.live
+// fragment_duration_ms): riding closer to the live edge than one fragment
+// drains the buffer before the next fragment lands, which shows up as
+// periodic waiting stalls and emergency-seek jumps.
+const liveEdgeTargetSeconds = 1;
 // Drift between the target and this threshold is left alone; past it the
 // video plays slightly fast until the target is reached again. The band
 // keeps the rate from flapping around a single boundary.
-const catchUpThresholdSeconds = 0.5;
+const catchUpThresholdSeconds = 1.25;
 // 5% is invisible on a preview with no audio track, and converges from the
 // threshold back to the target in a few seconds.
 const catchUpPlaybackRate = 1.05;
 // A hard seek is visible, so it is reserved for drift the catch-up rate
 // would take too long to absorb — a stall, a suspended tab, a burst append.
-const emergencySeekSeconds = 2.5;
+const emergencySeekSeconds = 3;
 const retryDelay = (attempt: number) => Math.min(1_000 * 2 ** attempt, 5_000);
 
 const endpointUrl = (cameraId: string, generation: number) =>
