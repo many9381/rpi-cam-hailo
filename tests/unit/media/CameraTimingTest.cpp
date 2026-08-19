@@ -41,6 +41,17 @@ TEST(CameraTimingTest, ResolvesConfiguredX264PresetWithAutomaticThreads) {
   EXPECT_EQ(policy.threads, 0);
 }
 
+TEST(CameraTimingTest, ResolvesX264VBVBufferSizeFromBitrate) {
+  camera_firmware::config::CameraEncoderConfig config;
+  config.preset = "medium";
+  config.bitrate_kbps = 6000U;
+
+  const auto policy = camera_firmware::media::ResolveX264RuntimePolicy(config);
+
+  EXPECT_EQ(policy.vbv_max_bitrate_kbps, 6000);
+  EXPECT_EQ(policy.vbv_buffer_size_kbits, 3000);
+}
+
 TEST(CameraTimingTest, EstimatesFrameRateFromBoundedTimestampWindow) {
   using namespace std::chrono_literals;
   camera_firmware::media::FrameRateEstimator estimator(3U);

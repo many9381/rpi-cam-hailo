@@ -18,6 +18,8 @@ FixedFrameDurationLimits(unsigned int fps);
 struct X264RuntimePolicy {
   std::string preset;
   int threads{0};
+  int vbv_max_bitrate_kbps{0};
+  int vbv_buffer_size_kbits{0};
 };
 
 [[nodiscard]] X264RuntimePolicy ResolveX264RuntimePolicy(

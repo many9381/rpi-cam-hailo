@@ -25,7 +25,10 @@ common::Result<std::array<std::int64_t, 2>> FixedFrameDurationLimits(
 
 X264RuntimePolicy ResolveX264RuntimePolicy(
     const config::CameraEncoderConfig& config) {
-  return {.preset = config.preset, .threads = 0};
+  return {.preset = config.preset,
+          .threads = 0,
+          .vbv_max_bitrate_kbps = static_cast<int>(config.bitrate_kbps),
+          .vbv_buffer_size_kbits = static_cast<int>(config.bitrate_kbps / 2U)};
 }
 
 FrameRateEstimator::FrameRateEstimator(std::size_t maximum_samples)

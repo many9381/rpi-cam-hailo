@@ -566,6 +566,8 @@ struct CameraPipeline::Impl {
     params.rc.i_rc_method = X264_RC_ABR;
     params.rc.i_bitrate =
         static_cast<int>(configured_camera.encoder.bitrate_kbps);
+    params.rc.i_vbv_max_bitrate = policy.vbv_max_bitrate_kbps;
+    params.rc.i_vbv_buffer_size = policy.vbv_buffer_size_kbits;
     params.b_annexb = 1;
     params.b_repeat_headers = 1;
     params.b_vfr_input = 0;
