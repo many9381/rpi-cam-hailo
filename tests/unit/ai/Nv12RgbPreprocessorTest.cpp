@@ -155,6 +155,60 @@ TEST(Nv12RgbPreprocessorTest, RejectsInvalidDmabufWithoutMapping) {
   EXPECT_EQ(converted.error().code, "E_AI_PREPROCESS");
 }
 
+TEST(Nv12RgbPreprocessorTest, RepeatedConvertCallsProduceIdenticalOutput) {
+  // Guards the "reused scratch buffer not re-padded / stale content" bug:
+  // converting the same source geometry twice on the same preprocessor
+  // instance (which now reuses an internal scratch buffer across calls)
+  // must produce byte-for-byte identical output both times.
+  Nv12RgbPreprocessor preprocessor(4, 4, true, 114U);
+  const auto lease = GrayNv12Lease(8, 4);
+
+  auto first = preprocessor.Convert(lease);
+  ASSERT_TRUE(first.ok()) << first.error().message;
+  auto second = preprocessor.Convert(lease);
+  ASSERT_TRUE(second.ok()) << second.error().message;
+
+  EXPECT_EQ(first.value(), second.value());
+  EXPECT_TRUE(RowEquals(second.value(), 0, 4, 114U));
+  EXPECT_TRUE(RowEquals(second.value(), 3, 4, 114U));
+}
+
+TEST(Nv12RgbPreprocessorTest, GeometryChangeRepadsPreviouslyContentColumns) {
+  // First call letterboxes an 8x4 (2:1) source into a 4x4 target: content
+  // occupies rows 1-2 (full width), rows 0 and 3 are top/bottom padding.
+  // Second call, on the SAME preprocessor instance, letterboxes a 4x8 (1:2)
+  // source into the same 4x4 target: content occupies columns 1-2 for every
+  // row, columns 0 and 3 are left/right padding -- including in rows 1-2,
+  // which held real (non-114) pixel data after the first call. If the
+  // scratch-buffer reuse fails to detect the geometry change and re-pad,
+  // those bytes would leak stale content instead of being reset to 114.
+  Nv12RgbPreprocessor preprocessor(4, 4, true, 114U);
+
+  auto landscape = preprocessor.Convert(GrayNv12Lease(8, 4));
+  ASSERT_TRUE(landscape.ok()) << landscape.error().message;
+  EXPECT_TRUE(RowEquals(landscape.value(), 0, 4, 114U));
+  EXPECT_TRUE(RowEquals(landscape.value(), 3, 4, 114U));
+
+  auto portrait = preprocessor.Convert(GrayNv12Lease(4, 8));
+  ASSERT_TRUE(portrait.ok()) << portrait.error().message;
+  ASSERT_EQ(portrait.value().size(), 4U * 4U * 3U);
+
+  constexpr std::size_t kBytesPerPixel = 3U;
+  constexpr std::size_t kRowBytes = 4U * kBytesPerPixel;
+  for (int row = 0; row < 4; ++row) {
+    const std::size_t row_start = static_cast<std::size_t>(row) * kRowBytes;
+    // Column 0 (left pad) and column 3 (right pad) must be 114 in every row,
+    // including rows 1 and 2 which were letterbox *content* rows for the
+    // previous (landscape) geometry.
+    EXPECT_TRUE(RowEquals(portrait.value(), row_start, row_start + kBytesPerPixel,
+                          114U))
+        << "row " << row << " left pad";
+    EXPECT_TRUE(RowEquals(portrait.value(), row_start + 3U * kBytesPerPixel,
+                          row_start + kRowBytes, 114U))
+        << "row " << row << " right pad";
+  }
+}
+
 TEST(Nv12RgbPreprocessorTest, LoresSourceHasSameLetterboxGeometryAsFullSource) {
   // A 640x640 letterbox model input. A 16:9 source letterboxes to a 640x360
   // content band centred vertically: rows 0..139 and 500..639 are 114 padding,
