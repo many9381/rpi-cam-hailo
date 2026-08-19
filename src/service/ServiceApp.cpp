@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <future>
@@ -374,6 +375,62 @@ class LiveMp4PumpManager;
 constexpr std::chrono::milliseconds kLiveMp4BackpressureRetryDelay{50};
 constexpr std::chrono::seconds kLiveMp4BackpressureGiveUpAfter{10};
 
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+namespace {
+
+struct LiveMp4BackpressureTimingOverride {
+  std::atomic<std::int64_t> retry_delay_ms{-1};
+  std::atomic<std::int64_t> give_up_after_ms{-1};
+};
+
+LiveMp4BackpressureTimingOverride&
+LiveMp4BackpressureTimingOverrideForTesting() {
+  static LiveMp4BackpressureTimingOverride timing;
+  return timing;
+}
+
+}  // namespace
+
+void OverrideLiveMp4BackpressureTimingForTesting(
+    std::chrono::milliseconds retry_delay,
+    std::chrono::milliseconds give_up_after) noexcept {
+  auto& timing = LiveMp4BackpressureTimingOverrideForTesting();
+  timing.retry_delay_ms.store(retry_delay.count(), std::memory_order_relaxed);
+  timing.give_up_after_ms.store(give_up_after.count(),
+                                std::memory_order_relaxed);
+}
+
+void ResetLiveMp4BackpressureTimingForTesting() noexcept {
+  auto& timing = LiveMp4BackpressureTimingOverrideForTesting();
+  timing.retry_delay_ms.store(-1, std::memory_order_relaxed);
+  timing.give_up_after_ms.store(-1, std::memory_order_relaxed);
+}
+#endif
+
+std::chrono::milliseconds LiveMp4BackpressureRetryDelay() noexcept {
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+  const auto override_ms = LiveMp4BackpressureTimingOverrideForTesting()
+                               .retry_delay_ms.load(std::memory_order_relaxed);
+  if (override_ms >= 0) {
+    return std::chrono::milliseconds{override_ms};
+  }
+#endif
+  return kLiveMp4BackpressureRetryDelay;
+}
+
+std::chrono::milliseconds LiveMp4BackpressureGiveUpAfter() noexcept {
+#if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
+  const auto override_ms =
+      LiveMp4BackpressureTimingOverrideForTesting().give_up_after_ms.load(
+          std::memory_order_relaxed);
+  if (override_ms >= 0) {
+    return std::chrono::milliseconds{override_ms};
+  }
+#endif
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      kLiveMp4BackpressureGiveUpAfter);
+}
+
 class LiveMp4PumpState final {
  public:
   static std::shared_ptr<LiveMp4PumpState> Create(
@@ -466,16 +523,15 @@ class LiveMp4PumpState final {
           std::shared_ptr<SessionStreamLease> recheck_lease;
           LiveMp4PumpManager* recheck_manager = nullptr;
           if (!ActiveBeforeRead(recheck_lease, recheck_manager)) {
-            stall_started = {};
             break;  // revoked/terminal -- outer loop will observe and exit
           }
           const auto now = std::chrono::steady_clock::now();
           if (stall_started == std::chrono::steady_clock::time_point{}) {
             stall_started = now;
-          } else if (now - stall_started >= kLiveMp4BackpressureGiveUpAfter) {
+          } else if (now - stall_started >= LiveMp4BackpressureGiveUpAfter()) {
             break;  // peer genuinely dead or stalled beyond tolerance
           }
-          std::this_thread::sleep_for(kLiveMp4BackpressureRetryDelay);
+          std::this_thread::sleep_for(LiveMp4BackpressureRetryDelay());
           sent_ok = SendUnlessActive(buffer.data(), size);
         }
         if (!sent_ok) {

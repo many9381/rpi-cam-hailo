@@ -33,6 +33,10 @@
 
 namespace camera_firmware::service::internal {
 void FailNextLiveMp4PumpAllocationForTesting() noexcept;
+void OverrideLiveMp4BackpressureTimingForTesting(
+    std::chrono::milliseconds retry_delay,
+    std::chrono::milliseconds give_up_after) noexcept;
+void ResetLiveMp4BackpressureTimingForTesting() noexcept;
 std::optional<std::string_view> SerializeUserRoleForTesting(
     security::UserRole role) noexcept;
 drogon::HttpResponsePtr ExecuteProtectedRuntimeControlCommand(
@@ -2265,6 +2269,88 @@ TEST(ServiceResponseTest,
       [&] { return state->cancel_calls == 1U && state->close_calls == 1U; }));
   EXPECT_EQ(state->read_calls, 1U);
   EXPECT_EQ(state->send_calls, 1U);
+}
+
+TEST(ServiceResponseTest,
+     LiveMp4BackpressureGiveUpCancelsAndClosesExactlyOnce) {
+  // Covers the give-up branch of the backpressure retry loop: the send is
+  // ALWAYS false with no lease revocation, so the pump must terminate via
+  // the continuous-stall bound (overridden to 200ms here) and then run the
+  // Pump-tail CancelAndClose exactly once even though cancel() and close()
+  // both throw. The elapsed lower bound proves the give-up wait actually
+  // happened (a kill-on-first-failure regression would finish immediately).
+  camera_firmware::service::internal::
+      OverrideLiveMp4BackpressureTimingForTesting(
+          std::chrono::milliseconds{10}, std::chrono::milliseconds{200});
+  struct TimingReset {
+    ~TimingReset() {
+      camera_firmware::service::internal::
+          ResetLiveMp4BackpressureTimingForTesting();
+    }
+  } timing_reset;
+  struct State {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t read_calls{0U};
+    std::size_t send_calls{0U};
+    std::size_t cancel_calls{0U};
+    std::size_t close_calls{0U};
+  };
+  class BackpressuredStream final : public trantor::AsyncStream {
+   public:
+    explicit BackpressuredStream(std::shared_ptr<State> state)
+        : state_(std::move(state)) {}
+    bool send(const char*, std::size_t) override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->send_calls;
+      return false;
+    }
+    void close() override {
+      std::lock_guard lock(state_->mutex);
+      ++state_->close_calls;
+      state_->changed.notify_all();
+      throw std::runtime_error("close failed");
+    }
+
+   private:
+    std::shared_ptr<State> state_;
+  };
+  auto state = std::make_shared<State>();
+  const auto started = std::chrono::steady_clock::now();
+  auto response = camera_firmware::service::BuildCancellableLiveMp4Response(
+      [state](const std::string&) {
+        return camera_firmware::common::Result<
+            camera_firmware::service::LiveMp4StreamHandle>::Ok({
+            .read = [state](char* output, std::size_t capacity) {
+              std::lock_guard lock(state->mutex);
+              ++state->read_calls;
+              const auto count = std::min(capacity, std::size_t{1U});
+              std::fill_n(output, count, 'x');
+              return count;
+            },
+            .cancel = [state] {
+              std::lock_guard lock(state->mutex);
+              ++state->cancel_calls;
+              state->changed.notify_all();
+              throw std::runtime_error("cancel failed");
+            },
+        });
+      },
+      "imx708-main",
+      camera_firmware::service::kDefaultLiveMp4ResponseByteLimit, nullptr);
+  response->asyncStreamCallback()(std::make_unique<BackpressuredStream>(state));
+
+  std::unique_lock lock(state->mutex);
+  ASSERT_TRUE(state->changed.wait_for(
+      lock, std::chrono::seconds(5),
+      [&] { return state->cancel_calls == 1U && state->close_calls == 1U; }));
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  EXPECT_GE(elapsed, std::chrono::milliseconds{200});
+  EXPECT_LT(elapsed, std::chrono::seconds{3});
+  EXPECT_EQ(state->read_calls, 1U);
+  EXPECT_GE(state->send_calls, 3U);
+  EXPECT_EQ(state->cancel_calls, 1U);
+  EXPECT_EQ(state->close_calls, 1U);
 }
 
 TEST(ServiceResponseTest, LiveMp4RevokeSerializesWithInProgressSend) {
