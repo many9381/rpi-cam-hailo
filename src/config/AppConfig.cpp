@@ -181,6 +181,12 @@ common::Result<void> ValidateAiConfigSemantics(
              "camera.ai.model_ids references unknown model: " + model_id});
       }
     }
+    constexpr unsigned int kMaximumCameraAiMaxFps = 120U;
+    if (camera_config.ai.max_fps > kMaximumCameraAiMaxFps) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MAX_FPS",
+           "camera.ai.max_fps must be 120 or less"});
+    }
   }
 
   return common::Result<void>::Ok();
@@ -412,6 +418,7 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       if (camera_ai) {
         AssignIfPresent(camera_ai, "enabled", config.camera.ai.enabled);
         config.camera.ai.model_ids = ReadStringList(camera_ai["model_ids"]);
+        AssignIfPresent(camera_ai, "max_fps", config.camera.ai.max_fps);
       }
     }
 

@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "camera_firmware/common/Logger.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 
 namespace camera_firmware::media {
 namespace {
@@ -121,6 +122,7 @@ struct FragmentedMp4Hub::Impl {
     }
     worker = std::thread(
         [this, input_reader = std::move(input_reader)]() mutable {
+          common::NameCurrentThread("fmp4-hub");
           WorkerMain(std::move(input_reader));
         });
     return Result<void>::Ok();

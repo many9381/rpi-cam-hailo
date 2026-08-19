@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "camera_firmware/common/ThreadTuning.hpp"
+
 namespace camera_firmware::ai {
 
 struct AiModelRunner::SharedState {
@@ -129,7 +131,11 @@ AiModelRunner::AiModelRunner(std::string camera_id,
     state_->status.last_error_code = processor.error().code;
     state_->status.last_error_message = processor.error().message;
   }
-  worker_ = std::thread([this] { Run(); });
+  worker_ = std::thread([this] {
+    common::NameCurrentThread("ai-runner");
+    common::DeprioritizeCurrentThread(10);
+    Run();
+  });
 }
 
 AiModelRunner::~AiModelRunner() { Stop(); }

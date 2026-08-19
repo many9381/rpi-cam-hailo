@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 
 namespace camera_firmware::ai {
 
@@ -17,9 +18,11 @@ struct AiFramePump::SharedState {
   bool stopping{false};
 };
 
-AiFramePump::AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime)
+AiFramePump::AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime,
+                         std::chrono::milliseconds minimum_interval)
     : frame_tap_(frame_tap),
       runtime_(runtime),
+      minimum_interval_(minimum_interval),
       state_(std::make_shared<SharedState>()) {}
 
 AiFramePump::~AiFramePump() { Stop(); }
@@ -36,9 +39,12 @@ common::Result<void> AiFramePump::Start() {
     state_->running = true;
   }
 
-  worker_ = std::thread([state = state_, &runtime = runtime_] {
-    Run(state, runtime);
-  });
+  worker_ = std::thread(
+      [state = state_, &runtime = runtime_, interval = minimum_interval_] {
+        common::NameCurrentThread("ai-pump");
+        common::DeprioritizeCurrentThread(10);
+        Run(state, runtime, interval);
+      });
 
   std::weak_ptr<SharedState> weak_state = state_;
   subscription_ = frame_tap_.Subscribe(
@@ -84,7 +90,9 @@ void AiFramePump::QueueFrame(const std::shared_ptr<SharedState>& state,
 }
 
 void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
-                      AiRuntime& runtime) {
+                      AiRuntime& runtime,
+                      std::chrono::milliseconds minimum_interval) {
+  auto next_allowed = std::chrono::steady_clock::now();
   while (true) {
     std::optional<media::FrameLease> frame;
     {
@@ -99,9 +107,27 @@ void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
       state->pending_frame.reset();
     }
 
-    if (frame.has_value()) {
-      (void)runtime.SubmitFrame(std::move(*frame));
+    if (!frame.has_value()) {
+      continue;
     }
+
+    if (minimum_interval.count() > 0) {
+      std::unique_lock lock(state->mutex);
+      state->changed.wait_until(lock, next_allowed,
+                                [&state] { return state->stopping; });
+      if (state->stopping) {
+        return;
+      }
+      // A newer frame may have arrived while gated -- take it
+      // (latest-wins).
+      if (state->pending_frame.has_value()) {
+        frame = std::move(state->pending_frame);
+        state->pending_frame.reset();
+      }
+    }
+
+    (void)runtime.SubmitFrame(std::move(*frame));
+    next_allowed = std::chrono::steady_clock::now() + minimum_interval;
   }
 }
 

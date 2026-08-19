@@ -81,6 +81,7 @@ gtest_discover_tests(camera_firmware_integrity_tests
 add_executable(camera_firmware_common_tests
     unit/common/ResultTest.cpp
     unit/common/SecureBytesTest.cpp
+    unit/common/ThreadTuningTest.cpp
 )
 
 target_link_libraries(camera_firmware_common_tests
