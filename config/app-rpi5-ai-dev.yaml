@@ -19,6 +19,7 @@ camera:
   ai:
     enabled: true
     model_ids: [objects]
+    max_fps: 10
 
 http:
   enabled: true

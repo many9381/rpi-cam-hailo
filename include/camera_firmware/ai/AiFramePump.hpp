@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -12,7 +13,8 @@ class AiRuntime;
 
 class AiFramePump {
  public:
-  AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime);
+  AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime,
+              std::chrono::milliseconds minimum_interval = {});
   ~AiFramePump();
 
   AiFramePump(const AiFramePump&) = delete;
@@ -29,10 +31,12 @@ class AiFramePump {
   static void QueueFrame(const std::shared_ptr<SharedState>& state,
                          media::FrameLease frame);
   static void Run(const std::shared_ptr<SharedState>& state,
-                  AiRuntime& runtime);
+                  AiRuntime& runtime,
+                  std::chrono::milliseconds minimum_interval);
 
   AiFrameTap& frame_tap_;
   AiRuntime& runtime_;
+  std::chrono::milliseconds minimum_interval_;
   std::shared_ptr<SharedState> state_;
   AiFrameTap::Subscription subscription_;
   std::thread worker_;

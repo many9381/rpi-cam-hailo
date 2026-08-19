@@ -84,6 +84,7 @@ struct AiModelConfig {
 struct CameraAiConfig {
   bool enabled{false};
   std::vector<std::string> model_ids;
+  unsigned int max_fps{0};
 };
 
 struct CameraConfig {

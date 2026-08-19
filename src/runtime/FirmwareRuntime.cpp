@@ -66,7 +66,11 @@ struct ProductionRuntimeGraph {
       : config(configured),
         detection_event_store(detection_bus),
         ai_runtime(&detection_bus),
-        ai_frame_pump(ai_frame_tap, ai_runtime),
+        ai_frame_pump(
+            ai_frame_tap, ai_runtime,
+            config.camera.ai.max_fps == 0U
+                ? std::chrono::milliseconds{0}
+                : std::chrono::milliseconds{1000U / config.camera.ai.max_fps}),
         camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring),
         fragmented_mp4_hub(encoded_ring),
         ai_controller(config, ai_runtime, ai_frame_pump) {}

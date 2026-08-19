@@ -561,6 +561,7 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_TRUE(cfg.value().ai.models.empty());
   EXPECT_FALSE(cfg.value().camera.ai.enabled);
   EXPECT_TRUE(cfg.value().camera.ai.model_ids.empty());
+  EXPECT_EQ(cfg.value().camera.ai.max_fps, 0U);
 }
 
 TEST(AppConfigTest, LoadsExplicitCameraEncoderPreset) {
@@ -1331,4 +1332,57 @@ TEST(AppConfigTest, RejectsDuplicateCameraAiModelIds) {
 
   ASSERT_FALSE(cfg.ok());
   EXPECT_EQ(cfg.error().code, "E_CONFIG_AI_CAMERA_MODEL");
+}
+
+TEST(AppConfigTest, ParsesCameraAiMaxFps) {
+  const char* yaml = "/tmp/cf-ai-max-fps.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: false\n"
+         "security:\n"
+         "  enabled: false\n"
+         "ai:\n"
+         "  enabled: true\n"
+         "  backend: hailo\n"
+         "  models:\n"
+         "    - id: objects\n"
+         "      kind: object_detection\n"
+         "      hef_path: /opt/cf/models/yolov8n.hef\n"
+         "camera:\n"
+         "  ai:\n"
+         "    enabled: true\n"
+         "    model_ids: [objects]\n"
+         "    max_fps: 10\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_TRUE(cfg.ok()) << cfg.error().message;
+  EXPECT_EQ(cfg.value().camera.ai.max_fps, 10U);
+}
+
+TEST(AppConfigTest, RejectsCameraAiMaxFpsAboveMaximum) {
+  const char* yaml = "/tmp/cf-ai-max-fps-too-high.yaml";
+  std::ofstream out(yaml);
+  out << "secure_rtsp:\n"
+         "  enabled: false\n"
+         "ai:\n"
+         "  enabled: true\n"
+         "  backend: hailo\n"
+         "  models:\n"
+         "    - id: objects\n"
+         "      kind: object_detection\n"
+         "      hef_path: /opt/cf/models/yolov8n.hef\n"
+         "camera:\n"
+         "  ai:\n"
+         "    enabled: true\n"
+         "    model_ids: [objects]\n"
+         "    max_fps: 200\n";
+  out.close();
+
+  auto cfg = camera_firmware::config::LoadConfigFile(yaml);
+
+  ASSERT_FALSE(cfg.ok());
+  EXPECT_EQ(cfg.error().code, "E_CONFIG_AI_MAX_FPS");
+  EXPECT_EQ(cfg.error().message, "camera.ai.max_fps must be 120 or less");
 }
