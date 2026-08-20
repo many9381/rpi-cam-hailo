@@ -400,7 +400,9 @@ struct CameraPipeline::Impl {
     status.encoded_frames = encoded_frames;
     status.capture_error_count = capture_error_count;
     status.encode_error_count = encode_error_count;
-    status.ai_source = ai_uses_lores ? "lores" : "main-fallback";
+    status.ai_source = ai_uses_lores
+        ? (ai_lores_rgb ? "lores-rgb" : "lores")
+        : "main-fallback";
     return status;
   }
 
@@ -428,16 +430,30 @@ struct CameraPipeline::Impl {
     main_cfg.size.height = configured_camera.video.height;
     main_cfg.bufferCount = std::max(main_cfg.bufferCount, kDefaultBufferCount);
 
+    // The AI lores branch prefers packed RGB straight from the ISP so the
+    // preprocessor can skip the swscale color conversion entirely. libcamera
+    // BGR888 (DRM_FORMAT_BGR888) is R,G,B byte order in memory -- the
+    // model's rgb8 layout. If the ISP declines it, fall back to NV12 lores
+    // (software conversion path), and beyond that to the main stream.
     const bool have_lores_slot = want_lores && camera_config->size() >= 2U;
     if (have_lores_slot) {
       auto& lores_cfg = camera_config->at(1);
-      lores_cfg.pixelFormat = libcamera::formats::NV12;
+      lores_cfg.pixelFormat = libcamera::formats::BGR888;
       lores_cfg.size.width = lores.width;
       lores_cfg.size.height = lores.height;
       lores_cfg.bufferCount = std::max(lores_cfg.bufferCount, kDefaultBufferCount);
     }
 
-    const auto validation = camera_config->validate();
+    auto validation = camera_config->validate();
+    if (have_lores_slot &&
+        validation != libcamera::CameraConfiguration::Invalid &&
+        camera_config->at(1).pixelFormat != libcamera::formats::BGR888) {
+      auto& lores_cfg = camera_config->at(1);
+      lores_cfg.pixelFormat = libcamera::formats::NV12;
+      lores_cfg.size.width = lores.width;
+      lores_cfg.size.height = lores.height;
+      validation = camera_config->validate();
+    }
     if (validation == libcamera::CameraConfiguration::Invalid) {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "failed to validate NV12 video camera config"});
@@ -462,12 +478,16 @@ struct CameraPipeline::Impl {
     }
 
     bool uses_lores = false;
+    bool uses_lores_rgb = false;
     lores_stream = nullptr;
     if (have_lores_slot) {
       auto& validated_lores = camera_config->at(1);
       libcamera::Stream* candidate = validated_lores.stream();
+      const bool rgb_format =
+          validated_lores.pixelFormat == libcamera::formats::BGR888;
       if (candidate != nullptr &&
-          validated_lores.pixelFormat == libcamera::formats::NV12 &&
+          (rgb_format ||
+           validated_lores.pixelFormat == libcamera::formats::NV12) &&
           validated_lores.stride > 0U && validated_lores.size.width > 0U &&
           validated_lores.size.height > 0U) {
         lores_stream = candidate;
@@ -475,6 +495,7 @@ struct CameraPipeline::Impl {
         lores_width = validated_lores.size.width;
         lores_height = validated_lores.size.height;
         uses_lores = true;
+        uses_lores_rgb = rgb_format;
       }
     }
     if (want_lores && !uses_lores) {
@@ -482,6 +503,13 @@ struct CameraPipeline::Impl {
           Logger::Level::kWarn,
           "AI lores stream unavailable; falling back to downscaling the main "
           "stream for inference");
+    } else if (uses_lores) {
+      Logger::instance().log(
+          Logger::Level::kInfo,
+          uses_lores_rgb
+              ? "AI frames source: lores-rgb (ISP BGR888, no software "
+                "color conversion)"
+              : "AI frames source: lores (NV12, software conversion)");
     }
 
     {
@@ -489,6 +517,7 @@ struct CameraPipeline::Impl {
       output_width = stream_config.size.width;
       output_height = stream_config.size.height;
       ai_uses_lores = uses_lores;
+      ai_lores_rgb = uses_lores_rgb;
     }
     return Result<void>::Ok();
   }
@@ -683,9 +712,11 @@ struct CameraPipeline::Impl {
                libcamera::FrameMetadata::FrameSuccess ||
            lores_buffer->metadata().status ==
                libcamera::FrameMetadata::FrameStartup)) {
-        auto lores_frame = BuildFrameHandle(*lores_buffer, lores_width,
-                                            lores_height,
-                                            lores_stream_config.stride);
+        auto lores_frame = ai_lores_rgb
+            ? BuildBgrFrameHandle(*lores_buffer, lores_width, lores_height,
+                                  lores_stream_config.stride)
+            : BuildFrameHandle(*lores_buffer, lores_width, lores_height,
+                               lores_stream_config.stride);
         if (lores_frame.ok()) {
           FrameLease lores_lease(std::move(lores_frame).value(),
                                  [requeue_guard] {});
@@ -697,6 +728,41 @@ struct CameraPipeline::Impl {
     } else {
       ai_frame_tap.PublishLatest(main_lease.CloneRef());
     }
+  }
+
+  // Packed single-plane RGB (libcamera BGR888: R,G,B byte order in memory).
+  Result<FrameHandle> BuildBgrFrameHandle(const libcamera::FrameBuffer& buffer,
+                                          unsigned int width,
+                                          unsigned int height,
+                                          unsigned int stride) const {
+    const auto& planes = buffer.planes();
+    if (planes.empty()) {
+      return Result<FrameHandle>::Err(
+          {"E_CAMERA_DMABUF", "completed frame has no DMABUF planes"});
+    }
+
+    FrameHandle handle;
+    handle.camera_id = camera_id;
+    handle.format = "BGR888";
+    handle.width = width;
+    handle.height = height;
+    handle.sequence = buffer.metadata().sequence;
+    handle.timestamp = std::chrono::nanoseconds(buffer.metadata().timestamp);
+
+    const std::size_t required =
+        static_cast<std::size_t>(stride) * handle.height;
+    if (planes[0].length < required) {
+      return Result<FrameHandle>::Err(
+          {"E_CAMERA_DMABUF", "BGR888 plane is shorter than expected"});
+    }
+    handle.planes[0] = FramePlane{
+        .dmabuf_fd = planes[0].fd.get(),
+        .offset = planes[0].offset,
+        .length = required,
+        .stride = stride,
+    };
+    handle.plane_count = 1;
+    return Result<FrameHandle>::Ok(std::move(handle));
   }
 
   Result<FrameHandle> BuildFrameHandle(const libcamera::FrameBuffer& buffer,
@@ -832,6 +898,7 @@ struct CameraPipeline::Impl {
   unsigned int lores_width{0U};
   unsigned int lores_height{0U};
   bool ai_uses_lores{false};
+  bool ai_lores_rgb{false};
   std::vector<std::unique_ptr<libcamera::Request>> requests;
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
   std::shared_ptr<RequeueContext> requeue_context;

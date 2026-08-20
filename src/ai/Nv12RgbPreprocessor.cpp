@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <new>
@@ -305,6 +306,84 @@ Nv12RgbPreprocessor::Nv12RgbPreprocessor(std::uint32_t target_width,
 
 Nv12RgbPreprocessor::~Nv12RgbPreprocessor() = default;
 
+// Fast path for lores frames the ISP already delivers as packed RGB bytes.
+// libcamera's BGR888 (DRM_FORMAT_BGR888) stores bytes in R,G,B order in
+// memory -- exactly the model's rgb8 layout -- so no color conversion is
+// needed and, because the lores stream is sized to the model's letterbox
+// content (ComputeLoresSize), no scaling either: each source row is copied
+// verbatim into the padded canvas.
+common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::ConvertBgr888(
+    const media::FrameHandle& source) {
+  using ResultBytes = common::Result<std::vector<std::uint8_t>>;
+  if (source.width == 0U || source.height == 0U || source.plane_count < 1U) {
+    return ResultBytes::Err(
+        PreprocessError("AI processor received an invalid BGR888 frame"));
+  }
+  const std::uint32_t row_bytes = source.width * static_cast<std::uint32_t>(kRgbChannels);
+  if (source.planes[0].stride < row_bytes) {
+    return ResultBytes::Err(
+        PreprocessError("BGR888 stride is smaller than the source row"));
+  }
+  const auto plane_required = RequiredPlaneBytes(source.planes[0].stride,
+                                                source.height);
+  if (!plane_required.ok() ||
+      source.planes[0].length < plane_required.value()) {
+    return ResultBytes::Err(
+        PreprocessError("BGR888 plane is shorter than expected"));
+  }
+
+  const auto geometry = BuildModelInputGeometry(source.width,
+                                                source.height,
+                                                impl_->target_width,
+                                                impl_->target_height,
+                                                impl_->letterbox);
+  if (!geometry.ok()) {
+    return ResultBytes::Err(geometry.error());
+  }
+  if (geometry.value().scaled_width != source.width ||
+      geometry.value().scaled_height != source.height) {
+    return ResultBytes::Err(PreprocessError(
+        "BGR888 frame does not match the model letterbox content size"));
+  }
+  const auto target_bytes = Rgb8ByteCount(impl_->target_width,
+                                          impl_->target_height);
+  if (!target_bytes.ok()) {
+    return ResultBytes::Err(target_bytes.error());
+  }
+
+  const auto mapped = impl_->MapPlaneCached(source.planes[0]);
+  if (!mapped.ok()) {
+    return ResultBytes::Err(mapped.error());
+  }
+
+  std::vector<std::uint8_t> rgb;
+  try {
+    rgb.assign(target_bytes.value(), impl_->padding);
+  } catch (const std::bad_alloc&) {
+    return ResultBytes::Err(
+        PreprocessError("failed to allocate AI model input buffer"));
+  } catch (const std::length_error&) {
+    return ResultBytes::Err(
+        PreprocessError("AI model input buffer size is invalid"));
+  }
+
+  const std::uint8_t* source_base = mapped.value();
+  std::uint8_t* target_base = rgb.data() +
+      ((static_cast<std::size_t>(geometry.value().y_offset) *
+            impl_->target_width +
+        geometry.value().x_offset) *
+       kRgbChannels);
+  const std::size_t target_stride =
+      static_cast<std::size_t>(impl_->target_width) * kRgbChannels;
+  for (std::uint32_t row = 0; row < source.height; ++row) {
+    std::memcpy(target_base + static_cast<std::size_t>(row) * target_stride,
+                source_base +
+                    static_cast<std::size_t>(row) * source.planes[0].stride,
+                row_bytes);
+  }
+  return ResultBytes::Ok(std::move(rgb));
+}
+
 common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
     const media::FrameLease& frame) {
   if (!frame.valid()) {
@@ -313,11 +392,14 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
   }
 
   const auto& source = frame.handle();
+  if (source.format == "BGR888") {
+    return ConvertBgr888(source);
+  }
   if (source.format != "NV12" || source.width == 0U || source.height == 0U ||
       source.plane_count < 2U || (source.width % 2U) != 0U ||
       (source.height % 2U) != 0U) {
     return common::Result<std::vector<std::uint8_t>>::Err(
-        PreprocessError("AI processor expected an even-dimension NV12 frame"));
+        PreprocessError("AI processor expected an NV12 or BGR888 frame"));
   }
   if (source.planes[0].stride < source.width ||
       source.planes[1].stride < source.width) {
