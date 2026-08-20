@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -142,7 +143,121 @@ bool RowEquals(const std::vector<std::uint8_t>& rgb,
                      [value](std::uint8_t pixel) { return pixel == value; });
 }
 
+FrameLease MakeBgr888Lease(std::uint32_t width,
+                           std::uint32_t height,
+                           std::uint32_t stride_bytes,
+                           std::size_t offset,
+                           std::vector<std::uint8_t> bytes) {
+  FrameHandle handle;
+  handle.camera_id = "imx708-main";
+  handle.format = "BGR888";
+  handle.width = width;
+  handle.height = height;
+  handle.plane_count = 1;
+  handle.planes[0] = {0, offset,
+                      static_cast<std::size_t>(stride_bytes) * height,
+                      stride_bytes};
+  const int fd = CreateAnonymousFile(bytes);
+  handle.planes[0].dmabuf_fd = fd;
+  return FrameLease(handle, [fd] {
+    if (fd >= 0) {
+      (void)::close(fd);
+    }
+  });
+}
+
+// Deterministic per-byte pattern so any channel reorder, row misplacement,
+// or stride mistake changes the output bytes.
+std::vector<std::uint8_t> PatternedBgrBytes(std::size_t offset,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            std::uint32_t stride_bytes) {
+  std::vector<std::uint8_t> bytes(
+      offset + static_cast<std::size_t>(stride_bytes) * height, 0U);
+  for (std::uint32_t row = 0; row < height; ++row) {
+    for (std::uint32_t byte = 0; byte < width * 3U; ++byte) {
+      bytes[offset + static_cast<std::size_t>(row) * stride_bytes + byte] =
+          static_cast<std::uint8_t>((row * 31U + byte * 7U + 3U) & 0xFFU);
+    }
+  }
+  return bytes;
+}
+
 }  // namespace
+
+TEST(Nv12RgbPreprocessorTest, CopiesBgr888LetterboxRowsVerbatim) {
+  constexpr std::uint32_t kWidth = 8U;
+  constexpr std::uint32_t kHeight = 4U;
+  constexpr std::uint32_t kTarget = 8U;
+  constexpr std::size_t kOffset = 41U;
+  const auto bytes = PatternedBgrBytes(kOffset, kWidth, kHeight, kWidth * 3U);
+
+  Nv12RgbPreprocessor preprocessor(kTarget, kTarget, true, 114U);
+  auto converted = preprocessor.Convert(
+      MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, kOffset, bytes));
+
+  ASSERT_TRUE(converted.ok()) << converted.error().message;
+  ASSERT_EQ(converted.value().size(), kTarget * kTarget * 3U);
+  // 8x4 into 8x8 letterbox: rows 0-1 and 6-7 are padding, rows 2-5 carry the
+  // source rows byte-for-byte (no color conversion, no scaling).
+  EXPECT_TRUE(RowEquals(converted.value(), 0, kTarget, 114U));
+  EXPECT_TRUE(RowEquals(converted.value(), 1, kTarget, 114U));
+  EXPECT_TRUE(RowEquals(converted.value(), 6, kTarget, 114U));
+  EXPECT_TRUE(RowEquals(converted.value(), 7, kTarget, 114U));
+  for (std::uint32_t row = 0; row < kHeight; ++row) {
+    const auto* source_row =
+        bytes.data() + kOffset + static_cast<std::size_t>(row) * kWidth * 3U;
+    const auto* target_row = converted.value().data() +
+        (static_cast<std::size_t>(row) + 2U) * kTarget * 3U;
+    EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
+        << "row " << row;
+  }
+}
+
+TEST(Nv12RgbPreprocessorTest, HonorsBgr888RowStridePadding) {
+  constexpr std::uint32_t kWidth = 8U;
+  constexpr std::uint32_t kHeight = 4U;
+  constexpr std::uint32_t kStride = kWidth * 3U + 12U;
+  constexpr std::size_t kOffset = 17U;
+  const auto bytes = PatternedBgrBytes(kOffset, kWidth, kHeight, kStride);
+
+  Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
+  auto converted = preprocessor.Convert(
+      MakeBgr888Lease(kWidth, kHeight, kStride, kOffset, bytes));
+
+  ASSERT_TRUE(converted.ok()) << converted.error().message;
+  for (std::uint32_t row = 0; row < kHeight; ++row) {
+    const auto* source_row =
+        bytes.data() + kOffset + static_cast<std::size_t>(row) * kStride;
+    const auto* target_row = converted.value().data() +
+        (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
+    EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
+        << "row " << row;
+  }
+}
+
+TEST(Nv12RgbPreprocessorTest, RejectsBgr888ContentSizeMismatch) {
+  // 6x4 into an 8x8 letterbox needs scaling (content would be 8x5); the BGR
+  // path is copy-only by design, so this must fail rather than distort.
+  const auto bytes = PatternedBgrBytes(0U, 6U, 4U, 18U);
+  Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
+  auto converted =
+      preprocessor.Convert(MakeBgr888Lease(6U, 4U, 18U, 0U, bytes));
+  ASSERT_FALSE(converted.ok());
+  EXPECT_EQ(converted.error().code, "E_AI_PREPROCESS");
+}
+
+TEST(Nv12RgbPreprocessorTest, RejectsUnsupportedFrameFormat) {
+  const auto bytes = PatternedBgrBytes(0U, 4U, 2U, 12U);
+  auto lease = MakeBgr888Lease(4U, 2U, 12U, 0U, bytes);
+  FrameHandle handle = lease.handle();
+  handle.format = "YUYV";
+  FrameLease yuyv(handle, [] {});
+  Nv12RgbPreprocessor preprocessor(4U, 4U, true, 114U);
+  auto converted = preprocessor.Convert(yuyv);
+  ASSERT_FALSE(converted.ok());
+  EXPECT_EQ(converted.error().code, "E_AI_PREPROCESS");
+}
 
 TEST(Nv12RgbPreprocessorTest, LetterboxesWithBilinearRgbAnd114Padding) {
   Nv12RgbPreprocessor preprocessor(4, 4, true, 114U);

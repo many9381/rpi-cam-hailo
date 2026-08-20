@@ -24,6 +24,9 @@ class Nv12RgbPreprocessor {
       const media::FrameLease& frame);
 
  private:
+  [[nodiscard]] common::Result<std::vector<std::uint8_t>> ConvertBgr888(
+      const media::FrameHandle& source);
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

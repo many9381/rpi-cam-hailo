@@ -250,7 +250,7 @@ void RunAiLoresRoutingSmoke(const CameraHardwareProfile& profile) {
 
   pipeline.Stop();
 
-  EXPECT_EQ(status.ai_source, "lores")
+  EXPECT_EQ(status.ai_source, "lores-rgb")
       << profile.id << ": " << StatusMessage(status);
   EXPECT_EQ(status.width, 1920U)
       << profile.id << ": " << StatusMessage(status);
