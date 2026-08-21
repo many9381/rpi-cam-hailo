@@ -1,5 +1,6 @@
 #include "camera_firmware/ai/AiModelProcessor.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -423,6 +424,37 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedYoloDetections) {
   EXPECT_FLOAT_EQ(events[0].detections[0].box.width, 0.50F);
   EXPECT_FLOAT_EQ(events[0].detections[0].box.height, 0.50F);
   EXPECT_TRUE(subscription.valid());
+}
+
+TEST(AiModelProcessorTest, PostprocessDecodesFloatMisalignedYoloOutput) {
+  // The in-place tensor read requires float alignment; a view that starts
+  // mid-word must take the copying fallback and still decode identically.
+  auto model = ProcessorModel("objects", "object_detection");
+  model.confidence_threshold = 0.50F;
+  auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
+  ASSERT_TRUE(processor.ok()) << processor.error().message;
+
+  camera_firmware::ai::DetectionBus bus;
+  std::vector<camera_firmware::ai::DetectionEvent> events;
+  auto subscription = bus.Subscribe(
+      [&events](const camera_firmware::ai::DetectionEvent& event) {
+        events.push_back(event);
+      });
+  const auto bytes = YoloNmsOutputBytes(0.91F);
+  std::vector<std::uint8_t> shifted(bytes.size() + 1U);
+  std::copy(bytes.begin(), bytes.end(), shifted.begin() + 1);
+  camera_firmware::ai::OutputView output{shifted.data() + 1, bytes.size()};
+
+  processor.value()->Postprocess(
+      camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+          output),
+      SourceFrame(7),
+      bus.PublisherHandle());
+
+  ASSERT_EQ(events.size(), 1U);
+  ASSERT_EQ(events[0].detections.size(), 1U);
+  EXPECT_EQ(events[0].detections[0].label, "car");
+  EXPECT_FLOAT_EQ(events[0].detections[0].confidence, 0.91F);
 }
 
 TEST(AiModelProcessorTest, PostprocessMapsLetterboxYoloBoxesToSourceFrame) {
