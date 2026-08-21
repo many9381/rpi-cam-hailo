@@ -120,6 +120,9 @@ AiModelRunner::AiModelRunner(std::string camera_id,
                                ? detection_bus->PublisherHandle()
                                : DetectionBus::Publisher{}),
       submission_resolved_observer_(std::move(submission_resolved_observer)),
+      // One in flight + one being prepared + one spare; recycling avoids the
+      // ~1.2MB allocation and full letterbox pad fill per frame.
+      canvas_pool_(std::make_shared<ModelInputBufferPool>(3U)),
       state_(std::make_shared<SharedState>()) {
   state_->status.camera_id = camera_id_;
   state_->status.model_id = model_.id;
@@ -221,8 +224,11 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
   }
 
   const media::FrameHandle source_frame = frame.handle();
+  // Recycled canvas: released back to the pool by its deleter once the last
+  // holder (normally the Hailo completion callback) drops it.
+  auto input_buffer = canvas_pool_->Acquire();
   const auto preprocess_started = std::chrono::steady_clock::now();
-  auto input = processor_->Preprocess(frame);
+  auto input = processor_->Preprocess(frame, *input_buffer);
   const auto preprocess_finished = std::chrono::steady_clock::now();
   if (!input.ok()) {
     RecordDrop(state_, input.error());
@@ -231,8 +237,6 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
   const double preprocess_ms = std::chrono::duration<double, std::milli>(
       preprocess_finished - preprocess_started).count();
 
-  auto input_buffer =
-      std::make_shared<ModelInputBuffer>(std::move(input).value());
   auto processor = processor_;
   auto submission = std::make_shared<SubmissionState>();
 

@@ -141,20 +141,14 @@ class DefaultModelProcessor final : public AiModelProcessor {
     return model_.kind;
   }
 
-  [[nodiscard]] common::Result<ModelInputBuffer> Preprocess(
-      const media::FrameLease& frame) override {
+  [[nodiscard]] common::Result<void> Preprocess(
+      const media::FrameLease& frame, ModelInputBuffer& canvas) override {
     if (model_.input.format != "rgb8" || model_.input.width == 0U ||
         model_.input.height == 0U) {
-      return common::Result<ModelInputBuffer>::Err(
+      return common::Result<void>::Err(
           {"E_AI_PREPROCESS", "AI model input must be non-empty rgb8"});
     }
-
-    auto converted = preprocessor_.Convert(frame);
-    if (!converted.ok()) {
-      return common::Result<ModelInputBuffer>::Err(converted.error());
-    }
-    return common::Result<ModelInputBuffer>::Ok(
-        {std::move(converted).value()});
+    return preprocessor_.ConvertInto(frame, canvas);
   }
 
   void Postprocess(common::Result<OutputView> output,

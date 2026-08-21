@@ -306,15 +306,40 @@ Nv12RgbPreprocessor::Nv12RgbPreprocessor(std::uint32_t target_width,
 
 Nv12RgbPreprocessor::~Nv12RgbPreprocessor() = default;
 
+namespace {
+
+// Fills the canvas with the letterbox pad value only when its storage or
+// geometry tag does not match this frame. A recycled canvas whose tag
+// matches keeps its pad bands from the previous conversion; the content
+// region is fully overwritten by the caller either way. Downstream only
+// reads the buffer (Hailo DMA), so the pads stay trustworthy across reuse.
+void EnsureCanvasPadding(ModelInputBuffer& canvas,
+                         std::size_t target_bytes,
+                         std::uint32_t source_width,
+                         std::uint32_t source_height,
+                         std::uint8_t padding) {
+  if (canvas.bytes.size() == target_bytes && canvas.padded &&
+      canvas.padded_source_width == source_width &&
+      canvas.padded_source_height == source_height) {
+    return;
+  }
+  canvas.bytes.assign(target_bytes, padding);
+  canvas.padded_source_width = source_width;
+  canvas.padded_source_height = source_height;
+  canvas.padded = true;
+}
+
+}  // namespace
+
 // Fast path for lores frames the ISP already delivers as packed RGB bytes.
 // libcamera's BGR888 (DRM_FORMAT_BGR888) stores bytes in R,G,B order in
 // memory -- exactly the model's rgb8 layout -- so no color conversion is
 // needed and, because the lores stream is sized to the model's letterbox
 // content (ComputeLoresSize), no scaling either: each source row is copied
 // verbatim into the padded canvas.
-common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::ConvertBgr888(
-    const media::FrameHandle& source) {
-  using ResultBytes = common::Result<std::vector<std::uint8_t>>;
+common::Result<void> Nv12RgbPreprocessor::ConvertBgr888(
+    const media::FrameHandle& source, ModelInputBuffer& canvas) {
+  using ResultBytes = common::Result<void>;
   if (source.width == 0U || source.height == 0U || source.plane_count < 1U) {
     return ResultBytes::Err(
         PreprocessError("AI processor received an invalid BGR888 frame"));
@@ -356,9 +381,9 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::ConvertBgr888(
     return ResultBytes::Err(mapped.error());
   }
 
-  std::vector<std::uint8_t> rgb;
   try {
-    rgb.assign(target_bytes.value(), impl_->padding);
+    EnsureCanvasPadding(canvas, target_bytes.value(), source.width,
+                        source.height, impl_->padding);
   } catch (const std::bad_alloc&) {
     return ResultBytes::Err(
         PreprocessError("failed to allocate AI model input buffer"));
@@ -368,7 +393,7 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::ConvertBgr888(
   }
 
   const std::uint8_t* source_base = mapped.value();
-  std::uint8_t* target_base = rgb.data() +
+  std::uint8_t* target_base = canvas.bytes.data() +
       ((static_cast<std::size_t>(geometry.value().y_offset) *
             impl_->target_width +
         geometry.value().x_offset) *
@@ -381,29 +406,40 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::ConvertBgr888(
                     static_cast<std::size_t>(row) * source.planes[0].stride,
                 row_bytes);
   }
-  return ResultBytes::Ok(std::move(rgb));
+  return ResultBytes::Ok();
 }
 
 common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
     const media::FrameLease& frame) {
+  ModelInputBuffer canvas;
+  auto converted = ConvertInto(frame, canvas);
+  if (!converted.ok()) {
+    return common::Result<std::vector<std::uint8_t>>::Err(converted.error());
+  }
+  return common::Result<std::vector<std::uint8_t>>::Ok(
+      std::move(canvas.bytes));
+}
+
+common::Result<void> Nv12RgbPreprocessor::ConvertInto(
+    const media::FrameLease& frame, ModelInputBuffer& canvas) {
   if (!frame.valid()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("AI frame lease is invalid"));
   }
 
   const auto& source = frame.handle();
   if (source.format == "BGR888") {
-    return ConvertBgr888(source);
+    return ConvertBgr888(source, canvas);
   }
   if (source.format != "NV12" || source.width == 0U || source.height == 0U ||
       source.plane_count < 2U || (source.width % 2U) != 0U ||
       (source.height % 2U) != 0U) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("AI processor expected an NV12 or BGR888 frame"));
   }
   if (source.planes[0].stride < source.width ||
       source.planes[1].stride < source.width) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("NV12 plane stride is smaller than the source width"));
   }
 
@@ -414,7 +450,7 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
   if (!y_required.ok() || !uv_required.ok() ||
       source.planes[0].length < y_required.value() ||
       source.planes[1].length < uv_required.value()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("AI processor received inconsistent NV12 planes"));
   }
 
@@ -426,10 +462,10 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
   const auto target_bytes = Rgb8ByteCount(impl_->target_width,
                                           impl_->target_height);
   if (!geometry.ok()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(geometry.error());
+    return common::Result<void>::Err(geometry.error());
   }
   if (!target_bytes.ok()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(target_bytes.error());
+    return common::Result<void>::Err(target_bytes.error());
   }
   if (source.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
       source.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -443,17 +479,17 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
           static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
       impl_->target_width >
           static_cast<std::uint32_t>(std::numeric_limits<int>::max() / 3)) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("NV12 dimensions exceed libswscale limits"));
   }
 
   auto mapped_y = impl_->MapPlaneCached(source.planes[0]);
   if (!mapped_y.ok()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(mapped_y.error());
+    return common::Result<void>::Err(mapped_y.error());
   }
   auto mapped_uv = impl_->MapPlaneCached(source.planes[1]);
   if (!mapped_uv.ok()) {
-    return common::Result<std::vector<std::uint8_t>>::Err(mapped_uv.error());
+    return common::Result<void>::Err(mapped_uv.error());
   }
 
   impl_->sws = sws_getCachedContext(
@@ -469,36 +505,29 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
       nullptr,
       nullptr);
   if (impl_->sws == nullptr) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("failed to create NV12 conversion context"));
   }
 
-  // A per-call scratch buffer (rather than a persistent, reused one) was
-  // tried and measured net *slower* on-device: the reuse still had to copy
-  // the whole canvas out to satisfy Convert()'s move-out contract (see
-  // AiModelProcessor.cpp -- the caller keeps the buffer alive through async
-  // inference submission, so the scratch can't be moved out and reused
-  // directly), and that copy cost more than the memset it was meant to
-  // avoid. Reverted to the plain per-call allocation; only the dmabuf mmap
-  // cache above is kept, which measured a real win on its own.
-  std::vector<std::uint8_t> rgb;
   try {
-    rgb.assign(target_bytes.value(), impl_->padding);
+    EnsureCanvasPadding(canvas, target_bytes.value(), source.width,
+                        source.height, impl_->padding);
   } catch (const std::bad_alloc&) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("failed to allocate AI model input buffer"));
   } catch (const std::length_error&) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    return common::Result<void>::Err(
         PreprocessError("AI model input buffer size is invalid"));
   }
   const std::uint8_t* source_planes[2] = {mapped_y.value(), mapped_uv.value()};
   int source_strides[2] = {static_cast<int>(source.planes[0].stride),
                            static_cast<int>(source.planes[1].stride)};
   std::uint8_t* target_planes[1] = {
-      rgb.data() + ((static_cast<std::size_t>(geometry.value().y_offset) *
-                         impl_->target_width +
-                     geometry.value().x_offset) *
-                    kRgbChannels)};
+      canvas.bytes.data() +
+      ((static_cast<std::size_t>(geometry.value().y_offset) *
+            impl_->target_width +
+        geometry.value().x_offset) *
+       kRgbChannels)};
   int target_strides[1] = {static_cast<int>(impl_->target_width * kRgbChannels)};
 
   const int scaled_rows = sws_scale(impl_->sws,
@@ -509,10 +538,13 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
                                     target_planes,
                                     target_strides);
   if (scaled_rows != static_cast<int>(geometry.value().scaled_height)) {
-    return common::Result<std::vector<std::uint8_t>>::Err(
+    // The canvas content region may now hold a partial scale; drop the
+    // padding tag so the next use repaints the whole canvas.
+    canvas.padded = false;
+    return common::Result<void>::Err(
         PreprocessError("failed to scale NV12 frame to model input"));
   }
-  return common::Result<std::vector<std::uint8_t>>::Ok(std::move(rgb));
+  return common::Result<void>::Ok();
 }
 
 }  // namespace camera_firmware::ai
