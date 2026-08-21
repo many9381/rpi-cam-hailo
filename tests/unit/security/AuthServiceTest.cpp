@@ -1648,6 +1648,10 @@ TEST_F(AuthServiceTest, ExpiredSessionIsRemovedBeforeNextLogin) {
   const auto first_hash =
       QueryBlob(store_->database_path(), "SELECT token_hash FROM sessions;");
 
+  // Drain the expiry worker's pending wake before advancing the fake
+  // clock; otherwise a delayed sweep can expire the session first and this
+  // test's login-path expectations race it.
+  hooked->WaitForSessionExpiryIdleForTesting();
   now_seconds_ += 600;
   auto second = hooked->Login(Login());
 

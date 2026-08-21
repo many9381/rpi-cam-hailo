@@ -554,13 +554,18 @@ target_link_libraries(camera_firmware_https_auth_integration
         OpenSSL::SSL
 )
 
+# These integration tests each boot a real drogon server and make timing
+# assertions; the loopback lock already serializes them against each other,
+# and RUN_SERIAL additionally keeps saturated unit suites from stealing the
+# cores out from under those timing windows (observed flakes otherwise).
 gtest_discover_tests(camera_firmware_https_auth_integration
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    TEST_FILTER HttpsAuthIntegrationTest.*
+    TEST_FILTER "HttpsAuthIntegrationTest.*"
     TEST_SUFFIX .ServiceSecurityIntegrationTest
     PROPERTIES
         TIMEOUT 90
         RESOURCE_LOCK camera_firmware_loopback_listener
+        RUN_SERIAL TRUE
 )
 
 gtest_discover_tests(camera_firmware_https_auth_integration
@@ -569,6 +574,7 @@ gtest_discover_tests(camera_firmware_https_auth_integration
     PROPERTIES
         TIMEOUT 90
         RESOURCE_LOCK camera_firmware_loopback_listener
+        RUN_SERIAL TRUE
 )
 
 add_executable(camera_firmware_user_management_process_integration

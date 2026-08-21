@@ -51,6 +51,7 @@ std::optional<ino_t> spoofed_owner_inode;
 int interrupted_close_descriptor{-1};
 int interrupted_close_calls{0};
 bool fail_rename_noreplace{false};
+bool preempt_rename_destination{false};
 bool interrupt_cleanup_fsync{false};
 std::array<int, 2> interrupted_fsync_descriptors{-1, -1};
 std::array<int, 2> interrupted_fsync_calls{0, 0};
@@ -1315,40 +1316,14 @@ TEST(DeviceTlsManagerTest, UnsafeStaleTemporaryIdentityFailsClosed) {
 
 TEST(DeviceTlsManagerTest, PublicationFailureRemovesWrittenTemporaryIdentity) {
   TemporaryDirectory state;
-  const int notifications = ::inotify_init1(IN_CLOEXEC);
-  ASSERT_GE(notifications, 0);
-  ASSERT_GE(::inotify_add_watch(notifications, state.path().c_str(), IN_CREATE),
-            0);
+  preempt_rename_destination = true;
 
-  auto generation = std::async(std::launch::async, [&] {
-    return camera_firmware::security::ResolveTlsMaterial(DevelopmentTls(),
-                                                         state.path(), TestCryptoProvider());
-  });
+  auto result = camera_firmware::security::ResolveTlsMaterial(
+      DevelopmentTls(), state.path(), TestCryptoProvider());
 
-  struct pollfd notification_poll {
-    notifications, POLLIN, 0
-  };
-  ASSERT_EQ(::poll(&notification_poll, 1, 2000), 1);
-  std::array<char, 4096> events{};
-  const ssize_t event_bytes = ::read(notifications, events.data(), events.size());
-  ASSERT_GT(event_bytes, 0);
-  bool saw_temporary_directory = false;
-  for (std::size_t offset = 0;
-       offset < static_cast<std::size_t>(event_bytes);) {
-    const auto* event =
-        reinterpret_cast<const struct inotify_event*>(events.data() + offset);
-    if (event->len != 0U &&
-        std::string_view(event->name).starts_with(".device-tls.tmp-")) {
-      saw_temporary_directory = true;
-      break;
-    }
-    offset += sizeof(struct inotify_event) + event->len;
-  }
-  ASSERT_TRUE(saw_temporary_directory);
-  ASSERT_EQ(::mkdir((state.path() / "device-tls").c_str(), 0700), 0);
-
-  auto result = generation.get();
-  ASSERT_EQ(::close(notifications), 0);
+  // The wrap fires at rename time, after the temporary identity was fully
+  // written -- consuming the flag proves publication was actually raced.
+  EXPECT_FALSE(preempt_rename_destination);
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_HTTP_TLS_IDENTITY");
   EXPECT_TRUE(TemporaryIdentityEntries(state.path()).empty());
@@ -1427,6 +1402,13 @@ extern "C" int __wrap_camera_firmware_tls_rename_noreplace(
   if (fail_rename_noreplace) {
     errno = ENOSYS;
     return -1;
+  }
+  if (preempt_rename_destination) {
+    // Deterministically lose the publication race: create the destination
+    // at the exact moment the manager tries to publish, after its
+    // temporary identity has been fully written.
+    preempt_rename_destination = false;
+    (void)::mkdirat(new_directory, new_name, 0700);
   }
   return __real_camera_firmware_tls_rename_noreplace(
       old_directory, old_name, new_directory, new_name);

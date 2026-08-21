@@ -432,6 +432,16 @@ class AuthService::SessionExpiryWorker {
     condition_.notify_one();
   }
 
+  // Blocks until the worker has finished all requested sweeps and parked.
+  // Test-only: lets a fixture advance its fake clock without racing a sweep
+  // that a previous operation's Wake() is still owed.
+  void WaitForIdleForTesting() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] {
+      return stopping_ || (idle_ && !wake_requested_);
+    });
+  }
+
  private:
   struct SweepResult {
     bool ok{false};
@@ -497,12 +507,14 @@ class AuthService::SessionExpiryWorker {
         return;
       }
       if (!sweep.ok) {
+        IdleScope idle(*this);
         condition_.wait_for(lock, std::chrono::seconds(1), [this] {
           return stopping_ || wake_requested_;
         });
         continue;
       }
       if (!sweep.next_expiry.has_value()) {
+        IdleScope idle(*this);
         condition_.wait(lock,
                         [this] { return stopping_ || wake_requested_; });
         continue;
@@ -511,6 +523,7 @@ class AuthService::SessionExpiryWorker {
       try {
         now_seconds = now_seconds_();
       } catch (...) {
+        IdleScope idle(*this);
         condition_.wait_for(lock, std::chrono::seconds(1), [this] {
           return stopping_ || wake_requested_;
         });
@@ -522,6 +535,7 @@ class AuthService::SessionExpiryWorker {
       const auto delay_seconds =
           std::min<std::int64_t>(*sweep.next_expiry - now_seconds,
                                  24 * 60 * 60);
+      IdleScope idle(*this);
       condition_.wait_for(lock, std::chrono::seconds(delay_seconds), [this] {
         return stopping_ || wake_requested_;
       });
@@ -531,10 +545,22 @@ class AuthService::SessionExpiryWorker {
   SecurityStore& store_;
   AuthClockCallback now_seconds_;
   AuthServiceRuntimeHooks hooks_;
+  // Marks the worker as parked for WaitForIdleForTesting while the
+  // owning scope sits in a condition wait (mutex held on entry/exit).
+  struct IdleScope {
+    explicit IdleScope(SessionExpiryWorker& owner) : worker(owner) {
+      worker.idle_ = true;
+      worker.condition_.notify_all();
+    }
+    ~IdleScope() { worker.idle_ = false; }
+    SessionExpiryWorker& worker;
+  };
+
   std::mutex mutex_;
   std::condition_variable condition_;
   bool stopping_{false};
   bool wake_requested_{true};
+  bool idle_{false};
   std::thread worker_;
 };
 
@@ -630,6 +656,12 @@ AuthService::AuthService(
       std::move(firmware_log_before_ack));
   session_expiry_worker_ = std::make_unique<SessionExpiryWorker>(
       store_, dependencies_.now_seconds, hooks_);
+}
+
+void AuthService::WaitForSessionExpiryIdleForTesting() {
+  if (session_expiry_worker_) {
+    session_expiry_worker_->WaitForIdleForTesting();
+  }
 }
 
 AuthService::~AuthService() = default;

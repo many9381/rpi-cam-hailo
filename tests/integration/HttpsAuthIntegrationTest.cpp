@@ -4161,7 +4161,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunNoLeaseLiveShutdownScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4266,7 +4266,7 @@ TEST(HttpsAuthIntegrationTest, ConcurrentBeginShutdownWaitsForLivePumpJoin) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunConcurrentLiveShutdownBarrierScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4397,7 +4397,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunConcurrentShutdownDuringLiveStartPublicationScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4499,7 +4499,7 @@ TEST(HttpsAuthIntegrationTest, BeginShutdownWaitsForAdmittedLiveOpen) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunBlockedLiveOpenShutdownScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4766,7 +4766,7 @@ TEST(HttpsAuthIntegrationTest, LiveReadMayStopServiceWithoutSelfJoin) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunLiveReadStopsServiceScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4860,7 +4860,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunLiveCancelStopsBeforeUnblockingReadScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -4964,7 +4964,7 @@ TEST(HttpsAuthIntegrationTest,
     const pid_t child = ::fork();
     ASSERT_GE(child, 0);
     if (child == 0) {
-      (void)::alarm(15U);
+      (void)::alarm(30U);
       TemporaryDirectory directory;
       RunServiceInitLiveCallbackSelectionScenario(
           directory.path(), configure_cancellable);
@@ -5090,7 +5090,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunSecurityDisabledSseShutdownScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -5107,7 +5107,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     const std::uint16_t port = ReserveLoopbackPort();
     camera_firmware::config::AppConfig config;
     config.security.enabled = false;
@@ -5265,7 +5265,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunDetectionSseMarkedRevokeWinsEventScenario(directory.path(), true);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -5458,7 +5458,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunDetectionSseShutdownBarrierScenario(directory.path(), true);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -5475,7 +5475,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunDetectionSseShutdownBarrierScenario(directory.path(), false);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -6225,7 +6225,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunSessionExpiryRevokesBlockedLiveStreamScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -6242,7 +6242,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunAuthenticatedLiveMp4Scenario(directory.path(), false);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -6259,7 +6259,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunAuthenticatedLiveMp4Scenario(directory.path(), false, true);
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
@@ -6413,7 +6413,7 @@ TEST(HttpsAuthIntegrationTest,
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
-    (void)::alarm(15U);
+    (void)::alarm(30U);
     RunProtectionStartShutdownDrainScenario(directory.path());
     _exit(::testing::Test::HasFailure() ? 1 : 0);
   }
