@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -186,6 +187,137 @@ TEST(IsoBmffAssemblerTest, EnforcesBoxAndBufferedByteLimits) {
   const auto excessive = assembler.Push(excessive_pending);
   ASSERT_FALSE(excessive.ok());
   EXPECT_EQ(excessive.error().code, "E_FMP4_LIMIT");
+}
+
+namespace {
+
+void AppendBigEndian32(std::vector<std::uint8_t>& out, std::uint32_t value) {
+  out.push_back(static_cast<std::uint8_t>(value >> 24U));
+  out.push_back(static_cast<std::uint8_t>(value >> 16U));
+  out.push_back(static_cast<std::uint8_t>(value >> 8U));
+  out.push_back(static_cast<std::uint8_t>(value));
+}
+
+std::vector<std::uint8_t> FullBox(const char* type,
+                                  std::uint32_t version_and_flags,
+                                  const std::vector<std::uint8_t>& payload) {
+  std::vector<std::uint8_t> out;
+  AppendBigEndian32(out, static_cast<std::uint32_t>(12U + payload.size()));
+  out.insert(out.end(), type, type + 4);
+  AppendBigEndian32(out, version_and_flags);
+  out.insert(out.end(), payload.begin(), payload.end());
+  return out;
+}
+
+std::vector<std::uint8_t> Container(const char* type,
+                                    const std::vector<std::uint8_t>& children) {
+  std::vector<std::uint8_t> out;
+  AppendBigEndian32(out, static_cast<std::uint32_t>(8U + children.size()));
+  out.insert(out.end(), type, type + 4);
+  out.insert(out.end(), children.begin(), children.end());
+  return out;
+}
+
+// Builds moof{ mfhd, traf{ tfhd, trun } }. Passing std::nullopt omits the
+// respective sample-flags field from the box.
+std::vector<std::uint8_t> MoofFragment(
+    std::optional<std::uint32_t> tfhd_default_sample_flags,
+    std::optional<std::uint32_t> trun_first_sample_flags) {
+  std::vector<std::uint8_t> tfhd_payload;
+  AppendBigEndian32(tfhd_payload, 1U);  // track_ID
+  std::uint32_t tfhd_flags = 0U;
+  if (tfhd_default_sample_flags.has_value()) {
+    tfhd_flags |= 0x000020U;
+    AppendBigEndian32(tfhd_payload, *tfhd_default_sample_flags);
+  }
+  const auto tfhd = FullBox("tfhd", tfhd_flags, tfhd_payload);
+
+  std::uint32_t trun_flags = 0x000001U;  // data-offset present
+  std::vector<std::uint8_t> trun_payload;
+  AppendBigEndian32(trun_payload, 2U);  // sample_count
+  AppendBigEndian32(trun_payload, 0U);  // data_offset
+  if (trun_first_sample_flags.has_value()) {
+    trun_flags |= 0x000004U;  // first-sample-flags present
+    AppendBigEndian32(trun_payload, *trun_first_sample_flags);
+  }
+  const auto trun = FullBox("trun", trun_flags, trun_payload);
+
+  std::vector<std::uint8_t> traf_children(tfhd);
+  traf_children.insert(traf_children.end(), trun.begin(), trun.end());
+  const auto traf = Container("traf", traf_children);
+
+  const auto mfhd = FullBox("mfhd", 0U, {0U, 0U, 0U, 1U});
+  std::vector<std::uint8_t> moof_children(mfhd);
+  moof_children.insert(moof_children.end(), traf.begin(), traf.end());
+  auto fragment = Container("moof", moof_children);
+
+  const auto mdat = Box("mdat");
+  fragment.insert(fragment.end(), mdat.begin(), mdat.end());
+  return fragment;
+}
+
+constexpr std::uint32_t kNonSyncBit = 0x00010000U;
+
+// mp4mux's actual trun shape (flags 0x701): data_offset + per-sample
+// duration/size/flags entries, no first-sample-flags field.
+std::vector<std::uint8_t> MoofWithPerSampleFlags(
+    std::uint32_t first_entry_flags) {
+  const auto tfhd = FullBox("tfhd", 0U, {0U, 0U, 0U, 1U});
+
+  std::vector<std::uint8_t> trun_payload;
+  AppendBigEndian32(trun_payload, 2U);   // sample_count
+  AppendBigEndian32(trun_payload, 0U);   // data_offset
+  AppendBigEndian32(trun_payload, 20U);  // entry0 duration
+  AppendBigEndian32(trun_payload, 999U); // entry0 size
+  AppendBigEndian32(trun_payload, first_entry_flags);
+  AppendBigEndian32(trun_payload, 20U);  // entry1 duration
+  AppendBigEndian32(trun_payload, 888U); // entry1 size
+  AppendBigEndian32(trun_payload, kNonSyncBit | 0xC0U);
+  const auto trun = FullBox("trun", 0x000701U, trun_payload);
+
+  std::vector<std::uint8_t> traf_children(tfhd);
+  traf_children.insert(traf_children.end(), trun.begin(), trun.end());
+  const auto traf = Container("traf", traf_children);
+  const auto mfhd = FullBox("mfhd", 0U, {0U, 0U, 0U, 1U});
+  std::vector<std::uint8_t> moof_children(mfhd);
+  moof_children.insert(moof_children.end(), traf.begin(), traf.end());
+  auto fragment = Container("moof", moof_children);
+  const auto mdat = Box("mdat");
+  fragment.insert(fragment.end(), mdat.begin(), mdat.end());
+  return fragment;
+}
+
+}  // namespace
+
+TEST(IsoBmffAssemblerTest, RandomAccessReadsPerSampleFlagsLikeMp4mux) {
+  EXPECT_TRUE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofWithPerSampleFlags(0x00000040U)));  // observed sync entry0
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofWithPerSampleFlags(kNonSyncBit | 0xC0U)));  // observed mid-GOP
+}
+
+TEST(IsoBmffAssemblerTest, RandomAccessFollowsTrunFirstSampleFlags) {
+  EXPECT_TRUE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(std::nullopt, 0x02000000U)));
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(std::nullopt, kNonSyncBit)));
+}
+
+TEST(IsoBmffAssemblerTest, RandomAccessFallsBackToTfhdDefaultFlags) {
+  EXPECT_TRUE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(0x02000000U, std::nullopt)));
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(kNonSyncBit, std::nullopt)));
+  // trun first-sample flags outrank the tfhd default.
+  EXPECT_TRUE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(kNonSyncBit, 0x02000000U)));
+}
+
+TEST(IsoBmffAssemblerTest, RandomAccessIsConservativeWhenFlagsAreAbsent) {
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess(
+      MoofFragment(std::nullopt, std::nullopt)));
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess(Box("mdat")));
+  EXPECT_FALSE(camera_firmware::media::IsFragmentRandomAccess({}));
 }
 
 TEST(IsoBmffAssemblerTest, FinishRejectsTruncatedBox) {

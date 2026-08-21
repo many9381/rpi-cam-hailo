@@ -19,6 +19,13 @@ struct IsoBmffSegment {
   std::vector<std::uint8_t> bytes;
 };
 
+// True when the media fragment's first sample is a sync sample (IDR): the
+// trun first-sample-flags, falling back to the tfhd default-sample-flags.
+// Absent flags or malformed boxes conservatively report false, so only
+// provably keyframe-led fragments are advertised as join points.
+[[nodiscard]] bool IsFragmentRandomAccess(
+    std::span<const std::uint8_t> fragment) noexcept;
+
 struct IsoBmffAssemblerLimits {
   std::size_t max_buffer_bytes{32U * 1024U * 1024U};
   std::size_t max_box_bytes{16U * 1024U * 1024U};

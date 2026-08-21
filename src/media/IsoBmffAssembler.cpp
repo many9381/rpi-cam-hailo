@@ -4,9 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -38,7 +40,109 @@ bool AppendWithinLimit(std::vector<std::uint8_t>& destination,
   return true;
 }
 
+// Walks one level of ISO-BMFF children within `bytes`, returning the payload
+// span of the first box whose type matches, or an empty optional.
+std::optional<std::span<const std::uint8_t>> FindChildBox(
+    std::span<const std::uint8_t> bytes, std::string_view type) {
+  std::size_t cursor = 0U;
+  while (bytes.size() - cursor >= 8U && bytes.size() > cursor) {
+    const auto remaining = bytes.subspan(cursor);
+    const std::uint64_t size = ReadBigEndian32(remaining.first(4U));
+    if (size < 8U || size > remaining.size()) {
+      return std::nullopt;
+    }
+    const std::string_view box_type(
+        reinterpret_cast<const char*>(remaining.data() + 4U), 4U);
+    if (box_type == type) {
+      return remaining.subspan(8U, static_cast<std::size_t>(size) - 8U);
+    }
+    cursor += static_cast<std::size_t>(size);
+  }
+  return std::nullopt;
+}
+
+constexpr std::uint32_t kSampleIsNonSyncBit = 0x00010000U;
+
 }  // namespace
+
+bool IsFragmentRandomAccess(std::span<const std::uint8_t> fragment) noexcept {
+  const auto moof = FindChildBox(fragment, "moof");
+  if (!moof.has_value()) {
+    return false;
+  }
+  const auto traf = FindChildBox(*moof, "traf");
+  if (!traf.has_value()) {
+    return false;
+  }
+
+  // trun: fullbox(4) + sample_count(4) [+ data_offset(4)]
+  // [+ first_sample_flags(4)] then per-sample entries whose layout the
+  // 0x100/0x200/0x400/0x800 flag bits describe. mp4mux emits per-sample
+  // flags (0x400) rather than first-sample-flags (0x004).
+  if (const auto trun = FindChildBox(*traf, "trun");
+      trun.has_value() && trun->size() >= 8U) {
+    const std::uint32_t flags =
+        ReadBigEndian32(trun->first(4U)) & 0x00FFFFFFU;
+    const std::uint32_t sample_count =
+        ReadBigEndian32(trun->subspan(4U, 4U));
+    std::size_t offset = 8U;  // version/flags + sample_count
+    if ((flags & 0x000001U) != 0U) {
+      offset += 4U;  // data_offset
+    }
+    if ((flags & 0x000004U) != 0U) {
+      if (trun->size() >= offset + 4U) {
+        const std::uint32_t first_sample_flags =
+            ReadBigEndian32(trun->subspan(offset, 4U));
+        return (first_sample_flags & kSampleIsNonSyncBit) == 0U;
+      }
+      return false;
+    }
+    if ((flags & 0x000400U) != 0U && sample_count > 0U) {
+      if ((flags & 0x000100U) != 0U) {
+        offset += 4U;  // entry0 sample_duration
+      }
+      if ((flags & 0x000200U) != 0U) {
+        offset += 4U;  // entry0 sample_size
+      }
+      if (trun->size() >= offset + 4U) {
+        const std::uint32_t entry_flags =
+            ReadBigEndian32(trun->subspan(offset, 4U));
+        return (entry_flags & kSampleIsNonSyncBit) == 0U;
+      }
+      return false;
+    }
+  }
+
+  // tfhd: fullbox(4) + track_ID(4) [+ base_data_offset(8)]
+  // [+ sample_description_index(4)] [+ default_sample_duration(4)]
+  // [+ default_sample_size(4)] [+ default_sample_flags(4)]
+  if (const auto tfhd = FindChildBox(*traf, "tfhd");
+      tfhd.has_value() && tfhd->size() >= 8U) {
+    const std::uint32_t flags =
+        ReadBigEndian32(tfhd->first(4U)) & 0x00FFFFFFU;
+    if ((flags & 0x000020U) != 0U) {
+      std::size_t offset = 8U;  // version/flags + track_ID
+      if ((flags & 0x000001U) != 0U) {
+        offset += 8U;
+      }
+      if ((flags & 0x000002U) != 0U) {
+        offset += 4U;
+      }
+      if ((flags & 0x000008U) != 0U) {
+        offset += 4U;
+      }
+      if ((flags & 0x000010U) != 0U) {
+        offset += 4U;
+      }
+      if (tfhd->size() >= offset + 4U) {
+        const std::uint32_t default_sample_flags =
+            ReadBigEndian32(tfhd->subspan(offset, 4U));
+        return (default_sample_flags & kSampleIsNonSyncBit) == 0U;
+      }
+    }
+  }
+  return false;
+}
 
 IsoBmffAssembler::IsoBmffAssembler(IsoBmffAssemblerLimits limits)
     : limits_(limits) {
