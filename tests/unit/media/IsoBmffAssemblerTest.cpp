@@ -98,6 +98,41 @@ TEST(IsoBmffAssemblerTest, HandlesSplitAndExtendedBoxHeaders) {
             camera_firmware::media::IsoBmffSegmentKind::kInitialization);
 }
 
+TEST(IsoBmffAssemblerTest, WholeBoxPushesLeaveNothingBuffered) {
+  // Steady state for mp4mux streamable output: every Push carries whole
+  // boxes, so nothing should remain staged between calls.
+  const auto ftyp = Box("ftyp");
+  const auto moov = Box("moov");
+  camera_firmware::media::IsoBmffAssembler assembler;
+
+  std::vector<std::uint8_t> init(ftyp);
+  init.insert(init.end(), moov.begin(), moov.end());
+  const auto pushed = assembler.Push(init);
+  ASSERT_TRUE(pushed.ok()) << pushed.error().message;
+  ASSERT_EQ(pushed.value().size(), 1U);
+  EXPECT_EQ(assembler.buffered_bytes(), 0U);
+}
+
+TEST(IsoBmffAssemblerTest, StagesOnlyThePartialTailAcrossPushes) {
+  const auto ftyp = Box("ftyp");
+  const auto moov = Box("moov");
+  camera_firmware::media::IsoBmffAssembler assembler;
+
+  std::vector<std::uint8_t> first(ftyp);
+  first.insert(first.end(), moov.begin(), moov.begin() + 3);
+  const auto partial = assembler.Push(first);
+  ASSERT_TRUE(partial.ok()) << partial.error().message;
+  EXPECT_TRUE(partial.value().empty());
+  // Only moov's 3 dangling bytes stay staged; the complete ftyp box has
+  // already been consumed into the init accumulator.
+  EXPECT_EQ(assembler.buffered_bytes(), 3U + ftyp.size());
+
+  const auto completed = assembler.Push(std::span(moov).subspan(3U));
+  ASSERT_TRUE(completed.ok()) << completed.error().message;
+  ASSERT_EQ(completed.value().size(), 1U);
+  EXPECT_EQ(assembler.buffered_bytes(), 0U);
+}
+
 TEST(IsoBmffAssemblerTest, RejectsInvalidLengthsAndTopLevelOrder) {
   camera_firmware::media::IsoBmffAssembler assembler;
   auto zero_length = Box("ftyp");
