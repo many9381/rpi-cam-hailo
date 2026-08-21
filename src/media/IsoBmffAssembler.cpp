@@ -61,13 +61,22 @@ common::Result<std::vector<IsoBmffSegment>> IsoBmffAssembler::Push(
       bytes.size() > limits_.max_buffer_bytes - pending_bytes_.size()) {
     return fail("E_FMP4_LIMIT", "fragmented MP4 input exceeds buffer limit");
   }
-  pending_bytes_.insert(pending_bytes_.end(), bytes.begin(), bytes.end());
+
+  // Steady state (mp4mux streamable output) delivers whole boxes per Push,
+  // so parse straight from the caller's span and stage only a trailing
+  // partial box. Only when a previous Push left a partial tail do we fall
+  // back to staging the input behind it.
+  std::span<const std::uint8_t> parse_view = bytes;
+  const bool staged = !pending_bytes_.empty();
+  if (staged) {
+    pending_bytes_.insert(pending_bytes_.end(), bytes.begin(), bytes.end());
+    parse_view = std::span<const std::uint8_t>(pending_bytes_);
+  }
 
   std::vector<IsoBmffSegment> output;
   std::size_t consumed = 0U;
-  while (pending_bytes_.size() - consumed >= 8U) {
-    const auto remaining = std::span<const std::uint8_t>(pending_bytes_)
-                               .subspan(consumed);
+  while (parse_view.size() - consumed >= 8U) {
+    const auto remaining = parse_view.subspan(consumed);
     const std::uint32_t compact_size = ReadBigEndian32(remaining.first(4U));
     std::size_t header_size = 8U;
     std::uint64_t box_size = compact_size;
@@ -149,10 +158,15 @@ common::Result<std::vector<IsoBmffSegment>> IsoBmffAssembler::Push(
     consumed += checked_box_size;
   }
 
-  if (consumed != 0U) {
-    pending_bytes_.erase(pending_bytes_.begin(),
-                         pending_bytes_.begin() +
-                             static_cast<std::ptrdiff_t>(consumed));
+  if (staged) {
+    if (consumed != 0U) {
+      pending_bytes_.erase(pending_bytes_.begin(),
+                           pending_bytes_.begin() +
+                               static_cast<std::ptrdiff_t>(consumed));
+    }
+  } else {
+    const auto tail = parse_view.subspan(consumed);
+    pending_bytes_.assign(tail.begin(), tail.end());
   }
   return Result::Ok(std::move(output));
 }
