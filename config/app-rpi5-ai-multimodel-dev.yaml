@@ -14,7 +14,7 @@ camera:
   encoder:
     backend: x264
     bitrate_kbps: 6000
-    gop: 25
+    gop: 13
     preset: ultrafast
   ai:
     enabled: true
@@ -29,7 +29,7 @@ http:
   public_base_url: http://127.0.0.1:8443
   live:
     enabled: true
-    fragment_duration_ms: 500
+    fragment_duration_ms: 250
     max_clients: 4
     ring_fragments: 8
     stale_timeout_ms: 2000

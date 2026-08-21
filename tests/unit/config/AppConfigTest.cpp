@@ -549,7 +549,7 @@ TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
   EXPECT_EQ(cfg.value().camera.video.format, "nv12");
   EXPECT_EQ(cfg.value().camera.encoder.backend, "x264");
   EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000u);
-  EXPECT_EQ(cfg.value().camera.encoder.gop, 25u);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 13u);
   EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().http.enabled);
   EXPECT_FALSE(cfg.value().http.tls.enabled);
@@ -846,7 +846,7 @@ TEST(AppConfigTest, LoadsRpi5AiDevConfig) {
   EXPECT_EQ(cfg.value().camera.video.height, 1080U);
   EXPECT_EQ(cfg.value().camera.video.fps, 50U);
   EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
-  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 13U);
   EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 1u);
@@ -886,7 +886,7 @@ TEST(AppConfigTest, LoadsRpi5AiMultiModelDevConfig) {
   EXPECT_EQ(cfg.value().camera.video.height, 1080U);
   EXPECT_EQ(cfg.value().camera.video.fps, 50U);
   EXPECT_EQ(cfg.value().camera.encoder.bitrate_kbps, 6000U);
-  EXPECT_EQ(cfg.value().camera.encoder.gop, 25U);
+  EXPECT_EQ(cfg.value().camera.encoder.gop, 13U);
   EXPECT_EQ(cfg.value().camera.encoder.preset, "ultrafast");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);

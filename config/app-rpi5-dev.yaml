@@ -14,7 +14,7 @@ camera:
   encoder:
     backend: x264
     bitrate_kbps: 6000
-    gop: 25
+    gop: 13
     preset: ultrafast
   ai:
     enabled: false
@@ -30,7 +30,7 @@ http:
     stale_timeout_ms: 2000
   live:
     enabled: true
-    fragment_duration_ms: 500
+    fragment_duration_ms: 250
     max_clients: 4
     ring_fragments: 8
     stale_timeout_ms: 2000

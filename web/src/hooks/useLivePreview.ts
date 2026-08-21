@@ -30,15 +30,16 @@ interface ActiveSession {
 
 const maximumBufferSeconds = 8;
 const backBufferSeconds = 3;
-// Must stay above the server fragment duration (500ms, http.live
-// fragment_duration_ms): riding closer to the live edge than one fragment
-// drains the buffer before the next fragment lands, which shows up as
-// periodic waiting stalls and emergency-seek jumps.
-const liveEdgeTargetSeconds = 1;
+// Must stay well above the server fragment cadence (fragment_duration_ms
+// 250ms; ~260ms real boundaries with gop 13 @ 50fps): riding closer to the
+// live edge than one fragment drains the buffer before the next fragment
+// lands, which shows up as periodic waiting stalls and emergency-seek
+// jumps. 0.625s keeps ~2.5 fragments of headroom.
+const liveEdgeTargetSeconds = 0.625;
 // Drift between the target and this threshold is left alone; past it the
 // video plays slightly fast until the target is reached again. The band
 // keeps the rate from flapping around a single boundary.
-const catchUpThresholdSeconds = 1.25;
+const catchUpThresholdSeconds = 0.875;
 // 5% is invisible on a preview with no audio track, and converges from the
 // threshold back to the target in a few seconds.
 const catchUpPlaybackRate = 1.05;

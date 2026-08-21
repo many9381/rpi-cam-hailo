@@ -226,7 +226,7 @@ describe('useLivePreview', () => {
     video.playbackRate = 1.05;
     Object.defineProperties(video, {
       readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
-      currentTime: { configurable: true, writable: true, value: 10.875 },
+      currentTime: { configurable: true, writable: true, value: 11.25 },
     });
     MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
 
@@ -236,18 +236,18 @@ describe('useLivePreview', () => {
       expect(MockMediaSource.instances[0].sourceBuffer.appended).toHaveLength(1);
     });
     expect(video.playbackRate).toBe(1.05);
-    expect(video.currentTime).toBe(10.875);
+    expect(video.currentTime).toBe(11.25);
   });
 
   it('leaves normal speed alone at exactly the catch-up threshold', async () => {
-    // drift of exactly 1.25 (binary-exact) must not engage catch-up: the
+    // drift of exactly 0.875 (binary-exact) must not engage catch-up: the
     // threshold is exclusive, which is what keeps the band from flapping.
     responseWithReader([{ done: false, value: new Uint8Array([1]) }]);
     render(<Probe cameraId="cam-a" />);
     const video = screen.getByTestId('video') as HTMLVideoElement;
     Object.defineProperties(video, {
       readyState: { configurable: true, value: HTMLMediaElement.HAVE_ENOUGH_DATA },
-      currentTime: { configurable: true, writable: true, value: 10.75 },
+      currentTime: { configurable: true, writable: true, value: 11.125 },
     });
     MockMediaSource.instances[0].sourceBuffer.ranges = [[0, 12]];
 
@@ -257,7 +257,7 @@ describe('useLivePreview', () => {
       expect(MockMediaSource.instances[0].sourceBuffer.appended).toHaveLength(1);
     });
     expect(video.playbackRate).toBe(1);
-    expect(video.currentTime).toBe(10.75);
+    expect(video.currentTime).toBe(11.125);
   });
 
   it('catches up without seeking at exactly the emergency threshold', async () => {
@@ -291,7 +291,7 @@ describe('useLivePreview', () => {
 
     act(() => MockMediaSource.instances[0].open());
 
-    await waitFor(() => expect(video.currentTime).toBe(12 - 1));
+    await waitFor(() => expect(video.currentTime).toBe(12 - 0.625));
     expect(video.playbackRate).toBe(1);
   });
 
@@ -308,7 +308,7 @@ describe('useLivePreview', () => {
 
     act(() => MockMediaSource.instances[0].open());
 
-    await waitFor(() => expect(video.currentTime).toBe(20 - 1));
+    await waitFor(() => expect(video.currentTime).toBe(20 - 0.625));
     expect(video.playbackRate).toBe(1);
   });
 

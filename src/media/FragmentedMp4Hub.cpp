@@ -474,8 +474,12 @@ struct FragmentedMp4Hub::Impl {
       return true;
     }
 
+    // Advertise a fragment as a join point only when its first sample is
+    // provably a sync sample; duration-triggered mid-GOP fragments must not
+    // be handed to fresh readers.
+    const bool random_access = IsFragmentRandomAccess(segment.bytes);
     const auto published =
-        current_ring->Publish(std::move(segment.bytes), true);
+        current_ring->Publish(std::move(segment.bytes), random_access);
     if (!published.ok()) {
       Fail(published.error().code, published.error().message);
       return false;
