@@ -261,7 +261,7 @@ TEST(FirmwareRuntimeTest, StoppedRuntimeReturnsSafeProviderValues) {
   };
   dependencies.snapshot = [&](std::string_view) {
     calls.provider_calls.fetch_add(1U);
-    return std::optional<std::vector<std::uint8_t>>{{1U, 2U, 3U}};
+    return std::optional<camera_firmware::media::JpegBytes>{std::string("\x01\x02\x03", 3U)};
   };
   FirmwareRuntime runtime(config, std::move(dependencies));
 
@@ -331,9 +331,9 @@ TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
   dependencies.snapshot = [&](std::string_view camera_id) {
     calls.provider_calls.fetch_add(1U);
     if (camera_id == "camera") {
-      return std::optional<std::vector<std::uint8_t>>{{1U, 2U, 3U}};
+      return std::optional<camera_firmware::media::JpegBytes>{std::string("\x01\x02\x03", 3U)};
     }
-    return std::optional<std::vector<std::uint8_t>>{};
+    return std::optional<camera_firmware::media::JpegBytes>{};
   };
   dependencies.per_media_key_zeroize_count = [&] {
     calls.provider_calls.fetch_add(1U);
@@ -346,7 +346,8 @@ TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
   EXPECT_EQ(runtime.AiStatus().state, "running");
   EXPECT_TRUE(runtime.RestartAi().ok());
   EXPECT_EQ(runtime.Snapshot("camera"),
-            (std::optional<std::vector<std::uint8_t>>{{1U, 2U, 3U}}));
+            (std::optional<camera_firmware::media::JpegBytes>{
+                std::string("\x01\x02\x03", 3U)}));
   EXPECT_EQ(runtime.PerMediaKeyZeroizeCount(), 7U);
   EXPECT_EQ(calls.provider_calls.load(), 5U);
 }

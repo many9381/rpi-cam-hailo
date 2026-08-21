@@ -235,7 +235,7 @@ common::Result<void> ManagedFirmwareRuntime::RestartAi() {
   return runtime->RestartAi();
 }
 
-std::optional<std::vector<std::uint8_t>> ManagedFirmwareRuntime::Snapshot(
+std::optional<media::JpegBytes> ManagedFirmwareRuntime::Snapshot(
     std::string_view camera_id) const {
   auto runtime = ReadSnapshot().runtime;
   return runtime ? runtime->Snapshot(camera_id) : std::nullopt;

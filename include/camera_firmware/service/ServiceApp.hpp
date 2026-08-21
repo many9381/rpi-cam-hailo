@@ -10,6 +10,8 @@
 #include <mutex>
 #include <optional>
 #include <string>
+
+#include "camera_firmware/media/JpegEncoder.hpp"
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -62,7 +64,7 @@ struct CameraStatus {
 
 using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;
 using SnapshotCallback =
-    std::function<std::optional<std::vector<std::uint8_t>>(const std::string&)>;
+    std::function<std::optional<media::JpegBytes>(const std::string&)>;
 using LiveMp4StreamCallback = std::function<std::size_t(char*, std::size_t)>;
 using LiveMp4CancelCallback = std::function<void()>;
 struct LiveMp4StreamHandle {

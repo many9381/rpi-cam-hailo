@@ -331,7 +331,8 @@ common::Result<JpegImage> EncodeRgbJpeg(unsigned int width,
   image.width = width;
   image.height = height;
   try {
-    image.bytes.assign(state->output, state->output + state->output_size);
+    image.bytes.assign(reinterpret_cast<const char*>(state->output),
+                       state->output_size);
   } catch (const std::bad_alloc&) {
     std::free(state->output);
     return EncodeError("JPEG output allocation failed");
