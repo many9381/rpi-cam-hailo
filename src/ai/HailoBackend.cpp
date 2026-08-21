@@ -1,5 +1,7 @@
 #include "camera_firmware/ai/HailoBackend.hpp"
 
+#include "camera_firmware/ai/AlignedBufferPool.hpp"
+
 #include <hailo/hailort.h>
 #include <hailo/infer_model.hpp>
 #include <hailo/vdevice.hpp>
@@ -24,44 +26,9 @@ std::string StatusMessage(std::string prefix, hailo_status status) {
   return std::move(prefix) + " (hailo_status=" + std::to_string(status) + ")";
 }
 
-struct PageAlignedBuffer {
-  std::size_t size{0};
-  std::size_t allocated_size{0};
-  std::uint8_t* data{nullptr};
-
-  PageAlignedBuffer(const PageAlignedBuffer&) = delete;
-  PageAlignedBuffer& operator=(const PageAlignedBuffer&) = delete;
-
-  PageAlignedBuffer() = default;
-  ~PageAlignedBuffer() { std::free(data); }
-};
-
-std::shared_ptr<PageAlignedBuffer> AllocatePageAligned(std::size_t size) {
-  if (size == 0U) {
-    return nullptr;
-  }
-
-  long page_size = ::sysconf(_SC_PAGESIZE);
-  if (page_size <= 0) {
-    page_size = 4096;
-  }
-  const auto page = static_cast<std::size_t>(page_size);
-  if (size > std::numeric_limits<std::size_t>::max() - page + 1U) {
-    return nullptr;
-  }
-  const std::size_t allocated = ((size + page - 1U) / page) * page;
-
-  void* data = nullptr;
-  if (posix_memalign(&data, page, allocated) != 0) {
-    return nullptr;
-  }
-
-  auto buffer = std::make_shared<PageAlignedBuffer>();
-  buffer->size = size;
-  buffer->allocated_size = allocated;
-  buffer->data = static_cast<std::uint8_t*>(data);
-  return buffer;
-}
+// Page-aligned output buffers come from a per-model AlignedBufferPool (see
+// LoadedModel) so the steady state reuses the same allocations instead of a
+// posix_memalign/free round trip per output per frame.
 
 struct HailoOutputBinding {
   std::string name;
@@ -77,6 +44,9 @@ struct HailoBackend::LoadedModel {
   std::string input_name;
   std::vector<HailoOutputBinding> outputs;
   std::size_t selected_output_index{0};
+  // One in-flight inference per model (the runner serializes submissions),
+  // so outputs.size() buffers cycle in steady state; double it for slack.
+  std::shared_ptr<AlignedBufferPool> output_pool;
 };
 
 HailoBackend::HailoBackend() = default;
@@ -215,6 +185,8 @@ common::Result<ModelHandle> HailoBackend::LoadModel(
   loaded->input_name = input.value().name();
   loaded->outputs = std::move(output_bindings);
   loaded->selected_output_index = selected_output_index;
+  loaded->output_pool =
+      std::make_shared<AlignedBufferPool>(loaded->outputs.size() * 2U);
 
   std::lock_guard lock(mutex_);
   models_.push_back(std::move(loaded));
@@ -305,7 +277,7 @@ common::Result<void> HailoBackend::Submit(ModelHandle handle,
   std::shared_ptr<PageAlignedBuffer> selected_output_buffer;
   for (std::size_t index = 0; index < model->outputs.size(); ++index) {
     const auto& output = model->outputs[index];
-    auto output_buffer = AllocatePageAligned(output.size);
+    auto output_buffer = model->output_pool->Acquire(output.size);
     if (output_buffer == nullptr) {
       return common::Result<void>::Err(
           {"E_HAILO_ALLOC",
