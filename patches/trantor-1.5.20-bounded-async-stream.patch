@@ -1,5 +1,5 @@
 diff --git a/trantor/net/AsyncStream.h b/trantor/net/AsyncStream.h
-index c459f9e..c380c17 100644
+index c459f9e..be1ffda 100644
 --- a/trantor/net/AsyncStream.h
 +++ b/trantor/net/AsyncStream.h
 @@ -15,10 +15,17 @@
@@ -20,7 +20,7 @@ index c459f9e..c380c17 100644
  /**
   * @brief This class represents a data stream that can be sent asynchronously.
   * The data is sent in chunks, and the chunks are sent in order, and all the
-@@ -35,7 +42,8 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
+@@ -35,9 +42,18 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
       * @param len The length of the data
       * @return true if the data is sent successfully or at least is put in the
       * send buffer.
@@ -29,8 +29,18 @@ index c459f9e..c380c17 100644
 +     * reached.
       */
      virtual bool send(const char *data, size_t len) = 0;
++    /**
++     * @brief Send data asynchronously, transferring ownership of the
++     * buffer so cross-thread queueing does not have to copy it.
++     */
++    virtual bool send(std::string &&data)
++    {
++        return send(data.data(), data.length());
++    }
      bool send(const std::string &data)
-@@ -48,4 +56,4 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
+     {
+         return send(data.data(), data.length());
+@@ -48,4 +64,4 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
      virtual void close() = 0;
  };
  using AsyncStreamPtr = std::unique_ptr<AsyncStream>;
@@ -129,10 +139,10 @@ index bbce40e..00b2843 100644
 \ No newline at end of file
 +}  // namespace trantor
 diff --git a/trantor/net/inner/TcpConnectionImpl.cc b/trantor/net/inner/TcpConnectionImpl.cc
-index 8fddf1a..8f6407b 100644
+index 8fddf1a..ab37c04 100644
 --- a/trantor/net/inner/TcpConnectionImpl.cc
 +++ b/trantor/net/inner/TcpConnectionImpl.cc
-@@ -845,6 +845,52 @@ void TcpConnectionImpl::onSslCloseAlert(TcpConnection *self)
+@@ -845,39 +845,101 @@ void TcpConnectionImpl::onSslCloseAlert(TcpConnection *self)
  {
      self->shutdown();
  }
@@ -185,7 +195,44 @@ index 8fddf1a..8f6407b 100644
  class AsyncStreamImpl : public AsyncStream
  {
    public:
-@@ -873,11 +919,14 @@ class AsyncStreamImpl : public AsyncStream
+-    explicit AsyncStreamImpl(std::function<bool(const char *, size_t)> callback)
++    // The third parameter optionally transfers ownership of the bytes:
++    // when non-empty, / point into it and the callback may move
++    // it instead of copying for cross-thread queueing.
++    using SendCallback =
++        std::function<bool(const char *, size_t, std::string &&)>;
++    explicit AsyncStreamImpl(SendCallback callback)
+         : callback_(std::move(callback))
+     {
+     }
+     AsyncStreamImpl() = delete;
+     bool send(const char *data, size_t len) override
+     {
+-        return callback_(data, len);
++        return callback_(data, len, std::string{});
++    }
++    bool send(std::string &&data) override
++    {
++        const char *bytes = data.data();
++        const size_t length = data.length();
++        return callback_(bytes, length, std::move(data));
+     }
+     void close() override
+     {
+-        callback_(nullptr, 0);
++        callback_(nullptr, 0, std::string{});
+         callback_ = nullptr;
+     }
+     ~AsyncStreamImpl() override
+     {
+         if (callback_)
+-            callback_(nullptr, 0);
++            callback_(nullptr, 0, std::string{});
+     }
+ 
+   private:
+-    std::function<bool(const char *, size_t)> callback_;
++    SendCallback callback_;
  };
  AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
  {
@@ -199,11 +246,13 @@ index 8fddf1a..8f6407b 100644
 -                                                        size_t len) -> bool {
 +        [asyncStreamNode,
 +         pendingBytes,
-+         weakPtr = std::move(weakPtr)](const char *data, size_t len) -> bool {
++         weakPtr = std::move(weakPtr)](const char *data,
++                                       size_t len,
++                                       std::string &&owned) -> bool {
              auto thisPtr = weakPtr.lock();
              if (!thisPtr)
              {
-@@ -889,21 +938,52 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -889,21 +951,54 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
                  LOG_DEBUG << "Connection is not connected,give up sending";
                  return false;
              }
@@ -246,7 +295,10 @@ index 8fddf1a..8f6407b 100644
              {
                  if (data)
                  {
-                     std::string buffer(data, len);
+-                    std::string buffer(data, len);
++                    std::string buffer = owned.empty()
++                                             ? std::string(data, len)
++                                             : std::move(owned);
                      thisPtr->loop_->queueInLoop([thisPtr,
                                                   asyncStreamNode,
 +                                                 reservation,
@@ -261,7 +313,7 @@ index 8fddf1a..8f6407b 100644
                      });
                  }
                  else
-@@ -915,6 +995,10 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -915,6 +1010,10 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
                      });
                  }
              }
@@ -272,7 +324,7 @@ index 8fddf1a..8f6407b 100644
              return true;
          });
      if (loop_->isInLoopThread())
-@@ -965,54 +1049,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -965,54 +1064,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
      }
      return asyncStream;
  }
@@ -283,8 +335,10 @@ index 8fddf1a..8f6407b 100644
 +                                            size_t len) noexcept
  {
      loop_->assertInLoopThread();
+-    if (data)
 +    if (status_ != ConnStatus::Connected)
-+    {
+     {
+-        if (len > 0)
 +        // Mirror sendInLoop: once the connection has left Connected the
 +        // channel must not be touched. A queued async close or send can
 +        // run after the peer's handleClose has disabled the channel;
@@ -293,10 +347,8 @@ index 8fddf1a..8f6407b 100644
 +        // aborts the process.
 +        return false;
 +    }
--    if (data)
 +    try
-     {
--        if (len > 0)
++    {
 +        if (data)
          {
 -            if (!writeBufferList_.empty() && node == writeBufferList_.front() &&
