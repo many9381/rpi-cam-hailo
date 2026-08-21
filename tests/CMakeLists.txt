@@ -273,6 +273,7 @@ add_executable(camera_firmware_ai_tests
     unit/ai/AiFramePumpTest.cpp
     unit/ai/AiFrameTapTest.cpp
     unit/ai/AiModelProcessorTest.cpp
+    unit/ai/AlignedBufferPoolTest.cpp
     unit/ai/ModelInputBufferPoolTest.cpp
     unit/ai/Nv12RgbPreprocessorTest.cpp
     unit/ai/AiRuntimeTest.cpp
