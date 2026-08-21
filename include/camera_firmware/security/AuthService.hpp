@@ -83,6 +83,11 @@ struct AuthServiceRuntimeHooks {
 
 class AuthService {
  public:
+  // Test-only: blocks until the background session-expiry worker has
+  // processed every pending wake and parked. Lets tests advance fake
+  // clocks without racing an in-flight sweep.
+  void WaitForSessionExpiryIdleForTesting();
+
   explicit AuthService(SecurityStore& store,
                        AuthServiceRuntimeHooks hooks = {});
   ~AuthService();

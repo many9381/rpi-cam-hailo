@@ -1719,6 +1719,14 @@ TEST(ServiceResponseTest, LiveMp4ResponseWritesBytesAndSignalsRelease) {
   EXPECT_EQ(output_state->bytes, "fragmented-mp4-bytes");
   lock.unlock();
 
+  // The release signal arrives from the pump thread after the output is
+  // closed; both orders are valid, so wait for it rather than racing it.
+  const auto release_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (!state->released.load() &&
+         std::chrono::steady_clock::now() < release_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   EXPECT_TRUE(state->released.load());
 }
 

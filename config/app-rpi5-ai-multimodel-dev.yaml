@@ -19,7 +19,7 @@ camera:
   ai:
     enabled: true
     model_ids: [objects, pose]
-    max_fps: 10
+    max_fps: 25
 
 http:
   enabled: true
