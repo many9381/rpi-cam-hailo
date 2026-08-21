@@ -265,7 +265,7 @@ common::Result<void> FirmwareRuntime::RestartAi() {
   }
 }
 
-std::optional<std::vector<std::uint8_t>> FirmwareRuntime::Snapshot(
+std::optional<media::JpegBytes> FirmwareRuntime::Snapshot(
     std::string_view camera_id) const {
   std::lock_guard lock(mutex_);
   if (!RunningLocked() || !dependencies_.snapshot) {
@@ -429,7 +429,7 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
   };
   dependencies.snapshot = [graph](std::string_view camera_id) {
     if (camera_id != graph->config.camera.id) {
-      return std::optional<std::vector<std::uint8_t>>{};
+      return std::optional<media::JpegBytes>{};
     }
     return media::BuildLatestSnapshotJpeg(
         graph->snapshot_tap, camera_id, SnapshotMaximumAge(graph->config));

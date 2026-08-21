@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "camera_firmware/media/FrameLease.hpp"
+#include "camera_firmware/media/JpegEncoder.hpp"
 
 namespace camera_firmware::media {
 
@@ -74,10 +75,10 @@ class SnapshotTap {
   std::shared_ptr<SourceRunToken> source_run_;
 };
 
-[[nodiscard]] std::optional<std::vector<std::uint8_t>> BuildLatestSnapshotJpeg(
+[[nodiscard]] std::optional<JpegBytes> BuildLatestSnapshotJpeg(
     const SnapshotTap& tap,
     std::string_view camera_id);
-[[nodiscard]] std::optional<std::vector<std::uint8_t>> BuildLatestSnapshotJpeg(
+[[nodiscard]] std::optional<JpegBytes> BuildLatestSnapshotJpeg(
     const SnapshotTap& tap,
     std::string_view camera_id,
     std::chrono::milliseconds maximum_age);

@@ -847,6 +847,26 @@ TEST(ServiceResponseTest, AiRestartResponseDoesNotReadStatusAfterCallbackError) 
   EXPECT_FALSE((*json).isMember("ai"));
 }
 
+TEST(ServiceResponseTest, SnapshotResponseMovesJpegBodyWithoutCopying) {
+  // Large enough to defeat std::string SSO so pointer identity proves the
+  // body was moved from the callback's buffer, not copied.
+  camera_firmware::media::JpegBytes jpeg(64U * 1024U, 'j');
+  const char* storage = jpeg.data();
+  camera_firmware::service::SnapshotCallback callback =
+      [&jpeg](const std::string&) {
+        return std::optional<camera_firmware::media::JpegBytes>{
+            std::move(jpeg)};
+      };
+
+  const auto response =
+      camera_firmware::service::BuildSnapshotResponse(callback, "cam-a");
+
+  ASSERT_NE(response, nullptr);
+  EXPECT_EQ(response->statusCode(), drogon::k200OK);
+  ASSERT_EQ(response->getBody().size(), 64U * 1024U);
+  EXPECT_EQ(response->getBody().data(), storage);
+}
+
 TEST(ServiceResponseTest, DetectionSnapshotJsonReturnsEmptyEventsArray) {
   const auto json =
       camera_firmware::service::BuildDetectionSnapshotJson({});
@@ -1442,11 +1462,11 @@ TEST(ServiceResponseTest, LegacyEmptyLiveCallbackRemainsSourceCompatible) {
 }
 
 TEST(ServiceResponseTest, SnapshotResponseReturnsJpegBytesFromCallback) {
-  const std::vector<std::uint8_t> jpeg{0xff, 0xd8, 0xff, 0xd9};
+  const camera_firmware::media::JpegBytes jpeg = std::string("\xff\xd8\xff\xd9", 4U);
 
   auto response = camera_firmware::service::BuildSnapshotResponse(
       [&](const std::string& camera_id)
-          -> std::optional<std::vector<std::uint8_t>> {
+          -> std::optional<camera_firmware::media::JpegBytes> {
         if (camera_id != "imx708-main") {
           return std::nullopt;
         }
@@ -1461,7 +1481,7 @@ TEST(ServiceResponseTest, SnapshotResponseReturnsJpegBytesFromCallback) {
 
 TEST(ServiceResponseTest, SnapshotResponseReturnsUnavailableForUnknownCamera) {
   auto response = camera_firmware::service::BuildSnapshotResponse(
-      [](const std::string&) -> std::optional<std::vector<std::uint8_t>> {
+      [](const std::string&) -> std::optional<camera_firmware::media::JpegBytes> {
         return std::nullopt;
       },
       "unknown");

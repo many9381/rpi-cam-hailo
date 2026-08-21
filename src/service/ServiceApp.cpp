@@ -5331,7 +5331,7 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
                         drogon::k503ServiceUnavailable);
   }
 
-  const auto snapshot = snapshot_callback(camera_id);
+  auto snapshot = snapshot_callback(camera_id);
   if (!snapshot.has_value() || snapshot->empty()) {
     return JsonResponse(BuildSnapshotUnavailableJson(),
                         drogon::k503ServiceUnavailable);
@@ -5340,7 +5340,7 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
   auto response = drogon::HttpResponse::newHttpResponse();
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeCode(drogon::CT_IMAGE_JPG);
-  response->setBody(std::string(snapshot->begin(), snapshot->end()));
+  response->setBody(std::move(*snapshot));
   return response;
 }
 

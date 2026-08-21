@@ -251,7 +251,9 @@ bool IsStartOfFrame(std::uint8_t marker) {
 }
 
 std::optional<JpegDimensions> ReadJpegDimensions(
-    const std::vector<std::uint8_t>& bytes) {
+    const camera_firmware::media::JpegBytes& jpeg_bytes) {
+  const auto* bytes_data = reinterpret_cast<const std::uint8_t*>(jpeg_bytes.data());
+  const std::vector<std::uint8_t> bytes(bytes_data, bytes_data + jpeg_bytes.size());
   if (bytes.size() < 4U || bytes[0] != 0xffU || bytes[1] != 0xd8U ||
       bytes[bytes.size() - 2U] != 0xffU || bytes.back() != 0xd9U) {
     return std::nullopt;
@@ -315,7 +317,7 @@ void JpegDecompressErrorExit(j_common_ptr cinfo) {
 void SuppressJpegMessage(j_common_ptr) {}
 
 std::optional<std::vector<std::uint8_t>> DecodeJpegRgb(
-    const std::vector<std::uint8_t>& jpeg,
+    const camera_firmware::media::JpegBytes& jpeg,
     unsigned int expected_width,
     unsigned int expected_height) {
   std::vector<std::uint8_t> rgb(
@@ -333,7 +335,9 @@ std::optional<std::vector<std::uint8_t>> DecodeJpegRgb(
 
   state->creation_attempted = true;
   jpeg_create_decompress(&state->decompressor);
-  jpeg_mem_src(&state->decompressor, jpeg.data(), jpeg.size());
+  jpeg_mem_src(&state->decompressor,
+               reinterpret_cast<const unsigned char*>(jpeg.data()),
+               jpeg.size());
   if (jpeg_read_header(&state->decompressor, TRUE) != JPEG_HEADER_OK) {
     jpeg_destroy_decompress(&state->decompressor);
     return std::nullopt;

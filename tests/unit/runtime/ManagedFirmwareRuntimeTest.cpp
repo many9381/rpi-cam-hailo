@@ -138,8 +138,8 @@ FirmwareRuntimeDependencies DependenciesFor(
   };
   dependencies.snapshot = [probe](std::string_view) {
     probe->provider_calls.fetch_add(1U);
-    return std::optional<std::vector<std::uint8_t>>{
-        {static_cast<std::uint8_t>(probe->name.size())}};
+    return std::optional<camera_firmware::media::JpegBytes>{
+        std::string(1U, static_cast<char>(probe->name.size()))};
   };
   dependencies.live_status = [probe] {
     probe->provider_calls.fetch_add(1U);
@@ -883,7 +883,8 @@ TEST(ManagedFirmwareRuntimeTest, RunningProvidersForwardToPublishedRuntime) {
   EXPECT_EQ(managed.AiStatus().state, "forwarded");
   EXPECT_EQ(managed.AiRunnerStatuses().front().model_id, "forwarded");
   EXPECT_TRUE(managed.RestartAi().ok());
-  EXPECT_EQ(managed.Snapshot("forwarded")->front(), 9U);
+  EXPECT_EQ(static_cast<unsigned>(managed.Snapshot("forwarded")->front()),
+            9U);
   EXPECT_EQ(managed.LiveStatus().state, "forwarded");
   const auto opened = managed.OpenLiveStream("forwarded");
   ASSERT_FALSE(opened.ok());

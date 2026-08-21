@@ -17,7 +17,7 @@ SnapshotTap::Clock::time_point SteadyNow() {
   return SnapshotTap::Clock::now();
 }
 
-std::optional<std::vector<std::uint8_t>> EncodeSnapshot(
+std::optional<JpegBytes> EncodeSnapshot(
     std::optional<FrameLease> latest,
     std::string_view camera_id) {
   if (!latest.has_value() || !latest->valid()) {
@@ -159,13 +159,13 @@ bool SnapshotTap::HasFreshFrame(
   return latest.has_value() && latest->valid();
 }
 
-std::optional<std::vector<std::uint8_t>> BuildLatestSnapshotJpeg(
+std::optional<JpegBytes> BuildLatestSnapshotJpeg(
     const SnapshotTap& tap,
     std::string_view camera_id) {
   return EncodeSnapshot(tap.Latest(), camera_id);
 }
 
-std::optional<std::vector<std::uint8_t>> BuildLatestSnapshotJpeg(
+std::optional<JpegBytes> BuildLatestSnapshotJpeg(
     const SnapshotTap& tap,
     std::string_view camera_id,
     std::chrono::milliseconds maximum_age) {

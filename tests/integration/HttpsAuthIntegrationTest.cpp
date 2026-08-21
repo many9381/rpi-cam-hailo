@@ -3379,8 +3379,8 @@ void RunViewerOwnPasswordLifecycleScenario(
     return camera_firmware::common::Result<void>::Ok();
   };
   args.snapshot_callback = [](const std::string&) {
-    return std::optional<std::vector<std::uint8_t>>{
-        std::vector<std::uint8_t>{0xffU, 0xd8U, 0xffU, 0xd9U}};
+    return std::optional<camera_firmware::media::JpegBytes>{
+        std::string("\xff\xd8\xff\xd9", 4U)};
   };
   args.secure_stream_diagnostics_provider = [] {
     return camera_firmware::service::SecureStreamDiagnostics{};
@@ -6998,8 +6998,8 @@ TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   };
   args.snapshot_callback = [&](const std::string&) {
     snapshot_calls.fetch_add(1);
-    return std::optional<std::vector<std::uint8_t>>{
-        std::vector<std::uint8_t>{0xffU, 0xd8U, 0xffU, 0xd9U}};
+    return std::optional<camera_firmware::media::JpegBytes>{
+        std::string("\xff\xd8\xff\xd9", 4U)};
   };
   args.detection_snapshot_provider = [&] {
     detection_snapshot_calls.fetch_add(1);

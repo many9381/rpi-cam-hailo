@@ -6,6 +6,8 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+
+#include "camera_firmware/media/JpegEncoder.hpp"
 #include <vector>
 
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
@@ -61,7 +63,7 @@ class ManagedFirmwareRuntime final {
   [[nodiscard]] ai::AiRuntimeStatus AiStatus() const;
   [[nodiscard]] std::vector<ai::AiModelRunnerStatus> AiRunnerStatuses() const;
   [[nodiscard]] common::Result<void> RestartAi();
-  [[nodiscard]] std::optional<std::vector<std::uint8_t>> Snapshot(
+  [[nodiscard]] std::optional<media::JpegBytes> Snapshot(
       std::string_view camera_id) const;
   [[nodiscard]] media::FragmentedMp4HubStatus LiveStatus() const;
   [[nodiscard]] common::Result<media::FragmentRing::Reader> OpenLiveStream(
