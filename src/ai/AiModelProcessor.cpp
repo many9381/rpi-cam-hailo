@@ -31,6 +31,32 @@ struct ModelInputGeometry {
   std::uint32_t y_offset{0};
 };
 
+// Reads the inference output tensor in place. The Hailo backend page-aligns
+// its output buffers, so the steady state is a straight reinterpret of the
+// view with no copy; a float-misaligned view (possible for buffers we did
+// not allocate) falls back to copying once so decoding stays correct.
+class TensorView {
+ public:
+  TensorView(const std::uint8_t* bytes, std::size_t byte_count)
+      : count_(byte_count / sizeof(float)) {
+    if (reinterpret_cast<std::uintptr_t>(bytes) % alignof(float) == 0U) {
+      data_ = reinterpret_cast<const float*>(bytes);
+      return;
+    }
+    fallback_.resize(count_);
+    std::memcpy(fallback_.data(), bytes, byte_count);
+    data_ = fallback_.data();
+  }
+
+  [[nodiscard]] const float* data() const noexcept { return data_; }
+  [[nodiscard]] std::size_t size() const noexcept { return count_; }
+
+ private:
+  std::size_t count_{0};
+  const float* data_{nullptr};
+  std::vector<float> fallback_;
+};
+
 ModelInputGeometry BuildModelInputGeometry(
     const media::FrameHandle& source,
     const config::AiModelInputConfig& target) {
@@ -186,7 +212,7 @@ class DefaultModelProcessor final : public AiModelProcessor {
                                  " bytes is not float aligned");
       }
 
-      std::vector<float> tensor(output_view.size / sizeof(float));
+      const TensorView tensor(output_view.data, output_view.size);
       if ((tensor.size() % kYoloPoseRowFloatCount) != 0U) {
         throw std::runtime_error(
             "AI pose output size " + std::to_string(tensor.size()) +
@@ -194,7 +220,6 @@ class DefaultModelProcessor final : public AiModelProcessor {
             std::to_string(kYoloPoseRowFloatCount) +
             "-float YOLO pose row shape");
       }
-      std::memcpy(tensor.data(), output_view.data, output_view.size);
       event.result_state = "decoded";
       event.detections =
           ParseYoloPoseRows(tensor.data(),
@@ -225,8 +250,7 @@ class DefaultModelProcessor final : public AiModelProcessor {
           "AI object detection output size does not match YOLO NMS shape");
     }
 
-    std::vector<float> tensor(output_view.size / sizeof(float));
-    std::memcpy(tensor.data(), output_view.data, output_view.size);
+    const TensorView tensor(output_view.data, output_view.size);
     event.result_state = "decoded";
     event.detections =
         ParseYoloHailoNms(tensor.data(),
