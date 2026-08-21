@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,9 @@ struct EncodedAccessUnit {
   std::uint64_t sequence{0};
   std::chrono::nanoseconds timestamp{0};
   bool is_key_frame{false};
-  std::vector<std::uint8_t> bytes;
+  // Immutable, refcounted payload: every ring reader and every downstream
+  // consumer (fMP4 mux, RTSP feed) shares one allocation per access unit.
+  std::shared_ptr<const std::vector<std::uint8_t>> bytes;
 };
 
 }  // namespace camera_firmware::media

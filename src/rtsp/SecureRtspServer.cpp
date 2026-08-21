@@ -386,19 +386,26 @@ GType SecureRtspMediaGType() { return cf_secure_rtsp_media_get_type(); }
 void FeedNeedData(GstAppSrc* appsrc, guint, gpointer user_data) {
   auto* state = static_cast<MediaFeedState*>(user_data);
   auto access_unit = state->reader.WaitNext(std::chrono::milliseconds(20));
-  if (!access_unit.has_value() || access_unit->bytes.empty()) {
+  if (!access_unit.has_value() || access_unit->bytes == nullptr ||
+      access_unit->bytes->empty()) {
     return;
   }
 
-  GstBuffer* buffer =
-      gst_buffer_new_allocate(nullptr, access_unit->bytes.size(), nullptr);
-  GstMapInfo map{};
-  if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
-    gst_buffer_unref(buffer);
+  // Zero-copy handoff: borrow the refcounted access-unit payload; the
+  // destroy-notify releases the reference when GStreamer is done with it.
+  auto* keepalive = new std::shared_ptr<const std::vector<std::uint8_t>>(
+      access_unit->bytes);
+  GstBuffer* buffer = gst_buffer_new_wrapped_full(
+      GST_MEMORY_FLAG_READONLY,
+      const_cast<std::uint8_t*>((*keepalive)->data()), (*keepalive)->size(),
+      0U, (*keepalive)->size(), keepalive, [](gpointer pointer) {
+        delete static_cast<
+            std::shared_ptr<const std::vector<std::uint8_t>>*>(pointer);
+      });
+  if (buffer == nullptr) {
+    delete keepalive;
     return;
   }
-  std::copy(access_unit->bytes.begin(), access_unit->bytes.end(), map.data);
-  gst_buffer_unmap(buffer, &map);
 
   GST_BUFFER_PTS(buffer) =
       static_cast<GstClockTime>(access_unit->timestamp.count());

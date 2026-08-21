@@ -339,7 +339,7 @@ struct FragmentedMp4Hub::Impl {
         std::lock_guard lock(mutex);
         ++input_access_units;
       }
-      if (access_unit.bytes.empty()) {
+      if (access_unit.bytes == nullptr || access_unit.bytes->empty()) {
         std::lock_guard lock(mutex);
         ++input_error_count;
         continue;
@@ -364,16 +364,22 @@ struct FragmentedMp4Hub::Impl {
       }
       last_pts = pts;
 
-      GstBuffer* buffer = gst_buffer_new_allocate(nullptr,
-                                                  access_unit.bytes.size(),
-                                                  nullptr);
-      if (buffer == nullptr ||
-          gst_buffer_fill(buffer, 0U, access_unit.bytes.data(),
-                          access_unit.bytes.size()) !=
-              access_unit.bytes.size()) {
-        if (buffer != nullptr) {
-          gst_buffer_unref(buffer);
-        }
+      // Zero-copy handoff: the GstBuffer borrows the refcounted access-unit
+      // payload; the destroy-notify drops the reference once GStreamer is
+      // done, so the ring may evict the entry without invalidating it.
+      auto* keepalive =
+          new std::shared_ptr<const std::vector<std::uint8_t>>(
+              access_unit.bytes);
+      GstBuffer* buffer = gst_buffer_new_wrapped_full(
+          GST_MEMORY_FLAG_READONLY,
+          const_cast<std::uint8_t*>((*keepalive)->data()),
+          (*keepalive)->size(), 0U, (*keepalive)->size(), keepalive,
+          [](gpointer pointer) {
+            delete static_cast<
+                std::shared_ptr<const std::vector<std::uint8_t>>*>(pointer);
+          });
+      if (buffer == nullptr) {
+        delete keepalive;
         Fail("E_FMP4_BUFFER", "failed to allocate fragmented MP4 input");
         break;
       }

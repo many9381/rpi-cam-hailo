@@ -791,7 +791,10 @@ class LiveSecureServer {
                                start_error);
     }
     url_ = "rtsps://127.0.0.1:" + std::to_string(port_) + config_.mount;
-    producer_ = std::thread([this, key_frame = EncodeTestKeyFrame()] {
+    producer_ = std::thread([this,
+                             key_frame = std::make_shared<
+                                 const std::vector<std::uint8_t>>(
+                                 EncodeTestKeyFrame())] {
       std::uint64_t sequence = 0U;
       while (!stop_producer_.load(std::memory_order_acquire)) {
         camera_firmware::media::EncodedAccessUnit access_unit;

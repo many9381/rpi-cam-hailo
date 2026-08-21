@@ -89,10 +89,13 @@ std::vector<media::EncodedAccessUnit> EncodeAnnexBFrames(
     access_unit.timestamp =
         std::chrono::nanoseconds((1000000000LL * frame) / fps);
     access_unit.is_key_frame = output.b_keyframe != 0;
+    std::vector<std::uint8_t> payload;
     for (int index = 0; index < nal_count; ++index) {
-      access_unit.bytes.insert(access_unit.bytes.end(), nals[index].p_payload,
-                               nals[index].p_payload + nals[index].i_payload);
+      payload.insert(payload.end(), nals[index].p_payload,
+                     nals[index].p_payload + nals[index].i_payload);
     }
+    access_unit.bytes =
+        std::make_shared<const std::vector<std::uint8_t>>(std::move(payload));
     access_units.push_back(std::move(access_unit));
   }
   x264_picture_clean(&input);

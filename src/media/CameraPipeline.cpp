@@ -681,7 +681,8 @@ struct CameraPipeline::Impl {
     }
 
     auto encoded = EncodeBuffer(*main_buffer, main_frame.value());
-    if (encoded.ok() && !encoded.value().bytes.empty()) {
+    if (encoded.ok() && encoded.value().bytes != nullptr &&
+        !encoded.value().bytes->empty()) {
       ++encoded_frames;
       encoded_rate.Record(frame_timestamp);
       encoded_ring.Publish(std::move(encoded).value());
@@ -873,7 +874,8 @@ struct CameraPipeline::Impl {
     access_unit.sequence = frame.sequence;
     access_unit.timestamp = frame.timestamp;
     access_unit.is_key_frame = picture_out.b_keyframe != 0;
-    access_unit.bytes = CopyNalPayloads(nals, nal_count);
+    access_unit.bytes = std::make_shared<const std::vector<std::uint8_t>>(
+        CopyNalPayloads(nals, nal_count));
     return Result<EncodedAccessUnit>::Ok(std::move(access_unit));
   }
 
