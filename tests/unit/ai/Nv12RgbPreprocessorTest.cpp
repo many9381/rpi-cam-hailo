@@ -259,6 +259,64 @@ TEST(Nv12RgbPreprocessorTest, RejectsUnsupportedFrameFormat) {
   EXPECT_EQ(converted.error().code, "E_AI_PREPROCESS");
 }
 
+TEST(Nv12RgbPreprocessorTest, ConvertIntoReusesCanvasAcrossFrames) {
+  constexpr std::uint32_t kWidth = 8U;
+  constexpr std::uint32_t kHeight = 4U;
+  const auto first_bytes = PatternedBgrBytes(0U, kWidth, kHeight, kWidth * 3U);
+  std::vector<std::uint8_t> second_bytes = first_bytes;
+  for (auto& byte : second_bytes) {
+    byte = static_cast<std::uint8_t>(~byte);
+  }
+
+  Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
+  camera_firmware::ai::ModelInputBuffer canvas;
+  ASSERT_TRUE(preprocessor.ConvertInto(
+      MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U, first_bytes),
+      canvas).ok());
+  const std::uint8_t* storage = canvas.bytes.data();
+
+  ASSERT_TRUE(preprocessor.ConvertInto(
+      MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U, second_bytes),
+      canvas).ok());
+
+  EXPECT_EQ(canvas.bytes.data(), storage);  // storage reused, not reallocated
+  EXPECT_TRUE(RowEquals(canvas.bytes, 0, 8, 114U));
+  EXPECT_TRUE(RowEquals(canvas.bytes, 7, 8, 114U));
+  for (std::uint32_t row = 0; row < kHeight; ++row) {
+    const auto* source_row =
+        second_bytes.data() + static_cast<std::size_t>(row) * kWidth * 3U;
+    const auto* target_row = canvas.bytes.data() +
+        (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
+    EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
+        << "row " << row;
+  }
+}
+
+TEST(Nv12RgbPreprocessorTest, ConvertIntoRepadsWhenGeometryChanges) {
+  // 8x4 (top/bottom bands) then 4x8 (left/right bands) through the SAME
+  // canvas: the old content columns must be repainted to padding, not leak
+  // the previous frame's pixels.
+  const auto landscape = PatternedBgrBytes(0U, 8U, 4U, 24U);
+  const auto portrait = PatternedBgrBytes(0U, 4U, 8U, 12U);
+
+  Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
+  camera_firmware::ai::ModelInputBuffer canvas;
+  ASSERT_TRUE(preprocessor.ConvertInto(
+      MakeBgr888Lease(8U, 4U, 24U, 0U, landscape), canvas).ok());
+  ASSERT_TRUE(preprocessor.ConvertInto(
+      MakeBgr888Lease(4U, 8U, 12U, 0U, portrait), canvas).ok());
+
+  // Portrait letterbox: columns 0-1 and 6-7 are padding in every row.
+  for (std::uint32_t row = 0; row < 8U; ++row) {
+    const std::size_t row_start = static_cast<std::size_t>(row) * 8U * 3U;
+    EXPECT_TRUE(RowEquals(canvas.bytes, row_start, row_start + 2U * 3U, 114U))
+        << "left pad, row " << row;
+    EXPECT_TRUE(RowEquals(canvas.bytes, row_start + 6U * 3U,
+                          row_start + 8U * 3U, 114U))
+        << "right pad, row " << row;
+  }
+}
+
 TEST(Nv12RgbPreprocessorTest, LetterboxesWithBilinearRgbAnd114Padding) {
   Nv12RgbPreprocessor preprocessor(4, 4, true, 114U);
   auto converted = preprocessor.Convert(GrayNv12Lease(8, 4));

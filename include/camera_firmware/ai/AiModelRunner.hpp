@@ -9,6 +9,7 @@
 #include "camera_firmware/ai/AiBackend.hpp"
 #include "camera_firmware/ai/AiModelProcessor.hpp"
 #include "camera_firmware/ai/DetectionBus.hpp"
+#include "camera_firmware/ai/ModelInputBufferPool.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/FrameLease.hpp"
@@ -69,6 +70,7 @@ class AiModelRunner {
   DetectionBus::Publisher detection_publisher_;
   SubmissionResolvedObserver submission_resolved_observer_;
   std::shared_ptr<AiModelProcessor> processor_;
+  std::shared_ptr<ModelInputBufferPool> canvas_pool_;
   std::shared_ptr<SharedState> state_;
   std::thread worker_;
 };

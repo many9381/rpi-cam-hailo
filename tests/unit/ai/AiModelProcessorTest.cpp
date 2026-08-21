@@ -18,6 +18,22 @@
 
 namespace {
 
+// Adapter for the canvas-based Preprocess signature: most tests only care
+// about the produced bytes, not the recycling contract.
+camera_firmware::common::Result<camera_firmware::ai::ModelInputBuffer>
+PreprocessToBuffer(camera_firmware::ai::AiModelProcessor& processor,
+                   const camera_firmware::media::FrameLease& lease) {
+  camera_firmware::ai::ModelInputBuffer canvas;
+  auto converted = processor.Preprocess(lease, canvas);
+  if (!converted.ok()) {
+    return camera_firmware::common::Result<
+        camera_firmware::ai::ModelInputBuffer>::Err(converted.error());
+  }
+  return camera_firmware::common::Result<
+      camera_firmware::ai::ModelInputBuffer>::Ok(std::move(canvas));
+}
+
+
 camera_firmware::config::AiModelConfig ProcessorModel(std::string id,
                                                       std::string kind) {
   camera_firmware::config::AiModelConfig model;
@@ -174,7 +190,7 @@ TEST(AiModelProcessorTest, PreprocessBuildsRgb8InputSizedForModel) {
       ProcessorModel("objects", "object_detection"));
   ASSERT_TRUE(processor.ok()) << processor.error().message;
 
-  auto input = processor.value()->Preprocess(Nv12Lease());
+  auto input = PreprocessToBuffer(*processor.value(), Nv12Lease());
 
   ASSERT_TRUE(input.ok()) << input.error().message;
   EXPECT_EQ(input.value().bytes.size(), 4U * 2U * 3U);
@@ -197,7 +213,7 @@ TEST(AiModelProcessorTest, PreprocessMapsNv12PlanesWithBilinearRgbResize) {
   };
   std::vector<std::uint8_t> uv_plane(8U * 2U, 128U);
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       Nv12Lease(4, std::move(y_plane), std::move(uv_plane)));
 
   ASSERT_TRUE(input.ok()) << input.error().message;
@@ -220,7 +236,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsNonNv12Frame) {
   handle.height = 4;
   handle.sequence = 2;
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
@@ -237,7 +253,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsInvalidPlaneFd) {
   handle.planes[0].dmabuf_fd = -1;
   handle.planes[1].dmabuf_fd = -1;
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
@@ -272,7 +288,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsOddNv12Dimensions) {
   handle.planes[1].length = 10;
   handle.planes[1].offset = handle.planes[0].length;
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [fd] {
         if (fd >= 0) {
           (void)::close(fd);
@@ -292,7 +308,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsPlaneOffsetLengthOverflow) {
   camera_firmware::media::FrameHandle handle = lease.handle();
   handle.planes[0].offset = std::numeric_limits<std::size_t>::max();
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
@@ -323,7 +339,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsPlaneRangeBeyondBackingFile) {
   handle.planes[1].length = 16;
   handle.planes[1].offset = handle.planes[0].length;
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [fd] {
         if (fd >= 0) {
           (void)::close(fd);
@@ -341,7 +357,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsOversizedModelInput) {
   auto processor = camera_firmware::ai::CreateAiModelProcessor(model);
   ASSERT_TRUE(processor.ok()) << processor.error().message;
 
-  auto input = processor.value()->Preprocess(Nv12Lease(9));
+  auto input = PreprocessToBuffer(*processor.value(), Nv12Lease(9));
 
   ASSERT_FALSE(input.ok());
   EXPECT_EQ(input.error().code, "E_AI_PREPROCESS");
@@ -364,7 +380,7 @@ TEST(AiModelProcessorTest, PreprocessRejectsShortNv12Planes) {
   handle.planes[1].stride = 8;
   handle.planes[1].length = 16;
 
-  auto input = processor.value()->Preprocess(
+  auto input = PreprocessToBuffer(*processor.value(), 
       camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
