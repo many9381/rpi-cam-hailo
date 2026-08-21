@@ -148,7 +148,7 @@ index 0d55148..57cdbfd 100644
      mutable std::shared_ptr<Json::Value> jsonPtr_;
  
 diff --git a/lib/src/HttpServer.cc b/lib/src/HttpServer.cc
-index 2724138..7698202 100644
+index 2724138..fda65ea 100644
 --- a/lib/src/HttpServer.cc
 +++ b/lib/src/HttpServer.cc
 @@ -553,6 +553,52 @@ static std::size_t chunkingCallback(
@@ -175,7 +175,7 @@ index 2724138..7698202 100644
 +        chunk.append(header, headerLength);
 +        chunk.append(data, len);
 +        chunk.append("\r\n", 2);
-+        if (!stream_->send(chunk))
++        if (!stream_->send(std::move(chunk)))
 +        {
 +            stream_.reset();
 +            return false;
