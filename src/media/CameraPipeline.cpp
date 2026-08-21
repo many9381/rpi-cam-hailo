@@ -400,6 +400,8 @@ struct CameraPipeline::Impl {
     status.encoded_frames = encoded_frames;
     status.capture_error_count = capture_error_count;
     status.encode_error_count = encode_error_count;
+    status.last_encode_ms = last_encode_ms;
+    status.encoded_ring_overruns = encoded_ring.overrun_total();
     status.ai_source = ai_uses_lores
         ? (ai_lores_rgb ? "lores-rgb" : "lores")
         : "main-fallback";
@@ -680,11 +682,17 @@ struct CameraPipeline::Impl {
       return;
     }
 
+    const auto encode_started = std::chrono::steady_clock::now();
     auto encoded = EncodeBuffer(*main_buffer, main_frame.value());
+    const auto encode_finished = std::chrono::steady_clock::now();
+    last_encode_ms = std::chrono::duration<double, std::milli>(
+        encode_finished - encode_started).count();
     if (encoded.ok() && encoded.value().bytes != nullptr &&
         !encoded.value().bytes->empty()) {
       ++encoded_frames;
-      encoded_rate.Record(frame_timestamp);
+      // Completion time, not the sensor timestamp: this is what makes
+      // encoded_fps drop when the encoder falls behind the capture rate.
+      encoded_rate.Record(encode_finished.time_since_epoch());
       encoded_ring.Publish(std::move(encoded).value());
     } else if (!encoded.ok()) {
       ++encode_error_count;
@@ -901,6 +909,7 @@ struct CameraPipeline::Impl {
   unsigned int lores_height{0U};
   bool ai_uses_lores{false};
   bool ai_lores_rgb{false};
+  double last_encode_ms{0.0};
   std::vector<std::unique_ptr<libcamera::Request>> requests;
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
   std::shared_ptr<RequeueContext> requeue_context;
