@@ -224,6 +224,8 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
     service_status.encoded_frames = status.encoded_frames;
     service_status.capture_error_count = status.capture_error_count;
     service_status.encode_error_count = status.encode_error_count;
+    service_status.last_encode_ms = status.last_encode_ms;
+    service_status.encoded_ring_overruns = status.encoded_ring_overruns;
     result.push_back(std::move(service_status));
   }
   return result;

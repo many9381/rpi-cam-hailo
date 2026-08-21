@@ -192,6 +192,8 @@ TEST(ServiceResponseTest, CameraStatusJsonIncludesCaptureDiagnostics) {
   status.encoded_frames = 998U;
   status.capture_error_count = 2U;
   status.encode_error_count = 1U;
+  status.last_encode_ms = 7.25;
+  status.encoded_ring_overruns = 3U;
 
   const auto json =
       camera_firmware::service::BuildCameraStatusJson(status);
@@ -208,6 +210,8 @@ TEST(ServiceResponseTest, CameraStatusJsonIncludesCaptureDiagnostics) {
   EXPECT_EQ(json["encoded_frames"].asUInt64(), 998U);
   EXPECT_EQ(json["capture_error_count"].asUInt64(), 2U);
   EXPECT_EQ(json["encode_error_count"].asUInt64(), 1U);
+  EXPECT_DOUBLE_EQ(json["last_encode_ms"].asDouble(), 7.25);
+  EXPECT_EQ(json["encoded_ring_overruns"].asUInt64(), 3U);
 }
 
 TEST(ServiceResponseTest, StreamJsonUsesConfiguredPublicHost) {

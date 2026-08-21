@@ -29,6 +29,10 @@ struct CameraPipelineStatus {
   std::uint64_t encoded_frames{0U};
   std::uint64_t capture_error_count{0U};
   std::uint64_t encode_error_count{0U};
+  // Wall-clock cost of the most recent x264 encode call and the number of
+  // encoded access units dropped from the ring before any reader saw them.
+  double last_encode_ms{0.0};
+  std::uint64_t encoded_ring_overruns{0U};
   std::string ai_source{"main-fallback"};
 };
 

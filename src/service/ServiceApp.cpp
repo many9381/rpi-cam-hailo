@@ -1130,6 +1130,8 @@ Json::Value BuildCameraStatusJsonValue(const CameraStatus& camera) {
   json["encoded_frames"] = Json::UInt64(camera.encoded_frames);
   json["capture_error_count"] = Json::UInt64(camera.capture_error_count);
   json["encode_error_count"] = Json::UInt64(camera.encode_error_count);
+  json["last_encode_ms"] = camera.last_encode_ms;
+  json["encoded_ring_overruns"] = Json::UInt64(camera.encoded_ring_overruns);
   return json;
 }
 
