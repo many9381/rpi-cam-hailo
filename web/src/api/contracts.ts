@@ -50,6 +50,21 @@ export function parseHealth(value: unknown): HealthStatus {
   return { status: value.status };
 }
 
+// Reads an optional non-negative metric: absent stays undefined, present must
+// be a valid non-negative number (integer for counters).
+function optionalNonnegative(
+  value: unknown, integer: boolean, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const valid = integer ? isNonnegativeInteger(value)
+    : isFiniteNumber(value) && value >= 0;
+  if (!valid) {
+    return invalid(label);
+  }
+  return value as number;
+}
+
 function parseCamera(value: unknown): CameraStatus {
   if (!isRecord(value) || !isString(value.id) || !isString(value.state) ||
       typeof value.snapshot_available !== 'boolean') {
@@ -59,6 +74,14 @@ function parseCamera(value: unknown): CameraStatus {
     id: value.id,
     state: value.state,
     snapshot_available: value.snapshot_available,
+    capture_fps: optionalNonnegative(
+      value.capture_fps, false, 'Invalid camera response'),
+    encoded_fps: optionalNonnegative(
+      value.encoded_fps, false, 'Invalid camera response'),
+    last_encode_ms: optionalNonnegative(
+      value.last_encode_ms, false, 'Invalid camera response'),
+    encoded_ring_overruns: optionalNonnegative(
+      value.encoded_ring_overruns, true, 'Invalid camera response'),
   };
 }
 

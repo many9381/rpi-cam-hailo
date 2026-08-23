@@ -26,6 +26,37 @@ describe('StatusPanel', () => {
       .not.toBeInTheDocument();
   });
 
+  it('shows encoder health metrics when the camera reports them', () => {
+    render(<StatusPanel
+      health={{ status: 'ok' }}
+      cameras={[{
+        id: 'cam-a', state: 'streaming', snapshot_available: true,
+        capture_fps: 49.8, encoded_fps: 24.9, last_encode_ms: 7.2,
+        encoded_ring_overruns: 3,
+      }]}
+      selectedCameraId="cam-a"
+      onSelectCamera={() => undefined}
+      onRestartRuntime={async () => undefined}
+    />);
+
+    // encoded_fps well below capture_fps signals encoder backlog.
+    expect(screen.getByText(/capture 49\.8/i)).toBeVisible();
+    expect(screen.getByText(/encode 24\.9/i)).toBeVisible();
+    expect(screen.getByText(/7\.2\s*ms/i)).toBeVisible();
+    expect(screen.getByText(/3 dropped/i)).toBeVisible();
+  });
+
+  it('omits the metrics line when the camera reports none', () => {
+    render(<StatusPanel
+      health={{ status: 'ok' }}
+      cameras={[{ id: 'cam-a', state: 'streaming', snapshot_available: true }]}
+      selectedCameraId="cam-a"
+      onSelectCamera={() => undefined}
+      onRestartRuntime={async () => undefined}
+    />);
+    expect(screen.queryByText(/capture/i)).not.toBeInTheDocument();
+  });
+
   it('offers one bounded runtime retry for an error camera', async () => {
     const user = userEvent.setup();
     const restart = vi.fn(() => new Promise<void>(() => {}));

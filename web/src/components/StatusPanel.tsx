@@ -77,6 +77,16 @@ export function StatusPanel({ health, cameras, selectedCameraId,
               <span>{camera.state}</span>
               <small>{camera.snapshot_available
                 ? 'Snapshot available' : 'Snapshot unavailable'}</small>
+              {camera.capture_fps !== undefined && (
+                <small className="camera-metrics">
+                  {`capture ${camera.capture_fps.toFixed(1)} / `}
+                  {`encode ${(camera.encoded_fps ?? 0).toFixed(1)} fps`}
+                  {camera.last_encode_ms !== undefined &&
+                    ` · ${camera.last_encode_ms.toFixed(1)} ms`}
+                  {camera.encoded_ring_overruns !== undefined &&
+                    ` · ${camera.encoded_ring_overruns} dropped`}
+                </small>
+              )}
             </span>
           </label>
         ))}

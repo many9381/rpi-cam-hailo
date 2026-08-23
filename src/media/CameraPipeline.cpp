@@ -149,12 +149,17 @@ struct CameraPipeline::Impl {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "only camera.encoder.backend=x264 is supported"});
     }
-    if (config.camera.encoder.bitrate_kbps == 0U ||
-        config.camera.encoder.gop == 0U ||
+    if (config.camera.encoder.gop == 0U ||
         config.camera.encoder.preset.empty()) {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG",
            "camera encoder bitrate, gop, and preset must be configured"});
+    }
+    if (config.camera.encoder.bitrate_kbps < config::kMinEncoderBitrateKbps ||
+        config.camera.encoder.bitrate_kbps > config::kMaxEncoderBitrateKbps) {
+      return Result<void>::Err(
+          {"E_CAMERA_CONFIG",
+           "camera.encoder.bitrate_kbps must be between 500 and 20000"});
     }
     if (config.secure_rtsp.mount.empty() || config.secure_rtsp.mount[0] != '/') {
       return Result<void>::Err(

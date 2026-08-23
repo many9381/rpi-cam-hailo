@@ -38,6 +38,10 @@ export interface CameraStatus {
   id: string;
   state: string;
   snapshot_available: boolean;
+  capture_fps?: number;
+  encoded_fps?: number;
+  last_encode_ms?: number;
+  encoded_ring_overruns?: number;
 }
 
 export interface MonitoringCamera extends CameraStatus {
