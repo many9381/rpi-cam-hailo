@@ -770,34 +770,32 @@ TEST_F(AuthServiceTest, DefaultStateLoginIsClosedWithoutAnInitialAccount) {
             0);
 }
 
-TEST_F(AuthServiceTest, InitialAccountLockoutMatchesTheOperationalPath) {
+TEST_F(AuthServiceTest, InitialAccountDoesNotLockInDefaultState) {
   auto service = OpenDefaultStateService();
 
-  for (int attempt = 1; attempt <= 4; ++attempt) {
+  // The initial credential is public on an uninitialized device, so an account
+  // lock protects no secret -- it only lets a reachable peer burn the lock and
+  // deny setup. Bad attempts must therefore never count toward a lock here.
+  for (int attempt = 1; attempt <= 10; ++attempt) {
     ExpectAuthenticationFailure(
         service->Login(Login("InitialAccount", "BadSecret!9", "192.0.2.55")));
     EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
                        "SELECT failed_login_count FROM users;"),
-              attempt);
-    EXPECT_TRUE(HighSeverityLogs().empty());
+              0);
   }
 
-  ExpectAuthenticationFailure(
-      service->Login(Login("InitialAccount", "BadSecret!9", "192.0.2.55")));
-
   EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
-                     "SELECT failed_login_count FROM users;"),
-            5);
+                     "SELECT COUNT(*) FROM users WHERE lock_until_seconds "
+                     "IS NOT NULL;"),
+            0);
   EXPECT_EQ(QueryInt(DefaultStateDatabasePath(),
                      "SELECT COUNT(*) FROM audit_events WHERE event_type = "
                      "'authentication_limit_reached';"),
-            1);
-  ASSERT_TRUE(WaitForHighSeverityLogCount(1U));
-  EXPECT_EQ(HighSeverityLogs().front(),
-            "authentication_limit_reached|192.0.2.55");
-  ExpectAuthenticationFailure(
-      service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55")));
-  now_seconds_ += 300;
+            0);
+  EXPECT_TRUE(HighSeverityLogs().empty());
+
+  // The correct password signs in immediately -- no lock, no wait -- even after
+  // a flood of failures that would have locked an operational account.
   EXPECT_TRUE(
       service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"))
           .ok());

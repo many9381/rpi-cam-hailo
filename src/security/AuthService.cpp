@@ -871,9 +871,16 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       }
     }
     if (!accepted) {
+      // The initial account's credential is public on an uninitialized device
+      // (setup/status serves it), so an account lock guards no secret -- it
+      // would only let a reachable peer burn the five-attempt lock and deny
+      // setup. Failures against it therefore never count toward a lock; the
+      // operational path is unchanged. Default-state login flooding is bounded
+      // by the request-rate limit instead of the lock.
       const bool counts_as_failure =
           peer_authorized && enabled && user_role.has_value() &&
-          !lock_active && !password_matches && immutable_context_current;
+          !lock_active && !password_matches && immutable_context_current &&
+          !initial_account;
       if (counts_as_failure) {
         const bool prior_lock_expired =
             context.value().user->lock_until_seconds.has_value() &&
