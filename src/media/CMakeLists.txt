@@ -1,6 +1,7 @@
 add_library(camera_firmware_media STATIC
     CameraPipeline.cpp
     CameraTiming.cpp
+    EncodeMailbox.cpp
     EncodedRing.cpp
     FragmentRing.cpp
     FragmentedMp4Hub.cpp

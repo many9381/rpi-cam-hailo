@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/media/CameraTiming.hpp"
+#include "camera_firmware/media/EncodeMailbox.hpp"
 #include "camera_firmware/media/LoresGeometry.hpp"
 
 namespace camera_firmware::media {
@@ -33,7 +35,12 @@ namespace {
 using camera_firmware::common::Logger;
 using camera_firmware::common::Result;
 
-constexpr unsigned int kDefaultBufferCount = 4;
+// Six, not four: the encoder now runs on its own thread, so a captured frame
+// can be pinned by the encoder (one in flight) and the latest-wins mailbox
+// (one queued) at the same time as the snapshot and AI-pull leases. Four
+// buffers leave no free frame for the sensor under that overlap; six restore
+// headroom so capture holds the sensor rate while the encoder falls behind.
+constexpr unsigned int kDefaultBufferCount = 6;
 
 struct X264EncoderDeleter {
   void operator()(x264_t* encoder) const noexcept {
@@ -299,6 +306,9 @@ struct CameraPipeline::Impl {
       state = "running";
     }
 
+    encode_mailbox.Reopen();
+    encoder_thread = std::thread([this] { RunEncoderLoop(); });
+
     for (auto& request : requests) {
       if (camera->queueRequest(request.get()) != 0) {
         Stop();
@@ -349,6 +359,15 @@ struct CameraPipeline::Impl {
       if (should_stop_camera) {
         (void)camera_to_stop->stop();
       }
+    }
+
+    // Stop the encoder thread before tearing down the resources it reads
+    // (mapped_buffers, encoder). Close()/join() run off the pipeline mutex so
+    // the thread can take that mutex to flush its final metrics without
+    // deadlocking the join.
+    encode_mailbox.Close();
+    if (encoder_thread.joinable()) {
+      encoder_thread.join();
     }
 
     {
@@ -693,25 +712,6 @@ struct CameraPipeline::Impl {
       return;
     }
 
-    const auto encode_started = std::chrono::steady_clock::now();
-    auto encoded = EncodeBuffer(*main_buffer, main_frame.value());
-    const auto encode_finished = std::chrono::steady_clock::now();
-    last_encode_ms = std::chrono::duration<double, std::milli>(
-        encode_finished - encode_started).count();
-    if (encoded.ok() && encoded.value().bytes != nullptr &&
-        !encoded.value().bytes->empty()) {
-      ++encoded_frames;
-      // Completion time, not the sensor timestamp: this is what makes
-      // encoded_fps drop when the encoder falls behind the capture rate.
-      encoded_rate.Record(encode_finished.time_since_epoch());
-      encoded_ring.Publish(std::move(encoded).value());
-    } else if (!encoded.ok()) {
-      ++encode_error_count;
-      Logger::instance().log(Logger::Level::kError, encoded.error().message);
-    } else {
-      ++encode_error_count;
-    }
-
     std::weak_ptr<RequeueContext> weak_context = requeue_context;
     // Owns nothing; its only job is to run the requeue when the last lease
     // that captured it drops. shared_ptr<void>(nullptr, deleter) is non-empty
@@ -724,6 +724,13 @@ struct CameraPipeline::Impl {
     FrameLease main_lease(std::move(main_frame).value(),
                           [requeue_guard] {});
     snapshot_tap.Publish(main_lease.CloneRef(), source_epoch);
+
+    // Hand the frame to the encoder thread instead of encoding inline: the
+    // capture callback returns without waiting on x264, so capture (and the
+    // AI pull) hold the sensor rate even when a frame is expensive to encode.
+    // Latest-wins, so a lagging encoder skips stale frames rather than pinning
+    // the pool. The lease keeps main_buffer alive until the encoder drops it.
+    encode_mailbox.Publish(EncodeJob{main_buffer, main_lease.CloneRef()});
 
     // Pull-on-ready: only lease an AI frame when inference is ready for one
     // (demand armed) AND the rate cap allows it. Both gates avoid pinning a
@@ -921,6 +928,42 @@ struct CameraPipeline::Impl {
     return Result<EncodedAccessUnit>::Ok(std::move(access_unit));
   }
 
+  // Dedicated encoder thread. Pulls the latest captured frame from the
+  // mailbox, encodes it, and publishes the access unit. EncodeBuffer reads
+  // mapped_buffers/encoder/stream_config, which are set up in Start() before
+  // this thread runs and torn down in Stop() only after it is joined, so it
+  // needs the pipeline mutex only to publish its metrics and the access unit.
+  void RunEncoderLoop() {
+    while (true) {
+      auto job = encode_mailbox.Take();
+      if (!job.has_value()) {
+        break;
+      }
+      const auto encode_started = std::chrono::steady_clock::now();
+      auto encoded = EncodeBuffer(*job->buffer, job->lease.handle());
+      const auto encode_finished = std::chrono::steady_clock::now();
+
+      std::scoped_lock lock(mutex);
+      last_encode_ms = std::chrono::duration<double, std::milli>(
+                           encode_finished - encode_started)
+                           .count();
+      if (encoded.ok() && encoded.value().bytes != nullptr &&
+          !encoded.value().bytes->empty()) {
+        ++encoded_frames;
+        // Completion time, not the sensor timestamp: this is what makes
+        // encoded_fps drop when the encoder falls behind the capture rate.
+        encoded_rate.Record(encode_finished.time_since_epoch());
+        encoded_ring.Publish(std::move(encoded).value());
+      } else if (!encoded.ok()) {
+        ++encode_error_count;
+        Logger::instance().log(Logger::Level::kError, encoded.error().message);
+      } else {
+        ++encode_error_count;
+      }
+      // job drops here, releasing its lease and requeuing the capture buffer.
+    }
+  }
+
   void SetStoppedState(const std::string& next_state) {
     std::scoped_lock lock(mutex);
     state = next_state;
@@ -950,6 +993,8 @@ struct CameraPipeline::Impl {
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
   std::shared_ptr<RequeueContext> requeue_context;
   X264Encoder encoder;
+  EncodeMailbox encode_mailbox;
+  std::thread encoder_thread;
   config::CameraConfig configured_camera;
   FrameRateEstimator capture_rate;
   FrameRateEstimator encoded_rate;
