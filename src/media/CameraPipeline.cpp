@@ -414,6 +414,13 @@ struct CameraPipeline::Impl {
   }
 
   Result<void> ConfigureCamera(const config::AppConfig& config) {
+    // AI rate cap: camera.ai.max_fps == 0 means unlimited (pull demand
+    // alone paces it). Otherwise cap the AI publish rate to that many fps.
+    ai_min_interval = config.camera.ai.max_fps > 0U
+        ? std::chrono::nanoseconds(std::chrono::seconds(1)) /
+              config.camera.ai.max_fps
+        : std::chrono::nanoseconds(0);
+    last_ai_publish = std::chrono::nanoseconds(0);
     const unsigned int model_width = ResolveAiLoresWidth(config);
     const LoresSize lores = ComputeLoresSize(configured_camera.video.width,
                                              configured_camera.video.height,
@@ -719,29 +726,52 @@ struct CameraPipeline::Impl {
                           [requeue_guard] {});
     snapshot_tap.Publish(main_lease.CloneRef(), source_epoch);
 
-    if (ai_uses_lores) {
-      libcamera::FrameBuffer* lores_buffer = request->findBuffer(lores_stream);
-      if (lores_buffer != nullptr &&
-          (lores_buffer->metadata().status ==
-               libcamera::FrameMetadata::FrameSuccess ||
-           lores_buffer->metadata().status ==
-               libcamera::FrameMetadata::FrameStartup)) {
-        auto lores_frame = ai_lores_rgb
-            ? BuildBgrFrameHandle(*lores_buffer, lores_width, lores_height,
-                                  lores_stream_config.stride)
-            : BuildFrameHandle(*lores_buffer, lores_width, lores_height,
-                               lores_stream_config.stride);
-        if (lores_frame.ok()) {
-          FrameLease lores_lease(std::move(lores_frame).value(),
-                                 [requeue_guard] {});
-          ai_frame_tap.PublishLatest(std::move(lores_lease));
+    // Pull-on-ready: only lease an AI frame when inference is ready for one
+    // (demand armed) AND the rate cap allows it. Both gates avoid pinning a
+    // buffer between inferences, so the capture pool is never starved.
+    if (WantsAiFrameNow(frame_timestamp)) {
+      if (ai_uses_lores) {
+        libcamera::FrameBuffer* lores_buffer = request->findBuffer(lores_stream);
+        if (lores_buffer != nullptr &&
+            (lores_buffer->metadata().status ==
+                 libcamera::FrameMetadata::FrameSuccess ||
+             lores_buffer->metadata().status ==
+                 libcamera::FrameMetadata::FrameStartup)) {
+          auto lores_frame = ai_lores_rgb
+              ? BuildBgrFrameHandle(*lores_buffer, lores_width, lores_height,
+                                    lores_stream_config.stride)
+              : BuildFrameHandle(*lores_buffer, lores_width, lores_height,
+                                 lores_stream_config.stride);
+          if (lores_frame.ok()) {
+            FrameLease lores_lease(std::move(lores_frame).value(),
+                                   [requeue_guard] {});
+            ai_frame_tap.PublishLatest(std::move(lores_lease));
+          }
         }
+        // A missing or failed lores buffer drops this AI frame only; the
+        // demand stays armed for the next capture.
+      } else {
+        ai_frame_tap.PublishLatest(main_lease.CloneRef());
       }
-      // A missing or failed lores buffer drops this AI frame only; latest-wins
-      // tolerates it and the main frame has already been encoded.
-    } else {
-      ai_frame_tap.PublishLatest(main_lease.CloneRef());
     }
+  }
+
+  // True when the AI consumer is ready for another frame (pull demand armed)
+  // and the configured AI rate cap permits publishing one now. Consumes the
+  // demand only when it also publishes, so a rate-limited skip leaves the
+  // demand armed for a later frame.
+  bool WantsAiFrameNow(std::chrono::nanoseconds frame_timestamp) {
+    if (ai_min_interval.count() > 0) {
+      const auto since_last = frame_timestamp - last_ai_publish;
+      if (last_ai_publish.count() != 0 && since_last < ai_min_interval) {
+        return false;
+      }
+    }
+    if (!ai_frame_tap.ConsumeDemand()) {
+      return false;
+    }
+    last_ai_publish = frame_timestamp;
+    return true;
   }
 
   // Packed single-plane RGB (libcamera BGR888: R,G,B byte order in memory).
@@ -914,6 +944,8 @@ struct CameraPipeline::Impl {
   unsigned int lores_height{0U};
   bool ai_uses_lores{false};
   bool ai_lores_rgb{false};
+  std::chrono::nanoseconds ai_min_interval{0};
+  std::chrono::nanoseconds last_ai_publish{0};
   double last_encode_ms{0.0};
   std::vector<std::unique_ptr<libcamera::Request>> requests;
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;

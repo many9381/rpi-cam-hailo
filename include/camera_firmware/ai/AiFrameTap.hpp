@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -45,6 +46,15 @@ class AiFrameTap {
   [[nodiscard]] std::optional<media::FrameLease> Latest() const;
   [[nodiscard]] Subscription Subscribe(Subscriber subscriber);
 
+  // Pull-on-ready demand signalling. The AI consumer calls RequestNext()
+  // when it is ready to infer another frame; the capture producer calls
+  // ConsumeDemand() and only builds+publishes a lores frame when it returns
+  // true, so a lores buffer is leased only while inference actually wants
+  // one -- never held across the idle gap between inferences. Starts armed
+  // so the first captured frame feeds inference immediately.
+  void RequestNext() noexcept;
+  [[nodiscard]] bool ConsumeDemand() noexcept;
+
  private:
   struct SharedState {
     mutable std::mutex mutex;
@@ -63,6 +73,7 @@ class AiFrameTap {
       media::FrameLease frame);
 
   std::shared_ptr<SharedState> shared_state_{std::make_shared<SharedState>()};
+  std::atomic<bool> wants_frame_{true};
 };
 
 }  // namespace camera_firmware::ai

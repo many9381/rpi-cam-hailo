@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -37,6 +38,9 @@ class AiRuntime {
 
   [[nodiscard]] common::Result<void> Start(const config::AppConfig& config);
   void Stop();
+  // Registers the pull-on-ready re-arm callback, applied to current and
+  // future runners; each fires it when it finishes an inference.
+  void SetReadyCallback(std::function<void()> on_ready);
   [[nodiscard]] common::Result<void> SubmitFrame(media::FrameLease frame);
   [[nodiscard]] AiRuntimeStatus Status() const;
   [[nodiscard]] std::vector<AiModelRunnerStatus> RunnerStatuses() const;
@@ -56,6 +60,7 @@ class AiRuntime {
   std::shared_ptr<AiBackend> backend_;
   std::unordered_map<std::string, ModelHandle> model_handles_;
   std::vector<std::shared_ptr<AiModelRunner>> runners_;
+  std::function<void()> ready_callback_;
   std::vector<std::string> redacted_model_paths_;
   AiRuntimeStatus status_;
 };

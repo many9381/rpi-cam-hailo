@@ -46,6 +46,13 @@ common::Result<void> AiFramePump::Start() {
         Run(state, runtime, interval);
       });
 
+  // Pull-on-ready: re-arm the tap's demand each time the runtime finishes
+  // an inference, so the capture side leases a lores buffer only when the
+  // runner is actually ready for the next frame.
+  runtime_.SetReadyCallback([&frame_tap = frame_tap_] {
+    frame_tap.RequestNext();
+  });
+
   std::weak_ptr<SharedState> weak_state = state_;
   subscription_ = frame_tap_.Subscribe(
       [weak_state](media::FrameLease frame) {
@@ -91,8 +98,12 @@ void AiFramePump::QueueFrame(const std::shared_ptr<SharedState>& state,
 
 void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
                       AiRuntime& runtime,
-                      std::chrono::milliseconds minimum_interval) {
-  auto next_allowed = std::chrono::steady_clock::now();
+                      std::chrono::milliseconds /*minimum_interval*/) {
+  // Pull-on-ready: the capture side only publishes a lores frame while the
+  // tap's demand is armed (re-armed on inference completion), and paces the
+  // AI rate itself, so the pump simply forwards each delivered frame to the
+  // runtime without holding it in a rate gate. Holding a frame here would
+  // pin its libcamera request and starve the capture buffer pool.
   while (true) {
     std::optional<media::FrameLease> frame;
     {
@@ -111,23 +122,7 @@ void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
       continue;
     }
 
-    if (minimum_interval.count() > 0) {
-      std::unique_lock lock(state->mutex);
-      state->changed.wait_until(lock, next_allowed,
-                                [&state] { return state->stopping; });
-      if (state->stopping) {
-        return;
-      }
-      // A newer frame may have arrived while gated -- take it
-      // (latest-wins).
-      if (state->pending_frame.has_value()) {
-        frame = std::move(state->pending_frame);
-        state->pending_frame.reset();
-      }
-    }
-
     (void)runtime.SubmitFrame(std::move(*frame));
-    next_allowed = std::chrono::steady_clock::now() + minimum_interval;
   }
 }
 

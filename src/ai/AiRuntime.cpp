@@ -162,12 +162,16 @@ common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
         continue;
       }
 
-      runners_.push_back(std::make_shared<AiModelRunner>(
+      auto runner = std::make_shared<AiModelRunner>(
           config.camera.id,
           *model,
           backend_.get(),
           handle_it->second,
-          detection_bus_));
+          detection_bus_);
+      if (ready_callback_) {
+        runner->SetReadyCallback(ready_callback_);
+      }
+      runners_.push_back(std::move(runner));
     }
   }
 
@@ -183,6 +187,18 @@ void AiRuntime::Stop() {
     resources = ReleaseResourcesLocked();
   }
   StopResources(std::move(resources));
+}
+
+void AiRuntime::SetReadyCallback(std::function<void()> on_ready) {
+  std::vector<std::shared_ptr<AiModelRunner>> runners;
+  {
+    std::lock_guard lock(mutex_);
+    ready_callback_ = std::move(on_ready);
+    runners = runners_;
+  }
+  for (const auto& runner : runners) {
+    runner->SetReadyCallback(ready_callback_);
+  }
 }
 
 AiRuntime::RuntimeResources AiRuntime::ReleaseResourcesLocked() {

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -20,6 +21,7 @@ struct AiModelRunner::SharedState {
   AiModelRunnerStatus status;
   std::uint64_t in_flight_callbacks{0};
   bool stopping{false};
+  std::function<void()> on_idle;
 };
 
 namespace {
@@ -160,6 +162,11 @@ common::Result<void> AiModelRunner::Submit(media::FrameLease frame) {
   return common::Result<void>::Ok();
 }
 
+void AiModelRunner::SetReadyCallback(std::function<void()> on_ready) {
+  std::lock_guard lock(state_->mutex);
+  state_->on_idle = std::move(on_ready);
+}
+
 void AiModelRunner::Stop() {
   {
     std::lock_guard lock(state_->mutex);
@@ -202,6 +209,22 @@ void AiModelRunner::Run() {
 
     if (frame.has_value()) {
       ProcessFrame(std::move(*frame));
+      // If ProcessFrame dropped the frame without submitting (backend
+      // unavailable, invalid frame, preprocess failure), no async
+      // completion will fire, so re-arm the pull demand here. When it did
+      // submit, in_flight_callbacks is non-zero and finish_submission
+      // re-arms on completion instead. A harmless double re-arm is possible
+      // if the async callback already completed -- RequestNext is idempotent.
+      std::function<void()> on_idle;
+      {
+        std::lock_guard lock(state_->mutex);
+        if (state_->in_flight_callbacks == 0U && state_->on_idle) {
+          on_idle = state_->on_idle;
+        }
+      }
+      if (on_idle) {
+        on_idle();
+      }
     }
   }
 }
@@ -251,13 +274,22 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
           }
           submission_state->finalized = true;
         }
+        std::function<void()> on_idle;
         {
           std::lock_guard lock(state->mutex);
           if (state->in_flight_callbacks > 0U) {
             --state->in_flight_callbacks;
           }
+          // Inference finished and nothing else is in flight: the runner is
+          // ready to pull the next frame (pull-on-ready).
+          if (state->in_flight_callbacks == 0U && state->on_idle) {
+            on_idle = state->on_idle;
+          }
         }
         state->changed.notify_all();
+        if (on_idle) {
+          on_idle();
+        }
       };
   auto complete_output =
       [weak_state,
