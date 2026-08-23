@@ -41,7 +41,6 @@ export interface CameraStatus {
   capture_fps?: number;
   encoded_fps?: number;
   last_encode_ms?: number;
-  encoded_ring_overruns?: number;
 }
 
 export interface MonitoringCamera extends CameraStatus {

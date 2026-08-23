@@ -32,7 +32,6 @@ describe('StatusPanel', () => {
       cameras={[{
         id: 'cam-a', state: 'streaming', snapshot_available: true,
         capture_fps: 49.8, encoded_fps: 24.9, last_encode_ms: 7.2,
-        encoded_ring_overruns: 3,
       }]}
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
@@ -43,7 +42,6 @@ describe('StatusPanel', () => {
     expect(screen.getByText(/capture 49\.8/i)).toBeVisible();
     expect(screen.getByText(/encode 24\.9/i)).toBeVisible();
     expect(screen.getByText(/7\.2\s*ms/i)).toBeVisible();
-    expect(screen.getByText(/3 dropped/i)).toBeVisible();
   });
 
   it('omits the metrics line when the camera reports none', () => {

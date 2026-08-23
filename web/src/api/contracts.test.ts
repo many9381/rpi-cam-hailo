@@ -75,14 +75,12 @@ describe('operational response parsers', () => {
       cameras: [{
         id: 'imx708-main', state: 'streaming', snapshot_available: true,
         capture_fps: 49.8, encoded_fps: 49.7, last_encode_ms: 7.25,
-        encoded_ring_overruns: 3,
       }],
       ai,
     });
     expect(result.cameras[0].capture_fps).toBeCloseTo(49.8);
     expect(result.cameras[0].encoded_fps).toBeCloseTo(49.7);
     expect(result.cameras[0].last_encode_ms).toBeCloseTo(7.25);
-    expect(result.cameras[0].encoded_ring_overruns).toBe(3);
   });
 
   it('rejects malformed encoder health metrics', () => {
@@ -96,7 +94,7 @@ describe('operational response parsers', () => {
     expect(() => parseCameraInventory({
       cameras: [{
         id: 'imx708-main', state: 'streaming', snapshot_available: true,
-        encoded_ring_overruns: -1,
+        last_encode_ms: -1,
       }],
       ai,
     })).toThrow('Invalid camera response');

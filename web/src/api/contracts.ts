@@ -80,8 +80,6 @@ function parseCamera(value: unknown): CameraStatus {
       value.encoded_fps, false, 'Invalid camera response'),
     last_encode_ms: optionalNonnegative(
       value.last_encode_ms, false, 'Invalid camera response'),
-    encoded_ring_overruns: optionalNonnegative(
-      value.encoded_ring_overruns, true, 'Invalid camera response'),
   };
 }
 
