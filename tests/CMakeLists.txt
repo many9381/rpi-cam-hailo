@@ -175,6 +175,7 @@ add_executable(camera_firmware_security_tests
     unit/security/AuditLogServiceTest.cpp
     unit/security/AuthServiceTest.cpp
     unit/security/BootstrapServiceTest.cpp
+    unit/security/LoginRateLimiterTest.cpp
     unit/security/DeviceTlsManagerTest.cpp
     unit/security/PasswordHasherTest.cpp
     unit/security/PasswordPolicyTest.cpp

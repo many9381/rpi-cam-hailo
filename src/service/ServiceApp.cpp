@@ -30,6 +30,7 @@
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/common/ThreadTuning.hpp"
 #include "camera_firmware/security/AuditLogService.hpp"
+#include "camera_firmware/security/LoginRateLimiter.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
 #include "camera_firmware/service/AuditLogHttp.hpp"
 #include "camera_firmware/service/RuntimeSettingsHttp.hpp"
@@ -956,6 +957,10 @@ struct ServiceState {
   // several handler threads. Cleared once setup completes; never written to the
   // store, a log line, or an audit record.
   std::optional<security::InitialAccountCredential> initial_account;
+  // Bounds POST /api/v1/auth/login flooding while the device is in the default
+  // state (where the initial account no longer locks). Self-synchronized, so it
+  // is read outside StateMutex.
+  security::LoginRateLimiter default_state_login_rate_limiter;
   bool shutting_down{false};
 };
 
@@ -1415,6 +1420,9 @@ drogon::HttpResponsePtr SecurityErrorResponse(const common::Error& error) {
   } else if (error.code == "E_INVALID_REQUEST") {
     status = drogon::k400BadRequest;
     message = "request could not be processed";
+  } else if (error.code == "E_RATE_LIMITED") {
+    status = drogon::k429TooManyRequests;
+    message = "too many requests";
   }
   body["message"] = message;
   return JsonResponse(std::move(body), status);
@@ -2634,14 +2642,33 @@ void RegisterHandlers() {
               }
               std::shared_ptr<security::AuthService> auth;
               std::shared_ptr<BoundedWorker> worker;
+              security::DeviceState device_state;
               {
                 std::scoped_lock lock(StateMutex());
                 auth = GlobalState().auth_service;
                 worker = GlobalState().security_worker;
+                device_state = GlobalState().device_state;
               }
               if (!auth || !worker) {
                 callback(SecurityUnavailableResponse());
                 return;
+              }
+              // The initial account does not lock in the default state (its
+              // credential is public), so bound login flooding with a request
+              // rate limit -- otherwise an unbounded stream of attempts could
+              // evict the setup audit trail from the finite audit ring. Rejected
+              // here, before any password verification or audit write.
+              if (device_state == security::DeviceState::kDefault) {
+                const auto now_seconds =
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+                if (!GlobalState().default_state_login_rate_limiter.Allow(
+                        peer_ip, now_seconds)) {
+                  callback(SecurityErrorResponse(
+                      {"E_RATE_LIMITED", "too many login attempts"}));
+                  return;
+                }
               }
               auto parsed_request =
                   std::make_shared<ParsedLoginRequest>(std::move(parsed).value());
