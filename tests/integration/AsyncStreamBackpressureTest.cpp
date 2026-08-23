@@ -12,8 +12,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdio>
+#include <string>
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+
 #include <gtest/gtest.h>
 #include <trantor/net/EventLoopThread.h>
+#include <trantor/net/TLSPolicy.h>
+#include <trantor/net/TcpConnection.h>
 #include <trantor/net/TcpServer.h>
 
 #ifndef TRANTOR_CAMERA_FIRMWARE_BOUNDED_ASYNC_STREAM
@@ -267,6 +277,246 @@ TEST(AsyncStreamBackpressureTest, RejectsProducerBeforeSlowPeerQueues16MiB) {
   });
   ASSERT_EQ(server_destroyed_future.wait_for(std::chrono::seconds(2)),
             std::future_status::ready);
+}
+
+// ---------------------------------------------------------------------------
+// TLS teardown death test.
+//
+// writeRaw() is reached only from the TLS write callback (onSslWrite). Its
+// partial-write branch re-arms write interest; the bug this pins is that it
+// did so unconditionally, even when the connection had already left
+// Connected. forceClose() reproduces that deterministically inside one
+// in-loop task: it sets status_ to Disconnecting, calls handleClose()
+// (status_ -> Disconnected, disableAll()), then tlsProviderPtr_->close(),
+// which flushes a close alert through onSslWrite -> writeRaw(). If the peer
+// socket buffer is full (the client completed the handshake and then stopped
+// reading), that write EAGAINs and the unguarded branch calls enableWriting()
+// on a channel handleClose() just disabled. connectDestroyed() then reaches
+// Channel::remove(), whose assert(events_ == kNoneEvent) aborts the process.
+// The guard (status_ == Connected) keeps writeRaw() from re-arming here.
+
+// Minimal self-signed RSA cert + key written to disk for the TLS server.
+bool WriteSelfSignedCert(const std::string& cert_path,
+                         const std::string& key_path) {
+  EVP_PKEY* pkey = EVP_RSA_gen(2048);
+  if (pkey == nullptr) {
+    return false;
+  }
+  X509* cert = X509_new();
+  if (cert == nullptr) {
+    EVP_PKEY_free(pkey);
+    return false;
+  }
+  bool ok = true;
+  ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
+  X509_gmtime_adj(X509_getm_notBefore(cert), 0);
+  X509_gmtime_adj(X509_getm_notAfter(cert), 60L * 60L * 24L * 365L);
+  ok = ok && X509_set_pubkey(cert, pkey) == 1;
+  X509_NAME* name = X509_get_subject_name(cert);
+  ok = ok && X509_NAME_add_entry_by_txt(
+                 name, "CN", MBSTRING_ASC,
+                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1,
+                 0) == 1;
+  ok = ok && X509_set_issuer_name(cert, name) == 1;
+  ok = ok && X509_sign(cert, pkey, EVP_sha256()) > 0;
+  if (ok) {
+    FILE* key_file = ::fopen(key_path.c_str(), "wb");
+    ok = key_file != nullptr &&
+         PEM_write_PrivateKey(key_file, pkey, nullptr, nullptr, 0, nullptr,
+                              nullptr) == 1;
+    if (key_file != nullptr) {
+      (void)::fclose(key_file);
+    }
+  }
+  if (ok) {
+    FILE* cert_file = ::fopen(cert_path.c_str(), "wb");
+    ok = cert_file != nullptr && PEM_write_X509(cert_file, cert) == 1;
+    if (cert_file != nullptr) {
+      (void)::fclose(cert_file);
+    }
+  }
+  X509_free(cert);
+  EVP_PKEY_free(pkey);
+  return ok;
+}
+
+// A blocking TLS client that completes the handshake and then never reads, so
+// the server's writes back up and its socket send buffer fills. SSL_set_fd
+// uses a BIO_NOCLOSE socket BIO, so the fd is owned here, not by SSL_free.
+class TlsClient {
+ public:
+  explicit TlsClient(std::uint16_t port) {
+    fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd_ < 0) {
+      return;
+    }
+    const int buffer_size = 4096;
+    (void)::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &buffer_size,
+                       sizeof(buffer_size));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+    bool connected = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      if (::connect(fd_, reinterpret_cast<sockaddr*>(&address),
+                    sizeof(address)) == 0) {
+        connected = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (!connected) {
+      return;
+    }
+    ctx_ = SSL_CTX_new(TLS_client_method());
+    if (ctx_ == nullptr) {
+      return;
+    }
+    ssl_ = SSL_new(ctx_);
+    if (ssl_ == nullptr) {
+      return;
+    }
+    SSL_set_fd(ssl_, fd_);
+    handshaked_ = SSL_connect(ssl_) == 1;
+  }
+
+  ~TlsClient() {
+    if (ssl_ != nullptr) {
+      SSL_free(ssl_);
+    }
+    if (ctx_ != nullptr) {
+      SSL_CTX_free(ctx_);
+    }
+    if (fd_ >= 0) {
+      (void)::close(fd_);
+    }
+  }
+
+  TlsClient(const TlsClient&) = delete;
+  TlsClient& operator=(const TlsClient&) = delete;
+
+  [[nodiscard]] bool handshaked() const noexcept { return handshaked_; }
+
+ private:
+  int fd_ = -1;
+  SSL_CTX* ctx_ = nullptr;
+  SSL* ssl_ = nullptr;
+  bool handshaked_ = false;
+};
+
+// One TLS teardown trial: handshake, back the server's send buffer up, then
+// forceClose() so the close-alert flush hits writeRaw() with a full buffer
+// after the channel is disabled. Returns false only on a setup failure.
+bool RunOneTlsTeardownTrial(const std::string& cert_path,
+                            const std::string& key_path) {
+  const auto port = ReserveLoopbackPort();
+  if (port == 0U) {
+    return false;
+  }
+  trantor::EventLoopThread loop_thread;
+  loop_thread.run();
+  auto* loop = loop_thread.getLoop();
+  auto server = std::make_unique<trantor::TcpServer>(
+      loop, trantor::InetAddress("127.0.0.1", port), "tls-teardown");
+  server->enableSSL(trantor::TLSPolicy::defaultServerPolicy(cert_path,
+                                                            key_path));
+  server->setAfterAcceptSockOptCallback([](int descriptor) {
+    const int buffer_size = 4096;
+    (void)::setsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &buffer_size,
+                       sizeof(buffer_size));
+  });
+
+  std::promise<trantor::TcpConnectionPtr> connected;
+  auto connected_future = connected.get_future();
+  std::atomic_bool published{false};
+  server->setConnectionCallback(
+      [&connected, &published](const trantor::TcpConnectionPtr& peer) {
+        if (peer->connected() && !published.exchange(true)) {
+          connected.set_value(peer);
+        }
+      });
+  server->start();
+
+  TlsClient client(port);
+  if (!client.handshaked()) {
+    return false;
+  }
+  if (connected_future.wait_for(std::chrono::seconds(2)) !=
+      std::future_status::ready) {
+    return false;
+  }
+  auto peer = connected_future.get();
+  if (!peer) {
+    return false;
+  }
+
+  // Fill the send buffer and force the close in one in-loop step, with no
+  // event iteration between them: send() partial-writes and buffers the rest
+  // (socket buffer now full because the client never reads), then forceClose()
+  // runs synchronously in the loop thread — handleClose() disables the channel
+  // and close() flushes the ~24-byte close alert through onSslWrite ->
+  // writeRaw(). With no drain window the tiny alert also EAGAINs, so the
+  // partial-write branch runs while status_ is Disconnected. Any sleep here
+  // lets TCP free enough space for the alert to write whole, and the branch is
+  // never reached — the bug hid behind exactly that timing.
+  const std::string blob(256U * 1024U, 'x');
+  loop->queueInLoop([peer, blob] {
+    peer->send(blob.data(), blob.size());
+    peer->forceClose();
+  });
+
+  // connectDestroyed() is queued by the close callback; it reaches
+  // Channel::remove() and aborts if writeRaw() re-armed write interest above.
+  std::promise<void> server_destroyed;
+  auto server_destroyed_future = server_destroyed.get_future();
+  loop->queueInLoop([&server, &server_destroyed] {
+    server.reset();
+    server_destroyed.set_value();
+  });
+  return server_destroyed_future.wait_for(std::chrono::seconds(2)) ==
+         std::future_status::ready;
+}
+
+// The reproduction is deterministic (the tiny close alert EAGAINs whenever the
+// send buffer is full, with no timing window), so one trial suffices; a few
+// add margin against a one-off setup hiccup (port reuse, handshake timing).
+constexpr int kTlsTeardownTrials = 4;
+
+// Death-test child body (extracted because ASSERT_EXIT is a macro). Under the
+// threadsafe death-test style the child re-executes the binary and regenerates
+// its own cert (a different pid than the parent's), so it removes them here;
+// _exit skips atexit handlers, so the unlinks are explicit.
+[[noreturn]] void RunTlsTeardownChild(const std::string& cert_path,
+                                      const std::string& key_path) {
+  for (int index = 0; index < kTlsTeardownTrials; ++index) {
+    if (!RunOneTlsTeardownTrial(cert_path, key_path)) {
+      (void)::unlink(cert_path.c_str());
+      (void)::unlink(key_path.c_str());
+      ::_exit(kTrialSetupFailedExitCode);
+    }
+  }
+  (void)::unlink(cert_path.c_str());
+  (void)::unlink(key_path.c_str());
+  ::_exit(0);
+}
+
+TEST(TlsTeardownTest, CloseAlertFlushAfterDisableDoesNotAbortTheProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  const std::string base =
+      ::testing::TempDir() + "/tls-teardown-" + std::to_string(::getpid());
+  const std::string cert_path = base + ".crt";
+  const std::string key_path = base + ".key";
+  ASSERT_TRUE(WriteSelfSignedCert(cert_path, key_path));
+
+  // Exit 0 means every trial survived the close-alert flush; a signal exit
+  // means Channel::remove()'s assert fired on a channel writeRaw() re-armed
+  // after handleClose() disabled it.
+  ASSERT_EXIT(RunTlsTeardownChild(cert_path, key_path),
+              ::testing::ExitedWithCode(0), "");
+
+  (void)::unlink(cert_path.c_str());
+  (void)::unlink(key_path.c_str());
 }
 
 }  // namespace

@@ -468,11 +468,13 @@ target_link_libraries(camera_firmware_async_stream_backpressure_tests
     PRIVATE
         Drogon::Drogon
         GTest::gtest_main
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
     PROPERTIES
-        TIMEOUT 15
+        TIMEOUT 30
         RESOURCE_LOCK camera_firmware_loopback_listener
 )
 
