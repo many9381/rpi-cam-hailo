@@ -139,10 +139,25 @@ index bbce40e..00b2843 100644
 \ No newline at end of file
 +}  // namespace trantor
 diff --git a/trantor/net/inner/TcpConnectionImpl.cc b/trantor/net/inner/TcpConnectionImpl.cc
-index 8fddf1a..ab37c04 100644
+index 8fddf1a..e322a47 100644
 --- a/trantor/net/inner/TcpConnectionImpl.cc
 +++ b/trantor/net/inner/TcpConnectionImpl.cc
-@@ -845,39 +845,101 @@ void TcpConnectionImpl::onSslCloseAlert(TcpConnection *self)
+@@ -750,7 +750,13 @@ ssize_t TcpConnectionImpl::writeRaw(const char *buffer, size_t length)
+     if (nWritten < static_cast<int>(length))
+     {
+         LOG_TRACE << "nWritten = " << nWritten << " length = " << length;
+-        if (!ioChannelPtr_->isWriting())
++        // Do not re-arm write interest once the connection has left
++        // Connected. writeRaw() is reached from the TLS write callback
++        // (onSslWrite), which the provider may invoke while flushing a
++        // close alert after handleClose() already disabled the channel;
++        // re-enabling here would leave events_ != kNoneEvent for the
++        // Channel::remove() assertion in connectDestroyed().
++        if (status_ == ConnStatus::Connected && !ioChannelPtr_->isWriting())
+             ioChannelPtr_->enableWriting();
+     }
+     extendLife();
+@@ -845,39 +851,101 @@ void TcpConnectionImpl::onSslCloseAlert(TcpConnection *self)
  {
      self->shutdown();
  }
@@ -252,7 +267,7 @@ index 8fddf1a..ab37c04 100644
              auto thisPtr = weakPtr.lock();
              if (!thisPtr)
              {
-@@ -889,21 +951,54 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -889,21 +957,54 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
                  LOG_DEBUG << "Connection is not connected,give up sending";
                  return false;
              }
@@ -313,7 +328,7 @@ index 8fddf1a..ab37c04 100644
                      });
                  }
                  else
-@@ -915,6 +1010,10 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -915,6 +1016,10 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
                      });
                  }
              }
@@ -324,7 +339,7 @@ index 8fddf1a..ab37c04 100644
              return true;
          });
      if (loop_->isInLoopThread())
-@@ -965,54 +1064,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+@@ -965,54 +1070,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
      }
      return asyncStream;
  }
