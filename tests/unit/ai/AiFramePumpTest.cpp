@@ -229,7 +229,11 @@ TEST(AiFramePumpTest, CanRestartAfterStop) {
   runtime.Stop();
 }
 
-TEST(AiFramePumpTest, KeepsFrameLeaseUntilTapDropsLatestFrame) {
+TEST(AiFramePumpTest, ForwardedFrameLeaseIsReleasedNotRetained) {
+  // Pull-on-ready: the tap retains nothing with the pump subscribed, and
+  // the pump forwards without holding the lease in a rate gate, so a
+  // published frame's lease is released once the runner is done with it --
+  // no lease pins a buffer across the idle gap.
   int releases = 0;
   {
     camera_firmware::ai::AiFrameTap tap;
@@ -254,60 +258,73 @@ TEST(AiFramePumpTest, KeepsFrameLeaseUntilTapDropsLatestFrame) {
 
     pump.Stop();
     runtime.Stop();
-    EXPECT_EQ(releases, 0);
   }
-
-  EXPECT_EQ(releases, 1);
+  EXPECT_EQ(releases, 1);  // released exactly once, no leak, no double
 }
 
-TEST(AiFramePumpTest, MinimumIntervalGatesSubmissionRate) {
+TEST(AiFramePumpTest, ReArmsTapDemandEvenWhenFrameIsDropped) {
+  // A frame dropped before submission (unavailable backend) must still
+  // re-arm the pull demand, or AI would stall after one frame.
+  camera_firmware::ai::AiFrameTap tap;
+  camera_firmware::ai::DetectionBus bus;
+  camera_firmware::ai::AiRuntime runtime(&bus, PumpUnavailableBackend());
+  ASSERT_TRUE(runtime.Start(PumpRuntimeConfig()).ok());
+
+  camera_firmware::ai::AiFramePump pump(tap, runtime);
+  ASSERT_TRUE(pump.Start().ok());
+
+  EXPECT_TRUE(tap.ConsumeDemand());   // drain initial arm
+  EXPECT_FALSE(tap.ConsumeDemand());
+
+  camera_firmware::media::FrameHandle handle;
+  handle.camera_id = "imx708-main";
+  handle.format = "NV12";
+  handle.width = 640;
+  handle.height = 480;
+  handle.sequence = 71;
+  tap.PublishLatest(camera_firmware::media::FrameLease(handle, [] {}));
+
+  bool re_armed = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    if (tap.ConsumeDemand()) { re_armed = true; break; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  EXPECT_TRUE(re_armed);
+
+  pump.Stop();
+  runtime.Stop();
+}
+
+TEST(AiFramePumpTest, ReArmsTapDemandAfterInferenceCompletes) {
+  // The pump wires the runtime's ready callback so that finishing an
+  // inference re-arms the tap's pull demand for the next frame.
   camera_firmware::ai::AiFrameTap tap;
   camera_firmware::ai::DetectionBus bus;
   camera_firmware::ai::AiRuntime runtime(
       &bus, std::make_shared<SucceedingAiBackend>());
   ASSERT_TRUE(runtime.Start(PumpRuntimeConfig()).ok());
 
-  // Margins are deliberately wide because this test runs under real
-  // thread scheduling, not a mocked clock: a 100ms gate against a burst
-  // published over ~250ms would, under perfect scheduling, yield 3
-  // submissions (t~0, ~100, ~200). Under load the gate may wake a little
-  // early or late, so we assert a bounded range (>=2, <=4) rather than
-  // an exact count. What must hold regardless of jitter is that the
-  // *last* frame published is the one the pump eventually hands to the
-  // runtime -- i.e. latest-wins survives the gate.
-  constexpr auto kMinimumInterval = std::chrono::milliseconds(100);
-  camera_firmware::ai::AiFramePump pump(tap, runtime, kMinimumInterval);
+  camera_firmware::ai::AiFramePump pump(tap, runtime);
   ASSERT_TRUE(pump.Start().ok());
 
-  constexpr int kFrameCount = 10;
-  constexpr auto kPublishSpacing = std::chrono::milliseconds(25);
-  constexpr std::uint64_t kFirstSequence = 500;
-  std::uint64_t last_sequence = kFirstSequence;
-  for (int i = 0; i < kFrameCount; ++i) {
-    last_sequence = kFirstSequence + static_cast<std::uint64_t>(i);
-    tap.PublishLatest(GatingNv12Lease(last_sequence));
-    std::this_thread::sleep_for(kPublishSpacing);
-  }
+  // Drain the initial armed demand so we observe the RE-arm, not the
+  // starting state.
+  EXPECT_TRUE(tap.ConsumeDemand());
+  EXPECT_FALSE(tap.ConsumeDemand());
 
-  // Wait (well past the last gate tick) for the runner to have processed
-  // a frame carrying the last published sequence number.
-  bool reached_last_published = false;
-  for (int attempt = 0; attempt < 100; ++attempt) {
-    const auto runners = runtime.RunnerStatuses();
-    if (runners.size() == 1U &&
-        runners[0].last_processed_sequence == last_sequence) {
-      reached_last_published = true;
+  tap.PublishLatest(GatingNv12Lease(600));
+
+  // After the succeeding backend completes the inference, the pump's ready
+  // callback must have re-armed the demand.
+  bool re_armed = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    if (tap.ConsumeDemand()) {
+      re_armed = true;
       break;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
-  EXPECT_TRUE(reached_last_published);
-
-  const auto runners = runtime.RunnerStatuses();
-  ASSERT_EQ(runners.size(), 1U);
-  EXPECT_GE(runners[0].submitted_frames, 2U);
-  EXPECT_LE(runners[0].submitted_frames, 4U);
-  EXPECT_EQ(runners[0].last_processed_sequence, last_sequence);
+  EXPECT_TRUE(re_armed);
 
   pump.Stop();
   runtime.Stop();

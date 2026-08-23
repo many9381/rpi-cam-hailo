@@ -48,6 +48,11 @@ class AiModelRunner {
 
   [[nodiscard]] common::Result<void> Submit(media::FrameLease frame);
   void Stop();
+
+  // Invoked (on the inference-completion thread) each time the runner
+  // finishes its in-flight work and is ready for another frame. Used to
+  // re-arm the AiFrameTap's pull demand.
+  void SetReadyCallback(std::function<void()> on_ready);
   [[nodiscard]] AiModelRunnerStatus Status() const;
 
  private:
