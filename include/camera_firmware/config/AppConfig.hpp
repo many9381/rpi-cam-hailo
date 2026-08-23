@@ -57,6 +57,13 @@ struct CameraVideoConfig {
   std::string format{"nv12"};
 };
 
+// Encoder bitrate bounds, matched to the runtime-settings validator
+// (settings::kMin/kMaxBitrateKbps). A floor is required, not just non-zero:
+// the near-CBR VBV buffer is bitrate_kbps/2, so a sub-2kbps bitrate would
+// round the buffer to 0 and silently disable VBV.
+inline constexpr unsigned int kMinEncoderBitrateKbps = 500U;
+inline constexpr unsigned int kMaxEncoderBitrateKbps = 20000U;
+
 struct CameraEncoderConfig {
   std::string backend{"x264"};
   unsigned int bitrate_kbps{6000};

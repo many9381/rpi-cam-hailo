@@ -1590,6 +1590,11 @@ select:focus-visible {
 .camera-card-content strong { overflow-wrap: anywhere; }
 .camera-card-content span { color: #4c5a54; font-size: 13px; }
 .camera-card-content small { color: #737e78; }
+.camera-card-content .camera-metrics {
+  font-variant-numeric: tabular-nums;
+  color: #8a938b;
+  font-size: 12px;
+}
 
 .detail-grid {
   display: grid;
