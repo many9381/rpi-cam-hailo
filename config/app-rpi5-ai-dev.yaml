@@ -19,7 +19,7 @@ camera:
   ai:
     enabled: true
     model_ids: [objects]
-    max_fps: 25
+    max_fps: 0    # 0 = unlimited; pull-on-ready runs AI at the natural rate
 
 http:
   enabled: true
