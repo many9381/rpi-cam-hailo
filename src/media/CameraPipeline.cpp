@@ -406,7 +406,6 @@ struct CameraPipeline::Impl {
     status.capture_error_count = capture_error_count;
     status.encode_error_count = encode_error_count;
     status.last_encode_ms = last_encode_ms;
-    status.encoded_ring_overruns = encoded_ring.overrun_total();
     status.ai_source = ai_uses_lores
         ? (ai_lores_rgb ? "lores-rgb" : "lores")
         : "main-fallback";

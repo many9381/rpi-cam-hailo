@@ -83,8 +83,6 @@ export function StatusPanel({ health, cameras, selectedCameraId,
                   {`encode ${(camera.encoded_fps ?? 0).toFixed(1)} fps`}
                   {camera.last_encode_ms !== undefined &&
                     ` · ${camera.last_encode_ms.toFixed(1)} ms`}
-                  {camera.encoded_ring_overruns !== undefined &&
-                    ` · ${camera.encoded_ring_overruns} dropped`}
                 </small>
               )}
             </span>
