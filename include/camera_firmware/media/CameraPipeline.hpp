@@ -16,6 +16,8 @@ class AiFrameTap;
 
 namespace camera_firmware::media {
 
+class SubStreamTap;
+
 struct CameraPipelineStatus {
   std::string id{"imx708-main"};
   std::string state{"stopped"};
@@ -39,7 +41,8 @@ class CameraPipeline {
  public:
   CameraPipeline(SnapshotTap& snapshot_tap,
                  ai::AiFrameTap& ai_frame_tap,
-                 EncodedRing& encoded_ring);
+                 EncodedRing& encoded_ring,
+                 SubStreamTap* sub_tap = nullptr);
   ~CameraPipeline();
 
   CameraPipeline(const CameraPipeline&) = delete;

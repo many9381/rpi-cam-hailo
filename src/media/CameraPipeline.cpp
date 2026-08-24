@@ -28,6 +28,7 @@
 #include "camera_firmware/media/CameraTiming.hpp"
 #include "camera_firmware/media/EncodeMailbox.hpp"
 #include "camera_firmware/media/LoresGeometry.hpp"
+#include "camera_firmware/media/SubStreamTap.hpp"
 
 namespace camera_firmware::media {
 namespace {
@@ -35,12 +36,14 @@ namespace {
 using camera_firmware::common::Logger;
 using camera_firmware::common::Result;
 
-// Six, not four: the encoder now runs on its own thread, so a captured frame
-// can be pinned by the encoder (one in flight) and the latest-wins mailbox
-// (one queued) at the same time as the snapshot and AI-pull leases. Four
-// buffers leave no free frame for the sensor under that overlap; six restore
-// headroom so capture holds the sensor rate while the encoder falls behind.
-constexpr unsigned int kDefaultBufferCount = 6;
+// Seven, not four: the encoder now runs on its own thread, so a captured
+// frame can be pinned by the encoder (one in flight) and the latest-wins
+// mailbox (one queued) at the same time as the snapshot and AI-pull leases.
+// Four buffers leave no free frame for the sensor under that overlap; six
+// restored headroom so capture holds the sensor rate while the encoder falls
+// behind. A seventh accounts for the sub-stream encoder's pull-on-ready lease
+// (at most one main request pinned) when an RTSP sub client is connected.
+constexpr unsigned int kDefaultBufferCount = 7;
 
 struct X264EncoderDeleter {
   void operator()(x264_t* encoder) const noexcept {
@@ -125,8 +128,10 @@ std::vector<std::uint8_t> CopyNalPayloads(x264_nal_t* nals, int nal_count) {
 }  // namespace
 
 struct CameraPipeline::Impl {
-  Impl(SnapshotTap& snapshot, ai::AiFrameTap& ai, EncodedRing& encoded)
-      : snapshot_tap(snapshot), ai_frame_tap(ai), encoded_ring(encoded) {}
+  Impl(SnapshotTap& snapshot, ai::AiFrameTap& ai, EncodedRing& encoded,
+       SubStreamTap* sub)
+      : snapshot_tap(snapshot), ai_frame_tap(ai), encoded_ring(encoded),
+        sub_tap_(sub) {}
 
   ~Impl() { Stop(); }
 
@@ -439,6 +444,14 @@ struct CameraPipeline::Impl {
               config.camera.ai.max_fps
         : std::chrono::nanoseconds(0);
     last_ai_publish = std::chrono::nanoseconds(0);
+
+    // Sub-stream rate cap: camera.sub_stream.fps paces how often the main
+    // lease is published to the sub tap, mirroring the AI rate cap above.
+    sub_min_interval_ = config.camera.sub_stream.fps > 0U
+        ? std::chrono::nanoseconds(std::chrono::seconds(1)) /
+              config.camera.sub_stream.fps
+        : std::chrono::nanoseconds(0);
+    last_sub_publish_ = std::chrono::nanoseconds(0);
     const unsigned int model_width = ResolveAiLoresWidth(config);
     const LoresSize lores = ComputeLoresSize(configured_camera.video.width,
                                              configured_camera.video.height,
@@ -760,6 +773,14 @@ struct CameraPipeline::Impl {
         ai_frame_tap.PublishLatest(main_lease.CloneRef());
       }
     }
+
+    // Pull-on-ready for the sub stream, same shape as the AI path above: only
+    // publish the main lease when a sub RTSP client is connected (tap active,
+    // demand armed) and the sub fps cap allows it. A null sub_tap_ (sub
+    // stream disabled) never publishes.
+    if (sub_tap_ != nullptr && WantsSubFrameNow(frame_timestamp)) {
+      sub_tap_->PublishLatest(main_lease.CloneRef());
+    }
   }
 
   // True when the AI consumer is ready for another frame (pull demand armed)
@@ -777,6 +798,28 @@ struct CameraPipeline::Impl {
       return false;
     }
     last_ai_publish = frame_timestamp;
+    return true;
+  }
+
+  // True when the sub-stream encoder is ready for another frame (pull demand
+  // armed) and the configured sub fps cap permits publishing one now. Mirrors
+  // WantsAiFrameNow exactly: consumes the demand only when it also publishes,
+  // so a rate-limited skip leaves the demand armed for a later frame. A null
+  // sub_tap_ (sub stream disabled) never wants a frame.
+  bool WantsSubFrameNow(std::chrono::nanoseconds frame_timestamp) {
+    if (sub_tap_ == nullptr) {
+      return false;
+    }
+    if (sub_min_interval_.count() > 0) {
+      const auto since_last = frame_timestamp - last_sub_publish_;
+      if (last_sub_publish_.count() != 0 && since_last < sub_min_interval_) {
+        return false;
+      }
+    }
+    if (!sub_tap_->ConsumeDemand()) {
+      return false;
+    }
+    last_sub_publish_ = frame_timestamp;
     return true;
   }
 
@@ -988,6 +1031,9 @@ struct CameraPipeline::Impl {
   bool ai_lores_rgb{false};
   std::chrono::nanoseconds ai_min_interval{0};
   std::chrono::nanoseconds last_ai_publish{0};
+  SubStreamTap* sub_tap_{nullptr};
+  std::chrono::nanoseconds sub_min_interval_{0};
+  std::chrono::nanoseconds last_sub_publish_{0};
   double last_encode_ms{0.0};
   std::vector<std::unique_ptr<libcamera::Request>> requests;
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
@@ -1014,8 +1060,10 @@ struct CameraPipeline::Impl {
 
 CameraPipeline::CameraPipeline(SnapshotTap& snapshot_tap,
                                ai::AiFrameTap& ai_frame_tap,
-                               EncodedRing& encoded_ring)
-    : impl_(std::make_unique<Impl>(snapshot_tap, ai_frame_tap, encoded_ring)) {}
+                               EncodedRing& encoded_ring,
+                               SubStreamTap* sub_tap)
+    : impl_(std::make_unique<Impl>(snapshot_tap, ai_frame_tap, encoded_ring,
+                                   sub_tap)) {}
 
 CameraPipeline::~CameraPipeline() = default;
 
