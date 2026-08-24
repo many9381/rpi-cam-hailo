@@ -36,6 +36,12 @@ class FirmwareRuntimeTestAccess {
       const config::AppConfig& config) {
     return FirmwareRuntime::SnapshotMaximumAge(config);
   }
+
+  static FirmwareRuntime::ProductionSubStreamHandles
+  ProductionDependenciesWithSubStreamHandles(const config::AppConfig& config) {
+    return FirmwareRuntime::BuildProductionDependenciesWithSubStreamHandles(
+        config);
+  }
 };
 
 namespace {
@@ -489,8 +495,12 @@ TEST(FirmwareRuntimeTest,
                    .has_value());
 }
 
+// The sub stream is best-effort (design doc error-handling section): a
+// colliding/invalid sub mount must be logged and disable the sub stream, but
+// must NOT prevent the main RTSP mount from starting. Before this fix,
+// start_rtsp() treated this as a hard gate and failed the whole runtime.
 TEST(FirmwareRuntimeTest,
-     ProductionSubStreamMountCollisionFailsFastWithoutStartingRtsp) {
+     ProductionSubStreamMountCollisionDisablesSubButStartsMainMount) {
   auto config = CandidateConfig();
   config.camera.sub_stream.enabled = true;
   config.camera.sub_stream.mount = config.secure_rtsp.mount;
@@ -499,11 +509,12 @@ TEST(FirmwareRuntimeTest,
       FirmwareRuntimeTestAccess::ProductionDependencies(config);
   const auto started = dependencies.start_rtsp();
 
-  ASSERT_FALSE(started.ok());
-  EXPECT_EQ(started.error().code, "E_CONFIG_SUB_STREAM_MOUNT");
+  // The main mount starts normally; the sub is disabled, not fatal.
+  ASSERT_TRUE(started.ok()) << started.error().message;
 
-  // stop_rtsp must be safe even though start_rtsp bailed out before
-  // touching either the RTSP server or the sub encoder.
+  // The invalid-mount branch returns before ever constructing/starting the
+  // sub encoder (see start_rtsp's mount-validity check), so stop_rtsp must
+  // still be safe even though there is no sub encoder instance to stop.
   dependencies.stop_rtsp();
 }
 
@@ -523,6 +534,91 @@ TEST(FirmwareRuntimeTest,
   // encoder's own Start()/Stop() (software x264 + swscale, no hardware)
   // without needing a real RTSP/TLS stack.
   dependencies.stop_rtsp();
+}
+
+// A tightly-packed solid NV12 frame at the given dimensions -- mirrors
+// SubStreamEncoderTest.cpp's frame builders. Named for the caller's use
+// (feeding one frame through the sub-stream path), not for a small buffer:
+// the caller passes the real configured camera.video geometry (see the
+// comment at its call site for why a tiny test-only size isn't safe here).
+media::FrameLease MakeSmallNv12SubFrame(std::uint32_t width,
+                                        std::uint32_t height) {
+  const std::size_t y_size = static_cast<std::size_t>(width) * height;
+  const std::size_t uv_size = static_cast<std::size_t>(width) * (height / 2U);
+  std::vector<std::uint8_t> combined(y_size + uv_size, 128U);
+
+  const int fd = memfd_create("cf-runtime-substream-nv12", MFD_CLOEXEC);
+  EXPECT_GE(fd, 0);
+  if (fd >= 0) {
+    EXPECT_EQ(ftruncate(fd, static_cast<off_t>(combined.size())), 0);
+    EXPECT_EQ(write(fd, combined.data(), combined.size()),
+              static_cast<ssize_t>(combined.size()));
+  }
+
+  media::FrameHandle handle;
+  handle.camera_id = "imx708-main";
+  handle.format = "NV12";
+  handle.width = width;
+  handle.height = height;
+  handle.plane_count = 2;
+  handle.planes[0] = {.dmabuf_fd = fd, .offset = 0, .length = y_size,
+                      .stride = width};
+  handle.planes[1] = {.dmabuf_fd = fd, .offset = y_size, .length = uv_size,
+                      .stride = width};
+
+  return media::FrameLease(std::move(handle), [fd] {
+    if (fd >= 0) {
+      close(fd);
+    }
+  });
+}
+
+// Regression test for the sub-stream tap being reused (not recreated) across
+// a runtime restart: SubStreamTap is a persistent member of the runtime
+// graph, but SubStreamEncoder::Stop() (invoked from stop_rtsp) closes it.
+// Without SubStreamEncoder::Impl::Start() reopening it, a SECOND
+// start_rtsp()/stop_rtsp() cycle would silently produce zero sub frames
+// forever, even though start_rtsp() itself still reports success.
+TEST(FirmwareRuntimeTest,
+     ProductionSubStreamSurvivesRestartAndProducesFramesOnSecondRun) {
+  // Same src/dst geometry as SubStreamEncoderTest.cpp's frame-feeding tests
+  // (1920x1080 -> 640x360): libswscale needs realistic plane geometry to
+  // scale safely, so this deliberately does not shrink camera.video/
+  // sub_stream dimensions down to a tiny test-only size.
+  auto config = CandidateConfig();
+  config.camera.sub_stream.enabled = true;
+  ASSERT_NE(config.camera.sub_stream.mount, config.secure_rtsp.mount);
+  const std::uint32_t kWidth = config.camera.video.width;
+  const std::uint32_t kHeight = config.camera.video.height;
+
+  auto handles =
+      FirmwareRuntimeTestAccess::ProductionDependenciesWithSubStreamHandles(
+          config);
+  ASSERT_NE(handles.sub_stream_tap, nullptr);
+
+  const auto feed_one_frame_and_wait_encoded = [&] {
+    handles.sub_stream_tap->SetActive(true);
+    handles.sub_stream_tap->PublishLatest(
+        MakeSmallNv12SubFrame(kWidth, kHeight));
+    for (int i = 0; i < 50 && handles.sub_encoded_frames() == 0U; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return handles.sub_encoded_frames();
+  };
+
+  // First run: the sub encoder wraps a freshly-constructed (never-closed)
+  // tap and must produce a frame.
+  ASSERT_TRUE(handles.dependencies.start_rtsp().ok());
+  EXPECT_GT(feed_one_frame_and_wait_encoded(), 0U);
+  handles.dependencies.stop_rtsp();
+
+  // Second run: a NEW SubStreamEncoder wraps the SAME tap, which stop_rtsp
+  // just Close()d. Without SubStreamTap::Reopen() being called from
+  // SubStreamEncoder::Impl::Start(), the tap stays permanently closed and
+  // every published frame is dropped instead of reaching the encoder.
+  ASSERT_TRUE(handles.dependencies.start_rtsp().ok());
+  EXPECT_GT(feed_one_frame_and_wait_encoded(), 0U);
+  handles.dependencies.stop_rtsp();
 }
 
 TEST(FirmwareRuntimeTest, MissingStopDependencyFailsBeforeStartingComponents) {

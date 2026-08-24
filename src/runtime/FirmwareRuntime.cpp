@@ -3,6 +3,7 @@
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -10,6 +11,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/ai/AiRuntimeController.hpp"
 #include "camera_firmware/ai/DetectionEventStore.hpp"
+#include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
@@ -28,6 +30,14 @@ common::Result<void> MissingDependency(std::string_view name) {
 common::Result<void> RuntimeException() {
   return common::Result<void>::Err(
       {"E_RUNTIME_START", "firmware runtime component failed"});
+}
+
+// Shared with FirmwareRuntime::SnapshotMaximumAge (a private static member,
+// unreachable from the free BuildDependenciesForGraph below) so both have a
+// single source of truth for the freshness window.
+std::chrono::milliseconds SnapshotMaximumAgeFor(
+    const config::AppConfig& config) noexcept {
+  return std::chrono::milliseconds(config.http.snapshot.stale_timeout_ms);
 }
 
 common::Error LiveUnavailable() {
@@ -104,6 +114,156 @@ struct ProductionRuntimeGraph {
   ai::AiRuntimeController ai_controller;
   rtsp::SecureRtspServer rtsp_server;
 };
+
+// Shared by BuildProductionDependencies and the test-only
+// BuildProductionDependenciesWithSubStreamHandles: both wire an identical set
+// of dependency lambdas around one ProductionRuntimeGraph, so the wiring
+// lives here once instead of being duplicated.
+FirmwareRuntimeDependencies BuildDependenciesForGraph(
+    std::shared_ptr<ProductionRuntimeGraph> graph) {
+  using common::Logger;
+
+  FirmwareRuntimeDependencies dependencies;
+  // start_rtsp/stop_rtsp own the whole sub-stream lifecycle (encoder +
+  // mount descriptor), not just the main mount. This file's overall
+  // Start()/Stop() call sequence is fixed elsewhere (rtsp is the first
+  // component started and the last one stopped) and several existing tests
+  // pin that exact ordering, so it is not changed here. Folding the
+  // sub-stream encoder into these two lambdas instead gets the two
+  // properties that matter without touching that sequence:
+  //   - start: the sub encoder is constructed and Start()ed, and the
+  //     collision/format of sub.mount is validated, strictly before
+  //     rtsp_server.Start() ever registers the sub mount -- so a client can
+  //     never activate a mount with nothing consuming its tap.
+  //   - stop: rtsp_server.Stop() runs first (so no new client can activate
+  //     the sub mount, and any in-flight on_deactivate fires while the tap
+  //     is still alive and the encoder is still around to be told), and
+  //     only then is the sub encoder stopped.
+  //
+  // The sub stream is best-effort (see the design doc's error-handling
+  // section): an invalid/colliding mount or a failed encoder Start() is
+  // logged and disables the sub stream for this run, but must never fail
+  // the main RTSP mount -- so both failure branches below fall through to
+  // starting rtsp_server with no sub descriptor instead of returning early.
+  dependencies.start_rtsp = [graph] {
+    const auto& sub = graph->config.camera.sub_stream;
+    if (!sub.enabled) {
+      return graph->rtsp_server.Start(graph->config.secure_rtsp,
+                                      graph->encoded_ring);
+    }
+
+    if (sub.mount.empty() || sub.mount.front() != '/' ||
+        sub.mount == graph->config.secure_rtsp.mount) {
+      Logger::instance().log(
+          Logger::Level::kError,
+          "sub_stream mount invalid or collides with main mount; disabling "
+          "sub stream");
+      return graph->rtsp_server.Start(graph->config.secure_rtsp,
+                                      graph->encoded_ring);
+    }
+
+    media::SubStreamEncoderParams params;
+    params.src_width = static_cast<int>(graph->config.camera.video.width);
+    params.src_height = static_cast<int>(graph->config.camera.video.height);
+    params.dst_width = static_cast<int>(sub.width);
+    params.dst_height = static_cast<int>(sub.height);
+    params.fps = sub.fps;
+    params.bitrate_kbps = sub.bitrate_kbps;
+    params.gop = sub.gop;
+    params.preset = graph->config.camera.encoder.preset;
+
+    graph->sub_stream_encoder.emplace(graph->sub_stream_tap,
+                                      graph->sub_encoded_ring, params);
+    auto encoder_started = graph->sub_stream_encoder->Start();
+    if (!encoder_started.ok()) {
+      Logger::instance().log(
+          Logger::Level::kError,
+          "sub_stream encoder failed to start: " +
+              encoder_started.error().message + "; disabling sub stream");
+      graph->sub_stream_encoder.reset();
+      return graph->rtsp_server.Start(graph->config.secure_rtsp,
+                                      graph->encoded_ring);
+    }
+
+    graph->sub_mount_descriptor = media::SubMountDescriptor{
+        sub.mount,
+        &graph->sub_encoded_ring,
+        [tap = &graph->sub_stream_tap] {
+          tap->SetActive(true);
+          tap->RequestNext();
+        },
+        [tap = &graph->sub_stream_tap] { tap->SetActive(false); },
+    };
+
+    auto rtsp_started = graph->rtsp_server.Start(
+        graph->config.secure_rtsp, graph->encoded_ring,
+        &graph->sub_mount_descriptor);
+    if (!rtsp_started.ok()) {
+      graph->sub_stream_encoder.reset();
+      return rtsp_started;
+    }
+    return rtsp_started;
+  };
+  dependencies.start_ai = [graph] { return graph->ai_controller.Restart(); };
+  dependencies.start_camera = [graph] {
+    return graph->camera_pipeline.Start(graph->config);
+  };
+  dependencies.start_live = [graph] {
+    if (!graph->config.http.live.enabled) {
+      return common::Result<void>::Ok();
+    }
+    return graph->fragmented_mp4_hub.Start(BuildLiveHubConfig(graph->config));
+  };
+  dependencies.stop_live = [graph] { graph->fragmented_mp4_hub.Stop(); };
+  dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
+  dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
+  dependencies.stop_rtsp = [graph] {
+    graph->rtsp_server.Stop();
+    if (graph->sub_stream_encoder) {
+      graph->sub_stream_encoder->Stop();
+      graph->sub_stream_encoder.reset();
+    }
+  };
+  dependencies.camera_statuses = [graph] {
+    return graph->camera_pipeline.Status(SnapshotMaximumAgeFor(graph->config));
+  };
+  dependencies.live_status = [graph] {
+    return graph->fragmented_mp4_hub.Status();
+  };
+  dependencies.ai_status = [graph] { return graph->ai_runtime.Status(); };
+  dependencies.ai_runner_statuses = [graph] {
+    return graph->ai_runtime.RunnerStatuses();
+  };
+  dependencies.restart_ai = [graph] {
+    return graph->ai_controller.Restart();
+  };
+  dependencies.snapshot = [graph](std::string_view camera_id) {
+    if (camera_id != graph->config.camera.id) {
+      return std::optional<media::JpegBytes>{};
+    }
+    return media::BuildLatestSnapshotJpeg(
+        graph->snapshot_tap, camera_id, SnapshotMaximumAgeFor(graph->config));
+  };
+  dependencies.open_live_stream = [graph](std::string_view camera_id) {
+    if (camera_id != graph->config.camera.id) {
+      return common::Result<media::FragmentRing::Reader>::Err(
+          {"E_LIVE_NOT_FOUND", "camera not found"});
+    }
+    return graph->fragmented_mp4_hub.OpenReader();
+  };
+  dependencies.detection_snapshot = [graph] {
+    return graph->detection_event_store.Snapshot();
+  };
+  dependencies.subscribe_detections =
+      [graph](ai::DetectionBus::Handler handler) {
+        return graph->detection_bus.Subscribe(std::move(handler));
+      };
+  dependencies.per_media_key_zeroize_count = [graph] {
+    return static_cast<std::uint64_t>(
+        graph->rtsp_server.PerMediaKeyZeroizeCount());
+  };
+  return dependencies;
+}
 
 }  // namespace
 
@@ -405,139 +565,28 @@ bool FirmwareRuntime::RunningLocked() const noexcept {
 
 std::chrono::milliseconds FirmwareRuntime::SnapshotMaximumAge(
     const config::AppConfig& config) noexcept {
-  return std::chrono::milliseconds(config.http.snapshot.stale_timeout_ms);
+  return SnapshotMaximumAgeFor(config);
 }
 
 FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     const config::AppConfig& config) {
   auto graph = std::make_shared<ProductionRuntimeGraph>(config);
-  FirmwareRuntimeDependencies dependencies;
-  // start_rtsp/stop_rtsp own the whole sub-stream lifecycle (encoder +
-  // mount descriptor), not just the main mount. This file's overall
-  // Start()/Stop() call sequence is fixed elsewhere (rtsp is the first
-  // component started and the last one stopped) and several existing tests
-  // pin that exact ordering, so it is not changed here. Folding the
-  // sub-stream encoder into these two lambdas instead gets the two
-  // properties that matter without touching that sequence:
-  //   - start: the sub encoder is constructed and Start()ed, and the
-  //     collision/format of sub.mount is validated, strictly before
-  //     rtsp_server.Start() ever registers the sub mount -- so a client can
-  //     never activate a mount with nothing consuming its tap.
-  //   - stop: rtsp_server.Stop() runs first (so no new client can activate
-  //     the sub mount, and any in-flight on_deactivate fires while the tap
-  //     is still alive and the encoder is still around to be told), and
-  //     only then is the sub encoder stopped.
-  dependencies.start_rtsp = [graph] {
-    const auto& sub = graph->config.camera.sub_stream;
-    if (!sub.enabled) {
-      return graph->rtsp_server.Start(graph->config.secure_rtsp,
-                                      graph->encoded_ring);
-    }
+  return BuildDependenciesForGraph(std::move(graph));
+}
 
-    if (sub.mount.empty() || sub.mount.front() != '/' ||
-        sub.mount == graph->config.secure_rtsp.mount) {
-      return common::Result<void>::Err(
-          {"E_CONFIG_SUB_STREAM_MOUNT",
-           "camera.sub_stream.mount must be a non-empty absolute path "
-           "distinct from secure_rtsp.mount"});
-    }
-
-    media::SubStreamEncoderParams params;
-    params.src_width = static_cast<int>(graph->config.camera.video.width);
-    params.src_height = static_cast<int>(graph->config.camera.video.height);
-    params.dst_width = static_cast<int>(sub.width);
-    params.dst_height = static_cast<int>(sub.height);
-    params.fps = sub.fps;
-    params.bitrate_kbps = sub.bitrate_kbps;
-    params.gop = sub.gop;
-    params.preset = graph->config.camera.encoder.preset;
-
-    graph->sub_stream_encoder.emplace(graph->sub_stream_tap,
-                                      graph->sub_encoded_ring, params);
-    auto encoder_started = graph->sub_stream_encoder->Start();
-    if (!encoder_started.ok()) {
-      graph->sub_stream_encoder.reset();
-      return encoder_started;
-    }
-
-    graph->sub_mount_descriptor = media::SubMountDescriptor{
-        sub.mount,
-        &graph->sub_encoded_ring,
-        [tap = &graph->sub_stream_tap] {
-          tap->SetActive(true);
-          tap->RequestNext();
-        },
-        [tap = &graph->sub_stream_tap] { tap->SetActive(false); },
-    };
-
-    auto rtsp_started = graph->rtsp_server.Start(
-        graph->config.secure_rtsp, graph->encoded_ring,
-        &graph->sub_mount_descriptor);
-    if (!rtsp_started.ok()) {
-      graph->sub_stream_encoder.reset();
-      return rtsp_started;
-    }
-    return rtsp_started;
+FirmwareRuntime::ProductionSubStreamHandles
+FirmwareRuntime::BuildProductionDependenciesWithSubStreamHandles(
+    const config::AppConfig& config) {
+  auto graph = std::make_shared<ProductionRuntimeGraph>(config);
+  ProductionSubStreamHandles handles;
+  handles.sub_stream_tap = &graph->sub_stream_tap;
+  handles.sub_encoded_frames = [graph] {
+    return graph->sub_stream_encoder
+               ? graph->sub_stream_encoder->encoded_frames()
+               : std::uint64_t{0};
   };
-  dependencies.start_ai = [graph] { return graph->ai_controller.Restart(); };
-  dependencies.start_camera = [graph] {
-    return graph->camera_pipeline.Start(graph->config);
-  };
-  dependencies.start_live = [graph] {
-    if (!graph->config.http.live.enabled) {
-      return common::Result<void>::Ok();
-    }
-    return graph->fragmented_mp4_hub.Start(BuildLiveHubConfig(graph->config));
-  };
-  dependencies.stop_live = [graph] { graph->fragmented_mp4_hub.Stop(); };
-  dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
-  dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
-  dependencies.stop_rtsp = [graph] {
-    graph->rtsp_server.Stop();
-    if (graph->sub_stream_encoder) {
-      graph->sub_stream_encoder->Stop();
-      graph->sub_stream_encoder.reset();
-    }
-  };
-  dependencies.camera_statuses = [graph] {
-    return graph->camera_pipeline.Status(SnapshotMaximumAge(graph->config));
-  };
-  dependencies.live_status = [graph] {
-    return graph->fragmented_mp4_hub.Status();
-  };
-  dependencies.ai_status = [graph] { return graph->ai_runtime.Status(); };
-  dependencies.ai_runner_statuses = [graph] {
-    return graph->ai_runtime.RunnerStatuses();
-  };
-  dependencies.restart_ai = [graph] {
-    return graph->ai_controller.Restart();
-  };
-  dependencies.snapshot = [graph](std::string_view camera_id) {
-    if (camera_id != graph->config.camera.id) {
-      return std::optional<media::JpegBytes>{};
-    }
-    return media::BuildLatestSnapshotJpeg(
-        graph->snapshot_tap, camera_id, SnapshotMaximumAge(graph->config));
-  };
-  dependencies.open_live_stream = [graph](std::string_view camera_id) {
-    if (camera_id != graph->config.camera.id) {
-      return common::Result<media::FragmentRing::Reader>::Err(
-          {"E_LIVE_NOT_FOUND", "camera not found"});
-    }
-    return graph->fragmented_mp4_hub.OpenReader();
-  };
-  dependencies.detection_snapshot = [graph] {
-    return graph->detection_event_store.Snapshot();
-  };
-  dependencies.subscribe_detections =
-      [graph](ai::DetectionBus::Handler handler) {
-        return graph->detection_bus.Subscribe(std::move(handler));
-      };
-  dependencies.per_media_key_zeroize_count = [graph] {
-    return static_cast<std::uint64_t>(
-        graph->rtsp_server.PerMediaKeyZeroizeCount());
-  };
-  return dependencies;
+  handles.dependencies = BuildDependenciesForGraph(graph);
+  return handles;
 }
 
 bool FirmwareRuntime::DependenciesComplete() const noexcept {

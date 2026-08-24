@@ -16,6 +16,7 @@
 #include "camera_firmware/media/CameraPipeline.hpp"
 #include "camera_firmware/media/JpegEncoder.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
+#include "camera_firmware/media/SubStreamTap.hpp"
 
 namespace camera_firmware::runtime {
 
@@ -91,6 +92,24 @@ class FirmwareRuntime {
 
   [[nodiscard]] static FirmwareRuntimeDependencies BuildProductionDependencies(
       const config::AppConfig& config);
+
+  // Test-only: exposes the persistent sub-stream tap and a live
+  // encoded-frame counter alongside the normal production dependency
+  // lambdas, so a test can drive a real frame through the sub-stream path
+  // across a start_rtsp/stop_rtsp restart and confirm the SAME tap instance
+  // -- which start_rtsp/stop_rtsp reuse across calls, see
+  // ProductionRuntimeGraph in FirmwareRuntime.cpp -- still delivers frames
+  // after being reopened. sub_stream_tap is a non-owning pointer kept alive
+  // by dependencies' captured graph.
+  struct ProductionSubStreamHandles {
+    FirmwareRuntimeDependencies dependencies;
+    media::SubStreamTap* sub_stream_tap{nullptr};
+    std::function<std::uint64_t()> sub_encoded_frames;
+  };
+  [[nodiscard]] static ProductionSubStreamHandles
+  BuildProductionDependenciesWithSubStreamHandles(
+      const config::AppConfig& config);
+
   [[nodiscard]] static std::chrono::milliseconds SnapshotMaximumAge(
       const config::AppConfig& config) noexcept;
   [[nodiscard]] bool DependenciesComplete() const noexcept;
