@@ -229,6 +229,7 @@ add_executable(camera_firmware_media_tests
     unit/media/LoresGeometryTest.cpp
     unit/media/Nv12DownscalerTest.cpp
     unit/media/SnapshotTapTest.cpp
+    unit/media/SubStreamTapTest.cpp
 )
 
 target_link_libraries(camera_firmware_media_tests

@@ -10,6 +10,7 @@ add_library(camera_firmware_media STATIC
     JpegEncoder.cpp
     Nv12Downscaler.cpp
     SnapshotTap.cpp
+    SubStreamTap.cpp
 )
 
 target_include_directories(camera_firmware_media
