@@ -1386,3 +1386,57 @@ TEST(AppConfigTest, RejectsCameraAiMaxFpsAboveMaximum) {
   EXPECT_EQ(cfg.error().code, "E_CONFIG_AI_MAX_FPS");
   EXPECT_EQ(cfg.error().message, "camera.ai.max_fps must be 120 or less");
 }
+
+TEST(AppConfigTest, ParsesCameraSubStreamBlock) {
+  const auto config = LoadInlineConfig(R"(
+camera:
+  sub_stream:
+    enabled: true
+    width: 640
+    height: 360
+    fps: 15
+    bitrate_kbps: 1000
+    gop: 30
+    mount: "/imx708/sub"
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  const auto& s = config.value().camera.sub_stream;
+  EXPECT_TRUE(s.enabled);
+  EXPECT_EQ(s.width, 640u);
+  EXPECT_EQ(s.height, 360u);
+  EXPECT_EQ(s.fps, 15u);
+  EXPECT_EQ(s.bitrate_kbps, 1000u);
+  EXPECT_EQ(s.gop, 30u);
+  EXPECT_EQ(s.mount, "/imx708/sub");
+}
+
+TEST(AppConfigTest, SubStreamDefaultsWhenAbsent) {
+  const auto config = LoadInlineConfig(R"(
+camera:
+  video:
+    width: 1920
+security:
+  enabled: false
+secure_rtsp:
+  enabled: false
+)");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  const auto& s = config.value().camera.sub_stream;
+  EXPECT_FALSE(s.enabled);
+  EXPECT_EQ(s.width, 640u);
+  EXPECT_EQ(s.height, 360u);
+  EXPECT_EQ(s.fps, 15u);
+  EXPECT_EQ(s.bitrate_kbps, 1000u);
+  EXPECT_EQ(s.gop, 30u);
+  EXPECT_EQ(s.mount, "/imx708/sub");
+}
+
+TEST(AppConfigTest, RejectsSubStreamBitrateBelowFloor) {
+  const auto config = LoadInlineConfig(
+      "camera:\n  sub_stream:\n    enabled: true\n    bitrate_kbps: 100\nsecurity:\n  enabled: false\nsecure_rtsp:\n  enabled: false\n");
+  EXPECT_FALSE(config.ok());
+}

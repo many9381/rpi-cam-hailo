@@ -279,6 +279,30 @@ common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
   return common::Result<void>::Ok();
 }
 
+common::Result<void> ValidateCameraSubStreamSemantics(
+    const CameraSubStreamConfig& config) {
+  if (!config.enabled) {
+    return common::Result<void>::Ok();
+  }
+
+  if (config.width == 0U || config.height == 0U || config.fps == 0U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_CAMERA_SUB_STREAM",
+         "camera.sub_stream width, height, and fps must be non-zero when enabled"});
+  }
+
+  if (config.bitrate_kbps < kMinEncoderBitrateKbps ||
+      config.bitrate_kbps > kMaxEncoderBitrateKbps) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_CAMERA_SUB_STREAM",
+         "camera.sub_stream.bitrate_kbps must be between " +
+             std::to_string(kMinEncoderBitrateKbps) + " and " +
+             std::to_string(kMaxEncoderBitrateKbps)});
+  }
+
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
   if (config.security.audit.max_events < 1U ||
       config.security.audit.max_events > 1000000U ||
@@ -321,6 +345,12 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
   if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
       config.secure_rtsp.session_key.path.empty()) {
     return common::Result<void>::Err(SessionKeyError());
+  }
+
+  const auto sub_stream_semantics =
+      ValidateCameraSubStreamSemantics(config.camera.sub_stream);
+  if (!sub_stream_semantics.ok()) {
+    return common::Result<void>::Err(sub_stream_semantics.error());
   }
 
   const auto ai_semantics =
@@ -413,6 +443,17 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
                         config.camera.encoder.bitrate_kbps);
         AssignIfPresent(encoder, "gop", config.camera.encoder.gop);
         AssignIfPresent(encoder, "preset", config.camera.encoder.preset);
+      }
+      const YAML::Node sub_stream = camera["sub_stream"];
+      if (sub_stream) {
+        AssignIfPresent(sub_stream, "enabled", config.camera.sub_stream.enabled);
+        AssignIfPresent(sub_stream, "width", config.camera.sub_stream.width);
+        AssignIfPresent(sub_stream, "height", config.camera.sub_stream.height);
+        AssignIfPresent(sub_stream, "fps", config.camera.sub_stream.fps);
+        AssignIfPresent(sub_stream, "bitrate_kbps",
+                        config.camera.sub_stream.bitrate_kbps);
+        AssignIfPresent(sub_stream, "gop", config.camera.sub_stream.gop);
+        AssignIfPresent(sub_stream, "mount", config.camera.sub_stream.mount);
       }
       const YAML::Node camera_ai = camera["ai"];
       if (camera_ai) {

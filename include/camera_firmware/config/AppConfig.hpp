@@ -71,6 +71,16 @@ struct CameraEncoderConfig {
   std::string preset{"ultrafast"};
 };
 
+struct CameraSubStreamConfig {
+  bool enabled{false};
+  unsigned int width{640};
+  unsigned int height{360};
+  unsigned int fps{15};
+  unsigned int bitrate_kbps{1000};
+  unsigned int gop{30};
+  std::string mount{"/imx708/sub"};
+};
+
 struct AiModelInputConfig {
   unsigned int width{640};
   unsigned int height{640};
@@ -99,6 +109,7 @@ struct CameraConfig {
   CameraSourceConfig source;
   CameraVideoConfig video;
   CameraEncoderConfig encoder;
+  CameraSubStreamConfig sub_stream;
   CameraAiConfig ai;
 };
 
