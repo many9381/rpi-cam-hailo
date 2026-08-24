@@ -20,6 +20,11 @@
 #include <utility>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <drogon/HttpAppFramework.h>
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -968,6 +973,9 @@ constexpr std::size_t kMaximumTransportBodyBytes = 64U * 1024U;
 static_assert(kMaximumTransportBodyBytes >
               kMaximumRuntimeSettingsBodyBytes);
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
+// How long Init waits for the listener to begin accepting after drogon reports
+// readiness (readiness fires before listen(); this bridges that gap).
+constexpr std::chrono::milliseconds kServiceListenerAcceptTimeout{5000};
 constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
 constexpr std::uint32_t kDetectionSseReconnectMs{200};
 
@@ -4952,6 +4960,47 @@ void DetectionSsePendingResponse::Finish(
 
 namespace internal {
 
+// drogon reports startup readiness (registerBeginningAdvice) BEFORE it calls
+// listen() on the listener sockets: run() runs the beginning advices and only
+// then invokes ListenerManager::startListening(). So a caller that unblocks on
+// the readiness signal and immediately connects can hit a bound-but-not-yet-
+// listening socket and get its connection refused. Production clients retry, but
+// a single-shot request (as the integration tests issue) fails, and callers that
+// swallow that first failure then cascade into auth errors. Bridge the gap by
+// probing the listener with a real TCP connect until it is accepting, so Init
+// only returns Ok once the server can actually serve a request.
+bool WaitForListenerAccepting(const std::string& bind_ip, std::uint16_t port,
+                              std::chrono::milliseconds budget) {
+  if (port == 0U) {
+    return true;
+  }
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_port = htons(port);
+  // An unspecified bind address (0.0.0.0) is reached via loopback.
+  const char* target = bind_ip.empty() || bind_ip == "0.0.0.0"
+                           ? "127.0.0.1"
+                           : bind_ip.c_str();
+  if (::inet_pton(AF_INET, target, &address.sin_addr) != 1) {
+    // Non-IPv4 bind address: skip the probe rather than misreport a failure.
+    return true;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd >= 0) {
+      const int result = ::connect(
+          fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+      (void)::close(fd);
+      if (result == 0) {
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return false;
+}
+
 std::thread StartServiceThreadWithTlsOwner(
     std::optional<security::ResolvedTlsMaterial> tls_material,
     std::function<void()> run) {
@@ -5729,6 +5778,23 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         }
         Stop();
         return startup;
+      }
+      // drogon signals readiness before it starts listening, so wait until the
+      // listener actually accepts before returning Ok; otherwise the caller's
+      // first request can race the listen() and be refused.
+      if (args.app_config->http.enabled &&
+          !internal::WaitForListenerAccepting(args.app_config->http.bind_ip,
+                                              args.app_config->http.port,
+                                              kServiceListenerAcceptTimeout)) {
+        auto stopped = internal::StopServiceThreadWithin(
+            server_thread_, server_thread_done_, kServiceThreadStopTimeout,
+            [] { drogon::app().quit(); });
+        running_ = false;
+        (void)stopped;
+        Stop();
+        return common::Result<void>::Err(
+            {"E_SERVICE_START",
+             "HTTP listener did not begin accepting connections"});
       }
     }
   } catch (const std::exception& ex) {
