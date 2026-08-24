@@ -623,8 +623,63 @@ struct SecureRtspServer::Impl {
     static_cast<Impl*>(user_data)->ReleaseTrackedMediaKey(media);
   }
 
+  static void OnSubMediaConfigure(GstRTSPMediaFactory*,
+                                  GstRTSPMedia* media,
+                                  gpointer user_data) {
+    static_cast<Impl*>(user_data)->ConfigureSubRtspMedia(media);
+  }
+
+  static void OnSubMediaUnprepared(GstRTSPMedia*, gpointer user_data) {
+    auto* impl = static_cast<Impl*>(user_data);
+    if (impl->sub_on_deactivate) {
+      impl->sub_on_deactivate();
+    }
+  }
+
+  // Builds a media factory with the shared launch string / TLS / SRTP /
+  // permissions setup used by every mount, and connects the supplied
+  // media-configure callback. The caller owns registering it with the
+  // mount points and clearing the returned pointer once ownership transfers.
+  GstRTSPMediaFactory* BuildMountFactory(const config::SecureRtspConfig& config,
+                                        GCallback configure_callback,
+                                        gpointer configure_user_data) {
+    GstRTSPMediaFactory* new_factory = gst_rtsp_media_factory_new();
+    gst_rtsp_media_factory_set_launch(
+        new_factory,
+        "( appsrc name=feedsrc is-live=true format=time do-timestamp=true "
+        "! h264parse config-interval=1 "
+        "! rtph264pay name=pay0 pt=96 config-interval=1 )");
+    gst_rtsp_media_factory_set_shared(new_factory, TRUE);
+    gst_rtsp_media_factory_set_enable_rtcp(new_factory, TRUE);
+    gst_rtsp_media_factory_set_stop_on_disconnect(new_factory, TRUE);
+    if (config.media_srtp) {
+      gst_rtsp_media_factory_set_profiles(new_factory, GST_RTSP_PROFILE_SAVPF);
+      gst_rtsp_media_factory_set_media_gtype(new_factory,
+                                             SecureRtspMediaGType());
+    }
+    if (config.client_auth.enabled) {
+      GstRTSPPermissions* permissions = gst_rtsp_permissions_new();
+      gst_rtsp_permissions_add_role(
+          permissions,
+          "viewer",
+          GST_RTSP_PERM_MEDIA_FACTORY_ACCESS,
+          G_TYPE_BOOLEAN,
+          TRUE,
+          GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT,
+          G_TYPE_BOOLEAN,
+          TRUE,
+          nullptr);
+      gst_rtsp_media_factory_set_permissions(new_factory, permissions);
+      gst_rtsp_permissions_unref(permissions);
+    }
+    g_signal_connect(new_factory, "media-configure", configure_callback,
+                     configure_user_data);
+    return new_factory;
+  }
+
   Result<void> Start(const config::SecureRtspConfig& config,
-                     media::EncodedRing& encoded_ring) {
+                     media::EncodedRing& encoded_ring,
+                     const media::SubMountDescriptor* sub) {
     if (running) {
       return Result<void>::Err({"E_RTSP_ALREADY_RUNNING",
                                 "SecureRtspServer is already running"});
@@ -689,44 +744,26 @@ struct SecureRtspServer::Impl {
     }
 
     mounts = gst_rtsp_server_get_mount_points(server);
-    factory = gst_rtsp_media_factory_new();
-    gst_rtsp_media_factory_set_launch(
-        factory,
-        "( appsrc name=feedsrc is-live=true format=time do-timestamp=true "
-        "! h264parse config-interval=1 "
-        "! rtph264pay name=pay0 pt=96 config-interval=1 )");
-    gst_rtsp_media_factory_set_shared(factory, TRUE);
-    gst_rtsp_media_factory_set_enable_rtcp(factory, TRUE);
-    gst_rtsp_media_factory_set_stop_on_disconnect(factory, TRUE);
-    if (config.media_srtp) {
-      gst_rtsp_media_factory_set_profiles(factory, GST_RTSP_PROFILE_SAVPF);
-      gst_rtsp_media_factory_set_media_gtype(factory, SecureRtspMediaGType());
-    }
-    if (config.client_auth.enabled) {
-      GstRTSPPermissions* permissions = gst_rtsp_permissions_new();
-      gst_rtsp_permissions_add_role(
-          permissions,
-          "viewer",
-          GST_RTSP_PERM_MEDIA_FACTORY_ACCESS,
-          G_TYPE_BOOLEAN,
-          TRUE,
-          GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT,
-          G_TYPE_BOOLEAN,
-          TRUE,
-          nullptr);
-      gst_rtsp_media_factory_set_permissions(factory, permissions);
-      gst_rtsp_permissions_unref(permissions);
-    }
-    g_signal_connect(factory,
-                     "media-configure",
-                     G_CALLBACK(OnMediaConfigure),
-                     this);
     ring = &encoded_ring;
     media_srtp_enabled = config.media_srtp;
+    factory = BuildMountFactory(config, G_CALLBACK(OnMediaConfigure), this);
 
     gst_rtsp_mount_points_add_factory(mounts, config.mount.c_str(), factory);
     factory = nullptr;
     factory_mounted = true;
+
+    if (sub != nullptr) {
+      sub_ring = sub->ring;
+      sub_on_activate = sub->on_activate;
+      sub_on_deactivate = sub->on_deactivate;
+      sub_mount_path = sub->mount;
+      sub_factory =
+          BuildMountFactory(config, G_CALLBACK(OnSubMediaConfigure), this);
+      gst_rtsp_mount_points_add_factory(mounts, sub->mount.c_str(),
+                                        sub_factory);
+      sub_factory = nullptr;
+      sub_factory_mounted = true;
+    }
 
     context = g_main_context_new();
     source_id = gst_rtsp_server_attach(server, context);
@@ -826,34 +863,58 @@ struct SecureRtspServer::Impl {
     }
   }
 
-  void ConfigureRtspMedia(GstRTSPMedia* media) {
-    if (media_srtp_enabled) {
-      gst_rtsp_media_set_profiles(media, GST_RTSP_PROFILE_SAVPF);
-      GstBuffer* media_key_buffer =
-          session_key.size() > 0U ? BufferFromSessionKey(session_key) : nullptr;
-      if (media_key_buffer != nullptr) {
-        g_object_set_qdata_full(G_OBJECT(media),
-                                SecureKeyQuark(),
-                                media_key_buffer,
-                                ZeroizeAndUnrefGstBuffer);
-        if (TrackMediaKey(media)) {
-          PerMediaKeyAllocationCounter().fetch_add(1U,
-                                                   std::memory_order_relaxed);
-        } else {
-          g_object_set_qdata_full(
-              G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
-          SetAttachFailure(
-              media,
-              "E_SRTP_KEY_TRACKING: failed to track per-media SRTP key");
-        }
+  // Attaches the per-media SRTP session key (and tracks it for cleanup on
+  // "unprepared") when SRTP media is enabled. Shared by every mount so both
+  // the main and sub media get identical secure-media wiring.
+  void AttachSrtpKeyIfEnabled(GstRTSPMedia* media) {
+    if (!media_srtp_enabled) {
+      return;
+    }
+    gst_rtsp_media_set_profiles(media, GST_RTSP_PROFILE_SAVPF);
+    GstBuffer* media_key_buffer =
+        session_key.size() > 0U ? BufferFromSessionKey(session_key) : nullptr;
+    if (media_key_buffer != nullptr) {
+      g_object_set_qdata_full(G_OBJECT(media),
+                              SecureKeyQuark(),
+                              media_key_buffer,
+                              ZeroizeAndUnrefGstBuffer);
+      if (TrackMediaKey(media)) {
+        PerMediaKeyAllocationCounter().fetch_add(1U,
+                                                 std::memory_order_relaxed);
       } else {
+        g_object_set_qdata_full(
+            G_OBJECT(media), SecureKeyQuark(), nullptr, nullptr);
         SetAttachFailure(
             media,
-            "E_SRTP_KEY_BUFFER: failed to allocate per-media SRTP key buffer");
+            "E_SRTP_KEY_TRACKING: failed to track per-media SRTP key");
       }
+    } else {
+      SetAttachFailure(
+          media,
+          "E_SRTP_KEY_BUFFER: failed to allocate per-media SRTP key buffer");
     }
+  }
+
+  void ConfigureRtspMedia(GstRTSPMedia* media) {
+    AttachSrtpKeyIfEnabled(media);
     if (ring != nullptr) {
       ConfigureAppSrc(media, *ring);
+    }
+  }
+
+  void ConfigureSubRtspMedia(GstRTSPMedia* media) {
+    AttachSrtpKeyIfEnabled(media);
+    if (sub_ring != nullptr) {
+      ConfigureAppSrc(media, *sub_ring);
+    }
+    // The sub media is on-demand: "unprepared" always fires the deactivate
+    // edge, independent of whether SRTP key tracking connected its own
+    // "unprepared" handler above. GObject cleans this connection up when the
+    // media object is destroyed, so no explicit tracking/disconnect needed.
+    g_signal_connect(media, "unprepared", G_CALLBACK(OnSubMediaUnprepared),
+                     this);
+    if (sub_on_activate) {
+      sub_on_activate();
     }
   }
 
@@ -918,6 +979,14 @@ struct SecureRtspServer::Impl {
       g_object_unref(factory);
       factory = nullptr;
     }
+    if (sub_factory_mounted && mounts != nullptr) {
+      gst_rtsp_mount_points_remove_factory(mounts, sub_mount_path.c_str());
+      sub_factory_mounted = false;
+    }
+    if (sub_factory != nullptr) {
+      g_object_unref(sub_factory);
+      sub_factory = nullptr;
+    }
     if (server != nullptr && mounts != nullptr) {
       gst_rtsp_server_set_mount_points(server, nullptr);
     }
@@ -946,6 +1015,10 @@ struct SecureRtspServer::Impl {
     }
     session_key = SrtpSessionKey();
     ring = nullptr;
+    sub_ring = nullptr;
+    sub_on_activate = nullptr;
+    sub_on_deactivate = nullptr;
+    sub_mount_path.clear();
     media_srtp_enabled = false;
     running = false;
     Logger::instance().log(Logger::Level::kInfo, "SRTP key cleanup complete");
@@ -998,6 +1071,14 @@ struct SecureRtspServer::Impl {
   bool media_srtp_enabled{false};
   bool factory_mounted{false};
   bool running{false};
+  // Optional second ("sub-stream") mount; only populated when a
+  // SubMountDescriptor is passed to Start.
+  GstRTSPMediaFactory* sub_factory{nullptr};
+  media::EncodedRing* sub_ring{nullptr};
+  std::function<void()> sub_on_activate;
+  std::function<void()> sub_on_deactivate;
+  std::string sub_mount_path;
+  bool sub_factory_mounted{false};
   std::mutex media_key_mutex;
   std::vector<TrackedMediaKey> tracked_media_keys;
   std::mutex lifecycle_mutex;
@@ -1178,10 +1259,11 @@ SecureRtspServer::SecureRtspServer() : impl_(std::make_unique<Impl>()) {}
 SecureRtspServer::~SecureRtspServer() = default;
 
 Result<void> SecureRtspServer::Start(const config::SecureRtspConfig& config,
-                                     media::EncodedRing& encoded_ring) {
+                                     media::EncodedRing& main_ring,
+                                     const media::SubMountDescriptor* sub) {
   std::lock_guard lock(impl_->lifecycle_mutex);
   impl_->config_cache = config;
-  return impl_->Start(config, encoded_ring);
+  return impl_->Start(config, main_ring, sub);
 }
 
 Result<void> SecureRtspServer::ReloadClientCredentials() {

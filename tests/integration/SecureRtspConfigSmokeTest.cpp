@@ -3,6 +3,7 @@
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
 #include <arpa/inet.h>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <netinet/in.h>
@@ -160,6 +161,52 @@ TEST(SecureRtspConfigSmokeTest, SecureServerStartStopKeepsOnlyActiveKeyOwner) {
   ASSERT_TRUE(started.ok()) << started.error().code << ": "
                             << started.error().message;
   server.Stop();
+}
+
+TEST(SecureRtspConfigSmokeTest, SecureServerRegistersOptionalSubMountAndStopsCleanly) {
+  const auto key_path =
+      std::filesystem::temp_directory_path() /
+      "camera-firmware-test-sub-mount-srtp.hex";
+  {
+    std::ofstream out(key_path);
+    out << std::string(60, '3');
+  }
+
+  camera_firmware::config::SecureRtspConfig config;
+  config.bind_ip = "127.0.0.1";
+  config.port = FindFreeLoopbackPort();
+  config.mount = "/test/sub-main";
+  config.control_tls = true;
+  config.allow_development_self_signed_tls = true;
+  config.media_srtp = true;
+  config.keying = "sdes-over-rtsps";
+  config.session_key.path = key_path.string();
+
+  camera_firmware::media::EncodedRing main_ring(4);
+  camera_firmware::media::EncodedRing sub_ring(4);
+
+  std::atomic<int> activate_count{0};
+  std::atomic<int> deactivate_count{0};
+  camera_firmware::media::SubMountDescriptor sub;
+  sub.mount = "/test/sub-stream";
+  sub.ring = &sub_ring;
+  sub.on_activate = [&activate_count] { activate_count.fetch_add(1); };
+  sub.on_deactivate = [&deactivate_count] { deactivate_count.fetch_add(1); };
+
+  camera_firmware::rtsp::SecureRtspServer server;
+  auto started = server.Start(config, main_ring, &sub);
+
+  std::filesystem::remove(key_path);
+  ASSERT_TRUE(started.ok()) << started.error().code << ": "
+                            << started.error().message;
+  // No client ever connects in this test, so the on-demand edges must stay
+  // quiet; real prepared/unprepared firing needs an actual RTSP client and
+  // is covered on-device.
+  EXPECT_EQ(activate_count.load(), 0);
+  EXPECT_EQ(deactivate_count.load(), 0);
+  server.Stop();
+  EXPECT_EQ(activate_count.load(), 0);
+  EXPECT_EQ(deactivate_count.load(), 0);
 }
 
 TEST(SecureRtspConfigSmokeTest, SecureMediaSemanticsUseSdesOverRtsps) {

@@ -1,12 +1,28 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
+
+namespace camera_firmware::media {
+
+// Describes an optional second ("sub-stream") RTSP mount fed from its own
+// EncodedRing, activated on demand as clients attach/detach.
+struct SubMountDescriptor {
+  std::string mount;
+  EncodedRing* ring;
+  // Called on the sub media's first-client edge (media-configure/prepared).
+  std::function<void()> on_activate;
+  // Called on the last-client edge (unprepared).
+  std::function<void()> on_deactivate;
+};
+
+}  // namespace camera_firmware::media
 
 namespace camera_firmware::rtsp {
 
@@ -46,7 +62,8 @@ class SecureRtspServer {
 
   [[nodiscard]] common::Result<void> Start(
       const config::SecureRtspConfig& config,
-      media::EncodedRing& encoded_ring);
+      media::EncodedRing& main_ring,
+      const media::SubMountDescriptor* sub = nullptr);
   [[nodiscard]] common::Result<void> ReloadClientCredentials();
   void Stop();
   [[nodiscard]] std::size_t PerMediaKeyAllocationCount() const noexcept;
