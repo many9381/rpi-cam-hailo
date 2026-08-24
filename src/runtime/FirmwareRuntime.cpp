@@ -13,6 +13,8 @@
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
+#include "camera_firmware/media/SubStreamEncoder.hpp"
+#include "camera_firmware/media/SubStreamTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
 namespace camera_firmware::runtime {
@@ -71,7 +73,9 @@ struct ProductionRuntimeGraph {
             config.camera.ai.max_fps == 0U
                 ? std::chrono::milliseconds{0}
                 : std::chrono::milliseconds{1000U / config.camera.ai.max_fps}),
-        camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring),
+        camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring,
+                        configured.camera.sub_stream.enabled ? &sub_stream_tap
+                                                              : nullptr),
         fragmented_mp4_hub(encoded_ring),
         ai_controller(config, ai_runtime, ai_frame_pump) {}
 
@@ -83,6 +87,18 @@ struct ProductionRuntimeGraph {
   ai::AiRuntime ai_runtime;
   ai::AiFramePump ai_frame_pump;
   media::EncodedRing encoded_ring{128U};
+  // Sub-stream members are declared (and thus constructed/destroyed) before
+  // camera_pipeline and rtsp_server: camera_pipeline takes &sub_stream_tap at
+  // construction, and rtsp_server's Stop() can synchronously invoke the sub
+  // mount's on_deactivate callback (captures &sub_stream_tap) via its
+  // post-join client teardown -- so the tap must still be alive whenever
+  // rtsp_server is stopped or destroyed. Declaring these members earlier
+  // means they are destroyed later (member destruction order is the reverse
+  // of declaration order), i.e. strictly after rtsp_server.
+  media::EncodedRing sub_encoded_ring{128U};
+  media::SubStreamTap sub_stream_tap;
+  media::SubMountDescriptor sub_mount_descriptor{};
+  std::optional<media::SubStreamEncoder> sub_stream_encoder;
   media::CameraPipeline camera_pipeline;
   media::FragmentedMp4Hub fragmented_mp4_hub;
   ai::AiRuntimeController ai_controller;
@@ -396,9 +412,72 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     const config::AppConfig& config) {
   auto graph = std::make_shared<ProductionRuntimeGraph>(config);
   FirmwareRuntimeDependencies dependencies;
+  // start_rtsp/stop_rtsp own the whole sub-stream lifecycle (encoder +
+  // mount descriptor), not just the main mount. This file's overall
+  // Start()/Stop() call sequence is fixed elsewhere (rtsp is the first
+  // component started and the last one stopped) and several existing tests
+  // pin that exact ordering, so it is not changed here. Folding the
+  // sub-stream encoder into these two lambdas instead gets the two
+  // properties that matter without touching that sequence:
+  //   - start: the sub encoder is constructed and Start()ed, and the
+  //     collision/format of sub.mount is validated, strictly before
+  //     rtsp_server.Start() ever registers the sub mount -- so a client can
+  //     never activate a mount with nothing consuming its tap.
+  //   - stop: rtsp_server.Stop() runs first (so no new client can activate
+  //     the sub mount, and any in-flight on_deactivate fires while the tap
+  //     is still alive and the encoder is still around to be told), and
+  //     only then is the sub encoder stopped.
   dependencies.start_rtsp = [graph] {
-    return graph->rtsp_server.Start(graph->config.secure_rtsp,
-                                    graph->encoded_ring);
+    const auto& sub = graph->config.camera.sub_stream;
+    if (!sub.enabled) {
+      return graph->rtsp_server.Start(graph->config.secure_rtsp,
+                                      graph->encoded_ring);
+    }
+
+    if (sub.mount.empty() || sub.mount.front() != '/' ||
+        sub.mount == graph->config.secure_rtsp.mount) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_SUB_STREAM_MOUNT",
+           "camera.sub_stream.mount must be a non-empty absolute path "
+           "distinct from secure_rtsp.mount"});
+    }
+
+    media::SubStreamEncoderParams params;
+    params.src_width = static_cast<int>(graph->config.camera.video.width);
+    params.src_height = static_cast<int>(graph->config.camera.video.height);
+    params.dst_width = static_cast<int>(sub.width);
+    params.dst_height = static_cast<int>(sub.height);
+    params.fps = sub.fps;
+    params.bitrate_kbps = sub.bitrate_kbps;
+    params.gop = sub.gop;
+    params.preset = graph->config.camera.encoder.preset;
+
+    graph->sub_stream_encoder.emplace(graph->sub_stream_tap,
+                                      graph->sub_encoded_ring, params);
+    auto encoder_started = graph->sub_stream_encoder->Start();
+    if (!encoder_started.ok()) {
+      graph->sub_stream_encoder.reset();
+      return encoder_started;
+    }
+
+    graph->sub_mount_descriptor = media::SubMountDescriptor{
+        sub.mount,
+        &graph->sub_encoded_ring,
+        [tap = &graph->sub_stream_tap] {
+          tap->SetActive(true);
+          tap->RequestNext();
+        },
+        [tap = &graph->sub_stream_tap] { tap->SetActive(false); },
+    };
+
+    auto rtsp_started = graph->rtsp_server.Start(
+        graph->config.secure_rtsp, graph->encoded_ring,
+        &graph->sub_mount_descriptor);
+    if (!rtsp_started.ok()) {
+      graph->sub_stream_encoder.reset();
+      return rtsp_started;
+    }
+    return rtsp_started;
   };
   dependencies.start_ai = [graph] { return graph->ai_controller.Restart(); };
   dependencies.start_camera = [graph] {
@@ -413,7 +492,13 @@ FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
   dependencies.stop_live = [graph] { graph->fragmented_mp4_hub.Stop(); };
   dependencies.stop_camera = [graph] { graph->camera_pipeline.Stop(); };
   dependencies.stop_ai = [graph] { graph->ai_controller.Stop(); };
-  dependencies.stop_rtsp = [graph] { graph->rtsp_server.Stop(); };
+  dependencies.stop_rtsp = [graph] {
+    graph->rtsp_server.Stop();
+    if (graph->sub_stream_encoder) {
+      graph->sub_stream_encoder->Stop();
+      graph->sub_stream_encoder.reset();
+    }
+  };
   dependencies.camera_statuses = [graph] {
     return graph->camera_pipeline.Status(SnapshotMaximumAge(graph->config));
   };

@@ -489,6 +489,42 @@ TEST(FirmwareRuntimeTest,
                    .has_value());
 }
 
+TEST(FirmwareRuntimeTest,
+     ProductionSubStreamMountCollisionFailsFastWithoutStartingRtsp) {
+  auto config = CandidateConfig();
+  config.camera.sub_stream.enabled = true;
+  config.camera.sub_stream.mount = config.secure_rtsp.mount;
+
+  auto dependencies =
+      FirmwareRuntimeTestAccess::ProductionDependencies(config);
+  const auto started = dependencies.start_rtsp();
+
+  ASSERT_FALSE(started.ok());
+  EXPECT_EQ(started.error().code, "E_CONFIG_SUB_STREAM_MOUNT");
+
+  // stop_rtsp must be safe even though start_rtsp bailed out before
+  // touching either the RTSP server or the sub encoder.
+  dependencies.stop_rtsp();
+}
+
+TEST(FirmwareRuntimeTest,
+     ProductionSubStreamEncoderStartsAndStopsWhenMountIsDistinct) {
+  auto config = CandidateConfig();
+  config.camera.sub_stream.enabled = true;
+  ASSERT_NE(config.camera.sub_stream.mount, config.secure_rtsp.mount);
+
+  auto dependencies =
+      FirmwareRuntimeTestAccess::ProductionDependencies(config);
+  const auto started = dependencies.start_rtsp();
+
+  ASSERT_TRUE(started.ok()) << started.error().message;
+
+  // rtsp is disabled in CandidateConfig(), so this exercises the sub
+  // encoder's own Start()/Stop() (software x264 + swscale, no hardware)
+  // without needing a real RTSP/TLS stack.
+  dependencies.stop_rtsp();
+}
+
 TEST(FirmwareRuntimeTest, MissingStopDependencyFailsBeforeStartingComponents) {
   config::AppConfig config;
   Calls calls;

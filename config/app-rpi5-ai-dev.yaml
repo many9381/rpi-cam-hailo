@@ -16,6 +16,14 @@ camera:
     bitrate_kbps: 6000
     gop: 13
     preset: ultrafast
+  sub_stream:
+    enabled: true
+    width: 640
+    height: 360
+    fps: 15
+    bitrate_kbps: 1000
+    gop: 30
+    mount: /imx708/sub
   ai:
     enabled: true
     model_ids: [objects]
