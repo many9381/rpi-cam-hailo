@@ -119,4 +119,28 @@ TEST(SubStreamTapTest, ActiveReflectsSetActive) {
   EXPECT_FALSE(tap.active());
 }
 
+TEST(SubStreamTapTest, PublishAfterCloseIsDroppedImmediately) {
+  SubStreamTap tap;
+  tap.SetActive(true);
+  tap.Close();
+
+  int releases = 0;
+  tap.PublishLatest(MakeLease(releases));
+  // A publish that races shutdown must not linger; its lease releases at once
+  // instead of being stored where nothing will ever read or free it.
+  EXPECT_EQ(releases, 1);
+  EXPECT_FALSE(tap.WaitNext(std::chrono::milliseconds(10)).has_value());
+}
+
+TEST(SubStreamTapTest, PublishWhileInactiveIsDropped) {
+  SubStreamTap tap;
+  int releases = 0;
+  tap.PublishLatest(MakeLease(releases));
+  // Never active: the lease must not be squirreled away for a later window.
+  EXPECT_EQ(releases, 1);
+
+  tap.SetActive(true);
+  EXPECT_FALSE(tap.WaitNext(std::chrono::milliseconds(10)).has_value());
+}
+
 }  // namespace

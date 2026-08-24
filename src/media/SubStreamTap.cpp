@@ -18,8 +18,17 @@ void SubStreamTap::PublishLatest(FrameLease frame) {
   std::optional<FrameLease> superseded;
   {
     std::lock_guard lock(mutex_);
-    superseded = std::move(pending_);
-    pending_ = std::move(frame);
+    if (!active_ || closed_) {
+      // Nobody will ever read pending_ again on this side of the gate (an
+      // inactive tap never satisfies WaitNext's predicate, and a closed tap
+      // never will again): drop the incoming frame instead of stashing it
+      // where it would pin its buffer forever or resurface as a stale frame
+      // in a later active window.
+      superseded = std::move(frame);
+    } else {
+      superseded = std::move(pending_);
+      pending_ = std::move(frame);
+    }
   }
   cv_.notify_one();
   // superseded's lease releases here, off the lock, requeuing its buffer.

@@ -37,7 +37,9 @@ class SubStreamTap {
   // Producer (CameraPipeline) side.
 
   // True only if the tap is active and the consumer has an outstanding,
-  // one-shot request for the next frame (the request is cleared either way).
+  // one-shot request for the next frame. The request is consumed (cleared)
+  // only on that active/open path; while inactive or closed it is left
+  // untouched, so it is still pending once the tap becomes active again.
   [[nodiscard]] bool ConsumeDemand() noexcept;
 
   // Hand the latest lease to the waiting consumer, superseding (and
