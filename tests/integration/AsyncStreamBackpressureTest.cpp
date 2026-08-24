@@ -55,24 +55,36 @@ class SocketFd {
   int descriptor_;
 };
 
+// Reserve an ephemeral loopback port and HOLD it open (leaked fd) for the life
+// of the process. Closing the reservation before the TcpServer binds leaves a
+// window where the kernel can reassign the port; the server's later bind() then
+// fails and trantor's Socket::bindAddress calls exit(1), killing the process.
+// Holding the socket bound (SO_REUSEADDR, never listened on) reserves the port,
+// and SO_REUSEADDR lets the server (reUseAddr=true by default) bind it too.
 std::uint16_t ReserveLoopbackPort() {
-  SocketFd socket(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
-  if (socket.get() < 0) {
+  const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    return 0U;
+  }
+  const int reuse = 1;
+  if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
+    (void)::close(fd);
     return 0U;
   }
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   address.sin_port = 0;
-  if (::bind(socket.get(), reinterpret_cast<sockaddr*>(&address),
-             sizeof(address)) != 0) {
+  if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    (void)::close(fd);
     return 0U;
   }
   socklen_t size = sizeof(address);
-  if (::getsockname(socket.get(), reinterpret_cast<sockaddr*>(&address),
-                    &size) != 0) {
+  if (::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &size) != 0) {
+    (void)::close(fd);
     return 0U;
   }
+  // Leak the reservation socket so the port stays held until the server binds.
   return ntohs(address.sin_port);
 }
 

@@ -352,10 +352,23 @@ std::string QueryText(const std::filesystem::path& path, const char* sql) {
   return value;
 }
 
+// Reserve an ephemeral loopback port and HOLD it open (leaked fd) for the life
+// of the process. Closing the reservation before the server binds leaves a
+// window where the kernel can reassign the port; the server's later bind() then
+// fails and trantor's Socket::bindAddress calls exit(1), killing the process --
+// a flaky "Bad server address". Holding the socket bound (SO_REUSEADDR, never
+// listened on) reserves the port, and SO_REUSEADDR lets the server bind it too.
 std::uint16_t ReserveLoopbackPort() {
   const int descriptor = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (descriptor < 0) {
     throw std::system_error(errno, std::generic_category(), "socket");
+  }
+  const int reuse = 1;
+  if (::setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                   sizeof(reuse)) != 0) {
+    const int error = errno;
+    (void)::close(descriptor);
+    throw std::system_error(error, std::generic_category(), "setsockopt");
   }
   sockaddr_in address{};
   address.sin_family = AF_INET;
@@ -374,7 +387,7 @@ std::uint16_t ReserveLoopbackPort() {
     (void)::close(descriptor);
     throw std::system_error(error, std::generic_category(), "getsockname");
   }
-  (void)::close(descriptor);
+  // Leak the reservation socket so the port stays held until the server binds.
   return ntohs(address.sin_port);
 }
 

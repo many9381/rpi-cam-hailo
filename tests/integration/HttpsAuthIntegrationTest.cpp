@@ -211,10 +211,27 @@ class AuditAuthorizationShutdownScope {
   bool original_;
 };
 
+// Reserve an ephemeral loopback port and HOLD it open for the life of the
+// process. Closing the reservation socket before the server binds (as the old
+// version did) leaves a window in which the kernel can hand the same port to
+// another socket -- a client's ephemeral connection, a prior test's TIME_WAIT
+// entry -- and the server's later bind() then fails. trantor's Socket::bindAddress
+// calls exit(1) on bind failure, so that window silently kills the whole test
+// process and shows up as a flaky "Bad server address" client error. Keeping the
+// reservation socket bound (SO_REUSEADDR, never listened on) holds the port so no
+// other socket can take it, while SO_REUSEADDR lets the server bind the same port.
+// The fd is intentionally leaked: the process is short-lived and binds a bounded
+// number of ports, and the reservation must outlive every server that uses it.
 std::uint16_t ReserveLoopbackPort() {
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) {
     throw std::system_error(errno, std::generic_category(), "socket");
+  }
+  const int reuse = 1;
+  if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
+    const int error = errno;
+    (void)::close(fd);
+    throw std::system_error(error, std::generic_category(), "setsockopt");
   }
   sockaddr_in address{};
   address.sin_family = AF_INET;
@@ -232,9 +249,9 @@ std::uint16_t ReserveLoopbackPort() {
     (void)::close(fd);
     throw std::system_error(error, std::generic_category(), "getsockname");
   }
-  const std::uint16_t port = ntohs(address.sin_port);
-  (void)::close(fd);
-  return port;
+  // Hold the reservation open (leaked) so the port cannot be reused before the
+  // server binds it. Not listened on, so all connections go to the server.
+  return ntohs(address.sin_port);
 }
 
 struct HttpResult {
