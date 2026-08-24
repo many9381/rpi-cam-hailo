@@ -96,6 +96,26 @@ bool CheckedAdd(std::size_t left, std::size_t right, std::size_t& result) {
   return true;
 }
 
+bool CheckedMultiply(std::size_t left, std::size_t right, std::size_t& result) {
+  if (left != 0U && right > std::numeric_limits<std::size_t>::max() / left) {
+    return false;
+  }
+  result = left * right;
+  return true;
+}
+
+// True only if `plane` is declared long enough to actually hold `rows` rows
+// of `plane.stride` bytes each. Both MapPlaneReadOnly's mmap size and every
+// downstream read (Nv12Downscaler/sws_scale) are derived from `rows` at
+// `plane.stride`, so this must hold before either runs or a short/lying
+// plane length lets the scaler read straight past the mapped region.
+bool PlaneCoversRows(const FramePlane& plane, std::size_t rows) {
+  std::size_t required = 0U;
+  return CheckedMultiply(static_cast<std::size_t>(plane.stride), rows,
+                         required) &&
+         required <= plane.length;
+}
+
 std::optional<MappedPlane> MapPlaneReadOnly(const FramePlane& plane) {
   if (plane.dmabuf_fd < 0 || plane.length == 0U) {
     return std::nullopt;
@@ -201,6 +221,15 @@ struct SubStreamEncoder::Impl {
     while (running.load(std::memory_order_relaxed)) {
       auto lease = tap.WaitNext(kPollTimeout);
       if (!lease.has_value()) {
+        // Re-check `running` here, before the backoff sleep below: Stop()
+        // sets running=false and then closes the tap, and WaitNext on a
+        // closed (or still-inactive) tap returns immediately rather than
+        // after the timeout, so without this we could otherwise start a
+        // fresh ~20ms sleep after shutdown was already requested and make
+        // Stop() wait it out for nothing.
+        if (!running.load(std::memory_order_relaxed)) {
+          break;
+        }
         // WaitNext returns immediately (not after the timeout) whenever the
         // tap is inactive -- e.g. no sub-stream RTSP client connected yet.
         // Back off ourselves so that window doesn't become a busy-spin.
@@ -217,6 +246,31 @@ struct SubStreamEncoder::Impl {
   void ProcessFrame(const FrameLease& lease) {
     const FrameHandle& handle = lease.handle();
     if (handle.format != "NV12" || handle.plane_count < 2U) {
+      ++error_count;
+      return;
+    }
+
+    // The downscaler and x264 are both configured for params.src_width/
+    // height; Nv12Downscaler::Scale only rejects a mismatch against ITS OWN
+    // src.width/height fields, which we'd otherwise set from params, not
+    // from the handle -- so a lease whose real geometry differs from what
+    // we're configured for would sail through that guard unnoticed. Reject
+    // it here instead, before anything is mapped.
+    if (handle.width != static_cast<std::uint32_t>(params.src_width) ||
+        handle.height != static_cast<std::uint32_t>(params.src_height)) {
+      ++error_count;
+      return;
+    }
+
+    // MapPlaneReadOnly sizes its mmap from plane.offset+plane.length, and
+    // the scale/encode below reads params.src_height (Y) / half that (UV)
+    // rows of plane.stride bytes regardless of what actually got mapped. If
+    // a plane's declared length can't cover that many rows -- a short or
+    // inconsistent DMABUF plane -- reading would walk past the mapping.
+    const auto y_rows = static_cast<std::size_t>(params.src_height);
+    const auto uv_rows = y_rows / 2U;
+    if (!PlaneCoversRows(handle.planes[0], y_rows) ||
+        !PlaneCoversRows(handle.planes[1], uv_rows)) {
       ++error_count;
       return;
     }
