@@ -132,6 +132,37 @@ TEST(SubStreamTapTest, PublishAfterCloseIsDroppedImmediately) {
   EXPECT_FALSE(tap.WaitNext(std::chrono::milliseconds(10)).has_value());
 }
 
+// Mirrors EncodeMailboxTest.ReopenReturnsAClosedMailboxToService: a runtime
+// restart reuses this same tap instance (it is a persistent member of the
+// runtime graph, see SubStreamEncoder::Impl::Start()'s tap.Reopen() call),
+// so after Close() permanently shut it down, Reopen() must bring it back to
+// service for a fresh SubStreamEncoder run -- and must not double-release
+// whatever lease Close() already dropped on the way out.
+TEST(SubStreamTapTest, ReopenAfterCloseRestoresService) {
+  SubStreamTap tap;
+  tap.SetActive(true);
+  int stale_releases = 0;
+  int fresh_releases = 0;
+
+  tap.PublishLatest(MakeLease(stale_releases));
+  tap.Close();
+  EXPECT_EQ(stale_releases, 1);  // Close() drops the pending lease.
+
+  tap.Reopen();
+  EXPECT_EQ(stale_releases, 1);  // Reopen() must not double-release it.
+
+  tap.SetActive(true);
+  tap.RequestNext();
+  EXPECT_TRUE(tap.ConsumeDemand());
+
+  tap.PublishLatest(MakeLease(fresh_releases));
+  auto got = tap.WaitNext(std::chrono::milliseconds(50));
+  ASSERT_TRUE(got.has_value());
+  EXPECT_TRUE(got->valid());
+  EXPECT_EQ(fresh_releases, 0);
+  EXPECT_EQ(stale_releases, 1);
+}
+
 TEST(SubStreamTapTest, PublishWhileInactiveIsDropped) {
   SubStreamTap tap;
   int releases = 0;

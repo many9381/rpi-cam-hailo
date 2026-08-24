@@ -84,4 +84,18 @@ void SubStreamTap::Close() noexcept {
   // dropped's lease releases here, off the lock, requeuing its buffer.
 }
 
+void SubStreamTap::Reopen() noexcept {
+  std::optional<FrameLease> dropped;
+  {
+    std::lock_guard lock(mutex_);
+    closed_ = false;
+    wants_frame_ = false;
+    dropped = std::move(pending_);
+    pending_.reset();
+  }
+  // dropped's lease releases here, off the lock -- same discipline as
+  // Close()/SetActive(false): never destruct a FrameLease while holding
+  // mutex_.
+}
+
 }  // namespace camera_firmware::media

@@ -154,6 +154,14 @@ struct SubStreamEncoder::Impl {
       return Result<void>::Err(
           {"E_SUBENC_RUNNING", "sub-stream encoder is already running"});
     }
+    // The tap is a persistent member of the runtime graph, reused across
+    // restarts, while this Impl is reconstructed fresh each time; a prior
+    // run's Stop() left it permanently Close()d, so it must be reopened here
+    // -- before the worker thread starts touching it -- symmetric to
+    // CameraPipeline::Start()'s encode_mailbox.Reopen(). A brand-new tap
+    // that was never closed tolerates Reopen() the same as EncodeMailbox
+    // does.
+    tap.Reopen();
     if (!downscaler.valid()) {
       return Result<void>::Err(
           {"E_SUBENC_SCALER", "failed to create sub-stream NV12 downscaler"});

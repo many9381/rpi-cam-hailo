@@ -66,6 +66,12 @@ class SubStreamTap {
   // forever after.
   void Close() noexcept;
 
+  // Return a closed tap to service for a fresh sub-encoder run (the runtime
+  // graph reuses one tap instance across restarts, mirroring
+  // EncodeMailbox::Reopen()). Clears closed_ and any outstanding one-shot
+  // demand, and drops any leftover pending lease before reopening.
+  void Reopen() noexcept;
+
  private:
   mutable std::mutex mutex_;
   std::condition_variable cv_;
