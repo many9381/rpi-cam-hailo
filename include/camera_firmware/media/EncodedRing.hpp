@@ -19,6 +19,9 @@ class EncodedRing {
     [[nodiscard]] std::optional<EncodedAccessUnit> WaitNext(
         std::chrono::milliseconds timeout);
     [[nodiscard]] bool valid() const noexcept;
+    // Total frames this reader missed because the ring slid past its cursor
+    // before it read them (per-reader, unlike the ring-wide overrun_total).
+    [[nodiscard]] std::uint64_t skipped_total() const noexcept;
 
    private:
     struct CursorState;

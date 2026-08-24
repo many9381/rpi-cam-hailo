@@ -208,6 +208,7 @@ struct FragmentedMp4Hub::Impl {
     }
     if (current_ring) {
       status.ring_overrun_total = current_ring->overrun_total();
+      status.input_reader_skipped = input_reader_skipped;
       status.retained_bytes = current_ring->retained_bytes();
       status.active_readers = current_ring->active_readers();
     }
@@ -338,6 +339,7 @@ struct FragmentedMp4Hub::Impl {
       {
         std::lock_guard lock(mutex);
         ++input_access_units;
+        input_reader_skipped = input_reader.skipped_total();
       }
       if (access_unit.bytes == nullptr || access_unit.bytes->empty()) {
         std::lock_guard lock(mutex);
@@ -525,6 +527,7 @@ struct FragmentedMp4Hub::Impl {
   std::string state{"stopped"};
   std::uint64_t input_access_units{0U};
   std::uint64_t pushed_access_units{0U};
+  std::uint64_t input_reader_skipped{0U};
   std::uint64_t dropped_until_keyframe{0U};
   std::uint64_t input_error_count{0U};
   std::uint64_t published_fragments{0U};

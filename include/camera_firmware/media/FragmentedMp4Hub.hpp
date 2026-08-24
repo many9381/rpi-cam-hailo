@@ -31,6 +31,9 @@ struct FragmentedMp4HubStatus {
   std::uint64_t published_fragments{0U};
   std::uint64_t generation{0U};
   std::uint64_t ring_overrun_total{0U};
+  // Frames this hub's own encoded-ring reader missed by falling behind
+  // (per-reader, unlike ring_overrun_total which counts every ring slide).
+  std::uint64_t input_reader_skipped{0U};
   std::size_t retained_bytes{0U};
   std::size_t active_readers{0U};
   std::string last_error_code;
