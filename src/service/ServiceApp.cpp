@@ -5643,6 +5643,19 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         }
       }
       if (!initialized_) {
+        // drogon is a process singleton whose quit() resets its
+        // ListenerManager to null and never rebuilds it, so a second
+        // addListener() anywhere in the process dereferences null and crashes.
+        // Production initializes exactly one ServiceApp once, so this never
+        // fires there; the guard turns a would-be segfault (e.g. a second
+        // ServiceApp constructed in one process, as several in-binary test
+        // runs do) into a clean error instead of undefined behavior.
+        static std::atomic_bool drogon_listener_configured{false};
+        if (drogon_listener_configured.exchange(true)) {
+          return common::Result<void>::Err(
+              {"E_SERVICE_REINIT",
+               "the HTTP server cannot be reinitialized in this process"});
+        }
         const auto web_root = std::filesystem::absolute(args.document_root);
         ServiceListenerConfig listener;
         if (tls_material.has_value()) {
