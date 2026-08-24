@@ -8,6 +8,7 @@ add_library(camera_firmware_media STATIC
     FrameLease.cpp
     IsoBmffAssembler.cpp
     JpegEncoder.cpp
+    Nv12Downscaler.cpp
     SnapshotTap.cpp
 )
 
@@ -24,4 +25,7 @@ target_link_libraries(camera_firmware_media
         PkgConfig::GSTREAMER_APP
         PkgConfig::LIBCAMERA
         PkgConfig::X264
+    PRIVATE
+        PkgConfig::LIBSWSCALE
+        PkgConfig::LIBAVUTIL
 )

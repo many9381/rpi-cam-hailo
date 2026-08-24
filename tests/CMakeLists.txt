@@ -227,6 +227,7 @@ add_executable(camera_firmware_media_tests
     unit/media/IsoBmffAssemblerTest.cpp
     unit/media/JpegEncoderTest.cpp
     unit/media/LoresGeometryTest.cpp
+    unit/media/Nv12DownscalerTest.cpp
     unit/media/SnapshotTapTest.cpp
 )
 
