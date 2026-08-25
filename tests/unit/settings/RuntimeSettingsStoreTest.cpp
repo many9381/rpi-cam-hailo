@@ -361,6 +361,15 @@ std::string ReplaceOnce(std::string input, std::string_view from,
   return input;
 }
 
+// ValidDocument() with a valid (disabled, base-geometry) sub_stream object
+// inserted into the active settings, for tests that need to mutate the
+// sub_stream shape itself.
+std::string ValidDocumentWithActiveSubStream() {
+  return ReplaceOnce(
+      ValidDocument(), "\"gop\":25},\"models\":",
+      "\"gop\":25},\"sub_stream\":{\"enabled\":false,\"width\":640,\"height\":360,\"fps\":15,\"bitrate_kbps\":1000},\"models\":");
+}
+
 void ExpectDecodeFailure(std::string_view document) {
   const auto decoded =
       DecodeRuntimeSettingsDocument(document, MakeBaseConfig(), Catalog());
@@ -541,6 +550,32 @@ TEST(RuntimeSettingsStoreTest,
   EXPECT_EQ(sub.height, 360U);
   EXPECT_EQ(sub.fps, 15U);
   EXPECT_EQ(sub.bitrate_kbps, 1000U);
+}
+
+TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveSubStreamObject) {
+  const std::string base = ValidDocumentWithActiveSubStream();
+  // Sanity: the unmutated base document decodes successfully, so a failure
+  // below is attributable to the mutation, not a malformed base fixture.
+  const auto sanity = DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(sanity.ok()) << sanity.error().message;
+
+  // 1. non-bool `enabled`.
+  ExpectDecodeFailure(ReplaceOnce(base, "\"enabled\":false,\"width\":640",
+                                  "\"enabled\":1,\"width\":640"));
+  ExpectDecodeFailure(ReplaceOnce(base, "\"enabled\":false,\"width\":640",
+                                  "\"enabled\":\"false\",\"width\":640"));
+
+  // 2. missing required key (drop "fps").
+  ExpectDecodeFailure(ReplaceOnce(base, "\"fps\":15,", ""));
+
+  // 3. extra/unknown key inside sub_stream (must be rejected by the inner
+  // HasExactKeys, which requires exactly the five known keys).
+  ExpectDecodeFailure(ReplaceOnce(base, "\"bitrate_kbps\":1000},\"models\":",
+                                  "\"bitrate_kbps\":1000,\"foo\":0},\"models\":"));
+
+  // 4. fractional / negative numeric field (must fail DecodeUnsigned).
+  ExpectDecodeFailure(ReplaceOnce(base, "\"width\":640,", "\"width\":-1,"));
+  ExpectDecodeFailure(ReplaceOnce(base, "\"width\":640,", "\"width\":640.5,"));
 }
 
 TEST(RuntimeSettingsStoreTest, RoundTripsMaximumUnsignedRevision) {
