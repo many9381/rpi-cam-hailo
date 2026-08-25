@@ -104,6 +104,28 @@ bool HasExactKeys(const Json::Value& object,
   return true;
 }
 
+bool HasKeysWithOptional(const Json::Value& object,
+                         std::initializer_list<std::string_view> required_keys,
+                         std::string_view optional_key) {
+  if (!object.isObject()) {
+    return false;
+  }
+  for (const auto key : required_keys) {
+    if (!object.isMember(std::string(key))) {
+      return false;
+    }
+  }
+  const auto required_count = required_keys.size();
+  if (object.size() == required_count) {
+    return true;
+  }
+  if (object.size() == required_count + 1U &&
+      object.isMember(std::string(optional_key))) {
+    return true;
+  }
+  return false;
+}
+
 bool IsIntegralJsonValue(const Json::Value& value) {
   return value.type() == Json::intValue || value.type() == Json::uintValue;
 }
@@ -154,7 +176,7 @@ common::Result<unsigned int> ParseUnsigned(const Json::Value& value) {
 
 common::Result<settings::RuntimeSettings> ParseSettings(
     const Json::Value& value) {
-  if (!HasExactKeys(value, {"camera", "models"}) ||
+  if (!HasKeysWithOptional(value, {"camera", "models"}, "sub_stream") ||
       !HasExactKeys(value["camera"],
                     {"profile_id", "bitrate_kbps", "gop"}) ||
       !value["camera"]["profile_id"].isString() ||
@@ -172,6 +194,28 @@ common::Result<settings::RuntimeSettings> ParseSettings(
   settings::RuntimeSettings parsed;
   parsed.camera = {value["camera"]["profile_id"].asString(), bitrate.value(),
                    gop.value()};
+
+  if (value.isMember("sub_stream")) {
+    const auto& sub_stream_value = value["sub_stream"];
+    if (!HasExactKeys(sub_stream_value,
+                      {"enabled", "width", "height", "fps",
+                       "bitrate_kbps"}) ||
+        !sub_stream_value["enabled"].isBool()) {
+      return InvalidRequest<settings::RuntimeSettings>();
+    }
+    const auto width = ParseUnsigned(sub_stream_value["width"]);
+    const auto height = ParseUnsigned(sub_stream_value["height"]);
+    const auto fps = ParseUnsigned(sub_stream_value["fps"]);
+    const auto sub_bitrate = ParseUnsigned(sub_stream_value["bitrate_kbps"]);
+    if (!width.ok() || !height.ok() || !fps.ok() || !sub_bitrate.ok()) {
+      return InvalidRequest<settings::RuntimeSettings>();
+    }
+    parsed.sub_stream = {sub_stream_value["enabled"].asBool(), width.value(),
+                         height.value(), fps.value(), sub_bitrate.value()};
+  } else {
+    parsed.sub_stream = {false, 640U, 360U, 15U, 1000U};
+  }
+
   parsed.models.reserve(value["models"].size());
   for (const auto& model : value["models"]) {
     if (!HasExactKeys(model,
@@ -200,6 +244,14 @@ Json::Value BuildSettingsJson(const settings::RuntimeSettings& settings) {
   camera["bitrate_kbps"] = settings.camera.bitrate_kbps;
   camera["gop"] = settings.camera.gop;
   json["camera"] = std::move(camera);
+
+  Json::Value sub_stream(Json::objectValue);
+  sub_stream["enabled"] = settings.sub_stream.enabled;
+  sub_stream["width"] = settings.sub_stream.width;
+  sub_stream["height"] = settings.sub_stream.height;
+  sub_stream["fps"] = settings.sub_stream.fps;
+  sub_stream["bitrate_kbps"] = settings.sub_stream.bitrate_kbps;
+  json["sub_stream"] = std::move(sub_stream);
 
   Json::Value models(Json::arrayValue);
   for (const auto& model : settings.models) {
@@ -266,6 +318,7 @@ PublicError MapPublicError(const common::Error& error) {
       error.code == "E_RUNTIME_SETTINGS_GOP" ||
       error.code == "E_RUNTIME_SETTINGS_AI_DISABLED" ||
       error.code.starts_with("E_RUNTIME_SETTINGS_MODEL_") ||
+      error.code.starts_with("E_RUNTIME_SETTINGS_SUB") ||
       error.code.starts_with("E_CONFIG_") ||
       error.code == "E_PIPELINE_CANDIDATE" ||
       error.code == "E_SETTINGS_UNSUPPORTED") {

@@ -1089,10 +1089,11 @@ bool HasExpectedPersistedPendingSettings(const HttpResult& response) {
   const auto& pending = root["pending"];
   const auto& camera = pending["camera"];
   const auto& models = pending["models"];
+  const auto& sub_stream = pending["sub_stream"];
   return root["schema_version"].asUInt() == 1U &&
          root["revision"].asUInt64() == 1U &&
          root["state"].asString() == "pending" && pending.isObject() &&
-         pending.size() == 2U && camera.isObject() && camera.size() == 3U &&
+         pending.size() == 3U && camera.isObject() && camera.size() == 3U &&
          camera["profile_id"].asString() == "imx708-1080p30" &&
          camera["bitrate_kbps"].asUInt() == 8000U &&
          camera["gop"].asUInt() == 30U && models.isArray() &&
@@ -1105,7 +1106,13 @@ bool HasExpectedPersistedPendingSettings(const HttpResult& response) {
          models[1U]["id"].asString() == "pose" &&
          !models[1U]["enabled"].asBool() &&
          std::abs(models[1U]["confidence_threshold"].asDouble() - 0.25) <
-             0.0001;
+             0.0001 &&
+         sub_stream.isObject() && sub_stream.size() == 5U &&
+         !sub_stream["enabled"].asBool() &&
+         sub_stream["width"].asUInt() == 640U &&
+         sub_stream["height"].asUInt() == 360U &&
+         sub_stream["fps"].asUInt() == 15U &&
+         sub_stream["bitrate_kbps"].asUInt() == 1000U;
 }
 
 int RunRuntimeSettingsPersistenceLifecycle(

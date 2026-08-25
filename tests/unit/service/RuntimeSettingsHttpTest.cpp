@@ -40,11 +40,34 @@ constexpr std::string_view kUpdateJson = R"({
   }
 })";
 
+constexpr std::string_view kUpdateJsonWithSubStream = R"({
+  "expected_revision": 7,
+  "settings": {
+    "camera": {
+      "profile_id": "imx708-1080p30",
+      "bitrate_kbps": 8000,
+      "gop": 30
+    },
+    "models": [
+      {"id":"objects","enabled":true,"confidence_threshold":0.55},
+      {"id":"pose","enabled":false,"confidence_threshold":0.25}
+    ],
+    "sub_stream": {
+      "enabled": true,
+      "width": 1280,
+      "height": 720,
+      "fps": 25,
+      "bitrate_kbps": 3000
+    }
+  }
+})";
+
 RuntimeSettingsSnapshot MakeSnapshot() {
   RuntimeSettingsSnapshot snapshot;
   snapshot.revision = 7U;
   snapshot.state = RuntimeSettingsState::kPending;
   snapshot.active.camera = {"imx708-1080p50", 6000U, 25U};
+  snapshot.active.sub_stream = {false, 640U, 360U, 15U, 1000U};
   snapshot.active.models = {{"objects", true, 0.40F},
                             {"pose", true, 0.35F}};
   snapshot.pending = snapshot.active;
@@ -94,6 +117,46 @@ TEST(RuntimeSettingsHttpTest, ParsesExactCompleteUpdateAndPreservesModelOrder) {
   EXPECT_EQ(parsed.value().settings.models[1].id, "pose");
   EXPECT_FLOAT_EQ(parsed.value().settings.models[0].confidence_threshold,
                   0.55F);
+  EXPECT_FALSE(parsed.value().settings.sub_stream.enabled);
+  EXPECT_EQ(parsed.value().settings.sub_stream.width, 640U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.height, 360U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.fps, 15U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 1000U);
+}
+
+TEST(RuntimeSettingsHttpTest, ParsesOptionalSubStreamAndRoundTripsFields) {
+  const auto parsed =
+      ParseRuntimeSettingsUpdateJson(kUpdateJsonWithSubStream,
+                                     "application/json");
+
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_TRUE(parsed.value().settings.sub_stream.enabled);
+  EXPECT_EQ(parsed.value().settings.sub_stream.width, 1280U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.height, 720U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.fps, 25U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 3000U);
+}
+
+TEST(RuntimeSettingsHttpTest, RejectsMalformedSubStreamPayloads) {
+  const std::vector<std::string> invalid = {
+      // Missing key (bitrate_kbps).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25}}})",
+      // Non-bool enabled.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":1,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000}}})",
+      // Extra key inside sub_stream.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000,"extra":1}}})",
+      // Size-3 settings object whose third key is not sub_stream.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"not_sub_stream":{}}})",
+      // Size-4 settings object (camera, models, sub_stream, and an extra key).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000},"extra":1}})",
+  };
+
+  for (const auto& body : invalid) {
+    const auto parsed =
+        ParseRuntimeSettingsUpdateJson(body, "application/json");
+    ASSERT_FALSE(parsed.ok()) << body;
+    EXPECT_EQ(parsed.error().code, "E_SETTINGS_REQUEST_INVALID") << body;
+  }
 }
 
 TEST(RuntimeSettingsHttpTest, ParsesExactExpectedRevisionCommand) {
@@ -187,6 +250,16 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
   EXPECT_FALSE(json["capabilities"]["models"][0U].isMember("output_name"));
   EXPECT_EQ(json["active"]["models"][0U]["id"].asString(), "objects");
   EXPECT_EQ(json["pending"]["models"][1U]["id"].asString(), "pose");
+  EXPECT_FALSE(json["active"]["sub_stream"]["enabled"].asBool());
+  EXPECT_EQ(json["active"]["sub_stream"]["width"].asUInt(), 640U);
+  EXPECT_EQ(json["active"]["sub_stream"]["height"].asUInt(), 360U);
+  EXPECT_EQ(json["active"]["sub_stream"]["fps"].asUInt(), 15U);
+  EXPECT_EQ(json["active"]["sub_stream"]["bitrate_kbps"].asUInt(), 1000U);
+  EXPECT_FALSE(json["pending"]["sub_stream"]["enabled"].asBool());
+  EXPECT_EQ(json["pending"]["sub_stream"]["width"].asUInt(), 640U);
+  EXPECT_EQ(json["pending"]["sub_stream"]["height"].asUInt(), 360U);
+  EXPECT_EQ(json["pending"]["sub_stream"]["fps"].asUInt(), 15U);
+  EXPECT_EQ(json["pending"]["sub_stream"]["bitrate_kbps"].asUInt(), 1000U);
   EXPECT_EQ(json["last_apply"]["code"].asString(),
             "E_SETTINGS_APPLY_FAILED");
 }
@@ -225,6 +298,12 @@ TEST(RuntimeSettingsHttpTest, InternalErrorsMapToBoundedPublicContract) {
       {"E_RUNTIME_SETTINGS_BUSY", drogon::k409Conflict, "E_SETTINGS_BUSY",
        "runtime settings are busy"},
       {"E_RUNTIME_SETTINGS_MODEL_ORDER", drogon::k422UnprocessableEntity,
+       "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
+      {"E_RUNTIME_SETTINGS_SUB_RESOLUTION", drogon::k422UnprocessableEntity,
+       "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
+      {"E_RUNTIME_SETTINGS_SUB_FPS", drogon::k422UnprocessableEntity,
+       "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
+      {"E_RUNTIME_SETTINGS_SUB_BITRATE", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
       {"E_CONFIG_HTTP_LIVE", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
