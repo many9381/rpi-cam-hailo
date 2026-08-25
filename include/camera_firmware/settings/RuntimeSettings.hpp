@@ -46,11 +46,16 @@ struct CameraRuntimeSettings {
 };
 
 struct SubStreamRuntimeSettings {
-  bool enabled;
-  unsigned int width;
-  unsigned int height;
-  unsigned int fps;
-  unsigned int bitrate_kbps;
+  // Default member initializers mirror the AppConfig sub_stream default and keep
+  // the NON-ZERO GEOMETRY INVARIANT true even for a value-initialized/omitted
+  // sub_stream: a designated-init RuntimeSettings that omits `.sub_stream` yields
+  // a valid disabled sub with real geometry, never all-zero (which the settings
+  // validator now rejects and the web client refuses to render).
+  bool enabled{false};
+  unsigned int width{640};
+  unsigned int height{360};
+  unsigned int fps{15};
+  unsigned int bitrate_kbps{1000};
 };
 
 struct ModelRuntimeSettings {
