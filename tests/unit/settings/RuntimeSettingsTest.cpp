@@ -130,6 +130,51 @@ TEST(RuntimeSettingsTest, ValidateRejectsBadSubStreamWhenEnabled) {
                   .ok());
 }
 
+TEST(RuntimeSettingsTest, ValidateRejectsZeroSubStreamGeometryRegardlessOfEnabled) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+
+  // A DISABLED sub-stream with any zero geometry field must be rejected: the web
+  // client rejects zero geometry unconditionally, so a persisted zero would brick
+  // the settings UI. This must hold with enabled=false (the DoS vector).
+  for (const auto zeroed : std::vector<camera_firmware::settings::SubStreamRuntimeSettings>{
+           {false, 0U, 360U, 15U, 1000U},
+           {false, 640U, 0U, 15U, 1000U},
+           {false, 640U, 360U, 0U, 1000U},
+           {false, 640U, 360U, 15U, 0U}}) {
+    auto settings = MakeRuntimeSettings();
+    settings.sub_stream = zeroed;
+    const auto validated =
+        camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+    ASSERT_FALSE(validated.ok())
+        << "zero field: " << zeroed.width << "x" << zeroed.height << "@"
+        << zeroed.fps << " " << zeroed.bitrate_kbps;
+    EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_GEOMETRY");
+  }
+
+  // Enabled + zero must also be rejected as geometry (before the allowlist check).
+  auto enabled_zero = MakeRuntimeSettings();
+  enabled_zero.sub_stream = {true, 0U, 0U, 0U, 0U};
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      enabled_zero, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_GEOMETRY");
+}
+
+TEST(RuntimeSettingsTest, ValidateBypassesAllowlistForDisabledNonZeroSubStream) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+
+  // Disabled + non-zero but off-allowlist geometry still passes: the allowlist /
+  // fps-range / bitrate-range checks remain enabled-only. Only the non-zero
+  // invariant is enforced regardless of `enabled`.
+  settings.sub_stream = {false, 800U, 600U, 20U, 1200U};
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
+                  settings, base, catalog)
+                  .ok());
+}
+
 TEST(RuntimeSettingsTest, ValidateAcceptsSubStreamFpsInclusiveBoundaries) {
   const auto base = MakeBaseConfig();
   const auto catalog = CameraProfileCatalog::Rpi5Imx708();

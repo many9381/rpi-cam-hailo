@@ -22,6 +22,14 @@ bool IsAllowedSubStreamResolution(unsigned int width, unsigned int height) {
 common::Result<void> ValidateSubStreamSettings(
     const RuntimeSettings& settings) {
   const auto& sub = settings.sub_stream;
+  // Non-zero geometry is enforced regardless of `enabled`: the web client rejects
+  // zero geometry unconditionally, so a persisted zero would brick the settings UI.
+  if (sub.width == 0U || sub.height == 0U || sub.fps == 0U ||
+      sub.bitrate_kbps == 0U) {
+    return common::Result<void>::Err(
+        {"E_RUNTIME_SETTINGS_SUB_GEOMETRY",
+         "sub-stream width, height, fps, and bitrate must be non-zero"});
+  }
   if (!sub.enabled) {
     return common::Result<void>::Ok();
   }

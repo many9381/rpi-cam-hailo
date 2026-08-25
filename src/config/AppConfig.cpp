@@ -281,14 +281,20 @@ common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
 
 common::Result<void> ValidateCameraSubStreamSemantics(
     const CameraSubStreamConfig& config) {
-  if (!config.enabled) {
-    return common::Result<void>::Ok();
-  }
-
-  if (config.width == 0U || config.height == 0U || config.fps == 0U) {
+  // Non-zero geometry is enforced regardless of `enabled`: the web client rejects
+  // zero geometry unconditionally, so a zeroed YAML field (or a zero derived from
+  // it) would brick the settings UI. DeriveRuntimeSettings does not call
+  // ValidateRuntimeSettings, so this config gate is the only stop for a zeroed
+  // YAML producing a zero derived active.
+  if (config.width == 0U || config.height == 0U || config.fps == 0U ||
+      config.bitrate_kbps == 0U) {
     return common::Result<void>::Err(
         {"E_CONFIG_CAMERA_SUB_STREAM",
-         "camera.sub_stream width, height, and fps must be non-zero when enabled"});
+         "camera.sub_stream width, height, fps, and bitrate must be non-zero"});
+  }
+
+  if (!config.enabled) {
+    return common::Result<void>::Ok();
   }
 
   if (config.bitrate_kbps < kMinEncoderBitrateKbps ||

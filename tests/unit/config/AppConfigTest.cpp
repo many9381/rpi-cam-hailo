@@ -1440,3 +1440,27 @@ TEST(AppConfigTest, RejectsSubStreamBitrateBelowFloor) {
       "camera:\n  sub_stream:\n    enabled: true\n    bitrate_kbps: 100\nsecurity:\n  enabled: false\nsecure_rtsp:\n  enabled: false\n");
   EXPECT_FALSE(config.ok());
 }
+
+TEST(AppConfigTest, RejectsDisabledSubStreamWithZeroGeometry) {
+  // A DISABLED sub_stream with a zero geometry field must be rejected regardless
+  // of `enabled`: the web client rejects zero geometry unconditionally, so a
+  // zeroed YAML field (or a zero derived from it) would brick the settings UI.
+  const auto config = LoadInlineConfig(
+      "camera:\n  sub_stream:\n    enabled: false\n    width: 0\n    height: 0\n"
+      "    fps: 0\n    bitrate_kbps: 0\nsecurity:\n  enabled: false\n"
+      "secure_rtsp:\n  enabled: false\n");
+  ASSERT_FALSE(config.ok());
+  EXPECT_EQ(config.error().code, "E_CONFIG_CAMERA_SUB_STREAM");
+}
+
+TEST(AppConfigTest, AcceptsDisabledSubStreamWithNonZeroGeometry) {
+  // Disabled + non-zero geometry still passes: the bitrate RANGE check remains
+  // enabled-only, only the non-zero invariant applies regardless of `enabled`.
+  const auto config = LoadInlineConfig(
+      "camera:\n  sub_stream:\n    enabled: false\n    width: 800\n    height: 600\n"
+      "    fps: 20\n    bitrate_kbps: 100\nsecurity:\n  enabled: false\n"
+      "secure_rtsp:\n  enabled: false\n");
+  ASSERT_TRUE(config.ok()) << config.error().message;
+  EXPECT_FALSE(config.value().camera.sub_stream.enabled);
+  EXPECT_EQ(config.value().camera.sub_stream.width, 800u);
+}

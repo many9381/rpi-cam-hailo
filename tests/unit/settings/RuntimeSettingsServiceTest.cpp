@@ -187,6 +187,10 @@ AppConfig MakeBaseConfig() {
 RuntimeSettings MakeBaseActive() {
   return {
       .camera = {"imx708-1080p50", 6000U, 25U},
+      // Non-zero geometry even while disabled: value-initializing an omitted
+      // .sub_stream would zero it, which validation now rejects (the settings-UI
+      // DoS invariant). Use the shipped default geometry.
+      .sub_stream = {false, 640U, 360U, 15U, 1000U},
       .models = {{"objects", true, 0.40F}, {"pose", true, 0.35F}},
   };
 }
@@ -194,6 +198,7 @@ RuntimeSettings MakeBaseActive() {
 RuntimeSettings MakePending() {
   return {
       .camera = {"imx708-1080p30", 8000U, 30U},
+      .sub_stream = {false, 640U, 360U, 15U, 1000U},
       .models = {{"objects", true, 0.55F}, {"pose", false, 0.25F}},
   };
 }

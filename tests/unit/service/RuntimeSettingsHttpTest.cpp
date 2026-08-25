@@ -137,6 +137,31 @@ TEST(RuntimeSettingsHttpTest, ParsesOptionalSubStreamAndRoundTripsFields) {
   EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 3000U);
 }
 
+TEST(RuntimeSettingsHttpTest, ParsesZeroedDisabledSubStreamSoValidationCanReject) {
+  // The persistent settings-UI DoS body: a non-web client PUTs a disabled
+  // sub_stream with zeroed geometry. This is structurally well-formed JSON, so
+  // the wire parser MUST accept it (all five keys, correct types) and hand it to
+  // the validation layer, which rejects it (E_RUNTIME_SETTINGS_SUB_GEOMETRY ->
+  // 422). If the parser rejected it here we would only be masking the seam.
+  constexpr std::string_view kZeroedDisabledSubStream = R"({
+    "expected_revision": 7,
+    "settings": {
+      "camera": {"profile_id": "imx708-1080p30", "bitrate_kbps": 8000, "gop": 30},
+      "models": [],
+      "sub_stream": {"enabled": false, "width": 0, "height": 0, "fps": 0, "bitrate_kbps": 0}
+    }
+  })";
+
+  const auto parsed =
+      ParseRuntimeSettingsUpdateJson(kZeroedDisabledSubStream, "application/json");
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_FALSE(parsed.value().settings.sub_stream.enabled);
+  EXPECT_EQ(parsed.value().settings.sub_stream.width, 0U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.height, 0U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.fps, 0U);
+  EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 0U);
+}
+
 TEST(RuntimeSettingsHttpTest, RejectsMalformedSubStreamPayloads) {
   const std::vector<std::string> invalid = {
       // Missing key (bitrate_kbps).
@@ -304,6 +329,8 @@ TEST(RuntimeSettingsHttpTest, InternalErrorsMapToBoundedPublicContract) {
       {"E_RUNTIME_SETTINGS_SUB_FPS", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
       {"E_RUNTIME_SETTINGS_SUB_BITRATE", drogon::k422UnprocessableEntity,
+       "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
+      {"E_RUNTIME_SETTINGS_SUB_GEOMETRY", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
       {"E_CONFIG_HTTP_LIVE", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
