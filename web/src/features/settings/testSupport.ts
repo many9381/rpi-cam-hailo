@@ -13,6 +13,9 @@ export const makeSettings = (
   bitrateKbps = 6_000,
 ): RuntimeSettings => ({
   camera: { profile_id: profileId, bitrate_kbps: bitrateKbps, gop: 25 },
+  sub_stream: {
+    enabled: false, width: 640, height: 360, fps: 15, bitrate_kbps: 1_000,
+  },
   models: [
     { id: 'objects', enabled: true, confidence_threshold: 0.4 },
     { id: 'pose', enabled: false, confidence_threshold: 0.5 },
@@ -70,6 +73,7 @@ export const makeSettingsController = (
     dirty: false,
     error: null,
     updateCamera: vi.fn(),
+    updateSubStream: vi.fn(),
     updateModel: vi.fn(),
     save: vi.fn(async () => undefined),
     apply: vi.fn(async () => undefined),

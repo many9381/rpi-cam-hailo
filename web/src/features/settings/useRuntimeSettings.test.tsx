@@ -8,6 +8,9 @@ import { useRuntimeSettings } from './useRuntimeSettings';
 
 const settings = (profileId = 'imx708-1080p50', bitrateKbps = 6_000) => ({
   camera: { profile_id: profileId, bitrate_kbps: bitrateKbps, gop: 25 },
+  sub_stream: {
+    enabled: false, width: 640, height: 360, fps: 15, bitrate_kbps: 1_000,
+  },
   models: [
     { id: 'objects', enabled: true, confidence_threshold: 0.4 },
     { id: 'pose', enabled: false, confidence_threshold: 0.5 },
@@ -107,6 +110,24 @@ describe('useRuntimeSettings', () => {
     expect(result.current.draft?.camera.profile_id).toBe('imx708-720p50');
     expect(result.current.draft?.models[0]).toEqual({
       id: 'objects', enabled: false, confidence_threshold: 0.55,
+    });
+    expect(result.current.snapshot?.active).toEqual(settings());
+  });
+
+  it('updates sub_stream draft values and marks the draft dirty', async () => {
+    const { client } = makeClient();
+    const { result } = renderHook(() => useRuntimeSettings(client));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    act(() => {
+      result.current.updateSubStream({
+        enabled: true, width: 854, height: 480, fps: 24, bitrate_kbps: 1_500,
+      });
+    });
+
+    expect(result.current.dirty).toBe(true);
+    expect(result.current.draft?.sub_stream).toEqual({
+      enabled: true, width: 854, height: 480, fps: 24, bitrate_kbps: 1_500,
     });
     expect(result.current.snapshot?.active).toEqual(settings());
   });

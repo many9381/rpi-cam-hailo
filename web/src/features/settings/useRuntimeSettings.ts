@@ -11,6 +11,7 @@ import {
   type PublicApiError,
   type RuntimeSettings,
   type RuntimeSettingsSnapshot,
+  type SubStreamRuntimeSettings,
 } from './contracts';
 
 export interface RuntimeSettingsController {
@@ -20,6 +21,7 @@ export interface RuntimeSettingsController {
   dirty: boolean;
   error: PublicApiError | null;
   updateCamera(next: CameraRuntimeSettings): void;
+  updateSubStream(next: SubStreamRuntimeSettings): void;
   updateModel(id: string, patch: Partial<ModelRuntimeSettings>): void;
   save(): Promise<void>;
   apply(): Promise<void>;
@@ -40,6 +42,11 @@ const settingsEqual = (
   return left.camera.profile_id === right.camera.profile_id &&
     left.camera.bitrate_kbps === right.camera.bitrate_kbps &&
     left.camera.gop === right.camera.gop &&
+    left.sub_stream.enabled === right.sub_stream.enabled &&
+    left.sub_stream.width === right.sub_stream.width &&
+    left.sub_stream.height === right.sub_stream.height &&
+    left.sub_stream.fps === right.sub_stream.fps &&
+    left.sub_stream.bitrate_kbps === right.sub_stream.bitrate_kbps &&
     left.models.length === right.models.length &&
     left.models.every((model, index) => {
       const other = right.models[index];
@@ -284,6 +291,14 @@ export function useRuntimeSettings(
     replaceDraft({ ...current, camera: next });
   }, [replaceDraft]);
 
+  const updateSubStream = useCallback((next: SubStreamRuntimeSettings) => {
+    const current = draftRef.current;
+    if (current === null) {
+      return;
+    }
+    replaceDraft({ ...current, sub_stream: next });
+  }, [replaceDraft]);
+
   const updateModel = useCallback((
     id: string,
     patch: Partial<ModelRuntimeSettings>,
@@ -307,6 +322,7 @@ export function useRuntimeSettings(
     dirty: !settingsEqual(draft, snapshot === null ? null : preferredSettings(snapshot)),
     error,
     updateCamera,
+    updateSubStream,
     updateModel,
     save,
     apply,

@@ -11,6 +11,14 @@ export interface CameraRuntimeSettings {
   gop: number;
 }
 
+export interface SubStreamRuntimeSettings {
+  enabled: boolean;
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_kbps: number;
+}
+
 export interface ModelRuntimeSettings {
   id: string;
   enabled: boolean;
@@ -19,8 +27,17 @@ export interface ModelRuntimeSettings {
 
 export interface RuntimeSettings {
   camera: CameraRuntimeSettings;
+  sub_stream: SubStreamRuntimeSettings;
   models: ModelRuntimeSettings[];
 }
+
+export const SUB_STREAM_RESOLUTIONS = [
+  { width: 640, height: 360 },
+  { width: 854, height: 480 },
+  { width: 1280, height: 720 },
+] as const;
+
+export const SUB_STREAM_FPS_RANGE = { minimum: 5, maximum: 30 } as const;
 
 export interface CameraProfileCapability {
   id: string;
@@ -124,6 +141,23 @@ const hasExactKeys = (
   Object.keys(value).length === keys.length &&
   keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 
+const hasKeysWithOptional = (
+  value: unknown,
+  keys: readonly string[],
+  optionalKey: string,
+): value is Record<string, unknown> => {
+  if (!isRecord(value) ||
+      !keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+    return false;
+  }
+  const size = Object.keys(value).length;
+  if (size === keys.length) {
+    return true;
+  }
+  return size === keys.length + 1 &&
+    Object.prototype.hasOwnProperty.call(value, optionalKey);
+};
+
 const isNonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0;
 
@@ -212,11 +246,55 @@ function parseCapabilities(value: unknown): RuntimeSettingsCapabilities {
   };
 }
 
+const DEFAULT_SUB_STREAM: SubStreamRuntimeSettings = {
+  enabled: false,
+  width: 640,
+  height: 360,
+  fps: 15,
+  bitrate_kbps: 1000,
+};
+
+function parseSubStream(
+  value: unknown,
+  capabilities: RuntimeSettingsCapabilities,
+): SubStreamRuntimeSettings {
+  if (value === undefined) {
+    return { ...DEFAULT_SUB_STREAM };
+  }
+  if (!hasExactKeys(value, ['enabled', 'width', 'height', 'fps', 'bitrate_kbps']) ||
+      typeof value.enabled !== 'boolean' ||
+      !isSafePositiveInteger(value.width) ||
+      !isSafePositiveInteger(value.height) ||
+      !isSafePositiveInteger(value.fps) ||
+      !isSafePositiveInteger(value.bitrate_kbps)) {
+    return invalid();
+  }
+  if (value.enabled) {
+    const allowedResolution = SUB_STREAM_RESOLUTIONS.some(
+      (resolution) => resolution.width === value.width && resolution.height === value.height,
+    );
+    if (!allowedResolution ||
+        value.fps < SUB_STREAM_FPS_RANGE.minimum ||
+        value.fps > SUB_STREAM_FPS_RANGE.maximum ||
+        value.bitrate_kbps < capabilities.bitrate_kbps.minimum ||
+        value.bitrate_kbps > capabilities.bitrate_kbps.maximum) {
+      return invalid();
+    }
+  }
+  return {
+    enabled: value.enabled,
+    width: value.width,
+    height: value.height,
+    fps: value.fps,
+    bitrate_kbps: value.bitrate_kbps,
+  };
+}
+
 function parseRuntimeSettings(
   value: unknown,
   capabilities: RuntimeSettingsCapabilities,
 ): RuntimeSettings {
-  if (!hasExactKeys(value, ['camera', 'models']) ||
+  if (!hasKeysWithOptional(value, ['camera', 'models'], 'sub_stream') ||
       !hasExactKeys(value.camera, ['profile_id', 'bitrate_kbps', 'gop']) ||
       !isNonemptyString(value.camera.profile_id) ||
       !isSafePositiveInteger(value.camera.bitrate_kbps) ||
@@ -254,6 +332,7 @@ function parseRuntimeSettings(
       bitrate_kbps: value.camera.bitrate_kbps,
       gop: value.camera.gop,
     },
+    sub_stream: parseSubStream(value.sub_stream, capabilities),
     models,
   };
 }

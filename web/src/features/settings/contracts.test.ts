@@ -55,6 +55,13 @@ const makeSnapshot = () => ({
       bitrate_kbps: 6_000,
       gop: 25,
     },
+    sub_stream: {
+      enabled: true,
+      width: 1280,
+      height: 720,
+      fps: 24,
+      bitrate_kbps: 2_000,
+    },
     models: [
       { id: 'objects', enabled: true, confidence_threshold: 0.4 },
       { id: 'pose', enabled: false, confidence_threshold: 0.5 },
@@ -65,6 +72,13 @@ const makeSnapshot = () => ({
       profile_id: 'imx708-720p50',
       bitrate_kbps: 5_000,
       gop: 30,
+    },
+    sub_stream: {
+      enabled: false,
+      width: 640,
+      height: 360,
+      fps: 15,
+      bitrate_kbps: 1_000,
     },
     models: [
       { id: 'objects', enabled: true, confidence_threshold: 0.45 },
@@ -81,6 +95,37 @@ const makeSnapshot = () => ({
 describe('runtime settings contracts', () => {
   it('parses the complete safe snapshot contract', () => {
     expect(parseRuntimeSettingsSnapshot(makeSnapshot())).toEqual(makeSnapshot());
+  });
+
+  it('reads active.sub_stream into typed settings', () => {
+    const parsed = parseRuntimeSettingsSnapshot(makeSnapshot());
+    expect(parsed.active.sub_stream).toEqual({
+      enabled: true,
+      width: 1280,
+      height: 720,
+      fps: 24,
+      bitrate_kbps: 2_000,
+    });
+  });
+
+  it('defaults sub_stream to disabled 640x360@15/1000kbps when absent', () => {
+    const value = makeSnapshot();
+    const { sub_stream: _activeSub, ...activeRest } = value.active;
+    const { sub_stream: _pendingSub, ...pendingRest } = value.pending;
+    const parsed = parseRuntimeSettingsSnapshot({
+      ...value,
+      active: activeRest,
+      pending: pendingRest,
+    });
+    const defaultSubStream = {
+      enabled: false,
+      width: 640,
+      height: 360,
+      fps: 15,
+      bitrate_kbps: 1_000,
+    };
+    expect(parsed.active.sub_stream).toEqual(defaultSubStream);
+    expect(parsed.pending?.sub_stream).toEqual(defaultSubStream);
   });
 
   it('parses a successful apply outcome separately from the snapshot', () => {
@@ -142,6 +187,42 @@ describe('runtime settings contracts', () => {
     ['inconsistent last apply', () => ({
       ...makeSnapshot(),
       last_apply: { status: 'success', code: 'E_SETTINGS_APPLY_FAILED', restored: true },
+    })],
+    ['enabled sub_stream with an off-allowlist resolution', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        sub_stream: {
+          enabled: true, width: 800, height: 600, fps: 24, bitrate_kbps: 2_000,
+        },
+      },
+    })],
+    ['enabled sub_stream with out-of-range fps', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        sub_stream: {
+          enabled: true, width: 1280, height: 720, fps: 60, bitrate_kbps: 2_000,
+        },
+      },
+    })],
+    ['enabled sub_stream with out-of-range bitrate', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        sub_stream: {
+          enabled: true, width: 1280, height: 720, fps: 24, bitrate_kbps: 100,
+        },
+      },
+    })],
+    ['sub_stream with a zero geometry field', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        sub_stream: {
+          enabled: false, width: 0, height: 360, fps: 15, bitrate_kbps: 1_000,
+        },
+      },
     })],
   ])('rejects %s', (_name, mutate) => {
     expect(() => parseRuntimeSettingsSnapshot(mutate())).toThrow(
