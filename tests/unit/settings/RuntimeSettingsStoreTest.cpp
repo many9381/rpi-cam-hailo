@@ -273,6 +273,7 @@ AppConfig MakeBaseConfig() {
 RuntimeSettings MakeBaseActive() {
   return {
       .camera = {"imx708-1080p50", 6000U, 25U},
+      .sub_stream = {false, 640U, 360U, 15U, 1000U},
       .models = {{"objects", true, 0.40F}, {"pose", true, 0.35F}},
   };
 }
@@ -280,6 +281,7 @@ RuntimeSettings MakeBaseActive() {
 RuntimeSettings MakePending() {
   return {
       .camera = {"imx708-1080p30", 8000U, 30U},
+      .sub_stream = {false, 640U, 360U, 15U, 1000U},
       .models = {{"objects", true, 0.55F}, {"pose", false, 0.25F}},
   };
 }
@@ -305,6 +307,11 @@ void ExpectSettingsEqual(const RuntimeSettings& actual,
   EXPECT_EQ(actual.camera.profile_id, expected.camera.profile_id);
   EXPECT_EQ(actual.camera.bitrate_kbps, expected.camera.bitrate_kbps);
   EXPECT_EQ(actual.camera.gop, expected.camera.gop);
+  EXPECT_EQ(actual.sub_stream.enabled, expected.sub_stream.enabled);
+  EXPECT_EQ(actual.sub_stream.width, expected.sub_stream.width);
+  EXPECT_EQ(actual.sub_stream.height, expected.sub_stream.height);
+  EXPECT_EQ(actual.sub_stream.fps, expected.sub_stream.fps);
+  EXPECT_EQ(actual.sub_stream.bitrate_kbps, expected.sub_stream.bitrate_kbps);
   ASSERT_EQ(actual.models.size(), expected.models.size());
   for (std::size_t index = 0; index < expected.models.size(); ++index) {
     EXPECT_EQ(actual.models[index].id, expected.models[index].id);
@@ -502,12 +509,38 @@ TEST(RuntimeSettingsStoreTest,
   ASSERT_TRUE(encoded.ok()) << encoded.error().message;
   EXPECT_EQ(
       encoded.value(),
-      R"json({"schema_version":1,"revision":7,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]},"last_apply":{"status":"failed","code":"E_CAMERA_START","restored":true}})json");
+      R"json({"schema_version":1,"revision":7,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]},"last_apply":{"status":"failed","code":"E_CAMERA_START","restored":true}})json");
   EXPECT_EQ(encoded.value().find("recovery_required"), std::string::npos);
   EXPECT_EQ(encoded.value().find("recovery_code"), std::string::npos);
   EXPECT_EQ(encoded.value().find("hef_path"), std::string::npos);
   EXPECT_EQ(encoded.value().find("output_name"), std::string::npos);
   EXPECT_EQ(encoded.value().find("/private/models"), std::string::npos);
+}
+
+TEST(RuntimeSettingsStoreTest, RoundTripsEnabledSubStream) {
+  RuntimeSettingsDocument doc = MakeDocument();
+  doc.active.sub_stream = {true, 1280U, 720U, 25U, 3000U};
+  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(encoded.ok());
+  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(decoded.ok());
+  EXPECT_TRUE(decoded.value().active.sub_stream.enabled);
+  EXPECT_EQ(decoded.value().active.sub_stream.width, 1280U);
+  EXPECT_EQ(decoded.value().active.sub_stream.height, 720U);
+  EXPECT_EQ(decoded.value().active.sub_stream.fps, 25U);
+  EXPECT_EQ(decoded.value().active.sub_stream.bitrate_kbps, 3000U);
+}
+
+TEST(RuntimeSettingsStoreTest,
+     LegacyDocumentWithoutSubStreamDecodesDisabledWithBaseGeometry) {
+  const auto decoded = DecodeRuntimeSettingsDocument(ValidDocument(), MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(decoded.ok());
+  const auto& sub = decoded.value().active.sub_stream;
+  EXPECT_FALSE(sub.enabled);
+  EXPECT_EQ(sub.width, 640U);       // from MakeBaseConfig().camera.sub_stream
+  EXPECT_EQ(sub.height, 360U);
+  EXPECT_EQ(sub.fps, 15U);
+  EXPECT_EQ(sub.bitrate_kbps, 1000U);
 }
 
 TEST(RuntimeSettingsStoreTest, RoundTripsMaximumUnsignedRevision) {
