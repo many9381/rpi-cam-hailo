@@ -108,6 +108,21 @@ describe('runtime settings contracts', () => {
     });
   });
 
+  it('parses a disabled sub_stream with off-allowlist geometry (allowlist bypassed while disabled)', () => {
+    const parsed = parseRuntimeSettingsSnapshot({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        sub_stream: {
+          enabled: false, width: 800, height: 600, fps: 15, bitrate_kbps: 1_000,
+        },
+      },
+    });
+    expect(parsed.active.sub_stream).toEqual({
+      enabled: false, width: 800, height: 600, fps: 15, bitrate_kbps: 1_000,
+    });
+  });
+
   it('defaults sub_stream to disabled 640x360@15/1000kbps when absent', () => {
     const value = makeSnapshot();
     const { sub_stream: _activeSub, ...activeRest } = value.active;
@@ -223,6 +238,17 @@ describe('runtime settings contracts', () => {
           enabled: false, width: 0, height: 360, fps: 15, bitrate_kbps: 1_000,
         },
       },
+    })],
+    ['settings object with a third key that is not sub_stream', () => {
+      const { sub_stream: _subStream, ...rest } = makeSnapshot().active;
+      return {
+        ...makeSnapshot(),
+        active: { ...rest, bogus: 'unexpected' },
+      };
+    }],
+    ['settings object with four keys (camera, models, sub_stream, extra)', () => ({
+      ...makeSnapshot(),
+      active: { ...makeSnapshot().active, extra: 'unexpected' },
     })],
   ])('rejects %s', (_name, mutate) => {
     expect(() => parseRuntimeSettingsSnapshot(mutate())).toThrow(
