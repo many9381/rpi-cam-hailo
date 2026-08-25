@@ -42,11 +42,93 @@ RuntimeSettings MakeRuntimeSettings() {
   settings.camera.profile_id = "imx708-1080p30";
   settings.camera.bitrate_kbps = 8000U;
   settings.camera.gop = 30U;
+  settings.sub_stream = {false, 640U, 360U, 15U, 1000U};
   settings.models = {{"objects", true, 0.55F}, {"pose", false, 0.25F}};
   return settings;
 }
 
 }  // namespace
+
+TEST(RuntimeSettingsTest, DeriveCopiesSubStreamFromBaseConfig) {
+  auto base = MakeBaseConfig();
+  base.camera.sub_stream.enabled = true;
+  base.camera.sub_stream.width = 640U;
+  base.camera.sub_stream.height = 360U;
+  base.camera.sub_stream.fps = 15U;
+  base.camera.sub_stream.bitrate_kbps = 1000U;
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+
+  const auto settings =
+      camera_firmware::settings::DeriveRuntimeSettings(base, catalog);
+
+  ASSERT_TRUE(settings.ok()) << settings.error().message;
+  EXPECT_TRUE(settings.value().sub_stream.enabled);
+  EXPECT_EQ(settings.value().sub_stream.width, 640U);
+  EXPECT_EQ(settings.value().sub_stream.height, 360U);
+  EXPECT_EQ(settings.value().sub_stream.fps, 15U);
+  EXPECT_EQ(settings.value().sub_stream.bitrate_kbps, 1000U);
+}
+
+TEST(RuntimeSettingsTest, BuildEffectiveConfigMapsSubStream) {
+  auto base = MakeBaseConfig();
+  base.camera.sub_stream.gop = 30U;
+  base.camera.sub_stream.mount = "/imx708/sub";
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.sub_stream = {true, 854U, 480U, 25U, 2000U};
+
+  const auto effective =
+      camera_firmware::settings::BuildEffectiveConfig(base, settings, catalog);
+
+  ASSERT_TRUE(effective.ok()) << effective.error().message;
+  const auto& sub = effective.value().camera.sub_stream;
+  EXPECT_TRUE(sub.enabled);
+  EXPECT_EQ(sub.width, 854U);
+  EXPECT_EQ(sub.height, 480U);
+  EXPECT_EQ(sub.fps, 25U);
+  EXPECT_EQ(sub.bitrate_kbps, 2000U);
+  EXPECT_EQ(sub.gop, 30U);
+  EXPECT_EQ(sub.mount, "/imx708/sub");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsBadSubStreamWhenEnabled) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+
+  auto ok = MakeRuntimeSettings();
+  ok.sub_stream = {true, 640U, 360U, 15U, 1000U};
+  EXPECT_TRUE(
+      camera_firmware::settings::ValidateRuntimeSettings(ok, base, catalog)
+          .ok());
+
+  auto bad_resolution = ok;
+  bad_resolution.sub_stream.width = 999U;
+  bad_resolution.sub_stream.height = 561U;
+  auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      bad_resolution, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_RESOLUTION");
+
+  auto bad_fps = ok;
+  bad_fps.sub_stream.fps = 60U;
+  validated =
+      camera_firmware::settings::ValidateRuntimeSettings(bad_fps, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_FPS");
+
+  auto bad_bitrate = ok;
+  bad_bitrate.sub_stream.bitrate_kbps = 100U;
+  validated = camera_firmware::settings::ValidateRuntimeSettings(
+      bad_bitrate, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_BITRATE");
+
+  auto disabled = ok;
+  disabled.sub_stream = {false, 1U, 1U, 1U, 1U};
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
+                  disabled, base, catalog)
+                  .ok());
+}
 
 TEST(RuntimeSettingsTest, CatalogExposesApprovedRpi5Imx708Profiles) {
   const auto catalog = CameraProfileCatalog::Rpi5Imx708();

@@ -13,6 +13,36 @@ common::Result<void> CaptureModeError() {
       {"E_RUNTIME_SETTINGS_CAPTURE_MODE", "camera profile is unsupported"});
 }
 
+bool IsAllowedSubStreamResolution(unsigned int width, unsigned int height) {
+  return (width == 640U && height == 360U) ||
+         (width == 854U && height == 480U) ||
+         (width == 1280U && height == 720U);
+}
+
+common::Result<void> ValidateSubStreamSettings(
+    const RuntimeSettings& settings) {
+  const auto& sub = settings.sub_stream;
+  if (!sub.enabled) {
+    return common::Result<void>::Ok();
+  }
+  if (!IsAllowedSubStreamResolution(sub.width, sub.height)) {
+    return common::Result<void>::Err(
+        {"E_RUNTIME_SETTINGS_SUB_RESOLUTION",
+         "sub-stream resolution must be one of the approved presets"});
+  }
+  if (sub.fps < 5U || sub.fps > 30U) {
+    return common::Result<void>::Err(
+        {"E_RUNTIME_SETTINGS_SUB_FPS",
+         "sub-stream fps must be between 5 and 30"});
+  }
+  if (sub.bitrate_kbps < kMinBitrateKbps || sub.bitrate_kbps > kMaxBitrateKbps) {
+    return common::Result<void>::Err(
+        {"E_RUNTIME_SETTINGS_SUB_BITRATE",
+         "sub-stream bitrate must be between 500 and 20000 kbps"});
+  }
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateModelSettings(
     const RuntimeSettings& settings,
     const config::AppConfig& base) {
@@ -126,6 +156,11 @@ common::Result<RuntimeSettings> DeriveRuntimeSettings(
   RuntimeSettings settings{
       .camera = {profile->id, base.camera.encoder.bitrate_kbps,
                  base.camera.encoder.gop},
+      .sub_stream = {base.camera.sub_stream.enabled,
+                     base.camera.sub_stream.width,
+                     base.camera.sub_stream.height,
+                     base.camera.sub_stream.fps,
+                     base.camera.sub_stream.bitrate_kbps},
   };
   settings.models.reserve(base.ai.models.size());
   for (const auto& model : base.ai.models) {
@@ -152,6 +187,10 @@ common::Result<void> ValidateRuntimeSettings(
     return common::Result<void>::Err(
         {"E_RUNTIME_SETTINGS_GOP", "camera GOP must be between 1 and 300"});
   }
+  const auto sub_stream_result = ValidateSubStreamSettings(settings);
+  if (!sub_stream_result.ok()) {
+    return sub_stream_result;
+  }
   return ValidateModelSettings(settings, base);
 }
 
@@ -171,6 +210,12 @@ common::Result<config::AppConfig> BuildEffectiveConfig(
   effective.camera.video.fps = profile->fps;
   effective.camera.encoder.bitrate_kbps = settings.camera.bitrate_kbps;
   effective.camera.encoder.gop = settings.camera.gop;
+
+  effective.camera.sub_stream.enabled = settings.sub_stream.enabled;
+  effective.camera.sub_stream.width = settings.sub_stream.width;
+  effective.camera.sub_stream.height = settings.sub_stream.height;
+  effective.camera.sub_stream.fps = settings.sub_stream.fps;
+  effective.camera.sub_stream.bitrate_kbps = settings.sub_stream.bitrate_kbps;
 
   effective.camera.ai.model_ids.clear();
   for (std::size_t index = 0; index < effective.ai.models.size(); ++index) {

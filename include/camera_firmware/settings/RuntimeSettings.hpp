@@ -45,6 +45,14 @@ struct CameraRuntimeSettings {
   unsigned int gop;
 };
 
+struct SubStreamRuntimeSettings {
+  bool enabled;
+  unsigned int width;
+  unsigned int height;
+  unsigned int fps;
+  unsigned int bitrate_kbps;
+};
+
 struct ModelRuntimeSettings {
   std::string id;
   bool enabled;
@@ -53,6 +61,7 @@ struct ModelRuntimeSettings {
 
 struct RuntimeSettings {
   CameraRuntimeSettings camera;
+  SubStreamRuntimeSettings sub_stream;
   std::vector<ModelRuntimeSettings> models;
 };
 
