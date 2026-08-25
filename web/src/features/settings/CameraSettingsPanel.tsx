@@ -1,5 +1,6 @@
 import type { ChangeEvent } from 'react';
 
+import { SUB_STREAM_RESOLUTIONS } from './contracts';
 import type { RuntimeSettingsController } from './useRuntimeSettings';
 
 interface CameraSettingsPanelProps {
@@ -8,6 +9,8 @@ interface CameraSettingsPanelProps {
 
 const isBusy = (status: RuntimeSettingsController['status']): boolean =>
   status === 'saving' || status === 'applying';
+
+const SUB_STREAM_FPS_OPTIONS = [10, 15, 25, 30] as const;
 
 export function CameraSettingsPanel({
   controller,
@@ -32,6 +35,7 @@ export function CameraSettingsPanel({
   }
 
   const disabled = isBusy(controller.status);
+  const subDisabled = disabled || !draft.sub_stream.enabled;
   const updateNumber = (
     field: 'bitrate_kbps' | 'gop',
   ) => (event: ChangeEvent<HTMLInputElement>) => {
@@ -110,6 +114,97 @@ export function CameraSettingsPanel({
           />
         </div>
       </div>
+
+      <div className="section-heading">
+        <div>
+          <h3 id="sub-stream-settings-heading">Sub-stream</h3>
+        </div>
+      </div>
+
+      <div className="camera-settings-grid">
+        <div className="settings-field">
+          <label htmlFor="runtime-substream-enabled">Sub-stream</label>
+          <input
+            id="runtime-substream-enabled"
+            type="checkbox"
+            checked={draft.sub_stream.enabled}
+            disabled={disabled}
+            onChange={(event) => controller.updateSubStream({
+              ...draft.sub_stream,
+              enabled: event.target.checked,
+            })}
+          />
+        </div>
+
+        <div className="settings-field">
+          <label htmlFor="runtime-substream-resolution">Resolution</label>
+          <select
+            id="runtime-substream-resolution"
+            value={`${draft.sub_stream.width}x${draft.sub_stream.height}`}
+            disabled={subDisabled}
+            onChange={(event) => {
+              const preset = SUB_STREAM_RESOLUTIONS.find(
+                ({ width, height }) => `${width}x${height}` === event.target.value,
+              );
+              if (preset === undefined) {
+                return;
+              }
+              controller.updateSubStream({
+                ...draft.sub_stream,
+                width: preset.width,
+                height: preset.height,
+              });
+            }}
+          >
+            {SUB_STREAM_RESOLUTIONS.map(({ width, height }) => (
+              <option key={`${width}x${height}`} value={`${width}x${height}`}>
+                {`${width}×${height}`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="settings-field">
+          <label htmlFor="runtime-substream-fps">Frame rate</label>
+          <select
+            id="runtime-substream-fps"
+            value={draft.sub_stream.fps}
+            disabled={subDisabled}
+            onChange={(event) => controller.updateSubStream({
+              ...draft.sub_stream,
+              fps: Number(event.target.value),
+            })}
+          >
+            {SUB_STREAM_FPS_OPTIONS.map((fps) => (
+              <option key={fps} value={fps}>{fps}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="settings-field">
+          <label htmlFor="runtime-substream-bitrate">Sub-stream bitrate</label>
+          <div className="number-control">
+            <input
+              id="runtime-substream-bitrate"
+              type="number"
+              min={snapshot.capabilities.bitrate_kbps.minimum}
+              max={snapshot.capabilities.bitrate_kbps.maximum}
+              step={100}
+              value={draft.sub_stream.bitrate_kbps}
+              disabled={subDisabled}
+              onChange={(event) => controller.updateSubStream({
+                ...draft.sub_stream,
+                bitrate_kbps: Number(event.target.value),
+              })}
+            />
+            <span>kbps</span>
+          </div>
+        </div>
+      </div>
+
+      <p>
+        Applying sub-stream changes briefly interrupts the sub-stream feed.
+      </p>
     </section>
   );
 }
