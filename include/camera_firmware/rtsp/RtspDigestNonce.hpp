@@ -45,10 +45,14 @@ class RtspDigestNonceManager {
   common::Result<std::string> Issue();
   common::Result<RtspDigestNonceValidation> Validate(
       std::string_view nonce) const;
+  // with_qop=false is a legacy RFC 2069 authorization, which carries no nonce
+  // count; a zero nonce_count is then accepted and the nonce becomes
+  // single-use (a second use of the same nonce fails the monotonic check).
   common::Result<bool> Commit(
       std::string_view username,
       const RtspDigestNonceValidation& validation,
-      std::uint32_t nonce_count);
+      std::uint32_t nonce_count,
+      bool with_qop = true);
   void Clear() noexcept;
   [[nodiscard]] common::ZeroizeAudit zeroize_audit() const noexcept;
 

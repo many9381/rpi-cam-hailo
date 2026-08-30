@@ -32,6 +32,15 @@ common::Result<common::SecureBytes> ComputeRtspDigestHa1(
     std::string_view username,
     std::string_view realm,
     std::span<const unsigned char> password);
+// Computes the RTSP Digest response. When with_qop is true (the default), the
+// RFC 2617/7616 quality-of-protection form is used:
+//   H(HA1:nonce:nc:cnonce:auth:HA2)
+// When with_qop is false, the legacy RFC 2069 form is used (nonce_count and
+// cnonce are ignored):
+//   H(HA1:nonce:HA2)
+// The RFC 2069 form exists so MD5-only RTSP clients that do not send qop
+// (GStreamer/FFmpeg/live555) can authenticate; the exchange is carried inside
+// the RTSPS TLS control channel.
 common::Result<common::SecureBytes> ComputeRtspDigestResponse(
     RtspDigestAlgorithm algorithm,
     std::span<const unsigned char> ha1,
@@ -39,7 +48,8 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
     std::string_view uri,
     std::string_view nonce,
     std::string_view nonce_count,
-    std::string_view cnonce);
+    std::string_view cnonce,
+    bool with_qop = true);
 bool RtspDigestConstantTimeEqual(std::span<const unsigned char> left,
                                  std::span<const unsigned char> right);
 

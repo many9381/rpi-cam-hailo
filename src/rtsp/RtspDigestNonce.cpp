@@ -579,13 +579,17 @@ common::Result<RtspDigestNonceValidation> RtspDigestNonceManager::Validate(
 common::Result<bool> RtspDigestNonceManager::Commit(
     std::string_view username,
     const RtspDigestNonceValidation& validation,
-    std::uint32_t nonce_count) {
+    std::uint32_t nonce_count,
+    bool with_qop) {
   try {
     if (!LifecycleAccepting(&impl_->lifecycle)) {
       return NonceFailure<bool>(kOperationFailed);
     }
+    // A qop=auth request MUST carry a non-zero nonce count. A legacy RFC 2069
+    // request (with_qop=false) carries none; nonce_count is then 0 and the
+    // nonce becomes single-use via the monotonic check below.
     if (validation.status != RtspDigestNonceStatus::kValid ||
-        nonce_count == 0U || validation.expires_at == 0U ||
+        (with_qop && nonce_count == 0U) || validation.expires_at == 0U ||
         IsAllZero(validation.nonce_id)) {
       return common::Result<bool>::Ok(false);
     }

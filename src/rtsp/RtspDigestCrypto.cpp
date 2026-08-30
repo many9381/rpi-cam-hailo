@@ -297,7 +297,8 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
     std::string_view uri,
     std::string_view nonce,
     std::string_view nonce_count,
-    std::string_view cnonce) {
+    std::string_view cnonce,
+    bool with_qop) {
   const std::size_t digest_size = RtspDigestSize(algorithm);
   if (DigestForAlgorithm(algorithm) == nullptr || digest_size == 0U) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
@@ -330,10 +331,15 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
     return common::Result<common::SecureBytes>::Err(encoded_ha2.error());
   }
 
-  if (!ValidateCombinedSize(
-          {encoded_ha1.value().size(), 1U, nonce.size(), 1U,
-           nonce_count.size(), 1U, cnonce.size(), kAuthSeparator.size(),
-           encoded_ha2.value().size()})) {
+  const bool size_ok =
+      with_qop
+          ? ValidateCombinedSize(
+                {encoded_ha1.value().size(), 1U, nonce.size(), 1U,
+                 nonce_count.size(), 1U, cnonce.size(), kAuthSeparator.size(),
+                 encoded_ha2.value().size()})
+          : ValidateCombinedSize({encoded_ha1.value().size(), 1U, nonce.size(),
+                                   1U, encoded_ha2.value().size()});
+  if (!size_ok) {
     return common::Result<common::SecureBytes>::Err(FormatError());
   }
 
@@ -343,11 +349,17 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
                           encoded_ha1.value().size());
     response_input.append(&kColon, 1U);
     Append(response_input, nonce);
-    response_input.append(&kColon, 1U);
-    Append(response_input, nonce_count);
-    response_input.append(&kColon, 1U);
-    Append(response_input, cnonce);
-    Append(response_input, kAuthSeparator);
+    if (with_qop) {
+      // RFC 2617/7616: HA1:nonce:nc:cnonce:qop:HA2
+      response_input.append(&kColon, 1U);
+      Append(response_input, nonce_count);
+      response_input.append(&kColon, 1U);
+      Append(response_input, cnonce);
+      Append(response_input, kAuthSeparator);
+    } else {
+      // RFC 2069: HA1:nonce:HA2
+      response_input.append(&kColon, 1U);
+    }
     response_input.append(encoded_ha2.value().data(),
                           encoded_ha2.value().size());
   } catch (...) {

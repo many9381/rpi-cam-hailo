@@ -679,6 +679,99 @@ TEST(RtspDigestVerifierTest, AuthenticatesMd5OnlyWhenExplicitlyEnabled) {
             RtspDigestVerifyStatus::kAuthenticated);
 }
 
+// Legacy RFC 2069 MD5 authorization: no algorithm, qop, nc, or cnonce. This is
+// what GStreamer/FFmpeg/live555 send. Accepted only when MD5 is enabled.
+TEST(RtspDigestVerifierTest, AuthenticatesRfc2069Md5WithoutQop) {
+  TemporaryDirectory directory;
+  const auto path = directory.File("credentials");
+  WriteFile(path, CredentialFile(kPassword, true));
+  DeterministicNonceInputs inputs;
+  auto verifier = CreateVerifier(AuthConfig(path, true), inputs);
+  ASSERT_NE(verifier, nullptr);
+  const std::string nonce = IssueChallengeNonce(verifier.get());
+
+  auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kMd5, kUsername, kRealm,
+                                  Bytes(kPassword));
+  ASSERT_TRUE(ha1.ok());
+  auto response = ComputeRtspDigestResponse(
+      RtspDigestAlgorithm::kMd5, {ha1.value().data(), ha1.value().size()},
+      kMethod, kUri, nonce, /*nonce_count=*/"", /*cnonce=*/"",
+      /*with_qop=*/false);
+  ASSERT_TRUE(response.ok());
+  const std::string authorization =
+      "Digest username=\"" + std::string(kUsername) + "\", realm=\"" +
+      std::string(kRealm) + "\", nonce=\"" + nonce + "\", uri=\"" +
+      std::string(kUri) + "\", response=\"" + HexForTest(response.value()) +
+      "\"";
+
+  auto parsed = ParseRtspDigestAuthorization(authorization);
+  ASSERT_TRUE(parsed.ok()) << "parser rejected the RFC 2069 header";
+  EXPECT_EQ(parsed.value().algorithm, RtspDigestAlgorithm::kMd5);
+  EXPECT_FALSE(parsed.value().has_qop);
+
+  EXPECT_EQ(VerifyStatus(verifier.get(), authorization),
+            RtspDigestVerifyStatus::kAuthenticated);
+}
+
+// A legacy RFC 2069 nonce is single-use: replaying the same authorization a
+// second time is rejected (there is no nonce count to advance).
+TEST(RtspDigestVerifierTest, Rfc2069Md5NonceIsSingleUse) {
+  TemporaryDirectory directory;
+  const auto path = directory.File("credentials");
+  WriteFile(path, CredentialFile(kPassword, true));
+  DeterministicNonceInputs inputs;
+  auto verifier = CreateVerifier(AuthConfig(path, true), inputs);
+  ASSERT_NE(verifier, nullptr);
+  const std::string nonce = IssueChallengeNonce(verifier.get());
+
+  auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kMd5, kUsername, kRealm,
+                                  Bytes(kPassword));
+  ASSERT_TRUE(ha1.ok());
+  auto response = ComputeRtspDigestResponse(
+      RtspDigestAlgorithm::kMd5, {ha1.value().data(), ha1.value().size()},
+      kMethod, kUri, nonce, /*nonce_count=*/"", /*cnonce=*/"",
+      /*with_qop=*/false);
+  ASSERT_TRUE(response.ok());
+  const std::string authorization =
+      "Digest username=\"" + std::string(kUsername) + "\", realm=\"" +
+      std::string(kRealm) + "\", nonce=\"" + nonce + "\", uri=\"" +
+      std::string(kUri) + "\", response=\"" + HexForTest(response.value()) +
+      "\"";
+
+  EXPECT_EQ(VerifyStatus(verifier.get(), authorization),
+            RtspDigestVerifyStatus::kAuthenticated);
+  EXPECT_EQ(VerifyStatus(verifier.get(), authorization),
+            RtspDigestVerifyStatus::kRejected);
+}
+
+// The same RFC 2069 MD5 authorization is rejected when MD5 is not enabled.
+TEST(RtspDigestVerifierTest, RejectsRfc2069Md5WhenMd5Disabled) {
+  TemporaryDirectory directory;
+  const auto path = directory.File("credentials");
+  WriteFile(path, CredentialFile(kPassword));
+  DeterministicNonceInputs inputs;
+  auto verifier = CreateVerifier(AuthConfig(path), inputs);
+  ASSERT_NE(verifier, nullptr);
+  const std::string nonce = IssueChallengeNonce(verifier.get());
+
+  auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kMd5, kUsername, kRealm,
+                                  Bytes(kPassword));
+  ASSERT_TRUE(ha1.ok());
+  auto response = ComputeRtspDigestResponse(
+      RtspDigestAlgorithm::kMd5, {ha1.value().data(), ha1.value().size()},
+      kMethod, kUri, nonce, /*nonce_count=*/"", /*cnonce=*/"",
+      /*with_qop=*/false);
+  ASSERT_TRUE(response.ok());
+  const std::string authorization =
+      "Digest username=\"" + std::string(kUsername) + "\", realm=\"" +
+      std::string(kRealm) + "\", nonce=\"" + nonce + "\", uri=\"" +
+      std::string(kUri) + "\", response=\"" + HexForTest(response.value()) +
+      "\"";
+
+  EXPECT_EQ(VerifyStatus(verifier.get(), authorization),
+            RtspDigestVerifyStatus::kRejected);
+}
+
 TEST(RtspDigestVerifierTest, CreateLoadsCredentialsFailClosed) {
   TemporaryDirectory directory;
   DeterministicNonceInputs inputs;

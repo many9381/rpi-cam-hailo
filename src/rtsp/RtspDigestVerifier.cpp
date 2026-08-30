@@ -224,11 +224,32 @@ class AuthorizationParser {
       }
     }
 
-    if (!std::all_of(seen_.begin(), seen_.end(), [](bool seen) {
-          return seen;
-        })) {
+    const auto seen = [this](Directive directive) {
+      return seen_[static_cast<std::size_t>(directive)];
+    };
+    // Mandatory directives, present in both RFC 2069 and RFC 2617/7616.
+    if (!seen(Directive::kUsername) || !seen(Directive::kRealm) ||
+        !seen(Directive::kNonce) || !seen(Directive::kUri) ||
+        !seen(Directive::kResponse)) {
       return false;
     }
+    // algorithm is optional; RFC 2069/7616 default it to MD5 when absent.
+    if (!seen(Directive::kAlgorithm)) {
+      authorization->algorithm = RtspDigestAlgorithm::kMd5;
+    }
+    // qop is optional. When present (RFC 2617/7616) it REQUIRES nc and cnonce;
+    // when absent (legacy RFC 2069) nc and cnonce MUST also be absent. This
+    // lets MD5-only clients that omit qop (GStreamer/FFmpeg/live555)
+    // authenticate over the RTSPS TLS control channel.
+    const bool has_qop = seen(Directive::kQop);
+    if (has_qop) {
+      if (!seen(Directive::kNonceCount) || !seen(Directive::kCnonce)) {
+        return false;
+      }
+    } else if (seen(Directive::kNonceCount) || seen(Directive::kCnonce)) {
+      return false;
+    }
+    authorization->has_qop = has_qop;
     return authorization->response.size() ==
            RtspDigestSize(authorization->algorithm);
   }
@@ -680,7 +701,7 @@ common::Result<RtspDigestVerifyStatus> RtspDigestVerifier::Verify(
       authorization.algorithm,
       {secrets.ha1.data(), secrets.ha1.size()},
       request.method, authorization.uri, authorization.nonce,
-      nonce_count_text, authorization.cnonce);
+      nonce_count_text, authorization.cnonce, authorization.has_qop);
   if (!expected.ok()) {
     return common::Result<RtspDigestVerifyStatus>::Err(expected.error());
   }
@@ -699,7 +720,8 @@ common::Result<RtspDigestVerifyStatus> RtspDigestVerifier::Verify(
   }
 
   auto committed = impl_->nonces->Commit(
-      authorization.username, validation.value(), authorization.nonce_count);
+      authorization.username, validation.value(), authorization.nonce_count,
+      authorization.has_qop);
   if (!committed.ok()) {
     return common::Result<RtspDigestVerifyStatus>::Err(committed.error());
   }

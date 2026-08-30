@@ -25,6 +25,9 @@ struct RtspDigestAuthorization {
   std::uint32_t nonce_count{0};
   RtspDigestAlgorithm algorithm{RtspDigestAlgorithm::kSha256};
   common::SecureBytes response;
+  // True when the client presented qop=auth (RFC 2617/7616), which mandates
+  // nc and cnonce. False for a legacy RFC 2069 authorization (no qop).
+  bool has_qop{false};
 };
 
 common::Result<RtspDigestAuthorization> ParseRtspDigestAuthorization(
