@@ -330,12 +330,24 @@ common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
     return common::Result<void>::Err(
         {"E_SECURITY_PUBLIC_URL", "security requires an https public URL"});
   }
-  if (!config.secure_rtsp.client_auth.enabled ||
-      config.secure_rtsp.client_auth.algorithms.size() != 1U ||
-      config.secure_rtsp.client_auth.algorithms.front() != "sha-256") {
-    return common::Result<void>::Err(
-        {"E_SECURITY_RTSP_AUTH",
-         "security requires SHA-256 RTSP Digest authentication"});
+  {
+    // Security mode requires SHA-256 Digest, and MAY additionally offer MD5
+    // so MD5-only RTSP clients (GStreamer/FFmpeg/live555) can authenticate.
+    // The digest is exchanged inside the RTSPS TLS control channel, so
+    // pairing MD5 alongside SHA-256 does not weaken the transport. Anything
+    // other than {sha-256} or {sha-256, md5} is rejected.
+    const std::unordered_set<std::string> auth_algorithms(
+        config.secure_rtsp.client_auth.algorithms.begin(),
+        config.secure_rtsp.client_auth.algorithms.end());
+    if (!config.secure_rtsp.client_auth.enabled ||
+        !auth_algorithms.contains("sha-256") ||
+        auth_algorithms.size() > 2U ||
+        (auth_algorithms.size() == 2U && !auth_algorithms.contains("md5"))) {
+      return common::Result<void>::Err(
+          {"E_SECURITY_RTSP_AUTH",
+           "security requires SHA-256 RTSP Digest authentication "
+           "(optionally paired with MD5)"});
+    }
   }
   if (!IsLexicallyBeneath(config.secure_rtsp.client_auth.credential_file,
                           config.security.state_directory)) {

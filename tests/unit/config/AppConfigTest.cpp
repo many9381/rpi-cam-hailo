@@ -470,12 +470,28 @@ TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
   ExpectConfigError(SecurityConfigWithRtspAuth(false), "E_SECURITY_RTSP_AUTH");
   ExpectConfigError(SecurityConfigWithPublicUrl("http://camera.local"),
                     "E_SECURITY_PUBLIC_URL");
-  ExpectConfigError(SecurityConfigWithAlgorithms("[sha-256, md5]"),
-                    "E_SECURITY_RTSP_AUTH");
+  // MD5 alone (without SHA-256) is still rejected -- the general validator
+  // requires SHA-256 to be present. Security mode never accepts an
+  // SHA-256-less digest.
+  ExpectConfigError(SecurityConfigWithAlgorithms("[md5]"),
+                    "E_CONFIG_RTSP_AUTH_ALGORITHM");
   ExpectConfigError(
       SecurityConfigWithCredentialFile(
           "/var/lib/camera-firmware/security/../rtsp.credentials"),
       "E_SECURITY_CREDENTIAL_PATH");
+}
+
+TEST(AppConfigTest, AcceptsSecurityWithSha256AndMd5RtspAuth) {
+  // Security mode requires SHA-256 but MAY additionally offer MD5 so that
+  // MD5-only RTSP clients (GStreamer/FFmpeg/live555) can authenticate; the
+  // digest travels inside the RTSPS TLS control channel, so pairing MD5
+  // alongside SHA-256 does not weaken the transport.
+  const auto loaded =
+      LoadInlineConfig(SecurityConfigWithAlgorithms("[sha-256, md5]"));
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  EXPECT_EQ(loaded.value().secure_rtsp.client_auth.algorithms.size(), 2U);
+  EXPECT_EQ(loaded.value().secure_rtsp.client_auth.algorithms.front(),
+            "sha-256");
 }
 
 TEST(AppConfigTest, AuditRetentionUsesApprovedDefaults) {
