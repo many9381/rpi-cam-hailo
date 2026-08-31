@@ -329,6 +329,26 @@ TEST(RtspDigestVerifierTest, ParsesCompleteSha256Authorization) {
       [](unsigned char value) { return value == 0xaaU; }));
 }
 
+TEST(RtspDigestVerifierTest, ParsesQuotedAlgorithmAndQop) {
+  // ffmpeg (and some other RTSP clients) send the algorithm and qop directive
+  // values quoted: algorithm="MD5", qop="auth". RFC 7616 defines them as
+  // unquoted tokens, but a lenient parser must accept both forms or those
+  // clients get a 401. The digest itself is unaffected by the quoting.
+  const std::string response(32U, 'A');
+  const std::string header =
+      "Digest username=\"" + std::string(kUsername) + "\", realm=\"" +
+      std::string(kRealm) + "\", nonce=\"" + std::string(76U, 'N') +
+      "\", uri=\"" + std::string(kUri) + "\", response=\"" + response +
+      "\", algorithm=\"MD5\", qop=\"auth\", nc=00000001, cnonce=\"" +
+      std::string(kCnonce) + "\"";
+
+  auto parsed = ParseRtspDigestAuthorization(header);
+
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().algorithm, RtspDigestAlgorithm::kMd5);
+  EXPECT_TRUE(parsed.value().has_qop);
+}
+
 TEST(RtspDigestVerifierTest, RejectsBasicAndHeadersOver8KiB) {
   ExpectHeaderError("Basic Zm9vOmJhcg==");
 
@@ -420,9 +440,9 @@ TEST(RtspDigestVerifierTest, RejectsZeroOrMalformedNonceCount) {
 TEST(RtspDigestVerifierTest, RejectsControlCharactersAndBadQuoting) {
   ExpectHeaderError(ReplaceOnce(ParserHeader(), "username=\"operator\"",
                                 "username=operator"));
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "algorithm=SHA-256",
-                                "algorithm=\"SHA-256\""));
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "qop=auth", "qop=\"auth\""));
+  // NOTE: quoted algorithm/qop (algorithm="SHA-256", qop="auth") are now
+  // ACCEPTED for client interop (ffmpeg sends them quoted) -- see
+  // ParsesQuotedAlgorithmAndQop. Malformed quoting is still rejected below.
   ExpectHeaderError(ReplaceOnce(ParserHeader(), "username=\"operator\"",
                                 "username=\"bad\rname\""));
   ExpectHeaderError(ReplaceOnce(ParserHeader(), "username=\"operator\"",
@@ -431,6 +451,12 @@ TEST(RtspDigestVerifierTest, RejectsControlCharactersAndBadQuoting) {
                                 "username=\"unterminated"));
   ExpectHeaderError(ReplaceOnce(ParserHeader(), "username=\"operator\"",
                                 "username=\"trailing\\\""));
+  // Malformed quoted algorithm is still rejected: an unterminated quote or an
+  // empty value must not authenticate.
+  ExpectHeaderError(ReplaceOnce(ParserHeader(), "algorithm=SHA-256",
+                                "algorithm=\"SHA-256"));
+  ExpectHeaderError(
+      ReplaceOnce(ParserHeader(), "algorithm=SHA-256", "algorithm=\"\""));
 }
 
 TEST(RtspDigestVerifierTest, RejectsQuotedPairsInResponseDigest) {

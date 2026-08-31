@@ -272,7 +272,7 @@ class AuthorizationParser {
       case Directive::kAlgorithm:
         return ParseAlgorithm(&authorization->algorithm);
       case Directive::kQop:
-        return AsciiCaseEqual(ParseToken(), "auth");
+        return AsciiCaseEqual(ParseOptionallyQuotedToken(), "auth");
       case Directive::kNonceCount:
         return ParseNonceCount(authorization);
       case Directive::kCnonce:
@@ -341,8 +341,23 @@ class AuthorizationParser {
     return false;
   }
 
+  // RFC 7616 defines algorithm and qop as unquoted tokens, but several clients
+  // (notably ffmpeg) send them quoted, e.g. algorithm="MD5", qop="auth".
+  // Accept both a bare token and a quoted token so those clients authenticate.
+  std::string_view ParseOptionallyQuotedToken() noexcept {
+    if (position_ < header_.size() && header_[position_] == '"') {
+      ++position_;
+      const std::string_view token = ParseToken();
+      if (!Consume('"')) {
+        return {};
+      }
+      return token;
+    }
+    return ParseToken();
+  }
+
   bool ParseAlgorithm(RtspDigestAlgorithm* algorithm) {
-    const std::string_view token = ParseToken();
+    const std::string_view token = ParseOptionallyQuotedToken();
     if (AsciiCaseEqual(token, "SHA-256")) {
       *algorithm = RtspDigestAlgorithm::kSha256;
       return true;
