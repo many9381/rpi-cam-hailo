@@ -1,0 +1,247 @@
+diff --git a/lib/inc/drogon/HttpResponse.h b/lib/inc/drogon/HttpResponse.h
+index ed9778f..fd0cd74 100644
+--- a/lib/inc/drogon/HttpResponse.h
++++ b/lib/inc/drogon/HttpResponse.h
+@@ -15,6 +15,7 @@
+ 
+ #include <drogon/exports.h>
+ #include <trantor/net/Certificate.h>
++#include <trantor/net/AsyncStream.h>
+ #include <drogon/DrClassMap.h>
+ #include <drogon/Cookie.h>
+ #include <drogon/HttpTypes.h>
+@@ -27,6 +28,8 @@
+ 
+ namespace drogon
+ {
++#define DROGON_CAMERA_FIRMWARE_ASYNC_STREAM_RESPONSE 1
++
+ /// Abstract class for webapp developer to get or set the Http response;
+ class HttpResponse;
+ using HttpResponsePtr = std::shared_ptr<HttpResponse>;
+@@ -481,6 +484,12 @@ class DROGON_EXPORT HttpResponse
+         ContentType type = CT_NONE,
+         const std::string &typeString = "");
+ 
++    /// Create a response whose body is produced from another thread.
++    static HttpResponsePtr newAsyncStreamResponse(
++        const std::function<void(trantor::AsyncStreamPtr)> &callback,
++        ContentType type = CT_NONE,
++        const std::string &typeString = "");
++
+     /**
+      * @brief Create a custom HTTP response object. For using this template,
+      * users must specialize the toResponse template.
+@@ -514,6 +523,9 @@ class DROGON_EXPORT HttpResponse
+     virtual const std::function<std::size_t(char *, std::size_t)>
+         &streamCallback() const = 0;
+ 
++    virtual const std::function<void(trantor::AsyncStreamPtr)>
++        &asyncStreamCallback() const = 0;
++
+     /**
+      * @brief Returns the content type associated with the response
+      */
+diff --git a/lib/src/HttpResponseImpl.cc b/lib/src/HttpResponseImpl.cc
+index be565a7..8b9e6a2 100644
+--- a/lib/src/HttpResponseImpl.cc
++++ b/lib/src/HttpResponseImpl.cc
+@@ -479,6 +479,35 @@ HttpResponsePtr HttpResponse::newStreamResponse(
+     return resp;
+ }
+ 
++HttpResponsePtr HttpResponse::newAsyncStreamResponse(
++    const std::function<void(trantor::AsyncStreamPtr)> &callback,
++    ContentType type,
++    const std::string &typeString)
++{
++    if (!callback)
++    {
++        return HttpResponse::newNotFoundResponse();
++    }
++    auto resp = std::make_shared<HttpResponseImpl>();
++    resp->setAsyncStreamCallback(callback);
++    resp->setStatusCode(k200OK);
++    if (typeString.empty())
++    {
++        resp->setContentTypeCode(type);
++    }
++    else
++    {
++        if (type == CT_NONE)
++            type = parseContentType(typeString);
++        if (type == CT_NONE)
++            type = CT_CUSTOM;
++        static_cast<HttpResponse *>(resp.get())
++            ->setContentTypeCodeAndCustomString(type, typeString);
++    }
++    doResponseCreateAdvices(resp);
++    return resp;
++}
++
+ void HttpResponseImpl::makeHeaderString(trantor::MsgBuffer &buffer)
+ {
+     buffer.ensureWritableBytes(128);
+@@ -526,7 +555,7 @@ void HttpResponseImpl::makeHeaderString(trantor::MsgBuffer &buffer)
+     if (!passThrough_)
+     {
+         buffer.ensureWritableBytes(64);
+-        if (streamCallback_)
++        if (streamCallback_ || asyncStreamCallback_)
+         {
+             // When the headers are created, it is time to set the transfer
+             // encoding to chunked if the contents size is not specified
+@@ -879,6 +908,7 @@ void HttpResponseImpl::swap(HttpResponseImpl &that) noexcept
+     swap(flagForParsingJson_, that.flagForParsingJson_);
+     swap(sendfileName_, that.sendfileName_);
+     swap(streamCallback_, that.streamCallback_);
++    swap(asyncStreamCallback_, that.asyncStreamCallback_);
+     jsonPtr_.swap(that.jsonPtr_);
+     fullHeaderString_.swap(that.fullHeaderString_);
+     httpString_.swap(that.httpString_);
+@@ -900,6 +930,7 @@ void HttpResponseImpl::clear()
+         streamCallback_(nullptr, 0);  // callback internal cleanup
+         streamCallback_ = {};
+     }
++    asyncStreamCallback_ = {};
+     headers_.clear();
+     cookies_.clear();
+     bodyPtr_.reset();
+@@ -950,7 +981,7 @@ void HttpResponseImpl::parseJson() const
+ 
+ bool HttpResponseImpl::shouldBeCompressed() const
+ {
+-    if (streamCallback_ || !sendfileName_.empty() ||
++    if (streamCallback_ || asyncStreamCallback_ || !sendfileName_.empty() ||
+         contentType() >= CT_APPLICATION_OCTET_STREAM ||
+         getBody().length() < 1024 || !(getHeaderBy("content-encoding").empty()))
+     {
+diff --git a/lib/src/HttpResponseImpl.h b/lib/src/HttpResponseImpl.h
+index 0d55148..57cdbfd 100644
+--- a/lib/src/HttpResponseImpl.h
++++ b/lib/src/HttpResponseImpl.h
+@@ -363,6 +363,18 @@ class DROGON_EXPORT HttpResponseImpl : public HttpResponse
+         streamCallback_ = callback;
+     }
+ 
++    const std::function<void(trantor::AsyncStreamPtr)> &asyncStreamCallback()
++        const override
++    {
++        return asyncStreamCallback_;
++    }
++
++    void setAsyncStreamCallback(
++        const std::function<void(trantor::AsyncStreamPtr)> &callback)
++    {
++        asyncStreamCallback_ = callback;
++    }
++
+     void makeHeaderString()
+     {
+         fullHeaderString_ = std::make_shared<trantor::MsgBuffer>(128);
+@@ -497,6 +509,7 @@ class DROGON_EXPORT HttpResponseImpl : public HttpResponse
+     std::string sendfileName_;
+     SendfileRange sendfileRange_{0, 0};
+     std::function<std::size_t(char *, std::size_t)> streamCallback_;
++    std::function<void(trantor::AsyncStreamPtr)> asyncStreamCallback_;
+ 
+     mutable std::shared_ptr<Json::Value> jsonPtr_;
+ 
+diff --git a/lib/src/HttpServer.cc b/lib/src/HttpServer.cc
+index 2724138..fda65ea 100644
+--- a/lib/src/HttpServer.cc
++++ b/lib/src/HttpServer.cc
+@@ -553,6 +553,52 @@ static std::size_t chunkingCallback(
+     //    return nHeaderLen + nDataSize + 2;
+ }
+ 
++class ChunkedAsyncStream final : public trantor::AsyncStream
++{
++  public:
++    explicit ChunkedAsyncStream(trantor::AsyncStreamPtr stream)
++        : stream_(std::move(stream))
++    {
++    }
++
++    bool send(const char *data, size_t len) override
++    {
++        if (!stream_ || data == nullptr || len == 0)
++            return false;
++        char header[32];
++        const auto headerLength =
++            static_cast<size_t>(snprintf(header, sizeof(header), "%zx\r\n", len));
++        std::string chunk;
++        chunk.reserve(headerLength + len + 2);
++        chunk.append(header, headerLength);
++        chunk.append(data, len);
++        chunk.append("\r\n", 2);
++        if (!stream_->send(std::move(chunk)))
++        {
++            stream_.reset();
++            return false;
++        }
++        return true;
++    }
++
++    void close() override
++    {
++        if (!stream_)
++            return;
++        stream_->send("0\r\n\r\n", 5);
++        stream_->close();
++        stream_.reset();
++    }
++
++    ~ChunkedAsyncStream() override
++    {
++        close();
++    }
++
++  private:
++    trantor::AsyncStreamPtr stream_;
++};
++
+ void HttpServer::sendResponse(const TcpConnectionPtr &conn,
+                               const HttpResponsePtr &response,
+                               bool isHeadMethod)
+@@ -564,8 +610,9 @@ void HttpServer::sendResponse(const TcpConnectionPtr &conn,
+         auto httpString = respImplPtr->renderToBuffer();
+         conn->send(httpString);
+         auto &streamCallback = respImplPtr->streamCallback();
++        auto &asyncStreamCallback = respImplPtr->asyncStreamCallback();
+         const std::string &sendfileName = respImplPtr->sendfileName();
+-        if (streamCallback || !sendfileName.empty())
++        if (streamCallback || asyncStreamCallback || !sendfileName.empty())
+         {
+             if (streamCallback)
+             {
+@@ -587,6 +634,29 @@ void HttpServer::sendResponse(const TcpConnectionPtr &conn,
+                 else
+                     conn->sendStream(streamCallback);
+             }
++            else if (asyncStreamCallback)
++            {
++                auto stream = conn->sendAsyncStream(true);
++                auto &headers = respImplPtr->headers();
++                const auto chunked =
++                    !respImplPtr->ifCloseConnection() &&
++                    headers.find("transfer-encoding") != headers.end() &&
++                    headers.at("transfer-encoding") == "chunked";
++                if (chunked)
++                {
++                    stream = std::make_unique<ChunkedAsyncStream>(
++                        std::move(stream));
++                }
++                try
++                {
++                    asyncStreamCallback(std::move(stream));
++                }
++                catch (...)
++                {
++                    if (stream)
++                        stream->close();
++                }
++            }
+             else
+             {
+                 const auto &range = respImplPtr->sendfileRange();

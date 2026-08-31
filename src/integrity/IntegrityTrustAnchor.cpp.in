@@ -1,0 +1,14 @@
+#include "camera_firmware/integrity/IntegrityTrustAnchor.hpp"
+
+namespace camera_firmware::integrity {
+namespace {
+
+constexpr char kEmbeddedIntegrityPublicKeyPem[] = "@CF_INTEGRITY_PUBLIC_KEY_PEM@";
+
+}  // namespace
+
+std::string_view EmbeddedIntegrityPublicKeyPem() {
+  return kEmbeddedIntegrityPublicKeyPem;
+}
+
+}  // namespace camera_firmware::integrity

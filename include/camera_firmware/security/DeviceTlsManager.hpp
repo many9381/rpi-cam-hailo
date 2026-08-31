@@ -1,0 +1,54 @@
+#pragma once
+
+#include <chrono>
+#include <filesystem>
+#include <memory>
+
+#include "camera_firmware/common/Result.hpp"
+#include "camera_firmware/config/AppConfig.hpp"
+#include "camera_firmware/crypto/CryptoProvider.hpp"
+
+namespace camera_firmware::security {
+
+class ResolvedTlsMaterial;
+
+namespace detail {
+struct ResolvedTlsHandles;
+}
+
+class ResolvedTlsMaterial {
+ public:
+  ResolvedTlsMaterial(const ResolvedTlsMaterial&) = default;
+  ResolvedTlsMaterial& operator=(const ResolvedTlsMaterial&) = default;
+  ResolvedTlsMaterial(ResolvedTlsMaterial&&) noexcept = default;
+  ResolvedTlsMaterial& operator=(ResolvedTlsMaterial&&) noexcept = default;
+
+  std::filesystem::path certificate_path;
+  std::filesystem::path private_key_path;
+  bool generated_for_development{false};
+
+ private:
+  friend common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
+      const config::HttpTlsConfig&,
+      const std::filesystem::path&,
+      crypto::CryptoProvider&);
+  friend common::Result<void> CheckTlsMaterialHealth(
+      const ResolvedTlsMaterial&, std::chrono::system_clock::time_point);
+  ResolvedTlsMaterial(
+      std::filesystem::path certificate,
+      std::filesystem::path private_key,
+      bool generated,
+      std::shared_ptr<detail::ResolvedTlsHandles> handles) noexcept;
+
+  std::shared_ptr<detail::ResolvedTlsHandles> handles_;
+};
+
+common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
+    const config::HttpTlsConfig& tls,
+    const std::filesystem::path& protected_state_directory,
+    crypto::CryptoProvider& provider);
+common::Result<void> CheckTlsMaterialHealth(
+    const ResolvedTlsMaterial& material,
+    std::chrono::system_clock::time_point now);
+
+}  // namespace camera_firmware::security

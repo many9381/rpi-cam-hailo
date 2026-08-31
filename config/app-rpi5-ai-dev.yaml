@@ -7,26 +7,53 @@ camera:
     backend: libcamera
     camera_index: 0
   video:
-    width: 1536
-    height: 864
-    fps: 30
+    width: 1920
+    height: 1080
+    fps: 50
     format: nv12
   encoder:
     backend: x264
-    bitrate_kbps: 3000
+    bitrate_kbps: 6000
+    gop: 13
+    preset: ultrafast
+  sub_stream:
+    enabled: true
+    width: 640
+    height: 360
+    fps: 15
+    bitrate_kbps: 1000
     gop: 30
+    mount: /imx708/sub
   ai:
     enabled: true
     model_ids: [objects]
+    max_fps: 0    # 0 = unlimited; pull-on-ready runs AI at the natural rate
 
 http:
   enabled: true
   bind_ip: 0.0.0.0
   port: 8443
-  web_root: web
+  web_root: web/dist
   public_base_url: http://127.0.0.1:8443
+  live:
+    enabled: true
+    fragment_duration_ms: 250
+    max_clients: 4
+    ring_fragments: 8
+    stale_timeout_ms: 2000
   tls:
     enabled: false
+
+security:
+  enabled: false
+  audit:
+    max_events: 50000
+    warning_percent: 90
+
+self_protection:
+  manifest_path: /var/lib/camera-firmware/integrity/manifest.yaml
+  signature_path: /var/lib/camera-firmware/integrity/manifest.sig
+  interval_hours: 24
 
 ai:
   enabled: true
@@ -52,6 +79,12 @@ secure_rtsp:
   bind_ip: 0.0.0.0
   port: 8555
   mount: /imx708/main
+  client_auth:
+    enabled: false
+    realm: rpi-camera
+    credential_file: config/rtsp-digest.credentials
+    algorithms: [sha-256]
+    nonce_ttl_seconds: 300
   session_key:
     source: file
     path: config/dev-srtp-session.hex

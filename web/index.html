@@ -1,82 +1,12 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Camera Firmware</title>
-    <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <main class="app-shell">
-      <section class="status-panel">
-        <h1>Camera Firmware</h1>
-        <dl class="status-grid">
-          <div>
-            <dt>Health</dt>
-            <dd id="health-status">Loading</dd>
-          </div>
-          <div>
-            <dt>Stream</dt>
-            <dd>
-              <span id="stream-url">Loading</span>
-              <small id="stream-security" class="status-detail">Stream security unavailable</small>
-            </dd>
-          </div>
-          <div>
-            <dt>AI</dt>
-            <dd>
-              <span id="ai-status">Loading</span>
-              <small id="ai-status-detail" class="status-detail">Waiting for runtime</small>
-            </dd>
-          </div>
-        </dl>
-        <div class="runner-status">
-          <div class="panel-header">
-            <h2>AI Runners</h2>
-            <div class="runner-controls">
-              <span id="runner-count">0 runners</span>
-              <button id="ai-restart-button" type="button">Restart AI</button>
-            </div>
-          </div>
-          <div id="ai-control-status" class="ai-control-status" aria-live="polite">Idle</div>
-          <div id="runner-list" class="runner-list" aria-live="polite">
-            <div class="runner-empty">No AI runners</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="content-grid">
-        <section class="panel">
-          <div class="panel-header">
-            <h2>Cameras</h2>
-            <button id="refresh-button" type="button">Refresh</button>
-          </div>
-          <ul id="camera-list" class="camera-list"></ul>
-        </section>
-
-        <section class="panel snapshot-panel">
-          <div class="panel-header">
-            <h2>Snapshot</h2>
-            <span id="snapshot-label">Unavailable</span>
-          </div>
-          <div id="snapshot-stage" class="snapshot-stage">
-            <img id="snapshot-image" alt="Latest camera snapshot">
-            <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
-          </div>
-        </section>
-      </section>
-
-      <section class="panel detections-panel">
-        <div class="panel-header">
-          <h2>Detections</h2>
-          <span><span id="detection-count">0</span> results</span>
-        </div>
-        <div id="detection-list" class="detection-list" aria-live="polite">
-          <div class="detection-empty">No detections</div>
-        </div>
-      </section>
-    </main>
-
-    <script src="/app.js" defer></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

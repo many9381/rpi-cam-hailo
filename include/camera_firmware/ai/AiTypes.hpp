@@ -14,10 +14,19 @@ struct DetectionBox {
   float height{0.0F};
 };
 
+struct Keypoint {
+  std::string name;
+  float x{0.0F};
+  float y{0.0F};
+  float confidence{0.0F};
+};
+
 struct Detection {
+  std::int32_t class_id{-1};
   std::string label;
   float confidence{0.0F};
   DetectionBox box;
+  std::vector<Keypoint> keypoints;
 };
 
 struct DetectionEvent {

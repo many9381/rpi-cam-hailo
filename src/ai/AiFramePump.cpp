@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "camera_firmware/ai/AiRuntime.hpp"
+#include "camera_firmware/common/ThreadTuning.hpp"
 
 namespace camera_firmware::ai {
 
@@ -17,9 +18,11 @@ struct AiFramePump::SharedState {
   bool stopping{false};
 };
 
-AiFramePump::AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime)
+AiFramePump::AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime,
+                         std::chrono::milliseconds minimum_interval)
     : frame_tap_(frame_tap),
       runtime_(runtime),
+      minimum_interval_(minimum_interval),
       state_(std::make_shared<SharedState>()) {}
 
 AiFramePump::~AiFramePump() { Stop(); }
@@ -36,8 +39,18 @@ common::Result<void> AiFramePump::Start() {
     state_->running = true;
   }
 
-  worker_ = std::thread([state = state_, &runtime = runtime_] {
-    Run(state, runtime);
+  worker_ = std::thread(
+      [state = state_, &runtime = runtime_, interval = minimum_interval_] {
+        common::NameCurrentThread("ai-pump");
+        common::DeprioritizeCurrentThread(10);
+        Run(state, runtime, interval);
+      });
+
+  // Pull-on-ready: re-arm the tap's demand each time the runtime finishes
+  // an inference, so the capture side leases a lores buffer only when the
+  // runner is actually ready for the next frame.
+  runtime_.SetReadyCallback([&frame_tap = frame_tap_] {
+    frame_tap.RequestNext();
   });
 
   std::weak_ptr<SharedState> weak_state = state_;
@@ -84,7 +97,13 @@ void AiFramePump::QueueFrame(const std::shared_ptr<SharedState>& state,
 }
 
 void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
-                      AiRuntime& runtime) {
+                      AiRuntime& runtime,
+                      std::chrono::milliseconds /*minimum_interval*/) {
+  // Pull-on-ready: the capture side only publishes a lores frame while the
+  // tap's demand is armed (re-armed on inference completion), and paces the
+  // AI rate itself, so the pump simply forwards each delivered frame to the
+  // runtime without holding it in a rate gate. Holding a frame here would
+  // pin its libcamera request and starve the capture buffer pool.
   while (true) {
     std::optional<media::FrameLease> frame;
     {
@@ -99,9 +118,11 @@ void AiFramePump::Run(const std::shared_ptr<SharedState>& state,
       state->pending_frame.reset();
     }
 
-    if (frame.has_value()) {
-      (void)runtime.SubmitFrame(std::move(*frame));
+    if (!frame.has_value()) {
+      continue;
     }
+
+    (void)runtime.SubmitFrame(std::move(*frame));
   }
 }
 

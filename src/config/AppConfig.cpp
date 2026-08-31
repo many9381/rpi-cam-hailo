@@ -2,8 +2,12 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <cmath>
 #include <exception>
+#include <filesystem>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -19,25 +23,22 @@ void AssignIfPresent(const YAML::Node& node, const char* key, T& value) {
   }
 }
 
-common::Result<AppConfig> SessionKeyError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_SESSION_KEY",
-       "secure_rtsp.session_key.path is required when SRTP is enabled"});
+common::Error SessionKeyError() {
+  return {"E_CONFIG_SESSION_KEY",
+          "secure_rtsp.session_key.path is required when SRTP is enabled"};
 }
 
-common::Result<AppConfig> TlsCertificateError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_TLS_CERT",
-       "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
-       "when control_tls is enabled unless "
-       "allow_development_self_signed_tls is true"});
+common::Error TlsCertificateError() {
+  return {"E_CONFIG_TLS_CERT",
+          "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
+          "when control_tls is enabled unless "
+          "allow_development_self_signed_tls is true"};
 }
 
-common::Result<AppConfig> HttpTlsError() {
-  return common::Result<AppConfig>::Err(
-      {"E_CONFIG_HTTP_TLS",
-       "http.tls.certificate_path and private_key_path are required together "
-       "when http.tls.enabled is true"});
+common::Error HttpTlsError() {
+  return {"E_CONFIG_HTTP_TLS",
+          "http.tls.certificate_path and private_key_path are required together "
+          "when http.tls.enabled is true"};
 }
 
 std::vector<std::string> ReadStringList(const YAML::Node& node) {
@@ -50,6 +51,45 @@ std::vector<std::string> ReadStringList(const YAML::Node& node) {
     values.push_back(item.as<std::string>());
   }
   return values;
+}
+
+bool IsVisibleAuthField(std::string_view value, std::size_t maximum) {
+  return !value.empty() && value.size() <= maximum &&
+         std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+           return ch >= 0x21U && ch <= 0x7eU;
+         });
+}
+
+bool IsLexicallyBeneath(const std::filesystem::path& path,
+                        const std::filesystem::path& directory) {
+  const auto normalized_path = path.lexically_normal();
+  const auto normalized_directory = directory.lexically_normal();
+  if (normalized_path.empty() || normalized_directory.empty()) {
+    return false;
+  }
+
+  auto path_component = normalized_path.begin();
+  for (auto directory_component = normalized_directory.begin();
+       directory_component != normalized_directory.end(); ++directory_component,
+            ++path_component) {
+    if (path_component == normalized_path.end() ||
+        *path_component != *directory_component) {
+      return false;
+    }
+  }
+  return path_component != normalized_path.end();
+}
+
+bool IsAbsoluteNormalizedPath(const std::string& value) {
+  constexpr std::size_t kMaximumPathBytes = 4096U;
+  if (value.empty() || value.size() > kMaximumPathBytes ||
+      value.find('\0') != std::string::npos) {
+    return false;
+  }
+
+  const std::filesystem::path path(value);
+  return path.is_absolute() &&
+         path.native() == path.lexically_normal().native();
 }
 
 }  // namespace
@@ -98,12 +138,23 @@ common::Result<void> ValidateAiConfigSemantics(
            "ai.models[].input width and height must be positive for model " +
                model.id});
     }
+    constexpr std::uint64_t kRgbChannels = 3U;
+    const auto input_row_bytes =
+        static_cast<std::uint64_t>(model.input.height) * kRgbChannels;
+    if (static_cast<std::uint64_t>(model.input.width) >
+        kMaximumAiModelInputBytes / input_row_bytes) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MODEL",
+           "ai.models[].input exceeds the RGB8 memory limit for model " +
+               model.id});
+    }
     if (model.input.format != "rgb8") {
       return common::Result<void>::Err(
           {"E_CONFIG_AI_MODEL",
            "only ai.models[].input.format=rgb8 is supported"});
     }
-    if (model.confidence_threshold < 0.0F ||
+    if (!std::isfinite(model.confidence_threshold) ||
+        model.confidence_threshold < 0.0F ||
         model.confidence_threshold > 1.0F) {
       return common::Result<void>::Err(
           {"E_CONFIG_AI_MODEL",
@@ -130,6 +181,12 @@ common::Result<void> ValidateAiConfigSemantics(
              "camera.ai.model_ids references unknown model: " + model_id});
       }
     }
+    constexpr unsigned int kMaximumCameraAiMaxFps = 120U;
+    if (camera_config.ai.max_fps > kMaximumCameraAiMaxFps) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_AI_MAX_FPS",
+           "camera.ai.max_fps must be 120 or less"});
+    }
   }
 
   return common::Result<void>::Ok();
@@ -137,6 +194,43 @@ common::Result<void> ValidateAiConfigSemantics(
 
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config) {
+  if (config.client_auth.enabled) {
+    if (!config.enabled || !config.control_tls) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_TLS",
+           "secure_rtsp.client_auth requires enabled RTSPS"});
+    }
+    if (!IsVisibleAuthField(config.client_auth.realm, 128U) ||
+        config.client_auth.realm.find_first_of(":\"\\\r\n") !=
+            std::string::npos) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_REALM",
+           "secure_rtsp.client_auth.realm is invalid"});
+    }
+    if (config.client_auth.credential_file.empty()) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH",
+           "secure_rtsp.client_auth.credential_file is required"});
+    }
+    const std::unordered_set<std::string> algorithms(
+        config.client_auth.algorithms.begin(),
+        config.client_auth.algorithms.end());
+    if (algorithms.size() != config.client_auth.algorithms.size() ||
+        !algorithms.contains("sha-256") ||
+        (algorithms.size() == 2U && !algorithms.contains("md5")) ||
+        algorithms.size() > 2U) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH_ALGORITHM",
+           "secure_rtsp.client_auth.algorithms is invalid"});
+    }
+    if (config.client_auth.nonce_ttl_seconds < 30U ||
+        config.client_auth.nonce_ttl_seconds > 3600U) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_RTSP_AUTH",
+           "secure_rtsp.client_auth.nonce_ttl_seconds is invalid"});
+    }
+  }
+
   if (!config.enabled) {
     return common::Result<void>::Ok();
   }
@@ -157,6 +251,180 @@ common::Result<void> ValidateSecureRtspSemantics(
          "secure_rtsp.keying=sdes-over-rtsps requires control_tls=true"});
   }
 
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateHttpSnapshotSemantics(
+    const HttpSnapshotConfig& config) {
+  if (config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_HTTP_SNAPSHOT", "http.snapshot configuration is invalid"});
+  }
+
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
+  if (config.fragment_duration_ms < 100U ||
+      config.fragment_duration_ms > 5000U || config.max_clients < 1U ||
+      config.max_clients > 16U || config.ring_fragments < 2U ||
+      config.ring_fragments > 64U || config.stale_timeout_ms < 500U ||
+      config.stale_timeout_ms > 10000U ||
+      static_cast<std::uint64_t>(config.stale_timeout_ms) <
+          static_cast<std::uint64_t>(config.fragment_duration_ms) * 2U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_HTTP_LIVE", "http.live configuration is invalid"});
+  }
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateCameraSubStreamSemantics(
+    const CameraSubStreamConfig& config) {
+  // Non-zero geometry is enforced regardless of `enabled`: the web client rejects
+  // zero geometry unconditionally, so a zeroed YAML field (or a zero derived from
+  // it) would brick the settings UI. DeriveRuntimeSettings does not call
+  // ValidateRuntimeSettings, so this config gate is the only stop for a zeroed
+  // YAML producing a zero derived active.
+  if (config.width == 0U || config.height == 0U || config.fps == 0U ||
+      config.bitrate_kbps == 0U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_CAMERA_SUB_STREAM",
+         "camera.sub_stream width, height, fps, and bitrate must be non-zero"});
+  }
+
+  if (!config.enabled) {
+    return common::Result<void>::Ok();
+  }
+
+  if (config.bitrate_kbps < kMinEncoderBitrateKbps ||
+      config.bitrate_kbps > kMaxEncoderBitrateKbps) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_CAMERA_SUB_STREAM",
+         "camera.sub_stream.bitrate_kbps must be between " +
+             std::to_string(kMinEncoderBitrateKbps) + " and " +
+             std::to_string(kMaxEncoderBitrateKbps)});
+  }
+
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
+  if (config.security.audit.max_events < 1U ||
+      config.security.audit.max_events > 1000000U ||
+      config.security.audit.warning_percent < 1U ||
+      config.security.audit.warning_percent > 99U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SECURITY_AUDIT", "security.audit configuration is invalid"});
+  }
+
+  if (!config.security.enabled) {
+    return common::Result<void>::Ok();
+  }
+
+  if (!config.http.enabled || !config.http.tls.enabled) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_TLS", "security requires enabled HTTPS"});
+  }
+  if (!config.http.public_base_url.starts_with("https://")) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_PUBLIC_URL", "security requires an https public URL"});
+  }
+  {
+    // Security mode requires SHA-256 Digest, and MAY additionally offer MD5
+    // so MD5-only RTSP clients (GStreamer/FFmpeg/live555) can authenticate.
+    // The digest is exchanged inside the RTSPS TLS control channel, so
+    // pairing MD5 alongside SHA-256 does not weaken the transport. Anything
+    // other than {sha-256} or {sha-256, md5} is rejected.
+    const std::unordered_set<std::string> auth_algorithms(
+        config.secure_rtsp.client_auth.algorithms.begin(),
+        config.secure_rtsp.client_auth.algorithms.end());
+    if (!config.secure_rtsp.client_auth.enabled ||
+        !auth_algorithms.contains("sha-256") ||
+        auth_algorithms.size() > 2U ||
+        (auth_algorithms.size() == 2U && !auth_algorithms.contains("md5"))) {
+      return common::Result<void>::Err(
+          {"E_SECURITY_RTSP_AUTH",
+           "security requires SHA-256 RTSP Digest authentication "
+           "(optionally paired with MD5)"});
+    }
+  }
+  if (!IsLexicallyBeneath(config.secure_rtsp.client_auth.credential_file,
+                          config.security.state_directory)) {
+    return common::Result<void>::Err(
+        {"E_SECURITY_CREDENTIAL_PATH",
+         "RTSP credentials must be located beneath the security state directory"});
+  }
+
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
+  if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
+      config.secure_rtsp.session_key.path.empty()) {
+    return common::Result<void>::Err(SessionKeyError());
+  }
+
+  const auto sub_stream_semantics =
+      ValidateCameraSubStreamSemantics(config.camera.sub_stream);
+  if (!sub_stream_semantics.ok()) {
+    return common::Result<void>::Err(sub_stream_semantics.error());
+  }
+
+  const auto ai_semantics =
+      ValidateAiConfigSemantics(config.ai, config.camera);
+  if (!ai_semantics.ok()) {
+    return common::Result<void>::Err(ai_semantics.error());
+  }
+  const auto secure_rtsp_semantics =
+      ValidateSecureRtspSemantics(config.secure_rtsp);
+  if (!secure_rtsp_semantics.ok()) {
+    return common::Result<void>::Err(secure_rtsp_semantics.error());
+  }
+  const auto http_snapshot_semantics =
+      ValidateHttpSnapshotSemantics(config.http.snapshot);
+  if (!http_snapshot_semantics.ok()) {
+    return common::Result<void>::Err(http_snapshot_semantics.error());
+  }
+  const auto http_live_semantics = ValidateHttpLiveSemantics(config.http.live);
+  if (!http_live_semantics.ok()) {
+    return common::Result<void>::Err(http_live_semantics.error());
+  }
+  if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
+    const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();
+    const bool has_key = !config.secure_rtsp.tls_private_key_path.empty();
+    if (has_cert != has_key ||
+        (!config.secure_rtsp.allow_development_self_signed_tls && !has_cert)) {
+      return common::Result<void>::Err(TlsCertificateError());
+    }
+  }
+  if (config.http.enabled && config.http.tls.enabled) {
+    const bool has_cert = !config.http.tls.certificate_path.empty();
+    const bool has_key = !config.http.tls.private_key_path.empty();
+    if (has_cert != has_key ||
+        (!config.http.tls.allow_development_self_signed_tls && !has_cert)) {
+      return common::Result<void>::Err(HttpTlsError());
+    }
+  }
+
+  const auto security_semantics = ValidateSecuritySemantics(config);
+  if (!security_semantics.ok()) {
+    return common::Result<void>::Err(security_semantics.error());
+  }
+  if (config.self_protection.interval_hours < 1U ||
+      config.self_protection.interval_hours > 24U) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SELF_PROTECTION_INTERVAL",
+         "self_protection.interval_hours must be between 1 and 24"});
+  }
+  if (config.security.enabled &&
+      (!IsAbsoluteNormalizedPath(config.self_protection.manifest_path) ||
+       !IsAbsoluteNormalizedPath(config.self_protection.signature_path))) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_SELF_PROTECTION",
+         "self_protection manifest_path and signature_path must be absolute "
+         "normalized paths when security is enabled"});
+  }
   return common::Result<void>::Ok();
 }
 
@@ -192,29 +460,88 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
         AssignIfPresent(encoder, "bitrate_kbps",
                         config.camera.encoder.bitrate_kbps);
         AssignIfPresent(encoder, "gop", config.camera.encoder.gop);
+        AssignIfPresent(encoder, "preset", config.camera.encoder.preset);
+      }
+      const YAML::Node sub_stream = camera["sub_stream"];
+      if (sub_stream) {
+        AssignIfPresent(sub_stream, "enabled", config.camera.sub_stream.enabled);
+        AssignIfPresent(sub_stream, "width", config.camera.sub_stream.width);
+        AssignIfPresent(sub_stream, "height", config.camera.sub_stream.height);
+        AssignIfPresent(sub_stream, "fps", config.camera.sub_stream.fps);
+        AssignIfPresent(sub_stream, "bitrate_kbps",
+                        config.camera.sub_stream.bitrate_kbps);
+        AssignIfPresent(sub_stream, "gop", config.camera.sub_stream.gop);
+        AssignIfPresent(sub_stream, "mount", config.camera.sub_stream.mount);
       }
       const YAML::Node camera_ai = camera["ai"];
       if (camera_ai) {
         AssignIfPresent(camera_ai, "enabled", config.camera.ai.enabled);
         config.camera.ai.model_ids = ReadStringList(camera_ai["model_ids"]);
+        AssignIfPresent(camera_ai, "max_fps", config.camera.ai.max_fps);
       }
     }
 
     const YAML::Node http = root["http"];
     if (http) {
+      if (http["preview"].IsDefined()) {
+        return common::Result<AppConfig>::Err(
+            {"E_CONFIG_HTTP_PREVIEW_RETIRED",
+             "http.preview is retired; use http.snapshot and http.live"});
+      }
       AssignIfPresent(http, "enabled", config.http.enabled);
       AssignIfPresent(http, "bind_ip", config.http.bind_ip);
       AssignIfPresent(http, "port", config.http.port);
       AssignIfPresent(http, "web_root", config.http.web_root);
       AssignIfPresent(http, "public_base_url", config.http.public_base_url);
+      const YAML::Node snapshot = http["snapshot"];
+      if (snapshot) {
+        AssignIfPresent(snapshot, "stale_timeout_ms",
+                        config.http.snapshot.stale_timeout_ms);
+      }
+      const YAML::Node live = http["live"];
+      if (live) {
+        AssignIfPresent(live, "enabled", config.http.live.enabled);
+        AssignIfPresent(live, "fragment_duration_ms",
+                        config.http.live.fragment_duration_ms);
+        AssignIfPresent(live, "max_clients", config.http.live.max_clients);
+        AssignIfPresent(live, "ring_fragments",
+                        config.http.live.ring_fragments);
+        AssignIfPresent(live, "stale_timeout_ms",
+                        config.http.live.stale_timeout_ms);
+      }
       const YAML::Node tls = http["tls"];
       if (tls) {
         AssignIfPresent(tls, "enabled", config.http.tls.enabled);
+        AssignIfPresent(tls, "allow_development_self_signed_tls",
+                        config.http.tls.allow_development_self_signed_tls);
         AssignIfPresent(tls, "certificate_path",
                         config.http.tls.certificate_path);
         AssignIfPresent(tls, "private_key_path",
                         config.http.tls.private_key_path);
       }
+    }
+
+    const YAML::Node security = root["security"];
+    if (security) {
+      AssignIfPresent(security, "enabled", config.security.enabled);
+      AssignIfPresent(security, "state_directory",
+                      config.security.state_directory);
+      const YAML::Node audit = security["audit"];
+      if (audit) {
+        AssignIfPresent(audit, "max_events", config.security.audit.max_events);
+        AssignIfPresent(audit, "warning_percent",
+                        config.security.audit.warning_percent);
+      }
+    }
+
+    const YAML::Node self_protection = root["self_protection"];
+    if (self_protection) {
+      AssignIfPresent(self_protection, "manifest_path",
+                      config.self_protection.manifest_path);
+      AssignIfPresent(self_protection, "signature_path",
+                      config.self_protection.signature_path);
+      AssignIfPresent(self_protection, "interval_hours",
+                      config.self_protection.interval_hours);
     }
 
     const YAML::Node ai = root["ai"];
@@ -229,6 +556,7 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
           AssignIfPresent(model, "id", parsed_model.id);
           AssignIfPresent(model, "kind", parsed_model.kind);
           AssignIfPresent(model, "hef_path", parsed_model.hef_path);
+          AssignIfPresent(model, "output_name", parsed_model.output_name);
           AssignIfPresent(model, "confidence_threshold",
                           parsed_model.confidence_threshold);
           AssignIfPresent(model, "labels", parsed_model.labels);
@@ -263,6 +591,23 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
                       "tls_private_key_path",
                       config.secure_rtsp.tls_private_key_path);
 
+      const YAML::Node client_auth = secure_rtsp["client_auth"];
+      if (client_auth) {
+        AssignIfPresent(client_auth, "enabled",
+                        config.secure_rtsp.client_auth.enabled);
+        AssignIfPresent(client_auth, "realm",
+                        config.secure_rtsp.client_auth.realm);
+        AssignIfPresent(client_auth, "credential_file",
+                        config.secure_rtsp.client_auth.credential_file);
+        const YAML::Node algorithms = client_auth["algorithms"];
+        if (algorithms) {
+          config.secure_rtsp.client_auth.algorithms =
+              ReadStringList(algorithms);
+        }
+        AssignIfPresent(client_auth, "nonce_ttl_seconds",
+                        config.secure_rtsp.client_auth.nonce_ttl_seconds);
+      }
+
       const YAML::Node session_key = secure_rtsp["session_key"];
       if (session_key) {
         AssignIfPresent(session_key, "source", config.secure_rtsp.session_key.source);
@@ -274,34 +619,9 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       }
     }
 
-    if (config.secure_rtsp.enabled && config.secure_rtsp.media_srtp &&
-        config.secure_rtsp.session_key.path.empty()) {
-      return SessionKeyError();
-    }
-    auto ai_semantics = ValidateAiConfigSemantics(config.ai, config.camera);
-    if (!ai_semantics.ok()) {
-      return common::Result<AppConfig>::Err(ai_semantics.error());
-    }
-    auto secure_rtsp_semantics =
-        ValidateSecureRtspSemantics(config.secure_rtsp);
-    if (!secure_rtsp_semantics.ok()) {
-      return common::Result<AppConfig>::Err(secure_rtsp_semantics.error());
-    }
-    if (config.secure_rtsp.enabled && config.secure_rtsp.control_tls) {
-      const bool has_cert = !config.secure_rtsp.tls_certificate_path.empty();
-      const bool has_key = !config.secure_rtsp.tls_private_key_path.empty();
-      if (has_cert != has_key ||
-          (!config.secure_rtsp.allow_development_self_signed_tls &&
-           !has_cert)) {
-        return TlsCertificateError();
-      }
-    }
-    if (config.http.enabled && config.http.tls.enabled) {
-      const bool has_cert = !config.http.tls.certificate_path.empty();
-      const bool has_key = !config.http.tls.private_key_path.empty();
-      if (!has_cert || !has_key) {
-        return HttpTlsError();
-      }
+    const auto semantics = ValidateAppConfigSemantics(config);
+    if (!semantics.ok()) {
+      return common::Result<AppConfig>::Err(semantics.error());
     }
 
     return common::Result<AppConfig>::Ok(std::move(config));

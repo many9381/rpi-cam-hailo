@@ -2,10 +2,52 @@
 
 #include <chrono>
 #include <future>
+#include <optional>
+#include <utility>
 
 #include <gtest/gtest.h>
 
 #include "camera_firmware/media/FrameLease.hpp"
+
+TEST(AiFrameTapTest, StartsDemandingAFrameAndConsumesItOnce) {
+  camera_firmware::ai::AiFrameTap tap;
+  // A fresh tap demands the first frame so inference starts immediately.
+  EXPECT_TRUE(tap.ConsumeDemand());
+  // Demand is one-shot: a second consume without a re-arm returns false.
+  EXPECT_FALSE(tap.ConsumeDemand());
+}
+
+TEST(AiFrameTapTest, RequestNextReArmsDemand) {
+  camera_firmware::ai::AiFrameTap tap;
+  EXPECT_TRUE(tap.ConsumeDemand());
+  EXPECT_FALSE(tap.ConsumeDemand());
+
+  tap.RequestNext();
+  EXPECT_TRUE(tap.ConsumeDemand());
+  EXPECT_FALSE(tap.ConsumeDemand());
+}
+
+TEST(AiFrameTapTest, DoesNotRetainTheFrameWhenAConsumerIsSubscribed) {
+  // Pull-on-ready: with a live subscriber the tap must hand the lease off
+  // and retain nothing, so a lores buffer is never pinned between frames.
+  camera_firmware::ai::AiFrameTap tap;
+  bool released = false;
+  std::optional<camera_firmware::media::FrameLease> received;
+  auto subscription = tap.Subscribe(
+      [&received](camera_firmware::media::FrameLease frame) {
+        received.emplace(std::move(frame));
+      });
+
+  camera_firmware::media::FrameHandle handle;
+  handle.sequence = 7;
+  tap.PublishLatest(
+      camera_firmware::media::FrameLease(handle, [&] { released = true; }));
+
+  EXPECT_FALSE(tap.Latest().has_value());  // nothing retained
+  ASSERT_TRUE(received.has_value());
+  received.reset();  // subscriber drops its lease
+  EXPECT_TRUE(released);  // the only holder was the subscriber
+}
 
 TEST(AiFrameTapTest, KeepsLatestFrameOnly) {
   camera_firmware::ai::AiFrameTap tap;
@@ -81,19 +123,22 @@ TEST(AiFrameTapTest, NotifiesSubscriberWithCloneOfLatestFrame) {
   EXPECT_EQ(delivered_sequence, 11u);
 }
 
-TEST(AiFrameTapTest, SubscriberCanReadLatestWithoutDeadlock) {
+TEST(AiFrameTapTest, SubscriberReadingLatestFromItsCallbackDoesNotDeadlock) {
   camera_firmware::ai::AiFrameTap tap;
-  bool saw_latest = false;
-  std::uint64_t latest_sequence = 0;
+  bool callback_ran = false;
+  std::uint64_t delivered_sequence = 0;
+  bool latest_retained = true;
 
+  // The subscriber calls Latest() re-entrantly from inside its callback --
+  // PublishLatest must not hold the tap mutex while invoking subscribers.
+  // In pull mode nothing is retained with a subscriber present, so Latest()
+  // returns empty; the frame arrives via the callback parameter instead.
   auto subscription =
-      tap.Subscribe([&tap, &saw_latest, &latest_sequence](
-                        camera_firmware::media::FrameLease) {
-        auto latest = tap.Latest();
-        saw_latest = latest.has_value();
-        if (latest.has_value()) {
-          latest_sequence = latest->handle().sequence;
-        }
+      tap.Subscribe([&tap, &callback_ran, &delivered_sequence, &latest_retained](
+                        camera_firmware::media::FrameLease frame) {
+        callback_ran = true;
+        delivered_sequence = frame.handle().sequence;
+        latest_retained = tap.Latest().has_value();
       });
 
   camera_firmware::media::FrameHandle handle;
@@ -106,8 +151,9 @@ TEST(AiFrameTapTest, SubscriberCanReadLatestWithoutDeadlock) {
             std::future_status::ready);
   publish.get();
   EXPECT_TRUE(subscription.valid());
-  EXPECT_TRUE(saw_latest);
-  EXPECT_EQ(latest_sequence, 12u);
+  EXPECT_TRUE(callback_ran);
+  EXPECT_EQ(delivered_sequence, 12u);
+  EXPECT_FALSE(latest_retained);
 }
 
 TEST(AiFrameTapTest, UnsubscribeWaitsForInFlightCallback) {

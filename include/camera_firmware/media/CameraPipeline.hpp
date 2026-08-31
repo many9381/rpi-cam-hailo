@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,17 +16,33 @@ class AiFrameTap;
 
 namespace camera_firmware::media {
 
+class SubStreamTap;
+
 struct CameraPipelineStatus {
   std::string id{"imx708-main"};
   std::string state{"stopped"};
   bool snapshot_available{false};
+  unsigned int width{0U};
+  unsigned int height{0U};
+  unsigned int configured_fps{0U};
+  double capture_fps{0.0};
+  double encoded_fps{0.0};
+  std::uint64_t captured_frames{0U};
+  std::uint64_t encoded_frames{0U};
+  std::uint64_t capture_error_count{0U};
+  std::uint64_t encode_error_count{0U};
+  // Wall-clock cost of the most recent x264 encode call and the number of
+  // encoded access units dropped from the ring before any reader saw them.
+  double last_encode_ms{0.0};
+  std::string ai_source{"main-fallback"};
 };
 
 class CameraPipeline {
  public:
   CameraPipeline(SnapshotTap& snapshot_tap,
                  ai::AiFrameTap& ai_frame_tap,
-                 EncodedRing& encoded_ring);
+                 EncodedRing& encoded_ring,
+                 SubStreamTap* sub_tap = nullptr);
   ~CameraPipeline();
 
   CameraPipeline(const CameraPipeline&) = delete;
@@ -39,6 +56,8 @@ class CameraPipeline {
   void Stop();
 
   [[nodiscard]] std::vector<CameraPipelineStatus> Status() const;
+  [[nodiscard]] std::vector<CameraPipelineStatus> Status(
+      std::chrono::milliseconds maximum_snapshot_age) const;
 
  private:
   struct Impl;

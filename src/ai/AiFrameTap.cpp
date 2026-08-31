@@ -67,11 +67,16 @@ void AiFrameTap::PublishLatest(media::FrameLease frame) {
   std::optional<media::FrameLease> delivered;
   {
     std::lock_guard lock(shared_state_->mutex);
-    shared_state_->latest = std::move(frame);
     if (shared_state_->subscribers.empty()) {
+      // Polling fallback (no subscriber): retain the latest for Latest().
+      shared_state_->latest = std::move(frame);
       return;
     }
-    delivered = shared_state_->latest->CloneRef();
+    // Pull-on-ready: hand the lease straight to subscribers and retain
+    // nothing, so the underlying lores buffer is released the moment the
+    // consumer is done -- never pinned across the idle gap between frames.
+    shared_state_->latest.reset();
+    delivered = std::move(frame);
     subscribers.reserve(shared_state_->subscribers.size());
     for (const auto& [subscriber_id, subscriber] :
          shared_state_->subscribers) {
@@ -87,6 +92,14 @@ void AiFrameTap::PublishLatest(media::FrameLease frame) {
       InvokeSubscriber(subscribers[index], std::move(*delivered));
     }
   }
+}
+
+void AiFrameTap::RequestNext() noexcept {
+  wants_frame_.store(true, std::memory_order_release);
+}
+
+bool AiFrameTap::ConsumeDemand() noexcept {
+  return wants_frame_.exchange(false, std::memory_order_acq_rel);
 }
 
 std::optional<media::FrameLease> AiFrameTap::Latest() const {

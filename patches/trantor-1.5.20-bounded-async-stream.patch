@@ -1,0 +1,470 @@
+diff --git a/trantor/net/AsyncStream.h b/trantor/net/AsyncStream.h
+index c459f9e..be1ffda 100644
+--- a/trantor/net/AsyncStream.h
++++ b/trantor/net/AsyncStream.h
+@@ -15,10 +15,17 @@
+ #pragma once
+ 
+ #include <trantor/utils/NonCopyable.h>
++#include <cstddef>
+ #include <memory>
++#include <string>
++
++#define TRANTOR_CAMERA_FIRMWARE_BOUNDED_ASYNC_STREAM 1
+ 
+ namespace trantor
+ {
++static constexpr std::size_t kAsyncStreamPendingByteLimit =
++    4U * 1024U * 1024U;
++
+ /**
+  * @brief This class represents a data stream that can be sent asynchronously.
+  * The data is sent in chunks, and the chunks are sent in order, and all the
+@@ -35,9 +42,18 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
+      * @param len The length of the data
+      * @return true if the data is sent successfully or at least is put in the
+      * send buffer.
+-     * @return false if the connection is closed.
++     * @return false if the connection is closed or the pending-byte limit is
++     * reached.
+      */
+     virtual bool send(const char *data, size_t len) = 0;
++    /**
++     * @brief Send data asynchronously, transferring ownership of the
++     * buffer so cross-thread queueing does not have to copy it.
++     */
++    virtual bool send(std::string &&data)
++    {
++        return send(data.data(), data.length());
++    }
+     bool send(const std::string &data)
+     {
+         return send(data.data(), data.length());
+@@ -48,4 +64,4 @@ class TRANTOR_EXPORT AsyncStream : public NonCopyable
+     virtual void close() = 0;
+ };
+ using AsyncStreamPtr = std::unique_ptr<AsyncStream>;
+-}  // namespace trantor
+\ No newline at end of file
++}  // namespace trantor
+diff --git a/trantor/net/inner/AsyncStreamBufferNode.cc b/trantor/net/inner/AsyncStreamBufferNode.cc
+index c30db1f..6ae37e0 100644
+--- a/trantor/net/inner/AsyncStreamBufferNode.cc
++++ b/trantor/net/inner/AsyncStreamBufferNode.cc
+@@ -5,8 +5,16 @@ namespace trantor
+ class AsyncBufferNode : public BufferNode
+ {
+   public:
+-    AsyncBufferNode() = default;
+-    ~AsyncBufferNode() override = default;
++    explicit AsyncBufferNode(
++        std::shared_ptr<std::atomic<size_t>> pendingBytes)
++        : pendingBytes_(std::move(pendingBytes))
++    {
++    }
++    ~AsyncBufferNode() override
++    {
++        if (msgBufferPtr_)
++            releaseReservedBytes(msgBufferPtr_->readableBytes());
++    }
+     bool isAsync() const override
+     {
+         return true;
+@@ -44,6 +52,7 @@ class AsyncBufferNode : public BufferNode
+         if (msgBufferPtr_)
+         {
+             msgBufferPtr_->retrieve(len);
++            releaseReservedBytes(len);
+         }
+     }
+     void append(const char *data, size_t len) override
+@@ -54,12 +63,19 @@ class AsyncBufferNode : public BufferNode
+         }
+         msgBufferPtr_->append(data, len);
+     }
++    void releaseReservedBytes(size_t len) override
++    {
++        if (len > 0)
++            pendingBytes_->fetch_sub(len, std::memory_order_relaxed);
++    }
+ 
+   private:
++    std::shared_ptr<std::atomic<size_t>> pendingBytes_;
+     std::unique_ptr<MsgBuffer> msgBufferPtr_;
+ };
+-BufferNodePtr BufferNode::newAsyncStreamBufferNode()
++BufferNodePtr BufferNode::newAsyncStreamBufferNode(
++    std::shared_ptr<std::atomic<size_t>> pendingBytes)
+ {
+-    return std::make_shared<AsyncBufferNode>();
++    return std::make_shared<AsyncBufferNode>(std::move(pendingBytes));
+ }
+ }  // namespace trantor
+diff --git a/trantor/net/inner/BufferNode.h b/trantor/net/inner/BufferNode.h
+index bbce40e..00b2843 100644
+--- a/trantor/net/inner/BufferNode.h
++++ b/trantor/net/inner/BufferNode.h
+@@ -19,6 +19,8 @@
+ #include <trantor/utils/MsgBuffer.h>
+ #include <trantor/utils/NonCopyable.h>
+ #include <trantor/utils/Logger.h>
++#include <atomic>
++#include <cstddef>
+ #include <functional>
+ #include <memory>
+ #include <string>
+@@ -60,6 +62,9 @@ class BufferNode : public NonCopyable
+     {
+         return false;
+     }
++    virtual void releaseReservedBytes(size_t)
++    {
++    }
+ 
+     void done()
+     {
+@@ -77,10 +82,11 @@ class BufferNode : public NonCopyable
+                                            long long offset,
+                                            long long length);
+ #endif
+-    static BufferNodePtr newAsyncStreamBufferNode();
++    static BufferNodePtr newAsyncStreamBufferNode(
++        std::shared_ptr<std::atomic<size_t>> pendingBytes);
+ 
+   protected:
+     bool isDone_{false};
+ };
+ 
+-}  // namespace trantor
+\ No newline at end of file
++}  // namespace trantor
+diff --git a/trantor/net/inner/TcpConnectionImpl.cc b/trantor/net/inner/TcpConnectionImpl.cc
+index 8fddf1a..e322a47 100644
+--- a/trantor/net/inner/TcpConnectionImpl.cc
++++ b/trantor/net/inner/TcpConnectionImpl.cc
+@@ -750,7 +750,13 @@ ssize_t TcpConnectionImpl::writeRaw(const char *buffer, size_t length)
+     if (nWritten < static_cast<int>(length))
+     {
+         LOG_TRACE << "nWritten = " << nWritten << " length = " << length;
+-        if (!ioChannelPtr_->isWriting())
++        // Do not re-arm write interest once the connection has left
++        // Connected. writeRaw() is reached from the TLS write callback
++        // (onSslWrite), which the provider may invoke while flushing a
++        // close alert after handleClose() already disabled the channel;
++        // re-enabling here would leave events_ != kNoneEvent for the
++        // Channel::remove() assertion in connectDestroyed().
++        if (status_ == ConnStatus::Connected && !ioChannelPtr_->isWriting())
+             ioChannelPtr_->enableWriting();
+     }
+     extendLife();
+@@ -845,39 +851,101 @@ void TcpConnectionImpl::onSslCloseAlert(TcpConnection *self)
+ {
+     self->shutdown();
+ }
++namespace
++{
++bool reserveAsyncStreamBytes(const std::shared_ptr<std::atomic<size_t>> &pending,
++                             size_t len) noexcept
++{
++    auto current = pending->load(std::memory_order_relaxed);
++    do
++    {
++        if (current > kAsyncStreamPendingByteLimit ||
++            len > kAsyncStreamPendingByteLimit - current)
++            return false;
++    } while (!pending->compare_exchange_weak(current,
++                                              current + len,
++                                              std::memory_order_relaxed,
++                                              std::memory_order_relaxed));
++    return true;
++}
++
++class AsyncStreamPendingReservation
++{
++  public:
++    AsyncStreamPendingReservation(
++        std::shared_ptr<std::atomic<size_t>> pending,
++        size_t len) noexcept
++        : pending_(std::move(pending)), len_(len)
++    {
++    }
++
++    ~AsyncStreamPendingReservation()
++    {
++        if (active_)
++            pending_->fetch_sub(len_, std::memory_order_relaxed);
++    }
++
++    void commit() noexcept
++    {
++        active_ = false;
++    }
++
++  private:
++    std::shared_ptr<std::atomic<size_t>> pending_;
++    size_t len_;
++    bool active_{true};
++};
++}  // namespace
++
+ class AsyncStreamImpl : public AsyncStream
+ {
+   public:
+-    explicit AsyncStreamImpl(std::function<bool(const char *, size_t)> callback)
++    // The third parameter optionally transfers ownership of the bytes:
++    // when non-empty, / point into it and the callback may move
++    // it instead of copying for cross-thread queueing.
++    using SendCallback =
++        std::function<bool(const char *, size_t, std::string &&)>;
++    explicit AsyncStreamImpl(SendCallback callback)
+         : callback_(std::move(callback))
+     {
+     }
+     AsyncStreamImpl() = delete;
+     bool send(const char *data, size_t len) override
+     {
+-        return callback_(data, len);
++        return callback_(data, len, std::string{});
++    }
++    bool send(std::string &&data) override
++    {
++        const char *bytes = data.data();
++        const size_t length = data.length();
++        return callback_(bytes, length, std::move(data));
+     }
+     void close() override
+     {
+-        callback_(nullptr, 0);
++        callback_(nullptr, 0, std::string{});
+         callback_ = nullptr;
+     }
+     ~AsyncStreamImpl() override
+     {
+         if (callback_)
+-            callback_(nullptr, 0);
++            callback_(nullptr, 0, std::string{});
+     }
+ 
+   private:
+-    std::function<bool(const char *, size_t)> callback_;
++    SendCallback callback_;
+ };
+ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+ {
+-    auto asyncStreamNode = BufferNode::newAsyncStreamBufferNode();
++    auto pendingBytes = std::make_shared<std::atomic<size_t>>(0U);
++    auto asyncStreamNode =
++        BufferNode::newAsyncStreamBufferNode(pendingBytes);
+     std::weak_ptr<TcpConnectionImpl> weakPtr = shared_from_this();
+     auto asyncStream = std::make_unique<AsyncStreamImpl>(
+-        [asyncStreamNode, weakPtr = std::move(weakPtr)](const char *data,
+-                                                        size_t len) -> bool {
++        [asyncStreamNode,
++         pendingBytes,
++         weakPtr = std::move(weakPtr)](const char *data,
++                                       size_t len,
++                                       std::string &&owned) -> bool {
+             auto thisPtr = weakPtr.lock();
+             if (!thisPtr)
+             {
+@@ -889,21 +957,54 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+                 LOG_DEBUG << "Connection is not connected,give up sending";
+                 return false;
+             }
++            if (data && len == 0)
++                return true;
++            if (data && !reserveAsyncStreamBytes(pendingBytes, len))
++            {
++                LOG_DEBUG << "Async stream pending-byte limit reached";
++                return false;
++            }
++
++            std::shared_ptr<AsyncStreamPendingReservation> reservation;
++            if (data)
++            {
++                try
++                {
++                    reservation =
++                        std::make_shared<AsyncStreamPendingReservation>(
++                            pendingBytes, len);
++                }
++                catch (...)
++                {
++                    pendingBytes->fetch_sub(len, std::memory_order_relaxed);
++                    return false;
++                }
++            }
+             if (thisPtr->loop_->isInLoopThread())
+             {
+-                thisPtr->sendAsyncDataInLoop(asyncStreamNode, data, len);
++                if (thisPtr->sendAsyncDataInLoop(asyncStreamNode, data, len))
++                {
++                    if (reservation)
++                        reservation->commit();
++                    return true;
++                }
++                return false;
+             }
+-            else
++            try
+             {
+                 if (data)
+                 {
+-                    std::string buffer(data, len);
++                    std::string buffer = owned.empty()
++                                             ? std::string(data, len)
++                                             : std::move(owned);
+                     thisPtr->loop_->queueInLoop([thisPtr,
+                                                  asyncStreamNode,
++                                                 reservation,
+                                                  buffer = std::move(buffer)]() {
+-                        thisPtr->sendAsyncDataInLoop(asyncStreamNode,
+-                                                     buffer.data(),
+-                                                     buffer.length());
++                        if (thisPtr->sendAsyncDataInLoop(asyncStreamNode,
++                                                         buffer.data(),
++                                                         buffer.length()))
++                            reservation->commit();
+                     });
+                 }
+                 else
+@@ -915,6 +1016,10 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+                     });
+                 }
+             }
++            catch (...)
++            {
++                return false;
++            }
+             return true;
+         });
+     if (loop_->isInLoopThread())
+@@ -965,54 +1070,79 @@ AsyncStreamPtr TcpConnectionImpl::sendAsyncStream(bool disableKickoff)
+     }
+     return asyncStream;
+ }
+-void TcpConnectionImpl::sendAsyncDataInLoop(const BufferNodePtr &node,
++bool TcpConnectionImpl::sendAsyncDataInLoop(const BufferNodePtr &node,
+                                             const char *data,
+-                                            size_t len)
++                                            size_t len) noexcept
+ {
+     loop_->assertInLoopThread();
+-    if (data)
++    if (status_ != ConnStatus::Connected)
+     {
+-        if (len > 0)
++        // Mirror sendInLoop: once the connection has left Connected the
++        // channel must not be touched. A queued async close or send can
++        // run after the peer's handleClose has disabled the channel;
++        // re-enabling writing here would leave events_ != kNoneEvent for
++        // the Channel::remove() in connectDestroyed, whose assertion then
++        // aborts the process.
++        return false;
++    }
++    try
++    {
++        if (data)
+         {
+-            if (!writeBufferList_.empty() && node == writeBufferList_.front() &&
+-                node->remainingBytes() == 0)
++            if (len > 0)
+             {
+-                auto nWritten = writeInLoop(data, len);
+-                if (nWritten < 0)
++                if (!writeBufferList_.empty() &&
++                    node == writeBufferList_.front() &&
++                    node->remainingBytes() == 0)
+                 {
+-                    LOG_TRACE << "write error";
+-                    return;
++                    auto nWritten = writeInLoop(data, len);
++                    if (nWritten < 0)
++                    {
++                        LOG_TRACE << "write error";
++                        return false;
++                    }
++                    if (static_cast<size_t>(nWritten) < len)
++                    {
++                        node->append(data + nWritten, len - nWritten);
++                    }
++                    node->releaseReservedBytes(
++                        static_cast<size_t>(nWritten));
+                 }
+-                if (static_cast<size_t>(nWritten) < len)
++                else
+                 {
+-                    node->append(data + nWritten, len - nWritten);
++                    node->append(data, len);
+                 }
+             }
+-            else
+-            {
+-                node->append(data, len);
+-            }
++            return true;
+         }
+-    }
+-    else
+-    {
+-        // stream is closed
+-        node->done();
+-        if (!writeBufferList_.empty() && node == writeBufferList_.front() &&
+-            !ioChannelPtr_->isWriting())
+-            ioChannelPtr_->enableWriting();
+-
+-        if (idleTimeoutBackup_ > 0)
++        else
+         {
+-            auto timingWheel = timingWheelWeakPtr_.lock();
+-            if (timingWheel)
++            // stream is closed
++            node->done();
++            if (!writeBufferList_.empty() &&
++                node == writeBufferList_.front() &&
++                !ioChannelPtr_->isWriting())
++                ioChannelPtr_->enableWriting();
++
++            if (idleTimeoutBackup_ > 0)
+             {
+-                auto entry = std::make_shared<KickoffEntry>(shared_from_this());
+-                kickoffEntry_ = entry;
+-                idleTimeout_ = idleTimeoutBackup_;
+-                idleTimeoutBackup_ = 0;
+-                timingWheel->insertEntry(idleTimeout_, std::move(entry));
++                auto timingWheel = timingWheelWeakPtr_.lock();
++                if (timingWheel)
++                {
++                    auto entry =
++                        std::make_shared<KickoffEntry>(shared_from_this());
++                    kickoffEntry_ = entry;
++                    idleTimeout_ = idleTimeoutBackup_;
++                    idleTimeoutBackup_ = 0;
++                    timingWheel->insertEntry(idleTimeout_, std::move(entry));
++                }
+             }
++            return true;
+         }
+     }
++    catch (...)
++    {
++        LOG_ERROR << "Failed to queue asynchronous stream data";
++        return false;
++    }
+ }
+diff --git a/trantor/net/inner/TcpConnectionImpl.h b/trantor/net/inner/TcpConnectionImpl.h
+index f19729a..7fa1810 100644
+--- a/trantor/net/inner/TcpConnectionImpl.h
++++ b/trantor/net/inner/TcpConnectionImpl.h
+@@ -234,9 +234,9 @@ class TcpConnectionImpl : public TcpConnection,
+     void handleClose();
+     void handleError();
+     // virtual void sendInLoop(const std::string &msg);
+-    void sendAsyncDataInLoop(const BufferNodePtr &node,
++    bool sendAsyncDataInLoop(const BufferNodePtr &node,
+                              const char *data,
+-                             size_t len);
++                             size_t len) noexcept;
+     // -1: error, 0: EAGAIN, >0: bytes sent
+     ssize_t sendNodeInLoop(const BufferNodePtr &node);
+ #ifndef _WIN32

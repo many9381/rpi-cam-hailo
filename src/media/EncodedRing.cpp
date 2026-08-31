@@ -28,6 +28,7 @@ struct EncodedRing::SharedState {
 struct EncodedRing::Reader::CursorState {
   std::shared_ptr<SharedState> shared_state;
   std::uint64_t next_publish_index{0};
+  std::uint64_t skipped_total{0};
 };
 
 EncodedRing::Reader::Reader(std::shared_ptr<CursorState> cursor_state)
@@ -53,6 +54,10 @@ std::optional<EncodedAccessUnit> EncodedRing::Reader::WaitNext(
   const auto earliest_available = state->entries.front().publish_index;
   const auto latest_available = state->entries.back().publish_index;
   if (cursor_state_->next_publish_index < earliest_available) {
+    // The ring slid past this reader's cursor: the frames between where it was
+    // and the oldest still available are lost for this reader. Count them.
+    cursor_state_->skipped_total +=
+        earliest_available - cursor_state_->next_publish_index;
     cursor_state_->next_publish_index = earliest_available;
   }
   if (cursor_state_->next_publish_index > latest_available) {
@@ -70,6 +75,15 @@ std::optional<EncodedAccessUnit> EncodedRing::Reader::WaitNext(
 
 bool EncodedRing::Reader::valid() const noexcept {
   return static_cast<bool>(cursor_state_);
+}
+
+std::uint64_t EncodedRing::Reader::skipped_total() const noexcept {
+  if (!cursor_state_) {
+    return 0;
+  }
+  auto state = cursor_state_->shared_state;
+  std::lock_guard lock(state->mutex);
+  return cursor_state_->skipped_total;
 }
 
 EncodedRing::EncodedRing(std::size_t capacity)

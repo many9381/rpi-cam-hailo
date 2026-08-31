@@ -1,0 +1,97 @@
+diff --git a/lib/inc/drogon/HttpRequest.h b/lib/inc/drogon/HttpRequest.h
+index e172820..8489da6 100644
+--- a/lib/inc/drogon/HttpRequest.h
++++ b/lib/inc/drogon/HttpRequest.h
+@@ -32,0 +33 @@
++#include <vector>
+@@ -35,0 +37,3 @@ namespace drogon
++#define DROGON_CAMERA_FIRMWARE_RAW_COOKIE_HEADERS 2
++DROGON_EXPORT unsigned int cameraFirmwareRawCookiePatchVersion() noexcept;
++
+@@ -176,0 +181,8 @@ class DROGON_EXPORT HttpRequest
++    /// Return every raw Cookie field received from the network.
++    virtual const std::vector<std::string> &rawCookieHeaders() const = 0;
++
++    const std::vector<std::string> &getRawCookieHeaders() const
++    {
++        return rawCookieHeaders();
++    }
++
+diff --git a/lib/src/HttpAppFrameworkImpl.h b/lib/src/HttpAppFrameworkImpl.h
+index 3aa928e..c295290 100644
+--- a/lib/src/HttpAppFrameworkImpl.h
++++ b/lib/src/HttpAppFrameworkImpl.h
+@@ -226,0 +227,9 @@ class HttpAppFrameworkImpl final : public HttpAppFramework
++    void applyPreSendingAdvices(const HttpRequestPtr &request,
++                                const HttpResponsePtr &response) const
++    {
++        for (const auto &advice : preSendingAdvices_)
++        {
++            advice(request, response);
++        }
++    }
++
+diff --git a/lib/src/HttpRequestImpl.cc b/lib/src/HttpRequestImpl.cc
+index 1ef2945..f193c73 100644
+--- a/lib/src/HttpRequestImpl.cc
++++ b/lib/src/HttpRequestImpl.cc
+@@ -32,0 +33,5 @@ using namespace drogon;
++unsigned int drogon::cameraFirmwareRawCookiePatchVersion() noexcept
++{
++    return DROGON_CAMERA_FIRMWARE_RAW_COOKIE_HEADERS;
++}
++
+@@ -423,0 +429 @@ void HttpRequestImpl::addHeader(const char *start,
++        rawCookieHeaders_.push_back(value);
+@@ -568,0 +575 @@ void HttpRequestImpl::swap(HttpRequestImpl &that) noexcept
++    swap(rawCookieHeaders_, that.rawCookieHeaders_);
+diff --git a/lib/src/HttpRequestImpl.h b/lib/src/HttpRequestImpl.h
+index 1cbb452..b4916e4 100644
+--- a/lib/src/HttpRequestImpl.h
++++ b/lib/src/HttpRequestImpl.h
+@@ -62,0 +63 @@ class HttpRequestImpl : public HttpRequest
++        rawCookieHeaders_.clear();
+@@ -350,0 +352,5 @@ class HttpRequestImpl : public HttpRequest
++    const std::vector<std::string> &rawCookieHeaders() const override
++    {
++        return rawCookieHeaders_;
++    }
++
+@@ -613,0 +620 @@ class HttpRequestImpl : public HttpRequest
++    std::vector<std::string> rawCookieHeaders_;
+diff --git a/lib/src/HttpRequestParser.cc b/lib/src/HttpRequestParser.cc
+index b9c6375..8b7d1ca 100644
+--- a/lib/src/HttpRequestParser.cc
++++ b/lib/src/HttpRequestParser.cc
+@@ -44,4 +44,10 @@ void HttpRequestParser::shutdownConnection(HttpStatusCode code)
+-        connPtr->send(utils::formattedString(
+-            "HTTP/1.1 %d %s\r\nConnection: close\r\n\r\n",
+-            code,
+-            statusCodeToString(code).data()));
++        auto response = HttpResponse::newHttpResponse();
++        response->setStatusCode(code);
++        response->setVersion(request_->getVersion());
++        response->setCloseConnection(true);
++        response->addHeader("Connection", "close");
++        HttpAppFrameworkImpl::instance().applyPreSendingAdvices(request_,
++                                                                response);
++        response->setPassThrough(true);
++        connPtr->send(
++            static_cast<HttpResponseImpl *>(response.get())->renderToBuffer());
+diff --git a/lib/src/HttpServer.cc b/lib/src/HttpServer.cc
+index 0d86e2c..2724138 100644
+--- a/lib/src/HttpServer.cc
++++ b/lib/src/HttpServer.cc
+@@ -242,4 +242,2 @@ void HttpServer::onRequests(
+-                        for (auto &advice : preSendingAdvices_)
+-                        {
+-                            advice(req, resp);
+-                        }
++                        HttpAppFrameworkImpl::instance()
++                            .applyPreSendingAdvices(req, resp);
+@@ -384,4 +382 @@ void HttpServer::handleResponse(
+-    for (auto &advice : preSendingAdvices_)
+-    {
+-        advice(req, response);
+-    }
++    HttpAppFrameworkImpl::instance().applyPreSendingAdvices(req, response);
