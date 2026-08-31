@@ -12,6 +12,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 import type { CameraApiClient } from '../../api/types';
 import { IconButton } from '../../components/IconButton';
+import { useTranslation } from '../../i18n/LanguageContext';
 import {
   DEFAULT_AUDIT_LIST_QUERY,
   type AuditEvent,
@@ -52,14 +53,14 @@ const emptyFilterDraft = (): FilterDraft => ({
 
 const sortColumns: ReadonlyArray<{
   field: AuditSortField;
-  label: string;
+  labelKey: string;
 }> = [
-  { field: 'timestamp', label: 'Timestamp' },
-  { field: 'event_type', label: 'Event type' },
-  { field: 'outcome', label: 'Outcome' },
-  { field: 'actor', label: 'Actor' },
-  { field: 'peer_ip', label: 'IP address' },
-  { field: 'subject', label: 'Subject' },
+  { field: 'timestamp', labelKey: 'audit.timestamp' },
+  { field: 'event_type', labelKey: 'audit.eventType' },
+  { field: 'outcome', labelKey: 'audit.outcome' },
+  { field: 'actor', labelKey: 'audit.actor' },
+  { field: 'peer_ip', labelKey: 'audit.ipAddress' },
+  { field: 'subject', labelKey: 'audit.subject' },
 ];
 
 interface FormattedUtc {
@@ -67,10 +68,13 @@ interface FormattedUtc {
   dateTime?: string;
 }
 
-function formatUtc(seconds: number): FormattedUtc {
+// Returns null when the timestamp cannot be formatted; callers resolve the
+// fallback copy via t('audit.timestampUnavailable') since this module-scope
+// helper has no access to the translator.
+function formatUtc(seconds: number): FormattedUtc | null {
   const date = new Date(seconds * 1_000);
   if (!Number.isFinite(date.getTime())) {
-    return { text: 'UTC timestamp unavailable' };
+    return null;
   }
   const dateTime = date.toISOString();
   return {
@@ -133,33 +137,47 @@ function SortIcon({ field, query }: {
     : <ArrowDown size={14} aria-hidden="true" />;
 }
 
+const OUTCOME_LABEL_KEYS: Record<AuditEvent['outcome'], string> = {
+  success: 'audit.outcomeSuccess',
+  failure: 'audit.outcomeFailure',
+};
+
 function CapacitySummary({ controller }: {
   controller?: AuditStatusController;
 }) {
+  const { t } = useTranslation();
   const status = controller?.data;
   if (status === null || status === undefined) {
     return controller?.state === 'unavailable'
-      ? <p className="audit-capacity-state" role="alert">Audit capacity is unavailable.</p>
-      : <p className="audit-capacity-state" role="status">Loading audit capacity...</p>;
+      ? <p className="audit-capacity-state" role="alert">{t('audit.capacityUnavailable')}</p>
+      : <p className="audit-capacity-state" role="status">{t('audit.loadingCapacity')}</p>;
   }
 
+  const lastRotationText = status.last_rotation_at_seconds === null
+    ? null
+    : formatUtc(status.last_rotation_at_seconds)?.text ?? t('audit.timestampUnavailable');
+
   return (
-    <div className="audit-capacity-summary" aria-label="Audit capacity summary">
-      <span><strong>{status.current_events} of {status.max_events} records</strong></span>
-      <span>{status.usage_percent}% used</span>
-      <span>{status.rotated_event_count} rotated</span>
+    <div className="audit-capacity-summary" aria-label={t('audit.capacitySummaryLabel')}>
+      <span><strong>{t('audit.capacityCount', {
+        current: status.current_events,
+        max: status.max_events,
+      })}</strong></span>
+      <span>{t('audit.usagePercent', { percent: status.usage_percent })}</span>
+      <span>{t('audit.rotatedCount', { count: status.rotated_event_count })}</span>
       <span>
-        Last rotation{' '}
-        {status.last_rotation_at_seconds === null
-          ? 'Never'
-          : formatUtc(status.last_rotation_at_seconds).text}
-        {status.last_rotated_sequence === null
-          ? ''
-          : ` through #${status.last_rotated_sequence}`}
+        {lastRotationText === null
+          ? t('audit.lastRotationNever')
+          : status.last_rotated_sequence === null
+            ? t('audit.lastRotationAt', { timestamp: lastRotationText })
+            : t('audit.lastRotationAtWithSequence', {
+              timestamp: lastRotationText,
+              sequence: status.last_rotated_sequence,
+            })}
       </span>
       {controller?.state === 'stale' && (
         <span className="audit-capacity-stale" role="status">
-          Capacity status may be out of date.
+          {t('audit.capacityStale')}
         </span>
       )}
     </div>
@@ -167,6 +185,7 @@ function CapacitySummary({ controller }: {
 }
 
 function EventRow({ event }: { event: AuditEvent }) {
+  const { t } = useTranslation();
   const timestamp = formatUtc(event.server_timestamp_seconds);
   const subject = event.subject_type === '' && event.subject_identity === ''
     ? null
@@ -178,27 +197,27 @@ function EventRow({ event }: { event: AuditEvent }) {
     );
   return (
     <tr>
-      <td data-label="Timestamp">
-        <time dateTime={timestamp.dateTime}>
-          {timestamp.text}
+      <td data-label={t('audit.timestamp')}>
+        <time dateTime={timestamp?.dateTime}>
+          {timestamp?.text ?? t('audit.timestampUnavailable')}
         </time>
       </td>
-      <td data-label="Event type">
+      <td data-label={t('audit.eventType')}>
         <span className="audit-event-value">
           <strong>{event.event_type}</strong>
           <span>#{event.sequence}</span>
         </span>
       </td>
-      <td data-label="Outcome">
+      <td data-label={t('audit.outcome')}>
         <span className={`audit-outcome-badge audit-outcome-${event.outcome}`}
-          aria-label={`Outcome: ${event.outcome}`}>
-          {event.outcome === 'success' ? 'Success' : 'Failure'}
+          aria-label={t('audit.outcomeAriaLabel', { outcome: event.outcome })}>
+          {t(OUTCOME_LABEL_KEYS[event.outcome])}
         </span>
       </td>
-      <td data-label="Actor">{event.actor_identity}</td>
-      <td data-label="IP address"><code>{event.peer_ip}</code></td>
-      <td data-label="Subject">{subject ?? '-'}</td>
-      <td data-label="Detail">{event.detail_code === '' ? '-' : event.detail_code}</td>
+      <td data-label={t('audit.actor')}>{event.actor_identity}</td>
+      <td data-label={t('audit.ipAddress')}><code>{event.peer_ip}</code></td>
+      <td data-label={t('audit.subject')}>{subject ?? '-'}</td>
+      <td data-label={t('audit.detail')}>{event.detail_code === '' ? '-' : event.detail_code}</td>
     </tr>
   );
 }
@@ -208,6 +227,7 @@ export function AuditRecordsPanel({
   auditStatus,
   routeFragment = '',
 }: AuditRecordsPanelProps) {
+  const { t } = useTranslation();
   const controller = useAuditRecords(client);
   const sectionRef = useRef<HTMLElement>(null);
   const handledFragment = useRef<string>();
@@ -284,105 +304,105 @@ export function AuditRecordsPanel({
       aria-labelledby="audit-records-heading">
       <div className="section-heading audit-records-heading">
         <div>
-          <h2 id="audit-records-heading">Audit records</h2>
+          <h2 id="audit-records-heading">{t('audit.title')}</h2>
           <CapacitySummary controller={auditStatus} />
         </div>
-        <IconButton label="Refresh audit records" disabled={busy}
+        <IconButton label={t('audit.refreshRecords')} disabled={busy}
           onClick={() => void runCommand(() => controller.refresh())}>
           <RefreshCw size={17} aria-hidden="true" />
         </IconButton>
       </div>
 
-      <form className="audit-filter-form" aria-label="Audit record filters"
+      <form className="audit-filter-form" aria-label={t('audit.filtersLabel')}
         onSubmit={applyFilters}>
         <label className="audit-filter-field">
-          <span>From (UTC)</span>
+          <span>{t('audit.filterFrom')}</span>
           <input type="datetime-local" value={draft.from}
             onChange={(event) => setDraft({ ...draft, from: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>To (UTC)</span>
+          <span>{t('audit.filterTo')}</span>
           <input type="datetime-local" value={draft.to}
             onChange={(event) => setDraft({ ...draft, to: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>Event type</span>
+          <span>{t('audit.eventType')}</span>
           <input value={draft.eventType} maxLength={64}
             onChange={(event) => setDraft({ ...draft, eventType: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>Outcome</span>
+          <span>{t('audit.outcome')}</span>
           <select value={draft.outcome}
             onChange={(event) => setDraft({
               ...draft,
               outcome: event.target.value as FilterDraft['outcome'],
             })}>
-            <option value="">All outcomes</option>
-            <option value="success">Success</option>
-            <option value="failure">Failure</option>
+            <option value="">{t('audit.allOutcomes')}</option>
+            <option value="success">{t('audit.outcomeSuccess')}</option>
+            <option value="failure">{t('audit.outcomeFailure')}</option>
           </select>
         </label>
         <label className="audit-filter-field">
-          <span>Actor</span>
+          <span>{t('audit.actor')}</span>
           <input value={draft.actor} maxLength={64}
             onChange={(event) => setDraft({ ...draft, actor: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>IP address</span>
+          <span>{t('audit.ipAddress')}</span>
           <input value={draft.peerIp} maxLength={45} inputMode="text"
             onChange={(event) => setDraft({ ...draft, peerIp: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>Subject type</span>
+          <span>{t('audit.filterSubjectType')}</span>
           <input value={draft.subjectType} maxLength={64}
             onChange={(event) => setDraft({ ...draft, subjectType: event.target.value })} />
         </label>
         <label className="audit-filter-field">
-          <span>Subject identity</span>
+          <span>{t('audit.filterSubjectIdentity')}</span>
           <input value={draft.subjectIdentity} maxLength={64}
             onChange={(event) => setDraft({ ...draft, subjectIdentity: event.target.value })} />
         </label>
         <div className="audit-filter-actions">
           <button type="submit" className="audit-command-button" disabled={busy}>
             <Filter size={16} aria-hidden="true" />
-            Apply filters
+            {t('audit.applyFilters')}
           </button>
           <button type="button" className="audit-command-button audit-command-secondary"
             disabled={busy} onClick={resetFilters}>
             <RotateCcw size={16} aria-hidden="true" />
-            Reset filters
+            {t('audit.resetFilters')}
           </button>
         </div>
       </form>
 
       {commandError !== null && <p className="audit-error" role="alert">{commandError}</p>}
       {controller.state === 'loading' && controller.page === null && (
-        <p className="audit-record-state" role="status">Loading audit records...</p>
+        <p className="audit-record-state" role="status">{t('audit.loadingRecords')}</p>
       )}
       {controller.state === 'unavailable' && controller.page === null && (
         <div className="audit-record-state audit-record-error" role="alert">
-          <span>Audit records are temporarily unavailable.</span>
+          <span>{t('audit.recordsUnavailable')}</span>
           <button type="button" className="audit-command-button"
-            aria-label="Retry audit records"
+            aria-label={t('audit.retryRecords')}
             onClick={() => void runCommand(() => controller.refresh())}>
             <RefreshCw size={16} aria-hidden="true" />
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       )}
       {controller.state === 'refreshing' && controller.page !== null && (
         <p className="audit-record-state audit-record-stale" role="status">
-          Refreshing audit records. Showing current results.
+          {t('audit.refreshingRecords')}
         </p>
       )}
       {controller.state === 'stale' && controller.page !== null && (
         <p className="audit-record-state audit-record-stale" role="status">
-          Showing the last available audit records.
+          {t('audit.staleRecords')}
         </p>
       )}
       {controller.state === 'ready' && controller.page?.events.length === 0 && (
         <p className="audit-record-state" role="status">
-          No audit records match the current filters.
+          {t('audit.noRecordsMatch')}
         </p>
       )}
 
@@ -391,11 +411,11 @@ export function AuditRecordsPanel({
           <table className={controller.state === 'refreshing' || controller.state === 'stale'
             ? 'audit-records-table audit-records-table-stale'
             : 'audit-records-table'}
-            aria-label="Audit records"
+            aria-label={t('audit.title')}
             aria-busy={controller.state === 'refreshing'}>
             <thead>
               <tr>
-                {sortColumns.map(({ field, label }) => (
+                {sortColumns.map(({ field, labelKey }) => (
                   <th key={field} scope="col"
                     aria-sort={controller.query.sort_by === field
                       ? controller.query.sort_direction === 'asc'
@@ -403,14 +423,15 @@ export function AuditRecordsPanel({
                         : 'descending'
                       : 'none'}>
                     <button type="button" className="audit-sort-button"
-                      aria-label={`Sort by ${label}`} title={`Sort by ${label}`}
+                      aria-label={t('audit.sortBy', { field: t(labelKey) })}
+                      title={t('audit.sortBy', { field: t(labelKey) })}
                       disabled={busy} onClick={() => sortBy(field)}>
-                      <span>{label}</span>
+                      <span>{t(labelKey)}</span>
                       <SortIcon field={field} query={controller.query} />
                     </button>
                   </th>
                 ))}
-                <th scope="col">Detail</th>
+                <th scope="col">{t('audit.detail')}</th>
               </tr>
             </thead>
             <tbody>
@@ -422,8 +443,8 @@ export function AuditRecordsPanel({
         </div>
       )}
 
-      <div className="audit-pagination" aria-label="Audit record pages">
-        <IconButton label="Previous audit page"
+      <div className="audit-pagination" aria-label={t('audit.paginationLabel')}>
+        <IconButton label={t('audit.previousPage')}
           disabled={busy || !controller.canGoBack}
           onClick={() => void runCommand(
             () => controller.previousPage(),
@@ -431,8 +452,8 @@ export function AuditRecordsPanel({
           )}>
           <ChevronLeft size={18} aria-hidden="true" />
         </IconButton>
-        <span>Page {pageNumber}</span>
-        <IconButton label="Next audit page"
+        <span>{t('audit.pageNumber', { n: pageNumber })}</span>
+        <IconButton label={t('audit.nextPage')}
           disabled={busy || controller.page?.next_cursor == null}
           onClick={() => void runCommand(
             () => controller.nextPage(),

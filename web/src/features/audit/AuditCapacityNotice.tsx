@@ -1,3 +1,4 @@
+import { useTranslation } from '../../i18n/LanguageContext';
 import type { AuditStatusController } from './useAuditStatus';
 
 interface AuditCapacityNoticeProps {
@@ -5,6 +6,7 @@ interface AuditCapacityNoticeProps {
 }
 
 export function AuditCapacityNotice({ controller }: AuditCapacityNoticeProps) {
+  const { t } = useTranslation();
   const status = controller?.data;
   if (status === null || status === undefined || !status.warning) {
     return null;
@@ -13,11 +15,14 @@ export function AuditCapacityNotice({ controller }: AuditCapacityNoticeProps) {
   return (
     <div className="settings-shell-notice audit-capacity-notice" role="alert">
       <span>
-        Audit storage is at {status.usage_percent}%: {status.current_events} of{' '}
-        {status.max_events} audit records are retained.
-        {controller?.state === 'stale' && ' Capacity status may be out of date.'}
+        {t('audit.storageNotice', {
+          percent: status.usage_percent,
+          current: status.current_events,
+          max: status.max_events,
+        })}
+        {controller?.state === 'stale' && ` ${t('audit.capacityStale')}`}
       </span>
-      <a href="#/system#audit-records">Review audit records</a>
+      <a href="#/system#audit-records">{t('audit.reviewRecords')}</a>
     </div>
   );
 }

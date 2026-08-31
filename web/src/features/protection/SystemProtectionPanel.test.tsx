@@ -6,6 +6,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import type { ProtectionSnapshot } from './contracts';
 import { SystemProtectionPanel } from './SystemProtectionPanel';
 import type { SystemProtectionController } from './useSystemProtection';
@@ -60,7 +61,9 @@ afterEach(() => {
 
 describe('SystemProtectionPanel', () => {
   it('renders an unframed operational summary with accessible icon commands', () => {
-    const view = render(<SystemProtectionPanel controller={controller()} />);
+    const view = render(<SystemProtectionPanel controller={controller()} />, {
+      wrapper: LanguageProvider,
+    });
 
     const section = screen.getByRole('region', { name: 'System protection' });
     expect(within(section).getByText('Operational')).toBeVisible();
@@ -83,7 +86,7 @@ describe('SystemProtectionPanel', () => {
   it('runs both administrator commands from the keyboard', async () => {
     const user = userEvent.setup();
     const value = controller();
-    render(<SystemProtectionPanel controller={value} />);
+    render(<SystemProtectionPanel controller={value} />, { wrapper: LanguageProvider });
 
     const selfTest = screen.getByRole('button', { name: 'Run security self-test' });
     selfTest.focus();
@@ -100,7 +103,7 @@ describe('SystemProtectionPanel', () => {
     render(<SystemProtectionPanel controller={controller({
       snapshot: snapshot({ state: 'checking', check_running: true }),
       activeCommand: 'integrity',
-    })} />);
+    })} />, { wrapper: LanguageProvider });
 
     expect(screen.getByText('Checking')).toBeVisible();
     for (const name of ['Refresh system protection', 'Run security self-test']) {
@@ -113,7 +116,9 @@ describe('SystemProtectionPanel', () => {
   });
 
   it('disables commands while a request is active over a retained snapshot', () => {
-    render(<SystemProtectionPanel controller={controller({ state: 'loading' })} />);
+    render(<SystemProtectionPanel controller={controller({ state: 'loading' })} />, {
+      wrapper: LanguageProvider,
+    });
 
     for (const name of [
       'Refresh system protection',
@@ -132,7 +137,7 @@ describe('SystemProtectionPanel', () => {
         integrity: suite('integrity', false),
       }),
       publicMessage: 'Showing the last verified protection result.',
-    })} />);
+    })} />, { wrapper: LanguageProvider });
 
     expect(screen.getByText('Restricted')).toBeVisible();
     expect(screen.getByText('E_INTEGRITY_MISMATCH')).toBeVisible();
@@ -147,7 +152,7 @@ describe('SystemProtectionPanel', () => {
       snapshot: null,
       publicMessage: 'System protection is temporarily unavailable.',
     });
-    render(<SystemProtectionPanel controller={value} />);
+    render(<SystemProtectionPanel controller={value} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'System protection is temporarily unavailable.',
@@ -164,7 +169,7 @@ describe('SystemProtectionPanel', () => {
     integrity.items[0] = { ...integrity.items[0], code: longCode };
     render(<SystemProtectionPanel controller={controller({
       snapshot: snapshot({ state: 'restricted', integrity }),
-    })} />);
+    })} />, { wrapper: LanguageProvider });
 
     expect(screen.getByText(longCode)).toHaveClass('protection-item-code');
     expect(styles).toMatch(/\.protection-item-code\s*\{[^}]*overflow-wrap:\s*anywhere/s);

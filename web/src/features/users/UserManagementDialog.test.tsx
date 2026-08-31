@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { UserManagementDialog } from './UserManagementDialog';
 
 interface DialogHarnessProps {
@@ -20,7 +21,7 @@ function DialogHarness({
   const openerRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <>
+    <LanguageProvider>
       <button ref={openerRef} type="button">Open user dialog</button>
       {open && (
         <UserManagementDialog
@@ -38,7 +39,7 @@ function DialogHarness({
           <button type="button">Save viewer</button>
         </UserManagementDialog>
       )}
-    </>
+    </LanguageProvider>
   );
 }
 

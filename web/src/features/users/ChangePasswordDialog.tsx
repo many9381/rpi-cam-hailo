@@ -11,6 +11,7 @@ import { X } from 'lucide-react';
 
 import { ApiError } from '../../api/client';
 import { IconButton } from '../../components/IconButton';
+import { useTranslation } from '../../i18n/LanguageContext';
 
 interface ChangePasswordDialogProps {
   open: boolean;
@@ -29,7 +30,6 @@ interface SecretValues {
   confirmation: string;
 }
 
-const GENERIC_FAILURE = 'Unable to change password.';
 const MAX_PUBLIC_ERROR_CODE_LENGTH = 32;
 const PUBLIC_PASSWORD_ERROR_CODES = new Set([
   'E_CURRENT_PASSWORD',
@@ -37,27 +37,32 @@ const PUBLIC_PASSWORD_ERROR_CODES = new Set([
   'E_INVALID_REQUEST',
 ]);
 
-function validationError({ currentPassword, replacementPassword, confirmation }: SecretValues) {
+function validationErrorKey(
+  { currentPassword, replacementPassword, confirmation }: SecretValues,
+): string | null {
   if (currentPassword.length === 0) {
-    return 'Enter the current password.';
+    return 'users.enterCurrentPassword';
   }
   if (replacementPassword.length === 0) {
-    return 'Enter a new password.';
+    return 'users.enterNewPassword';
   }
   if (confirmation.length === 0) {
-    return 'Confirm the new password.';
+    return 'users.confirmNewPasswordRequired';
   }
   if (replacementPassword !== confirmation) {
-    return 'New passwords do not match.';
+    return 'users.newPasswordsMismatch';
   }
   return null;
 }
 
-function publicError(error: unknown): string {
+// Returns the raw allowlisted error code as-is (it is a stable public
+// identifier, not UI copy) or null when the caller should fall back to a
+// translated generic failure message.
+function publicErrorCode(error: unknown): string | null {
   return error instanceof ApiError && error.code.length <= MAX_PUBLIC_ERROR_CODE_LENGTH &&
       PUBLIC_PASSWORD_ERROR_CODES.has(error.code)
     ? error.code
-    : GENERIC_FAILURE;
+    : null;
 }
 
 export function ChangePasswordDialog({
@@ -66,6 +71,7 @@ export function ChangePasswordDialog({
   changePassword,
   onClose,
 }: ChangePasswordDialogProps) {
+  const { t } = useTranslation();
   const [currentPassword, setCurrentPassword] = useState('');
   const [replacementPassword, setReplacementPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -146,10 +152,10 @@ export function ChangePasswordDialog({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const validation = validationError(secretsRef.current);
-    if (validation !== null) {
+    const errorKey = validationErrorKey(secretsRef.current);
+    if (errorKey !== null) {
       clearSecrets();
-      setError(validation);
+      setError(t(errorKey));
       return;
     }
 
@@ -169,7 +175,7 @@ export function ChangePasswordDialog({
       succeeded = true;
     } catch (caught) {
       if (isCurrentRequest() && !controller.signal.aborted) {
-        setError(publicError(caught));
+        setError(publicErrorCode(caught) ?? t('users.changePasswordGenericFailure'));
       }
     } finally {
       if (!isCurrentRequest()) {
@@ -226,15 +232,15 @@ export function ChangePasswordDialog({
         aria-labelledby="change-password-title" aria-describedby="change-password-error"
         tabIndex={-1} onKeyDown={onKeyDown}>
         <div className="change-password-dialog-header">
-          <h2 id="change-password-title">Change password</h2>
-          <IconButton ref={closeButtonRef} label="Close change password dialog" onClick={close}
-            disabled={pending}>
+          <h2 id="change-password-title">{t('account.changePassword')}</h2>
+          <IconButton ref={closeButtonRef} label={t('users.closeChangePasswordDialog')}
+            onClick={close} disabled={pending}>
             <X size={18} aria-hidden="true" />
           </IconButton>
         </div>
         <form onSubmit={(event) => void submit(event)} noValidate>
           <div className="field">
-            <label htmlFor="change-password-current">Current password</label>
+            <label htmlFor="change-password-current">{t('users.currentPasswordLabel')}</label>
             <input
               ref={currentInputRef}
               id="change-password-current"
@@ -253,7 +259,7 @@ export function ChangePasswordDialog({
             />
           </div>
           <div className="field">
-            <label htmlFor="change-password-new">New password</label>
+            <label htmlFor="change-password-new">{t('users.newPassword')}</label>
             <input
               ref={replacementInputRef}
               id="change-password-new"
@@ -272,7 +278,7 @@ export function ChangePasswordDialog({
             />
           </div>
           <div className="field">
-            <label htmlFor="change-password-confirmation">Confirm new password</label>
+            <label htmlFor="change-password-confirmation">{t('users.confirmNewPassword')}</label>
             <input
               ref={confirmationInputRef}
               id="change-password-confirmation"
@@ -297,7 +303,7 @@ export function ChangePasswordDialog({
           <div className="change-password-dialog-actions">
             <button ref={submitButtonRef} className="change-password-submit" type="submit"
               disabled={pending}>
-              {pending ? 'Changing password...' : 'Change password'}
+              {pending ? t('users.changingPassword') : t('account.changePassword')}
             </button>
           </div>
         </form>

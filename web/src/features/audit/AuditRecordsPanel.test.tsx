@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient } from '../../api/types';
+import { LanguageProvider } from '../../i18n';
 import type { AuditStatusController } from './useAuditStatus';
 import {
   useAuditRecords,
@@ -106,6 +107,7 @@ afterEach(() => {
 
 const renderPanel = () => render(
   <AuditRecordsPanel client={client} auditStatus={auditStatus} />,
+  { wrapper: LanguageProvider },
 );
 
 function topLevelRules(): CSSRule[] {
@@ -423,7 +425,9 @@ describe('AuditRecordsPanel', () => {
 
   it('shows capacity and rotation status including stale status copy', () => {
     const staleStatus: AuditStatusController = { ...auditStatus, state: 'stale' };
-    render(<AuditRecordsPanel client={client} auditStatus={staleStatus} />);
+    render(<AuditRecordsPanel client={client} auditStatus={staleStatus} />, {
+      wrapper: LanguageProvider,
+    });
 
     const summary = screen.getByLabelText('Audit capacity summary');
     expect(summary).toHaveTextContent('90 of 100 records');

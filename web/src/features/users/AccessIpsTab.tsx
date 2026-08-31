@@ -10,6 +10,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 
 import type { UserRole } from '../../api/types';
 import { IconButton } from '../../components/IconButton';
+import { useTranslation } from '../../i18n/LanguageContext';
 import type { ManagementIp } from './contracts';
 import { userManagementErrorMessage } from './publicError';
 import { UserManagementDialog } from './UserManagementDialog';
@@ -29,15 +30,15 @@ type AccessIpDialog = {
   entry: ManagementIp;
 };
 
-const REFRESH_FAILURE_NOTICE =
-  'Changes were applied, but the access IP list could not be refreshed.';
+const REFRESH_FAILURE_NOTICE_KEY = 'users.accessIpRefreshFailedNotice';
+
+const ROLE_LABEL_KEYS: Record<UserRole, string> = {
+  administrator: 'users.roleAdministrator',
+  viewer: 'users.roleViewer',
+};
 
 function formatTimestamp(seconds: number): string {
   return new Intl.DateTimeFormat().format(new Date(seconds * 1_000));
-}
-
-function roleLabel(role: UserRole): string {
-  return role === 'administrator' ? 'Administrator' : 'Viewer';
 }
 
 export function AccessIpsTab({
@@ -45,6 +46,7 @@ export function AccessIpsTab({
   createOpen,
   onCreateClose,
 }: AccessIpsTabProps) {
+  const { t } = useTranslation();
   const [dialog, setDialog] = useState<AccessIpDialog | null>(null);
   const [createRole, setCreateRole] = useState<UserRole>('administrator');
   const [address, setAddress] = useState('');
@@ -134,7 +136,7 @@ export function AccessIpsTab({
     setSubmitting(false);
     setDialogError(null);
     if (!result.refreshed) {
-      setNotice(REFRESH_FAILURE_NOTICE);
+      setNotice(t(REFRESH_FAILURE_NOTICE_KEY));
     }
     close();
   };
@@ -162,7 +164,7 @@ export function AccessIpsTab({
       setAddressError(null);
       return true;
     }
-    setAddressError('Enter an address.');
+    setAddressError(t('users.enterAddress'));
     setDialogError(null);
     return false;
   };
@@ -185,7 +187,7 @@ export function AccessIpsTab({
       }
       setDialogError(userManagementErrorMessage(
         error,
-        'The access IP could not be added.',
+        t('users.accessIpCreateFailed'),
       ));
       endSubmission(token);
     }
@@ -210,7 +212,7 @@ export function AccessIpsTab({
       }
       setDialogError(userManagementErrorMessage(
         error,
-        'The access IP could not be updated.',
+        t('users.accessIpUpdateFailed'),
       ));
       endSubmission(token);
     }
@@ -234,7 +236,7 @@ export function AccessIpsTab({
       }
       setDialogError(userManagementErrorMessage(
         error,
-        'The access IP could not be deleted.',
+        t('users.accessIpDeleteFailed'),
       ));
       endSubmission(token);
     }
@@ -258,7 +260,7 @@ export function AccessIpsTab({
   const renderResource = () => {
     if (managementIps.status === 'loading' &&
         managementIps.data.management_ips.length === 0) {
-      return <p className="user-management-resource-state">Loading access IPs...</p>;
+      return <p className="user-management-resource-state">{t('users.loadingAccessIps')}</p>;
     }
     if (managementIps.status === 'error') {
       return (
@@ -266,7 +268,7 @@ export function AccessIpsTab({
           <p role="alert">
             {userManagementErrorMessage(
               managementIps.error,
-              'The access IP list could not be loaded.',
+              t('users.accessIpListLoadFailed'),
             )}
           </p>
           <button
@@ -274,13 +276,13 @@ export function AccessIpsTab({
             disabled={pending}
             onClick={() => void controller.refreshManagementIps().catch(() => undefined)}
           >
-            Retry access IPs
+            {t('users.retryAccessIps')}
           </button>
         </div>
       );
     }
     if (managementIps.data.management_ips.length === 0) {
-      return <p className="user-management-resource-state">No access IPs found.</p>;
+      return <p className="user-management-resource-state">{t('users.noAccessIps')}</p>;
     }
 
     return (
@@ -288,11 +290,11 @@ export function AccessIpsTab({
         <table className="user-management-table access-ips-table">
           <thead>
             <tr>
-              <th scope="col">Role</th>
-              <th scope="col">Address</th>
-              <th scope="col">Protection state</th>
-              <th scope="col">Creation time</th>
-              <th className="access-ip-actions-column" scope="col">Actions</th>
+              <th scope="col">{t('users.role')}</th>
+              <th scope="col">{t('users.address')}</th>
+              <th scope="col">{t('users.protectionState')}</th>
+              <th scope="col">{t('users.creationTime')}</th>
+              <th className="access-ip-actions-column" scope="col">{t('users.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -303,30 +305,31 @@ export function AccessIpsTab({
                 administratorCount === 1;
               const protectedEntry = currentConnection || finalAdministrator;
               const protectedTitle = currentConnection
-                ? 'The current administrator connection cannot be changed.'
+                ? t('users.currentConnectionProtected')
                 : finalAdministrator
-                  ? 'The final administrator address cannot be changed.'
+                  ? t('users.finalAdministratorProtected')
                   : null;
 
               return (
                 <tr key={entry.id}>
-                  <td data-label="Role">{roleLabel(entry.role)}</td>
-                  <td data-label="Address">{entry.address}</td>
-                  <td data-label="Protection state">
+                  <td data-label={t('users.role')}>{t(ROLE_LABEL_KEYS[entry.role])}</td>
+                  <td data-label={t('users.address')}>{entry.address}</td>
+                  <td data-label={t('users.protectionState')}>
                     {currentConnection
-                      ? 'Current connection'
+                      ? t('users.currentConnection')
                       : finalAdministrator
-                        ? 'Final administrator address'
-                        : 'Not protected'}
+                        ? t('users.finalAdministratorAddress')
+                        : t('users.notProtected')}
                   </td>
-                  <td data-label="Creation time">
+                  <td data-label={t('users.creationTime')}>
                     {formatTimestamp(entry.created_at_seconds)}
                   </td>
-                  <td className="access-ip-actions-cell" data-label="Actions">
+                  <td className="access-ip-actions-cell" data-label={t('users.actions')}>
                     <div className="access-ip-actions">
                       <IconButton
-                        label={`Edit ${entry.address}`}
-                        title={protectedTitle ?? `Edit ${entry.address}`}
+                        label={t('users.editAddress', { address: entry.address })}
+                        title={protectedTitle ??
+                          t('users.editAddress', { address: entry.address })}
                         disabled={pending || protectedEntry}
                         onClick={(event) => openAction(
                           { kind: 'edit', entry },
@@ -336,8 +339,9 @@ export function AccessIpsTab({
                         <Pencil size={18} aria-hidden="true" />
                       </IconButton>
                       <IconButton
-                        label={`Delete ${entry.address}`}
-                        title={protectedTitle ?? `Delete ${entry.address}`}
+                        label={t('users.deleteAddress', { address: entry.address })}
+                        title={protectedTitle ??
+                          t('users.deleteAddress', { address: entry.address })}
                         disabled={pending || protectedEntry}
                         onClick={(event) => openAction(
                           { kind: 'delete', entry },
@@ -359,7 +363,7 @@ export function AccessIpsTab({
 
   const addressField = (id: string) => (
     <div className="field">
-      <label htmlFor={id}>Address</label>
+      <label htmlFor={id}>{t('users.address')}</label>
       <input
         id={id}
         name="address"
@@ -382,15 +386,15 @@ export function AccessIpsTab({
       )}
       {managementIps.status === 'stale' && (
         <p className="user-management-resource-warning" role="alert">
-          The access IP list could not be refreshed. Showing the last loaded access IPs.
+          {t('users.accessIpListRefreshFailed')}
         </p>
       )}
       {renderResource()}
 
       {createOpen && (
         <UserManagementDialog
-          title="Add access IP"
-          description="Add an administrator or viewer access address."
+          title={t('users.addAccessIp')}
+          description={t('users.addAccessIpDescription')}
           pending={pending}
           returnFocusRef={createReturnFocusRef}
           onClose={closeCreate}
@@ -401,7 +405,7 @@ export function AccessIpsTab({
             noValidate
           >
             <div className="field">
-              <label htmlFor="access-ip-create-role">Role</label>
+              <label htmlFor="access-ip-create-role">{t('users.role')}</label>
               <select
                 id="access-ip-create-role"
                 name="role"
@@ -409,15 +413,15 @@ export function AccessIpsTab({
                 disabled={pending}
                 onChange={(event) => setCreateRole(event.target.value as UserRole)}
               >
-                <option value="administrator">Administrator</option>
-                <option value="viewer">Viewer</option>
+                <option value="administrator">{t('users.roleAdministrator')}</option>
+                <option value="viewer">{t('users.roleViewer')}</option>
               </select>
             </div>
             {addressField('access-ip-create-address')}
             {dialogError !== null && <p className="form-error" role="alert">{dialogError}</p>}
             <div className="user-management-dialog-actions">
               <button className="primary-button" type="submit" disabled={pending}>
-                {submitting ? 'Adding access IP...' : 'Add access IP'}
+                {submitting ? t('users.addingAccessIp') : t('users.addAccessIp')}
               </button>
             </div>
           </form>
@@ -426,8 +430,10 @@ export function AccessIpsTab({
 
       {dialog?.kind === 'edit' && (
         <UserManagementDialog
-          title="Edit access IP"
-          description={`Update the ${roleLabel(dialog.entry.role).toLowerCase()} access address.`}
+          title={t('users.editAccessIp')}
+          description={t('users.editAccessIpDescription', {
+            role: t(ROLE_LABEL_KEYS[dialog.entry.role]).toLowerCase(),
+          })}
           pending={pending}
           returnFocusRef={actionReturnFocusRef}
           onClose={closeAction}
@@ -438,14 +444,14 @@ export function AccessIpsTab({
             noValidate
           >
             <div className="field">
-              <span>Role</span>
-              <strong>{roleLabel(dialog.entry.role)}</strong>
+              <span>{t('users.role')}</span>
+              <strong>{t(ROLE_LABEL_KEYS[dialog.entry.role])}</strong>
             </div>
             {addressField('access-ip-edit-address')}
             {dialogError !== null && <p className="form-error" role="alert">{dialogError}</p>}
             <div className="user-management-dialog-actions">
               <button className="primary-button" type="submit" disabled={pending}>
-                {submitting ? 'Saving access IP...' : 'Save access IP'}
+                {submitting ? t('users.savingAccessIp') : t('users.saveAccessIp')}
               </button>
             </div>
           </form>
@@ -454,8 +460,11 @@ export function AccessIpsTab({
 
       {dialog?.kind === 'delete' && (
         <UserManagementDialog
-          title="Delete access IP"
-          description={`Delete ${roleLabel(dialog.entry.role)} address ${dialog.entry.address}? This action cannot be undone.`}
+          title={t('users.deleteAccessIp')}
+          description={t('users.deleteAccessIpDescription', {
+            role: t(ROLE_LABEL_KEYS[dialog.entry.role]),
+            address: dialog.entry.address,
+          })}
           pending={pending}
           destructive
           returnFocusRef={actionReturnFocusRef}
@@ -469,7 +478,7 @@ export function AccessIpsTab({
               disabled={pending}
               onClick={() => void submitDelete()}
             >
-              {submitting ? 'Deleting access IP...' : 'Delete access IP'}
+              {submitting ? t('users.deletingAccessIp') : t('users.deleteAccessIp')}
             </button>
           </div>
         </UserManagementDialog>

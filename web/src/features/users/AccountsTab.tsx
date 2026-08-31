@@ -9,6 +9,7 @@ import {
 import { KeyRound, Trash2 } from 'lucide-react';
 
 import { IconButton } from '../../components/IconButton';
+import { useTranslation } from '../../i18n/LanguageContext';
 import {
   type SetupCredentialErrors,
   validateSetupCredentials,
@@ -32,31 +33,56 @@ type AccountDialog = {
   user: ManagedUser;
 };
 
-const REFRESH_FAILURE_NOTICE =
-  'Changes were applied, but the account list could not be refreshed.';
+type TFunc = ReturnType<typeof useTranslation>['t'];
 
-const fallbackByAction = {
-  enable: 'The viewer could not be enabled.',
-  disable: 'The viewer could not be disabled.',
-  reset: 'The viewer password could not be reset.',
-  delete: 'The viewer could not be deleted.',
+const REFRESH_FAILURE_NOTICE_KEY = 'users.accountRefreshFailedNotice';
+
+const fallbackKeyByAction = {
+  enable: 'users.enableViewerFailed',
+  disable: 'users.disableViewerFailed',
+  reset: 'users.resetViewerPasswordFailed',
+  delete: 'users.deleteViewerFailed',
 } as const;
 
-function formatTimestamp(seconds: number | null): string {
-  if (seconds === null) {
-    return 'Never';
-  }
+const ROLE_LABEL_KEYS: Record<ManagedUser['role'], string> = {
+  administrator: 'users.roleAdministrator',
+  viewer: 'users.roleViewer',
+};
+
+type AccountConfirmKind = 'enable' | 'disable' | 'delete';
+
+const ACCOUNT_ACTION_TITLE_KEYS: Record<AccountConfirmKind, string> = {
+  enable: 'users.enableViewer',
+  disable: 'users.disableViewer',
+  delete: 'users.deleteViewer',
+};
+
+const ACCOUNT_ACTION_PENDING_KEYS: Record<AccountConfirmKind, string> = {
+  enable: 'users.enablingViewer',
+  disable: 'users.disablingViewer',
+  delete: 'users.deletingViewer',
+};
+
+const ACCOUNT_ACTION_DESCRIPTION_KEYS: Record<AccountConfirmKind, string> = {
+  enable: 'users.enableViewerDescription',
+  disable: 'users.disableViewerDescription',
+  delete: 'users.deleteViewerDescription',
+};
+
+function formatTimestamp(seconds: number): string {
   return new Intl.DateTimeFormat().format(new Date(seconds * 1_000));
 }
 
-function accountStatus(user: ManagedUser): string {
+function accountStatusText(user: ManagedUser, t: TFunc): string {
   if (!user.enabled) {
-    return 'Disabled';
+    return t('ai.disabled');
   }
   if (user.lock_until_seconds !== null) {
-    return `Locked until ${formatTimestamp(user.lock_until_seconds)}`;
+    return t('users.lockedUntil', {
+      timestamp: formatTimestamp(user.lock_until_seconds),
+    });
   }
-  return 'Enabled';
+  return t('users.accountEnabled');
 }
 
 export function AccountsTab({
@@ -64,6 +90,7 @@ export function AccountsTab({
   createOpen,
   onCreateClose,
 }: AccountsTabProps) {
+  const { t } = useTranslation();
   const [dialog, setDialog] = useState<AccountDialog | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -133,7 +160,7 @@ export function AccountsTab({
     }
     setDialogError(null);
     if (!result.refreshed) {
-      setNotice(REFRESH_FAILURE_NOTICE);
+      setNotice(t(REFRESH_FAILURE_NOTICE_KEY));
     }
     close();
   };
@@ -222,7 +249,7 @@ export function AccountsTab({
       clearSecrets();
       setDialogError(userManagementErrorMessage(
         error,
-        'The viewer could not be created.',
+        t('users.viewerCreateFailed'),
       ));
       endSubmission(token);
     }
@@ -271,7 +298,7 @@ export function AccountsTab({
       }
       setDialogError(userManagementErrorMessage(
         error,
-        fallbackByAction[currentDialog.kind],
+        t(fallbackKeyByAction[currentDialog.kind]),
       ));
       endSubmission(token);
     }
@@ -329,7 +356,7 @@ export function AccountsTab({
         return;
       }
       clearSecrets();
-      setDialogError(userManagementErrorMessage(error, fallbackByAction.reset));
+      setDialogError(userManagementErrorMessage(error, t(fallbackKeyByAction.reset)));
       endSubmission(token);
     }
   };
@@ -338,7 +365,7 @@ export function AccountsTab({
     <>
       <div className="field">
         <label htmlFor={reset ? 'viewer-reset-password' : 'viewer-create-password'}>
-          {reset ? 'New password' : 'Password'}
+          {reset ? t('users.newPassword') : t('common.password')}
         </label>
         <input
           id={reset ? 'viewer-reset-password' : 'viewer-create-password'}
@@ -369,7 +396,7 @@ export function AccountsTab({
       </div>
       <div className="field">
         <label htmlFor={reset ? 'viewer-reset-confirmation' : 'viewer-create-confirmation'}>
-          {reset ? 'Confirm new password' : 'Confirm password'}
+          {reset ? t('users.confirmNewPassword') : t('setup.confirmPassword')}
         </label>
         <input
           id={reset ? 'viewer-reset-confirmation' : 'viewer-create-confirmation'}
@@ -406,7 +433,7 @@ export function AccountsTab({
   const renderResource = () => {
     const { users } = controller;
     if (users.status === 'loading' && users.data.length === 0) {
-      return <p className="user-management-resource-state">Loading accounts...</p>;
+      return <p className="user-management-resource-state">{t('users.loadingAccounts')}</p>;
     }
     if (users.status === 'error') {
       return (
@@ -414,7 +441,7 @@ export function AccountsTab({
           <p role="alert">
             {userManagementErrorMessage(
               users.error,
-              'The account list could not be loaded.',
+              t('users.accountListLoadFailed'),
             )}
           </p>
           <button
@@ -422,13 +449,13 @@ export function AccountsTab({
             disabled={controller.mutation !== null}
             onClick={() => void controller.refreshUsers().catch(() => undefined)}
           >
-            Retry accounts
+            {t('users.retryAccounts')}
           </button>
         </div>
       );
     }
     if (users.data.length === 0) {
-      return <p className="user-management-resource-state">No accounts found.</p>;
+      return <p className="user-management-resource-state">{t('users.noAccounts')}</p>;
     }
 
     return (
@@ -436,32 +463,37 @@ export function AccountsTab({
         <table className="user-management-table accounts-table">
           <thead>
             <tr>
-              <th scope="col">User</th>
-              <th scope="col">Role</th>
-              <th scope="col">Status</th>
-              <th scope="col">Last login</th>
-              <th className="account-actions-column" scope="col">Actions</th>
+              <th scope="col">{t('users.user')}</th>
+              <th scope="col">{t('users.role')}</th>
+              <th scope="col">{t('users.status')}</th>
+              <th scope="col">{t('users.lastLogin')}</th>
+              <th className="account-actions-column" scope="col">{t('users.actions')}</th>
             </tr>
           </thead>
           <tbody>
             {users.data.map((user) => (
               <tr key={user.id}>
-                <td data-label="User">{user.username}</td>
-                <td data-label="Role">
-                  {user.role === 'administrator' ? 'Administrator' : 'Viewer'}
+                <td data-label={t('users.user')}>{user.username}</td>
+                <td data-label={t('users.role')}>
+                  {t(ROLE_LABEL_KEYS[user.role])}
                 </td>
-                <td data-label="Status">{accountStatus(user)}</td>
-                <td data-label="Last login">
-                  {formatTimestamp(user.last_login_at_seconds)}
+                <td data-label={t('users.status')}>{accountStatusText(user, t)}</td>
+                <td data-label={t('users.lastLogin')}>
+                  {user.last_login_at_seconds === null
+                    ? t('common.never')
+                    : formatTimestamp(user.last_login_at_seconds)}
                 </td>
-                <td className="account-actions-cell" data-label="Actions">
+                <td className="account-actions-cell" data-label={t('users.actions')}>
                   {user.role === 'viewer' && (
                     <div className="account-actions">
                       <label className="switch-control">
                         <input
                           type="checkbox"
                           role="switch"
-                          aria-label={`${user.enabled ? 'Disable' : 'Enable'} ${user.username}`}
+                          aria-label={t(
+                            user.enabled ? 'users.disableUsername' : 'users.enableUsername',
+                            { username: user.username },
+                          )}
                           checked={user.enabled}
                           disabled={pending}
                           onChange={(event) => openAction({
@@ -472,14 +504,14 @@ export function AccountsTab({
                         <span aria-hidden="true" />
                       </label>
                       <IconButton
-                        label={`Reset password for ${user.username}`}
+                        label={t('users.resetPasswordFor', { username: user.username })}
                         disabled={pending}
                         onClick={(event) => openAction({ kind: 'reset', user }, event.currentTarget)}
                       >
                         <KeyRound size={18} aria-hidden="true" />
                       </IconButton>
                       <IconButton
-                        label={`Delete ${user.username}`}
+                        label={t('users.deleteUsername', { username: user.username })}
                         disabled={pending}
                         onClick={(event) => openAction({ kind: 'delete', user }, event.currentTarget)}
                       >
@@ -503,22 +535,22 @@ export function AccountsTab({
       )}
       {controller.users.status === 'stale' && (
         <p className="user-management-resource-warning" role="alert">
-          The account list could not be refreshed. Showing the last loaded accounts.
+          {t('users.accountListRefreshFailed')}
         </p>
       )}
       {renderResource()}
 
       {createOpen && (
         <UserManagementDialog
-          title="Add viewer"
-          description="Create a viewer account."
+          title={t('users.addViewer')}
+          description={t('users.addViewerDescription')}
           pending={pending}
           returnFocusRef={createReturnFocusRef}
           onClose={closeCreate}
         >
           <form className="user-management-dialog-form" onSubmit={(event) => void submitCreate(event)} noValidate>
             <div className="field">
-              <label htmlFor="viewer-create-username">Username</label>
+              <label htmlFor="viewer-create-username">{t('common.username')}</label>
               <input
                 id="viewer-create-username"
                 name="username"
@@ -543,7 +575,7 @@ export function AccountsTab({
             {dialogError !== null && <p className="form-error" role="alert">{dialogError}</p>}
             <div className="user-management-dialog-actions">
               <button className="primary-button" type="submit" disabled={pending}>
-                {submitting ? 'Creating viewer...' : 'Create viewer'}
+                {submitting ? t('users.creatingViewer') : t('users.createViewer')}
               </button>
             </div>
           </form>
@@ -552,8 +584,10 @@ export function AccountsTab({
 
       {dialog?.kind === 'reset' && (
         <UserManagementDialog
-          title="Reset viewer password"
-          description={`Set a new password for ${dialog.user.username}. The viewer's active session may end immediately.`}
+          title={t('users.resetViewerPasswordTitle')}
+          description={t('users.resetPasswordDescription', {
+            username: dialog.user.username,
+          })}
           pending={pending}
           returnFocusRef={actionReturnFocusRef}
           onClose={closeAction}
@@ -563,7 +597,7 @@ export function AccountsTab({
             {dialogError !== null && <p className="form-error" role="alert">{dialogError}</p>}
             <div className="user-management-dialog-actions">
               <button className="primary-button" type="submit" disabled={pending}>
-                {submitting ? 'Resetting password...' : 'Reset password'}
+                {submitting ? t('users.resettingPassword') : t('users.resetPassword')}
               </button>
             </div>
           </form>
@@ -572,14 +606,10 @@ export function AccountsTab({
 
       {dialog !== null && dialog.kind !== 'reset' && (
         <UserManagementDialog
-          title={dialog.kind === 'delete'
-            ? 'Delete viewer'
-            : `${dialog.kind === 'enable' ? 'Enable' : 'Disable'} viewer`}
-          description={dialog.kind === 'delete'
-            ? `Delete ${dialog.user.username}? This action cannot be undone. The viewer's active session ends immediately.`
-            : dialog.kind === 'disable'
-              ? `Disable ${dialog.user.username}? The viewer's active session ends immediately.`
-              : `Enable ${dialog.user.username}?`}
+          title={t(ACCOUNT_ACTION_TITLE_KEYS[dialog.kind])}
+          description={t(ACCOUNT_ACTION_DESCRIPTION_KEYS[dialog.kind], {
+            username: dialog.user.username,
+          })}
           pending={pending}
           destructive={dialog.kind === 'delete'}
           returnFocusRef={actionReturnFocusRef}
@@ -594,12 +624,8 @@ export function AccountsTab({
               onClick={() => void submitConfirmation()}
             >
               {submitting
-                ? `${dialog.kind === 'delete'
-                  ? 'Deleting'
-                  : dialog.kind === 'enable' ? 'Enabling' : 'Disabling'} viewer...`
-                : `${dialog.kind === 'delete'
-                  ? 'Delete'
-                  : dialog.kind === 'enable' ? 'Enable' : 'Disable'} viewer`}
+                ? t(ACCOUNT_ACTION_PENDING_KEYS[dialog.kind])
+                : t(ACCOUNT_ACTION_TITLE_KEYS[dialog.kind])}
             </button>
           </div>
         </UserManagementDialog>
