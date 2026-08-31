@@ -1,11 +1,21 @@
 import '@testing-library/jest-dom/vitest';
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient } from '../../api/types';
+import { LanguageProvider } from '../../i18n';
 import { SetupWizard } from './SetupWizard';
+
+// SetupWizard (and every step it renders) now calls useTranslation(), so
+// every render needs a LanguageProvider ancestor - centralized here the
+// same way App.test.tsx does it, instead of wrapping each call site
+// individually.
+function render(ui: ReactElement) {
+  return rtlRender(<LanguageProvider>{ui}</LanguageProvider>);
+}
 
 const makeClient = (): CameraApiClient => ({
   getJson: vi.fn(),

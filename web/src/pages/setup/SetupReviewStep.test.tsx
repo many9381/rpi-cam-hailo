@@ -1,10 +1,19 @@
 import '@testing-library/jest-dom/vitest';
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render as rtlRender, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { SetupReviewStep } from './SetupReviewStep';
+
+// SetupReviewStep now calls useTranslation(), so every render needs a
+// LanguageProvider ancestor - centralized here the same way App.test.tsx
+// does it, instead of wrapping each call site individually.
+function render(ui: ReactElement) {
+  return rtlRender(<LanguageProvider>{ui}</LanguageProvider>);
+}
 
 afterEach(cleanup);
 

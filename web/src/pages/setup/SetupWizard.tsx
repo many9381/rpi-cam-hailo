@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { parseInitializeResult } from '../../api/contracts';
 import type { CameraApiClient } from '../../api/types';
+import { useTranslation } from '../../i18n/LanguageContext';
 import { SetupCredentialsStep } from './SetupCredentialsStep';
 import { SetupIpStep } from './SetupIpStep';
 import { SetupReviewStep } from './SetupReviewStep';
@@ -14,9 +15,6 @@ export interface SetupWizardProps {
 }
 
 type WizardStep = 'credentials' | 'ip' | 'review';
-
-const GENERIC_FAILURE =
-  'Camera initialization failed. Check the credentials and try again.';
 
 /**
  * Owns every value collected across the three setup steps and performs the
@@ -35,6 +33,7 @@ export function SetupWizard({
   onInitialized,
   onInitializationFailed = async () => false,
 }: SetupWizardProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<WizardStep>('credentials');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -69,7 +68,7 @@ export function SetupWizard({
       const advanced = await onInitializationFailed();
       if (!advanced) {
         setStep('credentials');
-        setFailure(GENERIC_FAILURE);
+        setFailure(t('setup.initializationFailed'));
       }
     } finally {
       setSubmitting(false);
@@ -79,7 +78,7 @@ export function SetupWizard({
   return (
     <main className="auth-surface">
       <section className="auth-panel wizard-panel" aria-labelledby="wizard-heading">
-        <div className="brand-mark" aria-hidden="true">CF</div>
+        <div className="brand-mark" aria-hidden="true">{t('common.brandShort')}</div>
         {step === 'credentials' && (
           <SetupCredentialsStep
             username={username}
