@@ -6,6 +6,7 @@
 #include <gst/gst.h>
 #include <gst/rtsp-server/rtsp-server.h>
 #include <gst/rtsp-server/rtsp-sdp.h>
+#include <gst/sdp/gstmikey.h>
 #include <gio/gio.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -53,6 +55,36 @@ GQuark SecureAttachFailureQuark() {
   return g_quark_from_static_string("camera-firmware-secure-attach-failure");
 }
 
+// Borrowed rtpbin (owned by the media pipeline), stashed at setup_rtpbin so the
+// "prepared" handler can reach each stream's internal RTP session.
+GQuark SecureRtpbinQuark() {
+  return g_quark_from_static_string("camera-firmware-secure-rtpbin");
+}
+
+// A nonzero random SSRC. Random-per-prepare so a static server-wide SRTP
+// session key is never paired with a repeating (key, ssrc) — matching the
+// entropy of gst's default random ssrc that this replaces.
+guint32 NewRandomSsrc() {
+  guint32 ssrc = 0U;
+  while (ssrc == 0U) {
+    ssrc = g_random_int();
+  }
+  return ssrc;
+}
+
+// The per-media pinned SSRC (GUINT_TO_POINTER on the media). Chosen once at
+// media-configure so it is known both at DESCRIBE (SetupSecureSdp, which puts
+// it in the a=key-mgmt MIKEY and a=ssrc) and at "prepared" (which sets the
+// payloader + RTP session to it). Kept stable across the media's prepares.
+GQuark SecureSsrcQuark() {
+  return g_quark_from_static_string("camera-firmware-secure-ssrc");
+}
+
+guint32 MediaPinnedSsrc(GstRTSPMedia* media) {
+  return static_cast<guint32>(
+      GPOINTER_TO_UINT(g_object_get_qdata(G_OBJECT(media), SecureSsrcQuark())));
+}
+
 std::atomic<std::size_t>& PerMediaKeyZeroizeCounter() {
   static std::atomic<std::size_t> count{0};
   return count;
@@ -68,10 +100,144 @@ GstRTSPFilterResult CloseManagedClient(GstRTSPServer*, GstRTSPClient*,
   return GST_RTSP_FILTER_REMOVE;
 }
 
+// Feeds one RTSP media's appsrc from the shared EncodedRing via a DEDICATED
+// PUMP THREAD (mirrors FragmentedMp4Hub). gst_app_src's need-data callback for
+// this custom-setup_sdp media fires only a handful of times per connection, so
+// it cannot drive continuous streaming; instead the callback merely STARTS the
+// pump on first fire (when the appsrc is in a pushable state during prepare)
+// and the pump then pushes continuously with the appsrc's block=TRUE providing
+// natural backpressure. The pump refs the appsrc while running so the pointer
+// stays valid, and is stopped+joined on the media's "unprepared" (which always
+// precedes finalize for a prepared media) before that ref is dropped.
 struct MediaFeedState {
   explicit MediaFeedState(media::EncodedRing& ring) : reader(ring.NewReader()) {}
+  ~MediaFeedState() { StopPump(); }
 
   media::EncodedRing::Reader reader;
+
+  std::mutex lifecycle;
+  std::thread pump;
+  std::atomic<bool> stop{false};
+  bool started{false};
+  GstAppSrc* appsrc{nullptr};  // reffed while the pump runs
+  // A fresh reader starts at the live write position, i.e. mid-GOP. h264parse
+  // cannot negotiate caps until it sees an SPS/PPS+IDR access unit, so the pump
+  // drops delta frames until the first keyframe (mirrors FragmentedMp4Hub).
+  bool seen_keyframe{false};
+  // Buffer PTS must be normalized to a 0-based monotonic timeline (like
+  // FragmentedMp4Hub): the raw capture timestamps are large and, once the pump
+  // skips frames under load, would feed h264parse/rtph264pay non-normalized
+  // PTS that stall RTP output. base_pts anchors the first keyframe at 0.
+  std::optional<std::chrono::nanoseconds> base_pts;
+  GstClockTime last_pts{0};
+  bool have_last_pts{false};
+
+  // Called from the need-data callback; starts the pump exactly once per
+  // prepare cycle (no-op while one is running).
+  void StartPumpOnce(GstAppSrc* source) {
+    std::lock_guard lock(lifecycle);
+    if (started || source == nullptr) {
+      return;
+    }
+    started = true;
+    seen_keyframe = false;  // a re-prepared shared media serves a new client
+    base_pts.reset();
+    have_last_pts = false;
+    stop.store(false, std::memory_order_release);
+    appsrc = GST_APP_SRC(gst_object_ref(source));
+    // Hand the pump its own copy of the (reffed) appsrc pointer. StopPump nulls
+    // the member under the lock, but the pump must keep pushing to the valid,
+    // still-reffed element until it observes `stop` and exits -- reading the
+    // member unsynchronized would race that null. The ref is dropped only after
+    // the join, so `pump_src` stays valid for the pump's lifetime.
+    GstAppSrc* const pump_src = appsrc;
+    pump = std::thread([this, pump_src] { PumpLoop(pump_src); });
+  }
+
+  // Stops+joins the pump and releases the appsrc ref. Safe to call repeatedly
+  // and when no pump is running.
+  void StopPump() {
+    std::thread joining;
+    GstAppSrc* release = nullptr;
+    {
+      std::lock_guard lock(lifecycle);
+      if (!started) {
+        return;
+      }
+      started = false;
+      stop.store(true, std::memory_order_release);
+      joining = std::move(pump);
+      release = appsrc;
+      appsrc = nullptr;
+    }
+    if (joining.joinable()) {
+      joining.join();
+    }
+    if (release != nullptr) {
+      gst_object_unref(release);
+    }
+  }
+
+  void PumpLoop(GstAppSrc* src) {
+    common::NameCurrentThread("rtsp-feed");
+    while (!stop.load(std::memory_order_acquire)) {
+      auto access_unit = reader.WaitNext(std::chrono::milliseconds(100));
+      if (!access_unit.has_value() || access_unit->bytes == nullptr ||
+          access_unit->bytes->empty()) {
+        continue;
+      }
+      if (!seen_keyframe) {
+        if (!access_unit->is_key_frame) {
+          continue;  // resync: skip delta frames until the first keyframe
+        }
+        seen_keyframe = true;
+        base_pts = access_unit->timestamp;
+      }
+
+      // Normalize to a 0-based, strictly monotonic PTS (matches
+      // FragmentedMp4Hub) so h264parse/rtph264pay produce a clean RTP stream.
+      constexpr GstClockTime kFallbackStep = GST_MSECOND * 10;
+      GstClockTime pts = 0U;
+      const auto relative = access_unit->timestamp - *base_pts;
+      if (relative.count() > 0) {
+        pts = static_cast<GstClockTime>(relative.count());
+      }
+      if (have_last_pts && pts <= last_pts) {
+        pts = last_pts + kFallbackStep;
+      }
+      const GstClockTime duration = have_last_pts && pts > last_pts
+                                        ? pts - last_pts
+                                        : kFallbackStep;
+      last_pts = pts;
+      have_last_pts = true;
+
+      auto* keepalive = new std::shared_ptr<const std::vector<std::uint8_t>>(
+          access_unit->bytes);
+      GstBuffer* buffer = gst_buffer_new_wrapped_full(
+          GST_MEMORY_FLAG_READONLY,
+          const_cast<std::uint8_t*>((*keepalive)->data()), (*keepalive)->size(),
+          0U, (*keepalive)->size(), keepalive, [](gpointer pointer) {
+            delete static_cast<
+                std::shared_ptr<const std::vector<std::uint8_t>>*>(pointer);
+          });
+      if (buffer == nullptr) {
+        delete keepalive;
+        continue;
+      }
+      GST_BUFFER_PTS(buffer) = pts;
+      GST_BUFFER_DTS(buffer) = pts;
+      GST_BUFFER_DURATION(buffer) = duration;
+      GST_BUFFER_OFFSET(buffer) = access_unit->sequence;
+      GST_BUFFER_FLAG_SET(buffer, GST_BUFFER_FLAG_MARKER);
+      if (!access_unit->is_key_frame) {
+        GST_BUFFER_FLAG_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+      }
+      const GstFlowReturn flow = gst_app_src_push_buffer(src, buffer);
+      if (flow != GST_FLOW_OK && flow != GST_FLOW_FLUSHING) {
+        break;
+      }
+    }
+  }
 };
 
 void ZeroizeMemory(unsigned char* data, std::size_t size) noexcept {
@@ -243,6 +409,11 @@ gboolean SetupSecureRtpbin(GstRTSPMedia* media, GstElement* rtpbin) {
     return FALSE;
   }
 
+  // Borrow the rtpbin for the "prepared" handler. No ref: the rtpbin lives in
+  // the media pipeline, which outlives every prepared/unprepared cycle, and
+  // setup_rtpbin re-stashes the current rtpbin on each prepare.
+  g_object_set_qdata(G_OBJECT(media), SecureRtpbinQuark(), rtpbin);
+
   return AttachSecureEncoderHooks(media, rtpbin).ok() ? TRUE : FALSE;
 }
 
@@ -289,6 +460,66 @@ bool AddSdesCryptoAttribute(GstRTSPMedia* media, GstSDPMedia* sdp_media) {
   if (!added) {
     SetAttachFailure(media,
                      "E_SRTP_SDP: secure SDP crypto attribute failed");
+  }
+  return added;
+}
+
+// Adds an RFC 4567 `a=key-mgmt:mikey <base64>` attribute carrying our SRTP
+// session key, keyed to `ssrc`. GStreamer's rtspsrc reads the SRTP receive key
+// ONLY from this MIKEY (it ignores SDES a=crypto), and maps it by the RTP wire
+// SSRC — so `ssrc` here MUST equal the SSRC the payloader stamps (pinned in
+// OnSecureMediaPrepared). Without this the client reports "No MIKEYs" and drops
+// all media. The base64 carries raw key bytes and is zeroized before free.
+bool AddMikeyKeyMgmtAttribute(GstRTSPMedia* media, GstSDPMedia* sdp_media,
+                              guint32 ssrc) {
+  auto* key = static_cast<GstBuffer*>(
+      g_object_get_qdata(G_OBJECT(media), SecureKeyQuark()));
+  if (key == nullptr) {
+    SetAttachFailure(media,
+                     "E_SRTP_KEYMGMT_KEY_MISSING: no session key for MIKEY");
+    return false;
+  }
+  GstCaps* caps = gst_caps_new_simple("application/x-srtp",
+                                      "srtp-cipher", G_TYPE_STRING,
+                                      "aes-128-icm",
+                                      "srtp-auth", G_TYPE_STRING,
+                                      "hmac-sha1-80",
+                                      "srtcp-cipher", G_TYPE_STRING,
+                                      "aes-128-icm",
+                                      "srtcp-auth", G_TYPE_STRING,
+                                      "hmac-sha1-80",
+                                      "srtp-key", GST_TYPE_BUFFER, key,
+                                      nullptr);
+  if (caps == nullptr) {
+    SetAttachFailure(media, "E_SRTP_KEYMGMT_CAPS: MIKEY caps allocation failed");
+    return false;
+  }
+  GstMIKEYMessage* mikey = gst_mikey_message_new_from_caps(caps);
+  gst_caps_unref(caps);
+  if (mikey == nullptr) {
+    SetAttachFailure(media, "E_SRTP_KEYMGMT_MIKEY: MIKEY build failed");
+    return false;
+  }
+  gst_mikey_message_add_cs_srtp(mikey, 0, ssrc, 0);
+  gchar* base64 = gst_mikey_message_base64_encode(mikey);
+  gst_mikey_message_unref(mikey);
+  if (base64 == nullptr) {
+    SetAttachFailure(media, "E_SRTP_KEYMGMT_ENCODE: MIKEY encode failed");
+    return false;
+  }
+  gchar* value = g_strdup_printf("mikey %s", base64);
+  ZeroizeMemory(reinterpret_cast<unsigned char*>(base64), std::strlen(base64));
+  g_free(base64);
+  const bool added =
+      value != nullptr &&
+      gst_sdp_media_add_attribute(sdp_media, "key-mgmt", value) == GST_SDP_OK;
+  if (value != nullptr) {
+    ZeroizeMemory(reinterpret_cast<unsigned char*>(value), std::strlen(value));
+    g_free(value);
+  }
+  if (!added) {
+    SetAttachFailure(media,
+                     "E_SRTP_KEYMGMT_SDP: a=key-mgmt attribute add failed");
   }
   return added;
 }
@@ -363,7 +594,14 @@ gboolean SetupSecureSdp(GstRTSPMedia* media,
     if (!copied || media_copy == nullptr) {
       return FALSE;
     }
+    guint32 pinned = MediaPinnedSsrc(media);
+    if (pinned == 0U) {
+      pinned = NewRandomSsrc();
+      g_object_set_qdata(G_OBJECT(media), SecureSsrcQuark(),
+                         GUINT_TO_POINTER(pinned));
+    }
     const bool added = AddSdesCryptoAttribute(media, media_copy) &&
+                       AddMikeyKeyMgmtAttribute(media, media_copy, pinned) &&
                        gst_sdp_message_add_media(sdp, media_copy) == GST_SDP_OK;
     gst_sdp_media_free(media_copy);
     if (!added) {
@@ -384,37 +622,41 @@ void cf_secure_rtsp_media_init(CfSecureRtspMedia*) {}
 GType SecureRtspMediaGType() { return cf_secure_rtsp_media_get_type(); }
 
 void FeedNeedData(GstAppSrc* appsrc, guint, gpointer user_data) {
-  auto* state = static_cast<MediaFeedState*>(user_data);
-  auto access_unit = state->reader.WaitNext(std::chrono::milliseconds(20));
-  if (!access_unit.has_value() || access_unit->bytes == nullptr ||
-      access_unit->bytes->empty()) {
-    return;
-  }
+  // The dedicated pump thread does the actual feeding; need-data only starts
+  // it (once per prepare), at the first point the appsrc is pushable.
+  static_cast<MediaFeedState*>(user_data)->StartPumpOnce(appsrc);
+}
 
-  // Zero-copy handoff: borrow the refcounted access-unit payload; the
-  // destroy-notify releases the reference when GStreamer is done with it.
-  auto* keepalive = new std::shared_ptr<const std::vector<std::uint8_t>>(
-      access_unit->bytes);
-  GstBuffer* buffer = gst_buffer_new_wrapped_full(
-      GST_MEMORY_FLAG_READONLY,
-      const_cast<std::uint8_t*>((*keepalive)->data()), (*keepalive)->size(),
-      0U, (*keepalive)->size(), keepalive, [](gpointer pointer) {
-        delete static_cast<
-            std::shared_ptr<const std::vector<std::uint8_t>>*>(pointer);
-      });
-  if (buffer == nullptr) {
-    delete keepalive;
-    return;
-  }
-
-  GST_BUFFER_PTS(buffer) =
-      static_cast<GstClockTime>(access_unit->timestamp.count());
-  GST_BUFFER_DTS(buffer) = GST_BUFFER_PTS(buffer);
-  (void)gst_app_src_push_buffer(appsrc, buffer);
+void OnFeedUnprepared(GstRTSPMedia*, gpointer user_data) {
+  // Stop + join the pump before the media (and its appsrc) is torn down.
+  static_cast<MediaFeedState*>(user_data)->StopPump();
 }
 
 void DestroyFeedState(gpointer user_data) {
   delete static_cast<MediaFeedState*>(user_data);
+}
+
+// Pins every payloader (pay0, pay1, …) in a media to `ssrc`. Called at
+// media-configure, BEFORE the pump thread feeds any buffer, so the payloader
+// stamps the pinned SSRC from its very first RTP packet -- which must equal the
+// SSRC advertised in the SDP a=key-mgmt MIKEY, or the client cannot map the key.
+// (gst_rtsp_media_n_streams is still 0 at media-configure, so look up by name.)
+void PinPayloaderSsrc(GstRTSPMedia* media, guint32 ssrc) {
+  GstElement* element = gst_rtsp_media_get_element(media);
+  if (element == nullptr) {
+    return;
+  }
+  for (guint index = 0U; index < 8U; ++index) {
+    gchar* name = g_strdup_printf("pay%u", index);
+    GstElement* payloader = gst_bin_get_by_name(GST_BIN(element), name);
+    g_free(name);
+    if (payloader == nullptr) {
+      break;
+    }
+    g_object_set(payloader, "ssrc", ssrc, nullptr);
+    gst_object_unref(payloader);
+  }
+  gst_object_unref(element);
 }
 
 void ConfigureAppSrc(GstRTSPMedia* rtsp_media, media::EncodedRing& encoded_ring) {
@@ -436,15 +678,23 @@ void ConfigureAppSrc(GstRTSPMedia* rtsp_media, media::EncodedRing& encoded_ring)
     gst_app_src_set_caps(GST_APP_SRC(source), caps);
     gst_caps_unref(caps);
     gst_app_src_set_stream_type(GST_APP_SRC(source), GST_APP_STREAM_TYPE_STREAM);
-    gst_app_src_set_max_buffers(GST_APP_SRC(source), 8);
-    g_object_set(source, "is-live", TRUE, "format", GST_FORMAT_TIME, nullptr);
+    // Match FragmentedMp4Hub (the proven live-appsrc feed): block=FALSE with a
+    // byte-bounded queue. The pump pushes at the encoder rate; is-live drops
+    // pacing to the pipeline clock.
+    g_object_set(source, "is-live", TRUE, "format", GST_FORMAT_TIME, "block",
+                 FALSE, "max-bytes", static_cast<guint64>(4U * 1024U * 1024U),
+                 nullptr);
 
+    auto* feed_state = new MediaFeedState(encoded_ring);
     GstAppSrcCallbacks callbacks{};
     callbacks.need_data = FeedNeedData;
-    gst_app_src_set_callbacks(GST_APP_SRC(source),
-                              &callbacks,
-                              new MediaFeedState(encoded_ring),
+    gst_app_src_set_callbacks(GST_APP_SRC(source), &callbacks, feed_state,
                               DestroyFeedState);
+    // Stop the pump before this media (and its appsrc) is torn down. The state
+    // is owned by the appsrc's destroy-notify, which fires only after finalize,
+    // strictly after every "unprepared".
+    g_signal_connect(rtsp_media, "unprepared", G_CALLBACK(OnFeedUnprepared),
+                     feed_state);
     gst_object_unref(source);
   }
   gst_object_unref(element);
@@ -895,10 +1145,49 @@ struct SecureRtspServer::Impl {
     }
   }
 
+  // Fires when a media finishes preparing (during the client's SETUP, after the
+  // stream joined the rtpbin and its RTP session exists, but before the
+  // SETUP-time KeyMgmt MIKEY is built and before PLAY stamps any RTP). Pins ONE
+  // fresh random SSRC to both the wire (payloader) and the MIKEY/a=ssrc source
+  // (session internal-ssrc) so a client's srtpdec can map the SRTP key. Without
+  // this the two are independently random and diverge -> "No MIKEYs" -> no
+  // video. See gst rtpsession: the wire SSRC is the payloader's stamped ssrc
+  // (rtp_session_send_rtp -> obtain_internal_source(pinfo.ssrc)); the MIKEY and
+  // a=ssrc read gst_rtsp_stream_get_ssrc == session "internal-ssrc".
+  static void OnSecureMediaPrepared(GstRTSPMedia* media, gpointer /*data*/) {
+    const guint32 pinned = MediaPinnedSsrc(media);
+    if (pinned == 0U) {
+      return;
+    }
+
+    // The payloader SSRC is pinned earlier (media-configure, before the pump
+    // feeds). Here, once the RTP session exists, align its internal-ssrc too so
+    // a=ssrc / RTCP SR report the same value the wire and MIKEY use.
+    auto* rtpbin = static_cast<GstElement*>(
+        g_object_get_qdata(G_OBJECT(media), SecureRtpbinQuark()));
+    const guint stream_count = gst_rtsp_media_n_streams(media);
+    for (guint index = 0U; rtpbin != nullptr && index < stream_count; ++index) {
+      GObject* session = nullptr;
+      g_signal_emit_by_name(rtpbin, "get-internal-session", index, &session);
+      if (session != nullptr) {
+        g_object_set(session, "internal-ssrc", pinned, nullptr);
+        g_object_unref(session);
+      }
+    }
+  }
+
   void ConfigureRtspMedia(GstRTSPMedia* media) {
     AttachSrtpKeyIfEnabled(media);
     if (ring != nullptr) {
       ConfigureAppSrc(media, *ring);
+    }
+    if (media_srtp_enabled) {
+      const guint32 pinned = NewRandomSsrc();
+      g_object_set_qdata(G_OBJECT(media), SecureSsrcQuark(),
+                         GUINT_TO_POINTER(pinned));
+      PinPayloaderSsrc(media, pinned);
+      g_signal_connect(media, "prepared", G_CALLBACK(OnSecureMediaPrepared),
+                       nullptr);
     }
   }
 
@@ -906,6 +1195,14 @@ struct SecureRtspServer::Impl {
     AttachSrtpKeyIfEnabled(media);
     if (sub_ring != nullptr) {
       ConfigureAppSrc(media, *sub_ring);
+    }
+    if (media_srtp_enabled) {
+      const guint32 pinned = NewRandomSsrc();
+      g_object_set_qdata(G_OBJECT(media), SecureSsrcQuark(),
+                         GUINT_TO_POINTER(pinned));
+      PinPayloaderSsrc(media, pinned);
+      g_signal_connect(media, "prepared", G_CALLBACK(OnSecureMediaPrepared),
+                       nullptr);
     }
     // The sub media is on-demand: "unprepared" always fires the deactivate
     // edge, independent of whether SRTP key tracking connected its own

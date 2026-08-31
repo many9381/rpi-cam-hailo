@@ -1022,8 +1022,12 @@ TEST(RtspDigestAuthIntegrationTest,
 
   EXPECT_EQ(response.status_code, 200);
   EXPECT_NE(response.body.find("RTP/SAVPF"), std::string::npos);
+  // The SRTP session key is advertised two ways in the SDP body: SDES
+  // (a=crypto, used by VLC/ffmpeg) AND an RFC 4567 MIKEY (a=key-mgmt:mikey),
+  // which GStreamer's rtspsrc requires to obtain the receive key (it ignores
+  // a=crypto). Both must be present for the stream to be playable.
   EXPECT_NE(response.body.find("a=crypto:"), std::string::npos);
-  EXPECT_EQ(response.body.find("a=key-mgmt:mikey"), std::string::npos);
+  EXPECT_NE(response.body.find("a=key-mgmt:mikey"), std::string::npos);
 }
 
 TEST(RtspDigestAuthIntegrationTest, ReplayedAuthorizationReturns401) {
