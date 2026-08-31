@@ -447,6 +447,10 @@ select:focus-visible {
   gap: 10px;
 }
 
+.language-switcher { display: inline-flex; gap: 0.25rem; }
+.language-switcher .lang-btn { padding: 0.15rem 0.5rem; border: 1px solid var(--border, #d0d5dd); background: transparent; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+.language-switcher .lang-btn.active { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+
 .mobile-menu-button {
   display: none;
 }

@@ -1,5 +1,7 @@
 import { type FormEvent, useState } from 'react';
 
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
+
 export interface InitialCredential {
   username: string;
   password: string;
@@ -34,6 +36,7 @@ export function LoginPage({ login, initialCredential = null }: LoginPageProps) {
 
   return (
     <main className="auth-surface">
+      <LanguageSwitcher />
       <section className="auth-panel" aria-labelledby="login-heading">
         <div className="brand-mark" aria-hidden="true">CF</div>
         <h1 id="login-heading">Camera login</h1>

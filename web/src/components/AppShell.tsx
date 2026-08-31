@@ -26,6 +26,7 @@ import type { SystemProtectionController } from '../features/protection/useSyste
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
+import { LanguageSwitcher } from './LanguageSwitcher';
 
 interface AppShellProps {
   principal: Principal;
@@ -221,6 +222,7 @@ export function AppShell({
           <IconButton label="Refresh device state" onClick={onRefresh}>
             <RefreshCw size={18} aria-hidden="true" />
           </IconButton>
+          <LanguageSwitcher />
           <AccountMenu principal={principal} logout={logout} changePassword={changePassword} />
         </div>
       </header>
