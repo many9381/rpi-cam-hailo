@@ -208,6 +208,66 @@ export const en = {
     completeSetup: 'Complete setup',
     completingSetup: 'Completing setup...',
   },
+  settings: {
+    loading: 'Loading runtime settings...',
+    unavailable: 'Runtime settings are unavailable.',
+    pendingLabel: 'Pending',
+
+    cameraSettingsHeading: 'Camera settings',
+    activeCameraSummary: 'Active: {profile} / {bitrate} kbps / GOP {gop}',
+    captureProfile: 'Capture profile',
+    bitrate: 'Bitrate',
+    kbps: 'kbps',
+    gopInterval: 'GOP interval',
+    subStream: 'Sub-stream',
+    resolution: 'Resolution',
+    frameRate: 'Frame rate',
+    subStreamBitrate: 'Sub-stream bitrate',
+    subStreamApplyNotice:
+      'Applying sub-stream changes briefly interrupts the sub-stream feed.',
+
+    modelSettingsHeading: 'Model settings',
+    configuredModels: '{count} configured models',
+    noModelsConfigured: 'No AI models configured',
+    modelEnabledLabel: '{id} enabled',
+    kind: 'Kind',
+    format: 'Format',
+    stretch: 'Stretch',
+    none: 'None',
+    confidenceThreshold: 'Confidence threshold',
+    modelConfidenceLabel: '{id} confidence',
+    modelConfidenceValueLabel: '{id} confidence value',
+
+    errorRevisionConflict:
+      'Settings changed on the device. Review and save your changes again.',
+    errorNoPending: 'There are no pending settings to apply or discard.',
+    errorBusy: 'Another settings command is in progress.',
+    errorUnsupported: 'The selected runtime settings are not supported.',
+    errorStore: 'Runtime settings could not be stored.',
+    errorRequestInvalid: 'Runtime settings could not be validated.',
+    errorApplyFailed: 'Settings could not be applied.',
+    errorRequestFailed: 'The settings request could not be completed.',
+    noticeApplyFailedRestored:
+      'Settings could not be applied. The previous runtime was restored.',
+    noticeApplyFailedNeedsAttention:
+      'Settings could not be applied and the camera runtime needs attention.',
+    noticeRecoveryRequired:
+      'Save runtime settings to replace the invalid stored state.',
+    noticePendingSaved: 'Saved settings are waiting to be applied.',
+    actionsLabel: 'Runtime settings actions',
+    revisionLabel: 'Revision {revision}',
+    discardPending: 'Discard pending',
+    saveChanges: 'Save changes',
+    applyingSettings: 'Applying settings',
+    applyPending: 'Apply pending',
+    applying: 'Applying...',
+
+    cancelApply: 'Cancel apply',
+    applyDialogTitle: 'Apply runtime settings',
+    applyDialogDescription:
+      'Camera video and RTSP clients will reconnect briefly. Management access remains available.',
+    applyNow: 'Apply now',
+  },
 };
 
 export type Messages = typeof en;

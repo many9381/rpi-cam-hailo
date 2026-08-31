@@ -209,4 +209,64 @@ export const ko: Messages = {
     completeSetup: '설정 완료',
     completingSetup: '설정을 완료하는 중...',
   },
+  settings: {
+    loading: '런타임 설정을 불러오는 중...',
+    unavailable: '런타임 설정을 사용할 수 없습니다.',
+    pendingLabel: '대기 중',
+
+    cameraSettingsHeading: '카메라 설정',
+    activeCameraSummary: '활성: {profile} / {bitrate} kbps / GOP {gop}',
+    captureProfile: '캡처 프로필',
+    bitrate: '비트레이트',
+    kbps: 'kbps',
+    gopInterval: 'GOP 간격',
+    subStream: '서브 스트림',
+    resolution: '해상도',
+    frameRate: '프레임 속도',
+    subStreamBitrate: '서브 스트림 비트레이트',
+    subStreamApplyNotice:
+      '서브 스트림 변경 사항을 적용하면 서브 스트림 피드가 잠시 중단됩니다.',
+
+    modelSettingsHeading: '모델 설정',
+    configuredModels: '구성된 모델 {count}개',
+    noModelsConfigured: '구성된 AI 모델이 없습니다',
+    modelEnabledLabel: '{id} 활성화',
+    kind: '종류',
+    format: '형식',
+    stretch: '스트레치',
+    none: '없음',
+    confidenceThreshold: '신뢰도 임계값',
+    modelConfidenceLabel: '{id} 신뢰도',
+    modelConfidenceValueLabel: '{id} 신뢰도 값',
+
+    errorRevisionConflict:
+      '장치에서 설정이 변경되었습니다. 변경 사항을 검토한 후 다시 저장하세요.',
+    errorNoPending: '적용하거나 삭제할 대기 중인 설정이 없습니다.',
+    errorBusy: '다른 설정 명령이 진행 중입니다.',
+    errorUnsupported: '선택한 런타임 설정은 지원되지 않습니다.',
+    errorStore: '런타임 설정을 저장할 수 없습니다.',
+    errorRequestInvalid: '런타임 설정을 검증할 수 없습니다.',
+    errorApplyFailed: '설정을 적용할 수 없습니다.',
+    errorRequestFailed: '설정 요청을 완료할 수 없습니다.',
+    noticeApplyFailedRestored:
+      '설정을 적용할 수 없습니다. 이전 런타임으로 복원되었습니다.',
+    noticeApplyFailedNeedsAttention:
+      '설정을 적용할 수 없으며 카메라 런타임에 조치가 필요합니다.',
+    noticeRecoveryRequired:
+      '유효하지 않은 저장 상태를 대체하려면 런타임 설정을 저장하세요.',
+    noticePendingSaved: '저장된 설정이 적용 대기 중입니다.',
+    actionsLabel: '런타임 설정 작업',
+    revisionLabel: '리비전 {revision}',
+    discardPending: '대기 중인 설정 삭제',
+    saveChanges: '변경 사항 저장',
+    applyingSettings: '설정 적용 중',
+    applyPending: '대기 중인 설정 적용',
+    applying: '적용하는 중...',
+
+    cancelApply: '적용 취소',
+    applyDialogTitle: '런타임 설정 적용',
+    applyDialogDescription:
+      '카메라 영상과 RTSP 클라이언트가 잠시 다시 연결됩니다. 관리 액세스는 계속 사용할 수 있습니다.',
+    applyNow: '지금 적용',
+  },
 };

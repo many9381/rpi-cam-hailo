@@ -4,6 +4,8 @@ import {
   useRef,
 } from 'react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
+
 interface ApplySettingsDialogProps {
   onCancel(): void;
   onConfirm(): void;
@@ -13,6 +15,7 @@ export function ApplySettingsDialog({
   onCancel,
   onConfirm,
 }: ApplySettingsDialogProps) {
+  const { t } = useTranslation();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
@@ -41,19 +44,18 @@ export function ApplySettingsDialog({
   return (
     <div className="settings-dialog-layer">
       <button className="settings-dialog-backdrop" type="button"
-        aria-label="Cancel apply" tabIndex={-1} onClick={onCancel} />
+        aria-label={t('settings.cancelApply')} tabIndex={-1} onClick={onCancel} />
       <div className="settings-dialog" role="alertdialog" aria-modal="true"
         aria-labelledby="apply-settings-title" aria-describedby="apply-settings-description"
         onKeyDown={trapFocus}>
-        <h2 id="apply-settings-title">Apply runtime settings</h2>
+        <h2 id="apply-settings-title">{t('settings.applyDialogTitle')}</h2>
         <p id="apply-settings-description">
-          Camera video and RTSP clients will reconnect briefly. Management access
-          remains available.
+          {t('settings.applyDialogDescription')}
         </p>
         <div className="settings-dialog-actions">
-          <button ref={cancelRef} type="button" onClick={onCancel}>Cancel</button>
+          <button ref={cancelRef} type="button" onClick={onCancel}>{t('common.cancel')}</button>
           <button ref={confirmRef} className="settings-primary-action" type="button"
-            onClick={onConfirm}>Apply now</button>
+            onClick={onConfirm}>{t('settings.applyNow')}</button>
         </div>
       </div>
     </div>
