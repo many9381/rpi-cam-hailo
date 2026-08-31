@@ -63,7 +63,7 @@ export function SystemProtectionPanel(
               ? 'protection-message protection-message-stale'
               : 'protection-message protection-message-error'}
               role={controller.state === 'stale' ? 'status' : 'alert'}>
-              {controller.publicMessage}
+              {t(controller.publicMessage)}
             </p>
           )}
           <div className="protection-suites">
@@ -243,8 +243,7 @@ function ProtectionUnavailable({ controller }: {
   }
   return (
     <div className="protection-resource-state protection-resource-error" role="alert">
-      <span>{controller.publicMessage ??
-        t('protection.unavailableMessage')}</span>
+      <span>{t(controller.publicMessage ?? 'protection.unavailableMessage')}</span>
       <button type="button" className="protection-command-button"
         aria-label={t('protection.retry')} title={t('protection.retry')}
         onClick={() => void controller.refresh().catch(() => undefined)}>

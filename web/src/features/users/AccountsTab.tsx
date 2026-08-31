@@ -11,6 +11,7 @@ import { KeyRound, Trash2 } from 'lucide-react';
 import { IconButton } from '../../components/IconButton';
 import { useTranslation } from '../../i18n/LanguageContext';
 import {
+  type SetupCredentialErrorCode,
   type SetupCredentialErrors,
   validateSetupCredentials,
 } from '../../security/setupPolicy';
@@ -47,6 +48,23 @@ const fallbackKeyByAction = {
 const ROLE_LABEL_KEYS: Record<ManagedUser['role'], string> = {
   administrator: 'users.roleAdministrator',
   viewer: 'users.roleViewer',
+};
+
+// validateSetupCredentials (security/setupPolicy.ts) returns stable codes,
+// not English text — see the matching map in SetupCredentialsStep.tsx.
+// Unlike that step, this tab renders the password code too (create viewer /
+// reset password have no separate requirements checklist).
+const CREDENTIAL_ERROR_KEYS: Record<SetupCredentialErrorCode, string> = {
+  USERNAME_LENGTH: 'errors.usernameLength',
+  USERNAME_START: 'errors.usernameStart',
+  USERNAME_CHARSET: 'errors.usernameCharset',
+  PASSWORD_LENGTH: 'errors.passwordLength',
+  PASSWORD_CHARSET: 'errors.passwordCharset',
+  PASSWORD_USERNAME: 'errors.passwordDiffersFromUsername',
+  PASSWORD_CLASSES: 'errors.passwordClasses',
+  PASSWORD_REPEAT: 'errors.passwordNoRepeat',
+  PASSWORD_SEQUENCE: 'errors.passwordNoSequence',
+  CONFIRMATION_MISMATCH: 'errors.confirmationMismatch',
 };
 
 type AccountConfirmKind = 'enable' | 'disable' | 'delete';
@@ -250,6 +268,7 @@ export function AccountsTab({
       setDialogError(userManagementErrorMessage(
         error,
         t('users.viewerCreateFailed'),
+        t,
       ));
       endSubmission(token);
     }
@@ -299,6 +318,7 @@ export function AccountsTab({
       setDialogError(userManagementErrorMessage(
         error,
         t(fallbackKeyByAction[currentDialog.kind]),
+        t,
       ));
       endSubmission(token);
     }
@@ -356,7 +376,7 @@ export function AccountsTab({
         return;
       }
       clearSecrets();
-      setDialogError(userManagementErrorMessage(error, t(fallbackKeyByAction.reset)));
+      setDialogError(userManagementErrorMessage(error, t(fallbackKeyByAction.reset), t));
       endSubmission(token);
     }
   };
@@ -390,7 +410,7 @@ export function AccountsTab({
             id={reset ? 'viewer-reset-password-error' : 'viewer-create-password-error'}
             className="form-error"
           >
-            {credentialErrors.password}
+            {t(CREDENTIAL_ERROR_KEYS[credentialErrors.password])}
           </p>
         )}
       </div>
@@ -423,7 +443,7 @@ export function AccountsTab({
               : 'viewer-create-confirmation-error'}
             className="form-error"
           >
-            {credentialErrors.confirmation}
+            {t(CREDENTIAL_ERROR_KEYS[credentialErrors.confirmation])}
           </p>
         )}
       </div>
@@ -442,6 +462,7 @@ export function AccountsTab({
             {userManagementErrorMessage(
               users.error,
               t('users.accountListLoadFailed'),
+              t,
             )}
           </p>
           <button
@@ -567,7 +588,7 @@ export function AccountsTab({
               />
               {credentialErrors.username && (
                 <p id="viewer-create-username-error" className="form-error">
-                  {credentialErrors.username}
+                  {t(CREDENTIAL_ERROR_KEYS[credentialErrors.username])}
                 </p>
               )}
             </div>

@@ -35,6 +35,11 @@ export const en = {
     navigationLabel: 'Navigation',
     drawerLabel: 'Drawer navigation',
   },
+  app: {
+    checkingSession: 'Checking session...',
+    checkingSetup: 'Checking camera setup...',
+    managementUnavailable: 'Camera management is unavailable.',
+  },
   status: {
     deviceOperational: 'Operational',
     deviceChecking: 'Checking',
@@ -441,6 +446,7 @@ export const en = {
     unnamedCheck: 'Unnamed check',
     loading: 'Loading system protection...',
     unavailableMessage: 'System protection is temporarily unavailable.',
+    checkAlreadyRunning: 'Protection check is already running.',
     retry: 'Retry system protection',
 
     selfTestUnavailableWhileChecking:
@@ -465,6 +471,49 @@ export const en = {
     restrictedNotice:
       'System protection is restricted. Camera, stream, and AI runtime are stopped.',
     reviewProtection: 'Review system protection',
+  },
+  errors: {
+    usernameLength: 'Username must be 5 to 32 characters.',
+    usernameStart: 'Username must begin with an ASCII letter.',
+    usernameCharset:
+      'Username may contain only ASCII letters, numbers, periods, underscores, and hyphens.',
+    passwordLength: 'Password must be 9 to 128 characters.',
+    passwordCharset: 'Password must use printable, non-space ASCII characters.',
+    passwordDiffersFromUsername: 'Password must differ from the username.',
+    passwordClasses:
+      'Password must include uppercase, lowercase, number, and special characters.',
+    passwordNoRepeat:
+      'Password must not repeat a letter or number three times in a row.',
+    passwordNoSequence: 'Password must not contain a keyboard sequence.',
+    confirmationMismatch: 'Passwords do not match.',
+
+    usernameReserved: 'This username is reserved.',
+    usernameInvalid: 'Enter a valid username.',
+    passwordLengthRequired: 'Enter a password with the required length.',
+    passwordAsciiOnly: 'Use only printable ASCII characters in the password.',
+    passwordContainsUsername: 'The password cannot contain the username.',
+    passwordClassMix: 'Use the required mix of password character classes.',
+    passwordRepeatedChars: 'Avoid repeated characters in the password.',
+    passwordSequentialChars: 'Avoid sequential characters in the password.',
+    passwordReused: 'The current or previous password cannot be reused.',
+    currentPasswordIncorrect: 'The current password is incorrect.',
+    usernameExists: 'That username already exists.',
+    viewerLimitReached: 'The viewer account limit has been reached.',
+    userProtected: 'This administrator account is protected.',
+    userConflict: 'This account was changed. Refresh and try again.',
+    userNotFound: 'That account no longer exists.',
+    notAuthorized: 'You are not authorized to perform this action.',
+    managementIpInvalid: 'Enter one valid IPv4 or IPv6 host address.',
+    managementIpExists: 'That address already exists for this role.',
+    managementIpLimitReached: 'The address limit for this role has been reached.',
+    managementIpProtected: 'This administrator address is protected.',
+    managementIpRoleMismatch: 'That address belongs to a different role.',
+    managementIpNotFound: 'That address no longer exists.',
+    userManagementUnavailable: 'User management is temporarily unavailable.',
+    sessionEnded: 'Your session has ended.',
+
+    auditQueryInvalid: 'Audit query is invalid.',
+    auditRequestFailed: 'Audit request failed.',
   },
 };
 

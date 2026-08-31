@@ -5,7 +5,7 @@ import {
   evaluatePasswordRequirements,
   validateSetupCredentials,
   type PasswordRequirementId,
-  type SetupCredentialErrors,
+  type SetupCredentialErrorCode,
 } from '../../security/setupPolicy';
 
 // evaluatePasswordRequirements (security/setupPolicy.ts) is shared with
@@ -24,6 +24,30 @@ const REQUIREMENT_LABEL_KEYS: Record<PasswordRequirementId, string> = {
   repeat: 'setup.requirementRepeat',
   sequence: 'setup.requirementSequence',
 };
+
+// validateSetupCredentials (security/setupPolicy.ts) returns stable codes,
+// not English text, for the same reason as REQUIREMENT_LABEL_KEYS above.
+// Only the username/confirmation codes are ever rendered here — the
+// password field's error text is this step's own requirements checklist
+// (see the `password` branch in submit() below), not a setupPolicy code.
+const CREDENTIAL_ERROR_KEYS: Record<SetupCredentialErrorCode, string> = {
+  USERNAME_LENGTH: 'errors.usernameLength',
+  USERNAME_START: 'errors.usernameStart',
+  USERNAME_CHARSET: 'errors.usernameCharset',
+  PASSWORD_LENGTH: 'errors.passwordLength',
+  PASSWORD_CHARSET: 'errors.passwordCharset',
+  PASSWORD_USERNAME: 'errors.passwordDiffersFromUsername',
+  PASSWORD_CLASSES: 'errors.passwordClasses',
+  PASSWORD_REPEAT: 'errors.passwordNoRepeat',
+  PASSWORD_SEQUENCE: 'errors.passwordNoSequence',
+  CONFIRMATION_MISMATCH: 'errors.confirmationMismatch',
+};
+
+interface FormErrors {
+  username?: SetupCredentialErrorCode;
+  password?: boolean;
+  confirmation?: SetupCredentialErrorCode;
+}
 
 export interface SetupCredentialsStepProps {
   username: string;
@@ -53,7 +77,7 @@ export function SetupCredentialsStep({
   onNext,
 }: SetupCredentialsStepProps) {
   const { t } = useTranslation();
-  const [errors, setErrors] = useState<SetupCredentialErrors>({});
+  const [errors, setErrors] = useState<FormErrors>({});
   const requirements = evaluatePasswordRequirements(username, password);
   const passwordTouched = password.length > 0;
 
@@ -61,12 +85,12 @@ export function SetupCredentialsStep({
     event.preventDefault();
     const validation = validateSetupCredentials(username, password, confirmation);
     const allRequirementsMet = requirements.every((requirement) => requirement.met);
-    const nextErrors: SetupCredentialErrors = {};
+    const nextErrors: FormErrors = {};
     if (validation.username) {
       nextErrors.username = validation.username;
     }
     if (!allRequirementsMet) {
-      nextErrors.password = t('setup.resolveRequirements');
+      nextErrors.password = true;
     }
     if (validation.confirmation) {
       nextErrors.confirmation = validation.confirmation;
@@ -95,7 +119,7 @@ export function SetupCredentialsStep({
             onChange={(event) => onUsernameChange(event.target.value)}
           />
           {errors.username && (
-            <p className="form-error" id="wizard-username-error">{errors.username}</p>
+            <p className="form-error" id="wizard-username-error">{t(CREDENTIAL_ERROR_KEYS[errors.username])}</p>
           )}
         </div>
         <div className="field">
@@ -147,7 +171,7 @@ export function SetupCredentialsStep({
             onChange={(event) => onConfirmationChange(event.target.value)}
           />
           {errors.confirmation && (
-            <p className="form-error" id="wizard-confirmation-error">{errors.confirmation}</p>
+            <p className="form-error" id="wizard-confirmation-error">{t(CREDENTIAL_ERROR_KEYS[errors.confirmation])}</p>
           )}
         </div>
         <button className="primary-button" type="submit">{t('setup.next')}</button>

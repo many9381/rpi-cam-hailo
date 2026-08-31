@@ -1,9 +1,18 @@
+import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { ApiError, UnauthorizedError } from '../../api/client';
+import { LanguageProvider, useTranslation } from '../../i18n';
 import { userManagementErrorMessage } from './publicError';
 
+function realT() {
+  const { result } = renderHook(() => useTranslation(), { wrapper: LanguageProvider });
+  return result.current.t;
+}
+
 describe('userManagementErrorMessage', () => {
+  const t = realT();
+
   it.each([
     ['E_USERNAME_RESERVED', 'This username is reserved.'],
     ['E_USERNAME_FORMAT', 'Enter a valid username.'],
@@ -14,6 +23,7 @@ describe('userManagementErrorMessage', () => {
     ['E_PASSWORD_REPEAT', 'Avoid repeated characters in the password.'],
     ['E_PASSWORD_SEQUENCE', 'Avoid sequential characters in the password.'],
     ['E_PASSWORD_REUSE', 'The current or previous password cannot be reused.'],
+    ['E_CURRENT_PASSWORD', 'The current password is incorrect.'],
     ['E_USER_DUPLICATE', 'That username already exists.'],
     ['E_VIEWER_LIMIT', 'The viewer account limit has been reached.'],
     ['E_USER_PROTECTED', 'This administrator account is protected.'],
@@ -31,19 +41,21 @@ describe('userManagementErrorMessage', () => {
     expect(userManagementErrorMessage(
       new ApiError(409, code, 'viewer-secret 192.0.2.44'),
       'Request failed.',
+      t,
     )).toBe(expected);
   });
 
   it('uses bounded fallbacks and never exposes private details', () => {
     expect(userManagementErrorMessage(
-      new UnauthorizedError('private-session-detail'), 'Request failed.',
+      new UnauthorizedError('private-session-detail'), 'Request failed.', t,
     )).toBe('Your session has ended.');
     expect(userManagementErrorMessage(
       new ApiError(400, 'E_PRIVATE_AUTH_CODE', 'viewer-secret 192.0.2.44'),
       'Request failed.',
+      t,
     )).toBe('Request failed.');
     expect(userManagementErrorMessage(
-      new Error('viewer-secret 192.0.2.44'), 'Request failed.',
+      new Error('viewer-secret 192.0.2.44'), 'Request failed.', t,
     )).toBe('Request failed.');
   });
 });

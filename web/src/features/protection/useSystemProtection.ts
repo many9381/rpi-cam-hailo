@@ -9,6 +9,8 @@ export type ProtectionCommand = 'self_test' | 'integrity';
 export interface SystemProtectionController {
   state: 'loading' | 'ready' | 'stale' | 'unavailable';
   snapshot: ProtectionSnapshot | null;
+  // A translation key (see publicMessageFor below) when set by this hook;
+  // SystemProtectionPanel.tsx resolves it with t() before rendering.
   publicMessage: string | null;
   activeCommand: ProtectionCommand | null;
   refresh(): Promise<void>;
@@ -18,10 +20,14 @@ export interface SystemProtectionController {
 
 const POLL_INTERVAL_MS = 30_000;
 
+// A translation key, not English text: this hook stays translation-agnostic
+// (like useRuntimeSettings' PublicApiError.code) and SystemProtectionPanel.tsx
+// resolves it with t(). See errors.* / protection.* precedent in publicError.ts
+// and SettingsActionBar.tsx.
 const publicMessageFor = (error: unknown): string =>
   error instanceof ApiError && error.status === 409
-    ? 'Protection check is already running.'
-    : 'System protection is temporarily unavailable.';
+    ? 'protection.checkAlreadyRunning'
+    : 'protection.unavailableMessage';
 
 export function useSystemProtection(
   client: CameraApiClient,

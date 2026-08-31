@@ -1,6 +1,22 @@
 export type SetupCredentialField = 'username' | 'password' | 'confirmation';
 
-export type SetupCredentialErrors = Partial<Record<SetupCredentialField, string>>;
+// Stable, English-free error identifiers: this module mirrors
+// src/security/PasswordPolicy.cpp and carries no i18n knowledge of its own
+// (see the REQUIREMENT_LABEL_KEYS precedent in SetupCredentialsStep.tsx).
+// Each consumer maps a code to its own translation key at render time.
+export type SetupCredentialErrorCode =
+  | 'USERNAME_LENGTH'
+  | 'USERNAME_START'
+  | 'USERNAME_CHARSET'
+  | 'PASSWORD_LENGTH'
+  | 'PASSWORD_CHARSET'
+  | 'PASSWORD_USERNAME'
+  | 'PASSWORD_CLASSES'
+  | 'PASSWORD_REPEAT'
+  | 'PASSWORD_SEQUENCE'
+  | 'CONFIRMATION_MISMATCH';
+
+export type SetupCredentialErrors = Partial<Record<SetupCredentialField, SetupCredentialErrorCode>>;
 
 const USERNAME_CHARACTERS = /^[A-Za-z][A-Za-z0-9._-]*$/;
 const PRINTABLE_NON_SPACE_ASCII = /^[\x21-\x7e]+$/;
@@ -165,12 +181,11 @@ export function validateSetupCredentials(
   const errors: SetupCredentialErrors = {};
 
   if (username.length < 5 || username.length > 32) {
-    errors.username = 'Username must be 5 to 32 characters.';
+    errors.username = 'USERNAME_LENGTH';
   } else if (!/^[A-Za-z]/.test(username)) {
-    errors.username = 'Username must begin with an ASCII letter.';
+    errors.username = 'USERNAME_START';
   } else if (!USERNAME_CHARACTERS.test(username)) {
-    errors.username =
-      'Username may contain only ASCII letters, numbers, periods, underscores, and hyphens.';
+    errors.username = 'USERNAME_CHARSET';
   }
 
   const requirements = evaluatePasswordRequirements(username, password);
@@ -178,22 +193,21 @@ export function validateSetupCredentials(
     requirements.find((requirement) => requirement.id === id)?.met ?? false;
 
   if (!isMet('length')) {
-    errors.password = 'Password must be 9 to 128 characters.';
+    errors.password = 'PASSWORD_LENGTH';
   } else if (!isMet('charset')) {
-    errors.password = 'Password must use printable, non-space ASCII characters.';
+    errors.password = 'PASSWORD_CHARSET';
   } else if (!isMet('username')) {
-    errors.password = 'Password must differ from the username.';
+    errors.password = 'PASSWORD_USERNAME';
   } else if (!isMet('uppercase') || !isMet('lowercase') || !isMet('digit') || !isMet('special')) {
-    errors.password =
-      'Password must include uppercase, lowercase, number, and special characters.';
+    errors.password = 'PASSWORD_CLASSES';
   } else if (!isMet('repeat')) {
-    errors.password = 'Password must not repeat a letter or number three times in a row.';
+    errors.password = 'PASSWORD_REPEAT';
   } else if (!isMet('sequence')) {
-    errors.password = 'Password must not contain a keyboard sequence.';
+    errors.password = 'PASSWORD_SEQUENCE';
   }
 
   if (password !== confirmation) {
-    errors.confirmation = 'Passwords do not match.';
+    errors.confirmation = 'CONFIRMATION_MISMATCH';
   }
 
   return errors;

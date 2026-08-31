@@ -37,6 +37,11 @@ export const ko: Messages = {
     navigationLabel: '내비게이션',
     drawerLabel: '드로어 내비게이션',
   },
+  app: {
+    checkingSession: '세션을 확인하는 중...',
+    checkingSetup: '카메라 설정을 확인하는 중...',
+    managementUnavailable: '카메라 관리를 사용할 수 없습니다.',
+  },
   status: {
     deviceOperational: '정상',
     deviceChecking: '확인 중',
@@ -442,6 +447,7 @@ export const ko: Messages = {
     unnamedCheck: '이름 없는 검사',
     loading: '시스템 보호를 불러오는 중...',
     unavailableMessage: '시스템 보호를 일시적으로 사용할 수 없습니다.',
+    checkAlreadyRunning: '보호 검사가 이미 실행 중입니다.',
     retry: '시스템 보호 다시 시도',
 
     selfTestUnavailableWhileChecking:
@@ -466,5 +472,48 @@ export const ko: Messages = {
     restrictedNotice:
       '시스템 보호가 제한되었습니다. 카메라, 스트림, AI 런타임이 중지되었습니다.',
     reviewProtection: '시스템 보호 검토',
+  },
+  errors: {
+    usernameLength: '사용자 이름은 5자 이상 32자 이하여야 합니다.',
+    usernameStart: '사용자 이름은 ASCII 문자로 시작해야 합니다.',
+    usernameCharset:
+      '사용자 이름에는 ASCII 문자, 숫자, 마침표, 밑줄, 하이픈만 사용할 수 있습니다.',
+    passwordLength: '비밀번호는 9자 이상 128자 이하여야 합니다.',
+    passwordCharset: '비밀번호는 공백이 없는 출력 가능한 ASCII 문자를 사용해야 합니다.',
+    passwordDiffersFromUsername: '비밀번호는 사용자 이름과 달라야 합니다.',
+    passwordClasses:
+      '비밀번호는 대문자, 소문자, 숫자, 특수문자를 모두 포함해야 합니다.',
+    passwordNoRepeat:
+      '비밀번호는 동일한 문자나 숫자를 3회 연속 사용할 수 없습니다.',
+    passwordNoSequence: '비밀번호에는 키보드 배열 순서를 포함할 수 없습니다.',
+    confirmationMismatch: '비밀번호가 일치하지 않습니다.',
+
+    usernameReserved: '이 사용자 이름은 예약되어 있습니다.',
+    usernameInvalid: '유효한 사용자 이름을 입력하세요.',
+    passwordLengthRequired: '요구되는 길이의 비밀번호를 입력하세요.',
+    passwordAsciiOnly: '비밀번호에는 출력 가능한 ASCII 문자만 사용하세요.',
+    passwordContainsUsername: '비밀번호에는 사용자 이름을 포함할 수 없습니다.',
+    passwordClassMix: '요구되는 비밀번호 문자 조합을 사용하세요.',
+    passwordRepeatedChars: '비밀번호에 반복되는 문자를 사용하지 마세요.',
+    passwordSequentialChars: '비밀번호에 연속된 문자를 사용하지 마세요.',
+    passwordReused: '현재 또는 이전 비밀번호는 재사용할 수 없습니다.',
+    currentPasswordIncorrect: '현재 비밀번호가 올바르지 않습니다.',
+    usernameExists: '해당 사용자 이름은 이미 존재합니다.',
+    viewerLimitReached: '뷰어 계정 한도에 도달했습니다.',
+    userProtected: '이 관리자 계정은 보호되어 있습니다.',
+    userConflict: '이 계정이 변경되었습니다. 새로고침한 후 다시 시도하세요.',
+    userNotFound: '해당 계정이 더 이상 존재하지 않습니다.',
+    notAuthorized: '이 작업을 수행할 권한이 없습니다.',
+    managementIpInvalid: '유효한 IPv4 또는 IPv6 호스트 주소를 하나 입력하세요.',
+    managementIpExists: '해당 주소는 이 역할에 이미 존재합니다.',
+    managementIpLimitReached: '이 역할의 주소 한도에 도달했습니다.',
+    managementIpProtected: '이 관리자 주소는 보호되어 있습니다.',
+    managementIpRoleMismatch: '해당 주소는 다른 역할에 속해 있습니다.',
+    managementIpNotFound: '해당 주소가 더 이상 존재하지 않습니다.',
+    userManagementUnavailable: '사용자 관리를 일시적으로 사용할 수 없습니다.',
+    sessionEnded: '세션이 종료되었습니다.',
+
+    auditQueryInvalid: '감사 조회가 유효하지 않습니다.',
+    auditRequestFailed: '감사 요청에 실패했습니다.',
   },
 };

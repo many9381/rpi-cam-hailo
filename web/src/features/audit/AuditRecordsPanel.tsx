@@ -260,7 +260,7 @@ export function AuditRecordsPanel({
       await command();
       onSuccess?.();
     } catch (error) {
-      setCommandError(auditErrorMessage(error));
+      setCommandError(auditErrorMessage(error, t));
     } finally {
       setCommandPending(false);
     }

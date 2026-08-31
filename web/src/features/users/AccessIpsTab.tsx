@@ -188,6 +188,7 @@ export function AccessIpsTab({
       setDialogError(userManagementErrorMessage(
         error,
         t('users.accessIpCreateFailed'),
+        t,
       ));
       endSubmission(token);
     }
@@ -213,6 +214,7 @@ export function AccessIpsTab({
       setDialogError(userManagementErrorMessage(
         error,
         t('users.accessIpUpdateFailed'),
+        t,
       ));
       endSubmission(token);
     }
@@ -237,6 +239,7 @@ export function AccessIpsTab({
       setDialogError(userManagementErrorMessage(
         error,
         t('users.accessIpDeleteFailed'),
+        t,
       ));
       endSubmission(token);
     }
@@ -269,6 +272,7 @@ export function AccessIpsTab({
             {userManagementErrorMessage(
               managementIps.error,
               t('users.accessIpListLoadFailed'),
+              t,
             )}
           </p>
           <button
