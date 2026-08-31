@@ -17,6 +17,7 @@ import { SettingsActionBar } from '../features/settings/SettingsActionBar';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { useDetectionStream } from '../hooks/useDetectionStream';
 import type { OperationalController } from '../hooks/useOperationalData';
+import { useTranslation } from '../i18n/LanguageContext';
 
 interface DashboardPageProps {
   client: CameraApiClient;
@@ -30,22 +31,22 @@ interface DashboardPageProps {
 
 export type OperationalView = 'dashboard' | 'cameras' | 'ai' | 'system';
 
-const viewHeadings: Record<OperationalView, { title: string; subtitle: string }> = {
+const viewHeadings: Record<OperationalView, { titleKey: string; subtitleKey: string }> = {
   dashboard: {
-    title: 'Dashboard',
-    subtitle: 'Camera, secure stream, and Hailo runtime status',
+    titleKey: 'dashboard.dashboardTitle',
+    subtitleKey: 'dashboard.dashboardSubtitle',
   },
   cameras: {
-    title: 'Cameras',
-    subtitle: 'Live preview and camera inventory',
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
   },
   ai: {
-    title: 'AI inference',
-    subtitle: 'Hailo model runners and current detections',
+    titleKey: 'dashboard.aiTitle',
+    subtitleKey: 'dashboard.aiSubtitle',
   },
   system: {
-    title: 'System',
-    subtitle: 'Device health and secure stream transport',
+    titleKey: 'dashboard.systemTitle',
+    subtitleKey: 'dashboard.systemSubtitle',
   },
 };
 
@@ -58,6 +59,7 @@ export function DashboardPage({
   auditFragment,
   view = 'dashboard',
 }: DashboardPageProps) {
+  const { t } = useTranslation();
   const refresh = () => {
     void controller.refresh().catch(() => undefined);
     if (runtimeSettings !== undefined) {
@@ -107,9 +109,9 @@ export function DashboardPage({
 
   const heading = viewHeadings[view];
   const operationalState = controller.state === 'loading'
-    ? <p>Loading operational data...</p>
-    : <><p role="alert">Operational data is unavailable.</p>
-      <button type="button" onClick={refresh}>Retry</button></>;
+    ? <p>{t('dashboard.loadingOperationalData')}</p>
+    : <><p role="alert">{t('dashboard.operationalDataUnavailable')}</p>
+      <button type="button" onClick={refresh}>{t('common.retry')}</button></>;
   if (controller.data === null && view !== 'system') {
     return (
       <section className="dashboard-page dashboard-state">
@@ -127,18 +129,18 @@ export function DashboardPage({
     <div className="dashboard-page">
       <header className="dashboard-heading">
         <div>
-          <h1>{heading.title}</h1>
-          <p>{heading.subtitle}</p>
+          <h1>{t(heading.titleKey)}</h1>
+          <p>{t(heading.subtitleKey)}</p>
         </div>
         <button className="refresh-button" type="button"
-          aria-label="Refresh operational data" title="Refresh operational data"
+          aria-label={t('dashboard.refreshOperationalData')} title={t('dashboard.refreshOperationalData')}
           onClick={refresh}>
           <RefreshCw size={17} aria-hidden="true" />
-          Refresh
+          {t('dashboard.refresh')}
         </button>
       </header>
       {controller.state === 'stale' && (
-        <p className="stale-notice" role="status">Showing the last available status.</p>
+        <p className="stale-notice" role="status">{t('dashboard.staleNotice')}</p>
       )}
       {data === null && (
         <section className="dashboard-state">{operationalState}</section>

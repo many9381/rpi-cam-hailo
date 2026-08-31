@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DetectionSnapshot } from '../api/types';
 import type { LivePreviewController } from '../hooks/useLivePreview';
+import { LanguageProvider } from '../i18n';
 import { CameraPreview } from './CameraPreview';
 
 let previewController: LivePreviewController;
@@ -48,8 +49,8 @@ describe('CameraPreview', () => {
     const user = userEvent.setup();
     previewController = controller();
     const selectCamera = vi.fn();
-    render(<CameraPreview cameras={cameras} selectedCameraId="cam-a"
-      onSelectCamera={selectCamera} snapshot={detections} />);
+    render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={selectCamera} snapshot={detections} /></LanguageProvider>);
 
     expect(screen.getByRole('status')).toHaveTextContent('Connecting preview...');
     expect(screen.getByLabelText('cam-a camera preview')).toBeInstanceOf(HTMLVideoElement);
@@ -61,8 +62,8 @@ describe('CameraPreview', () => {
 
   it('starts live preview even when snapshot compatibility is unavailable', () => {
     previewController = controller();
-    render(<CameraPreview cameras={cameras} selectedCameraId="cam-b"
-      onSelectCamera={() => undefined} snapshot={detections} />);
+    render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-b"
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
 
     expect(previewCameraId).toBe('cam-b');
     const video = screen.getByLabelText('cam-b camera preview');
@@ -73,8 +74,8 @@ describe('CameraPreview', () => {
 
   it('shows live video and sizes the detection overlay from video metadata', () => {
     previewController = controller({ state: 'live' });
-    render(<CameraPreview cameras={cameras} selectedCameraId="cam-a"
-      onSelectCamera={() => undefined} snapshot={detections} />);
+    render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
     const video = screen.getByLabelText('cam-a camera preview');
     Object.defineProperties(video, {
       videoWidth: { configurable: true, value: 1920 },
@@ -93,8 +94,8 @@ describe('CameraPreview', () => {
 
   it('clears stale overlay dimensions when a new stream generation starts', () => {
     previewController = controller({ state: 'live', generation: 1 });
-    const view = render(<CameraPreview cameras={cameras} selectedCameraId="cam-a"
-      onSelectCamera={() => undefined} snapshot={detections} />);
+    const view = render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
     const video = screen.getByLabelText('cam-a camera preview');
     Object.defineProperties(video, {
       videoWidth: { configurable: true, value: 1920 },
@@ -104,8 +105,8 @@ describe('CameraPreview', () => {
     expect(screen.getByTestId('detection-overlay')).toBeInTheDocument();
 
     previewController = controller({ state: 'reconnecting', generation: 2 });
-    view.rerender(<CameraPreview cameras={cameras} selectedCameraId="cam-a"
-      onSelectCamera={() => undefined} snapshot={detections} />);
+    view.rerender(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
 
     expect(screen.queryByTestId('detection-overlay')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Preview reconnecting...');
@@ -113,8 +114,8 @@ describe('CameraPreview', () => {
 
   it('announces a concise no-camera state', () => {
     previewController = controller({ state: 'unavailable', generation: 0 });
-    render(<CameraPreview cameras={[]} selectedCameraId=""
-      onSelectCamera={() => undefined} snapshot={detections} />);
+    render(<LanguageProvider><CameraPreview cameras={[]} selectedCameraId=""
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
 
     expect(screen.getByRole('status')).toHaveTextContent('No camera selected.');
     expect(screen.getByRole('button', { name: 'Reconnect preview' })).toBeDisabled();

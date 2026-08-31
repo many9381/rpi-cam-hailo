@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AiStatus } from '../api/types';
+import { LanguageProvider } from '../i18n';
 import { AiPanel } from './AiPanel';
 
 const base: AiStatus = {
@@ -45,8 +46,10 @@ const detections = { events: [
 const renderPanel = (
   onRestart: () => Promise<void> = vi.fn(async () => undefined),
 ) => render(
-  <AiPanel ai={base} detections={detections} streamStatus="live"
-    onRestart={onRestart} />,
+  <LanguageProvider>
+    <AiPanel ai={base} detections={detections} streamStatus="live"
+      onRestart={onRestart} />
+  </LanguageProvider>,
 );
 
 afterEach(cleanup);
@@ -65,10 +68,10 @@ describe('AiPanel', () => {
   });
 
   it('renders the disabled state without model or runner rows', () => {
-    render(<AiPanel ai={{ ...base, enabled: false, backend: 'disabled',
+    render(<LanguageProvider><AiPanel ai={{ ...base, enabled: false, backend: 'disabled',
       state: 'disabled', reason: 'disabled by config', model_count: 0,
       runner_count: 0, models: [], runners: [] }} detections={{ events: [] }}
-      streamStatus="connecting" onRestart={vi.fn()} />);
+      streamStatus="connecting" onRestart={vi.fn()} /></LanguageProvider>);
 
     expect(screen.getByText('Disabled')).toBeVisible();
     expect(screen.getByText('No AI models')).toBeVisible();

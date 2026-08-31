@@ -2,6 +2,7 @@ import { RotateCw } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import type { CameraStatus, HealthStatus } from '../api/types';
+import { useTranslation } from '../i18n/LanguageContext';
 import { IconButton } from './IconButton';
 
 interface StatusPanelProps {
@@ -14,6 +15,7 @@ interface StatusPanelProps {
 
 export function StatusPanel({ health, cameras, selectedCameraId,
   onSelectCamera, onRestartRuntime }: StatusPanelProps) {
+  const { t } = useTranslation();
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
@@ -42,15 +44,16 @@ export function StatusPanel({ health, cameras, selectedCameraId,
     <section className="operational-section" aria-labelledby="system-status-heading">
       <div className="section-heading">
         <div>
-          <h2 id="system-status-heading">System and cameras</h2>
-          <p>{cameras.length} registered camera{cameras.length === 1 ? '' : 's'}</p>
+          <h2 id="system-status-heading">{t('status.title')}</h2>
+          <p>{t(cameras.length === 1 ? 'status.registeredCameraOne' : 'status.registeredCameraOther',
+            { n: cameras.length })}</p>
         </div>
         <div className="section-heading-controls">
           <span className={`status-value status-${health.status === 'ok' ? 'good' : 'warn'}`}>
             {health.status}
           </span>
           {runtimeUnavailable && (
-            <IconButton label="Restart camera runtime"
+            <IconButton label={t('status.restartRuntime')}
               onClick={() => void restart()} disabled={pending}>
               <RotateCw size={17} aria-hidden="true" />
             </IconButton>
@@ -59,11 +62,11 @@ export function StatusPanel({ health, cameras, selectedCameraId,
       </div>
       {error && (
         <p className="command-error" role="alert">
-          Camera runtime restart failed. Try again.
+          {t('status.restartFailed')}
         </p>
       )}
       <div className="camera-grid">
-        {cameras.length === 0 && <p className="empty-row">No cameras registered</p>}
+        {cameras.length === 0 && <p className="empty-row">{t('status.noCameras')}</p>}
         {cameras.map((camera) => (
           <label className="data-card camera-card" key={camera.id}>
             <input
@@ -76,13 +79,19 @@ export function StatusPanel({ health, cameras, selectedCameraId,
               <strong>{camera.id}</strong>
               <span>{camera.state}</span>
               <small>{camera.snapshot_available
-                ? 'Snapshot available' : 'Snapshot unavailable'}</small>
+                ? t('status.snapshotAvailable') : t('status.snapshotUnavailable')}</small>
               {camera.capture_fps !== undefined && (
                 <small className="camera-metrics">
-                  {`capture ${camera.capture_fps.toFixed(1)} / `}
-                  {`encode ${(camera.encoded_fps ?? 0).toFixed(1)} fps`}
-                  {camera.last_encode_ms !== undefined &&
-                    ` · ${camera.last_encode_ms.toFixed(1)} ms`}
+                  {camera.last_encode_ms !== undefined
+                    ? t('status.cameraMetricsWithMs', {
+                      capture: camera.capture_fps.toFixed(1),
+                      encode: (camera.encoded_fps ?? 0).toFixed(1),
+                      ms: camera.last_encode_ms.toFixed(1),
+                    })
+                    : t('status.cameraMetrics', {
+                      capture: camera.capture_fps.toFixed(1),
+                      encode: (camera.encoded_fps ?? 0).toFixed(1),
+                    })}
                 </small>
               )}
             </span>
