@@ -64,9 +64,21 @@ struct ModelRuntimeSettings {
   float confidence_threshold;
 };
 
+struct OsdItemRuntimeSettings {
+  std::string type;      // "timestamp" | "camera_name" | "custom_text"
+  std::string text;      // custom_text content, or timestamp format ("" = default)
+  std::string position;  // "top_left" | "top_right" | "bottom_left" | "bottom_right"
+};
+
+struct OsdRuntimeSettings {
+  bool enabled{false};
+  std::vector<OsdItemRuntimeSettings> items;
+};
+
 struct RuntimeSettings {
   CameraRuntimeSettings camera;
   SubStreamRuntimeSettings sub_stream;
+  OsdRuntimeSettings osd;
   std::vector<ModelRuntimeSettings> models;
 };
 

@@ -51,6 +51,41 @@ common::Result<void> ValidateSubStreamSettings(
   return common::Result<void>::Ok();
 }
 
+constexpr std::size_t kMaxOsdItems = 8U;
+constexpr std::size_t kMaxOsdTextBytes = 64U;
+
+bool IsAllowedOsdType(const std::string& t) {
+  return t == "timestamp" || t == "camera_name" || t == "custom_text";
+}
+bool IsAllowedOsdPosition(const std::string& p) {
+  return p == "top_left" || p == "top_right" ||
+         p == "bottom_left" || p == "bottom_right";
+}
+bool IsPrintableOsdText(const std::string& s) {
+  if (s.size() > kMaxOsdTextBytes) return false;
+  for (const unsigned char c : s) {
+    if (c < 0x20U || c == 0x7fU) return false;  // reject control chars
+  }
+  return true;
+}
+
+common::Result<void> ValidateOsdSettings(const RuntimeSettings& settings) {
+  const auto& osd = settings.osd;
+  if (osd.items.size() > kMaxOsdItems) {
+    return common::Result<void>::Err(
+        {"E_SETTINGS_OSD", "too many OSD items"});
+  }
+  for (const auto& item : osd.items) {  // unconditional: validate even if disabled
+    if (!IsAllowedOsdType(item.type) || !IsAllowedOsdPosition(item.position) ||
+        !IsPrintableOsdText(item.text) ||
+        (item.type == "custom_text" && item.text.empty())) {
+      return common::Result<void>::Err(
+          {"E_SETTINGS_OSD", "invalid OSD item"});
+    }
+  }
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateModelSettings(
     const RuntimeSettings& settings,
     const config::AppConfig& base) {
@@ -198,6 +233,10 @@ common::Result<void> ValidateRuntimeSettings(
   const auto sub_stream_result = ValidateSubStreamSettings(settings);
   if (!sub_stream_result.ok()) {
     return sub_stream_result;
+  }
+  const auto osd_result = ValidateOsdSettings(settings);
+  if (!osd_result.ok()) {
+    return osd_result;
   }
   return ValidateModelSettings(settings, base);
 }

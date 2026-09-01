@@ -14,6 +14,7 @@ using camera_firmware::config::AiModelConfig;
 using camera_firmware::config::AppConfig;
 using camera_firmware::settings::CameraProfileCatalog;
 using camera_firmware::settings::ModelRuntimeSettings;
+using camera_firmware::settings::OsdItemRuntimeSettings;
 using camera_firmware::settings::RuntimeSettings;
 
 AiModelConfig MakeModel(std::string id, float confidence_threshold) {
@@ -281,6 +282,126 @@ TEST(RuntimeSettingsTest, ValidateRejectsNearMissSubStreamResolutions) {
       settings, base, catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_RESOLUTION");
+}
+
+TEST(RuntimeSettingsTest, ValidateAcceptsDefaultEmptyOsd) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  const auto settings = MakeRuntimeSettings();
+
+  // MakeRuntimeSettings() never touches `.osd`, so it is left at the struct
+  // default (disabled, no items). That default must validate.
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
+                  settings, base, catalog)
+                  .ok());
+}
+
+TEST(RuntimeSettingsTest, ValidateAcceptsEightOsdItemsRejectsNine) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+
+  settings.osd.items = std::vector<OsdItemRuntimeSettings>(
+      8U, OsdItemRuntimeSettings{"timestamp", "", "top_left"});
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
+                  settings, base, catalog)
+                  .ok());
+
+  settings.osd.items.push_back({"timestamp", "", "top_left"});
+  ASSERT_EQ(settings.osd.items.size(), 9U);
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsCustomTextOsdItemWithEmptyText) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {{"custom_text", "", "top_left"}};
+
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsUnknownOsdItemType) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {{"bogus_type", "", "top_left"}};
+
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsUnknownOsdItemPosition) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {{"timestamp", "", "middle_center"}};
+
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateAcceptsOsdTextAtByteLimitRejectsOverLimit) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {{"custom_text", std::string(64U, 'a'), "top_left"}};
+
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
+                  settings, base, catalog)
+                  .ok());
+
+  settings.osd.items[0].text = std::string(65U, 'a');
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsOsdTextWithControlCharacter) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {{"timestamp", "\x01", "top_left"}};
+
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
+}
+
+TEST(RuntimeSettingsTest, ValidateRejectsInvalidOsdItemsEvenWhenDisabled) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+
+  // osd.enabled == false must NOT bypass item validation: an invalid item
+  // persisted while disabled would otherwise brick the settings UI the moment
+  // OSD is later turned on (the same unconditional-validation seam sub_stream
+  // already closed for zero geometry).
+  settings.osd.enabled = false;
+  settings.osd.items = {{"custom_text", "", "top_left"}};
+
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
+  ASSERT_FALSE(validated.ok());
+  EXPECT_EQ(validated.error().code, "E_SETTINGS_OSD");
 }
 
 TEST(RuntimeSettingsTest, CatalogExposesApprovedRpi5Imx708Profiles) {
