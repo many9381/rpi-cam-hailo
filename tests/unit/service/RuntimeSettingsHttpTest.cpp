@@ -62,12 +62,61 @@ constexpr std::string_view kUpdateJsonWithSubStream = R"({
   }
 })";
 
+constexpr std::string_view kUpdateJsonWithOsd = R"({
+  "expected_revision": 7,
+  "settings": {
+    "camera": {
+      "profile_id": "imx708-1080p30",
+      "bitrate_kbps": 8000,
+      "gop": 30
+    },
+    "models": [
+      {"id":"objects","enabled":true,"confidence_threshold":0.55},
+      {"id":"pose","enabled":false,"confidence_threshold":0.25}
+    ],
+    "osd": {
+      "enabled": true,
+      "items": [
+        {"type": "custom_text", "text": "Front Door", "position": "top_left"}
+      ]
+    }
+  }
+})";
+
+constexpr std::string_view kUpdateJsonWithSubStreamAndOsd = R"({
+  "expected_revision": 7,
+  "settings": {
+    "camera": {
+      "profile_id": "imx708-1080p30",
+      "bitrate_kbps": 8000,
+      "gop": 30
+    },
+    "models": [],
+    "sub_stream": {
+      "enabled": true,
+      "width": 1280,
+      "height": 720,
+      "fps": 25,
+      "bitrate_kbps": 3000
+    },
+    "osd": {
+      "enabled": true,
+      "items": [
+        {"type": "camera_name", "text": "", "position": "bottom_right"}
+      ]
+    }
+  }
+})";
+
 RuntimeSettingsSnapshot MakeSnapshot() {
   RuntimeSettingsSnapshot snapshot;
   snapshot.revision = 7U;
   snapshot.state = RuntimeSettingsState::kPending;
   snapshot.active.camera = {"imx708-1080p50", 6000U, 25U};
   snapshot.active.sub_stream = {false, 640U, 360U, 15U, 1000U};
+  snapshot.active.osd = {true,
+                         {{"custom_text", "Front Door", "top_left"},
+                          {"timestamp", "", "bottom_right"}}};
   snapshot.active.models = {{"objects", true, 0.40F},
                             {"pose", true, 0.35F}};
   snapshot.pending = snapshot.active;
@@ -122,6 +171,8 @@ TEST(RuntimeSettingsHttpTest, ParsesExactCompleteUpdateAndPreservesModelOrder) {
   EXPECT_EQ(parsed.value().settings.sub_stream.height, 360U);
   EXPECT_EQ(parsed.value().settings.sub_stream.fps, 15U);
   EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 1000U);
+  EXPECT_FALSE(parsed.value().settings.osd.enabled);
+  EXPECT_TRUE(parsed.value().settings.osd.items.empty());
 }
 
 TEST(RuntimeSettingsHttpTest, ParsesOptionalSubStreamAndRoundTripsFields) {
@@ -135,6 +186,31 @@ TEST(RuntimeSettingsHttpTest, ParsesOptionalSubStreamAndRoundTripsFields) {
   EXPECT_EQ(parsed.value().settings.sub_stream.height, 720U);
   EXPECT_EQ(parsed.value().settings.sub_stream.fps, 25U);
   EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 3000U);
+}
+
+TEST(RuntimeSettingsHttpTest, ParsesOptionalOsdAndRoundTripsFields) {
+  const auto parsed =
+      ParseRuntimeSettingsUpdateJson(kUpdateJsonWithOsd, "application/json");
+
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_TRUE(parsed.value().settings.osd.enabled);
+  ASSERT_EQ(parsed.value().settings.osd.items.size(), 1U);
+  EXPECT_EQ(parsed.value().settings.osd.items[0].type, "custom_text");
+  EXPECT_EQ(parsed.value().settings.osd.items[0].text, "Front Door");
+  EXPECT_EQ(parsed.value().settings.osd.items[0].position, "top_left");
+}
+
+TEST(RuntimeSettingsHttpTest, ParsesBothOptionalSubStreamAndOsdTogether) {
+  const auto parsed = ParseRuntimeSettingsUpdateJson(
+      kUpdateJsonWithSubStreamAndOsd, "application/json");
+
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_TRUE(parsed.value().settings.sub_stream.enabled);
+  EXPECT_EQ(parsed.value().settings.sub_stream.width, 1280U);
+  EXPECT_TRUE(parsed.value().settings.osd.enabled);
+  ASSERT_EQ(parsed.value().settings.osd.items.size(), 1U);
+  EXPECT_EQ(parsed.value().settings.osd.items[0].type, "camera_name");
+  EXPECT_EQ(parsed.value().settings.osd.items[0].position, "bottom_right");
 }
 
 TEST(RuntimeSettingsHttpTest, ParsesZeroedDisabledSubStreamSoValidationCanReject) {
@@ -162,6 +238,56 @@ TEST(RuntimeSettingsHttpTest, ParsesZeroedDisabledSubStreamSoValidationCanReject
   EXPECT_EQ(parsed.value().settings.sub_stream.bitrate_kbps, 0U);
 }
 
+TEST(RuntimeSettingsHttpTest, ParsesOutOfRangeOsdSoValidationCanReject) {
+  // Mirrors ParsesZeroedDisabledSubStreamSoValidationCanReject: these bodies
+  // are structurally well-formed JSON (exact keys, correct field types), so
+  // the wire parser MUST accept them and hand them to the validation layer.
+  // ValidateOsdSettings is what rejects an unknown enum value, an over-long
+  // text, or too many items (E_SETTINGS_OSD -> 422; see
+  // InternalErrorsMapToBoundedPublicContract below).
+
+  // Unknown "type" enum value -- a string, so structurally valid.
+  constexpr std::string_view kUnknownType = R"({
+    "expected_revision": 7,
+    "settings": {
+      "camera": {"profile_id": "imx708-1080p30", "bitrate_kbps": 8000, "gop": 30},
+      "models": [],
+      "osd": {"enabled": true, "items": [{"type": "bogus", "text": "", "position": "top_left"}]}
+    }
+  })";
+  const auto bad_type =
+      ParseRuntimeSettingsUpdateJson(kUnknownType, "application/json");
+  ASSERT_TRUE(bad_type.ok()) << bad_type.error().message;
+  ASSERT_EQ(bad_type.value().settings.osd.items.size(), 1U);
+  EXPECT_EQ(bad_type.value().settings.osd.items[0].type, "bogus");
+
+  // 9 items (the validator's cap is 8).
+  std::string nine_items_body =
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[)";
+  for (int index = 0; index < 9; ++index) {
+    if (index > 0) {
+      nine_items_body += ",";
+    }
+    nine_items_body += R"({"type":"timestamp","text":"","position":"top_left"})";
+  }
+  nine_items_body += "]}}}";
+  const auto nine_items =
+      ParseRuntimeSettingsUpdateJson(nine_items_body, "application/json");
+  ASSERT_TRUE(nine_items.ok()) << nine_items.error().message;
+  EXPECT_EQ(nine_items.value().settings.osd.items.size(), 9U);
+
+  // 65-byte text (the validator's cap is 64 bytes).
+  const std::string oversized_text(65U, 'a');
+  const std::string oversized_text_body =
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[{"type":"custom_text","text":")" +
+      oversized_text + R"(","position":"top_left"}]}}})";
+  const auto oversized =
+      ParseRuntimeSettingsUpdateJson(oversized_text_body, "application/json");
+  ASSERT_TRUE(oversized.ok()) << oversized.error().message;
+  ASSERT_EQ(oversized.value().settings.osd.items.size(), 1U);
+  EXPECT_EQ(oversized.value().settings.osd.items[0].text.size(), 65U);
+}
+
 TEST(RuntimeSettingsHttpTest, RejectsMalformedSubStreamPayloads) {
   const std::vector<std::string> invalid = {
       // Missing key (bitrate_kbps).
@@ -174,6 +300,36 @@ TEST(RuntimeSettingsHttpTest, RejectsMalformedSubStreamPayloads) {
       R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"not_sub_stream":{}}})",
       // Size-4 settings object (camera, models, sub_stream, and an extra key).
       R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000},"extra":1}})",
+  };
+
+  for (const auto& body : invalid) {
+    const auto parsed =
+        ParseRuntimeSettingsUpdateJson(body, "application/json");
+    ASSERT_FALSE(parsed.ok()) << body;
+    EXPECT_EQ(parsed.error().code, "E_SETTINGS_REQUEST_INVALID") << body;
+  }
+}
+
+TEST(RuntimeSettingsHttpTest, RejectsMalformedOsdPayloads) {
+  const std::vector<std::string> invalid = {
+      // Missing key (items).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true}}})",
+      // Non-bool enabled.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":1,"items":[]}}})",
+      // items not an array.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":{}}}})",
+      // Extra key inside osd.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[],"extra":1}}})",
+      // Item missing a key (position).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[{"type":"timestamp","text":""}]}}})",
+      // Item has an extra key.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[{"type":"timestamp","text":"","position":"top_left","extra":1}]}}})",
+      // Item field wrong type (type is a number, not a string).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[{"type":1,"text":"","position":"top_left"}]}}})",
+      // Size-3 settings object whose third key is neither sub_stream nor osd.
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"not_osd":{}}})",
+      // Size-5 settings object (camera, models, sub_stream, osd, and an extra key).
+      R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000},"osd":{"enabled":true,"items":[]},"extra":1}})",
   };
 
   for (const auto& body : invalid) {
@@ -285,6 +441,23 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
   EXPECT_EQ(json["pending"]["sub_stream"]["height"].asUInt(), 360U);
   EXPECT_EQ(json["pending"]["sub_stream"]["fps"].asUInt(), 15U);
   EXPECT_EQ(json["pending"]["sub_stream"]["bitrate_kbps"].asUInt(), 1000U);
+  EXPECT_TRUE(json["active"]["osd"]["enabled"].asBool());
+  ASSERT_EQ(json["active"]["osd"]["items"].size(), 2U);
+  EXPECT_EQ(json["active"]["osd"]["items"][0U]["type"].asString(),
+            "custom_text");
+  EXPECT_EQ(json["active"]["osd"]["items"][0U]["text"].asString(),
+            "Front Door");
+  EXPECT_EQ(json["active"]["osd"]["items"][0U]["position"].asString(),
+            "top_left");
+  EXPECT_EQ(json["active"]["osd"]["items"][1U]["type"].asString(),
+            "timestamp");
+  EXPECT_EQ(json["active"]["osd"]["items"][1U]["text"].asString(), "");
+  EXPECT_EQ(json["active"]["osd"]["items"][1U]["position"].asString(),
+            "bottom_right");
+  EXPECT_TRUE(json["pending"]["osd"]["enabled"].asBool());
+  ASSERT_EQ(json["pending"]["osd"]["items"].size(), 2U);
+  EXPECT_EQ(json["pending"]["osd"]["items"][0U]["type"].asString(),
+            "custom_text");
   EXPECT_EQ(json["last_apply"]["code"].asString(),
             "E_SETTINGS_APPLY_FAILED");
 }
@@ -331,6 +504,8 @@ TEST(RuntimeSettingsHttpTest, InternalErrorsMapToBoundedPublicContract) {
       {"E_RUNTIME_SETTINGS_SUB_BITRATE", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
       {"E_RUNTIME_SETTINGS_SUB_GEOMETRY", drogon::k422UnprocessableEntity,
+       "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
+      {"E_SETTINGS_OSD", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
       {"E_CONFIG_HTTP_LIVE", drogon::k422UnprocessableEntity,
        "E_SETTINGS_UNSUPPORTED", "runtime settings are unsupported"},
