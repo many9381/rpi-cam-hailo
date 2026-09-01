@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { LanguageProvider } from '../../i18n';
 import { CameraSettingsPanel } from './CameraSettingsPanel';
-import type { RuntimeSettings } from './contracts';
+import { MAX_OSD_ITEMS, MAX_OSD_TEXT, type RuntimeSettings } from './contracts';
 import { makeSettingsController, makeSettingsSnapshot } from './testSupport';
 
 afterEach(cleanup);
@@ -15,6 +15,11 @@ const withSubStreamEnabled = (
   ...base,
   sub_stream: { ...base.sub_stream, enabled },
 });
+
+const withOsd = (
+  base: RuntimeSettings,
+  osd: RuntimeSettings['osd'],
+): RuntimeSettings => ({ ...base, osd });
 
 describe('CameraSettingsPanel', () => {
   it('offers only approved capture profiles and bounded encoder controls', () => {
@@ -172,5 +177,118 @@ describe('CameraSettingsPanel', () => {
 
     rerender(<CameraSettingsPanel controller={{ ...controller, status: 'ready' }} />);
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).toBeEnabled();
+  });
+
+  it('renders the OSD section with a heading and enabled toggle', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('heading', { name: 'OSD', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Show OSD' })).not.toBeChecked();
+  });
+
+  it('toggles the OSD enabled checkbox and calls updateOsd with enabled flipped', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show OSD' }));
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({ enabled: true, items: [] });
+  });
+
+  it('adds a default OSD item and calls updateOsd', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({
+      enabled: false,
+      items: [{ type: 'custom_text', text: '', position: 'top_left' }],
+    });
+  });
+
+  it('edits an OSD item type, text, and position and calls updateOsd with the change', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, {
+        enabled: true,
+        items: [{ type: 'custom_text', text: 'hello', position: 'top_left' }],
+      }),
+    });
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Type' }), {
+      target: { value: 'timestamp' },
+    });
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({
+      enabled: true,
+      items: [{ type: 'timestamp', text: 'hello', position: 'top_left' }],
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Text' }), {
+      target: { value: 'world' },
+    });
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({
+      enabled: true,
+      items: [{ type: 'custom_text', text: 'world', position: 'top_left' }],
+    });
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Position' }), {
+      target: { value: 'bottom_right' },
+    });
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({
+      enabled: true,
+      items: [{ type: 'custom_text', text: 'hello', position: 'bottom_right' }],
+    });
+  });
+
+  it('removes an OSD item and calls updateOsd without it', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, {
+        enabled: true,
+        items: [
+          { type: 'custom_text', text: 'first', position: 'top_left' },
+          { type: 'camera_name', text: '', position: 'bottom_right' },
+        ],
+      }),
+    });
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+    expect(controller.updateOsd).toHaveBeenLastCalledWith({
+      enabled: true,
+      items: [{ type: 'camera_name', text: '', position: 'bottom_right' }],
+    });
+  });
+
+  it('disables Add item once MAX_OSD_ITEMS items are present', () => {
+    const snapshot = makeSettingsSnapshot();
+    const items = Array.from({ length: MAX_OSD_ITEMS }, () => ({
+      type: 'custom_text' as const, text: 'x', position: 'top_left' as const,
+    }));
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, { enabled: true, items }),
+    });
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('button', { name: 'Add item' })).toBeDisabled();
+  });
+
+  it('enforces MAX_OSD_TEXT on the OSD item text input', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, {
+        enabled: true,
+        items: [{ type: 'custom_text', text: '', position: 'top_left' }],
+      }),
+    });
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    const textInput = screen.getByRole('textbox', { name: 'Text' }) as HTMLInputElement;
+    expect(textInput.maxLength).toBe(MAX_OSD_TEXT);
   });
 });
