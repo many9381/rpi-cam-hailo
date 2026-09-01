@@ -3,14 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ApiError, UnauthorizedError } from '../../api/client';
 import type { CameraApiClient, Parser } from '../../api/types';
-import type { RuntimeSettingsSnapshot } from './contracts';
+import type { RuntimeSettings, RuntimeSettingsSnapshot } from './contracts';
 import { useRuntimeSettings } from './useRuntimeSettings';
 
-const settings = (profileId = 'imx708-1080p50', bitrateKbps = 6_000) => ({
+const settings = (
+  profileId = 'imx708-1080p50',
+  bitrateKbps = 6_000,
+): RuntimeSettings => ({
   camera: { profile_id: profileId, bitrate_kbps: bitrateKbps, gop: 25 },
   sub_stream: {
     enabled: false, width: 640, height: 360, fps: 15, bitrate_kbps: 1_000,
   },
+  osd: { enabled: false, items: [] },
   models: [
     { id: 'objects', enabled: true, confidence_threshold: 0.4 },
     { id: 'pose', enabled: false, confidence_threshold: 0.5 },

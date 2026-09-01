@@ -16,6 +16,7 @@ export const makeSettings = (
   sub_stream: {
     enabled: false, width: 640, height: 360, fps: 15, bitrate_kbps: 1_000,
   },
+  osd: { enabled: false, items: [] },
   models: [
     { id: 'objects', enabled: true, confidence_threshold: 0.4 },
     { id: 'pose', enabled: false, confidence_threshold: 0.5 },

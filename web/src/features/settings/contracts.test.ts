@@ -62,6 +62,13 @@ const makeSnapshot = () => ({
       fps: 24,
       bitrate_kbps: 2_000,
     },
+    osd: {
+      enabled: true,
+      items: [
+        { type: 'timestamp', text: '', position: 'top_left' },
+        { type: 'custom_text', text: 'Front Porch', position: 'bottom_right' },
+      ],
+    },
     models: [
       { id: 'objects', enabled: true, confidence_threshold: 0.4 },
       { id: 'pose', enabled: false, confidence_threshold: 0.5 },
@@ -79,6 +86,12 @@ const makeSnapshot = () => ({
       height: 360,
       fps: 15,
       bitrate_kbps: 1_000,
+    },
+    osd: {
+      enabled: false,
+      items: [
+        { type: 'camera_name', text: '', position: 'top_right' },
+      ],
     },
     models: [
       { id: 'objects', enabled: true, confidence_threshold: 0.45 },
@@ -105,6 +118,17 @@ describe('runtime settings contracts', () => {
       height: 720,
       fps: 24,
       bitrate_kbps: 2_000,
+    });
+  });
+
+  it('reads active.osd into typed settings', () => {
+    const parsed = parseRuntimeSettingsSnapshot(makeSnapshot());
+    expect(parsed.active.osd).toEqual({
+      enabled: true,
+      items: [
+        { type: 'timestamp', text: '', position: 'top_left' },
+        { type: 'custom_text', text: 'Front Porch', position: 'bottom_right' },
+      ],
     });
   });
 
@@ -141,6 +165,31 @@ describe('runtime settings contracts', () => {
     };
     expect(parsed.active.sub_stream).toEqual(defaultSubStream);
     expect(parsed.pending?.sub_stream).toEqual(defaultSubStream);
+  });
+
+  it('defaults osd to disabled with no items when absent', () => {
+    const value = makeSnapshot();
+    const { osd: _activeOsd, ...activeRest } = value.active;
+    const { osd: _pendingOsd, ...pendingRest } = value.pending;
+    const parsed = parseRuntimeSettingsSnapshot({
+      ...value,
+      active: activeRest,
+      pending: pendingRest,
+    });
+    const defaultOsd = { enabled: false, items: [] };
+    expect(parsed.active.osd).toEqual(defaultOsd);
+    expect(parsed.pending?.osd).toEqual(defaultOsd);
+  });
+
+  it('round-trips osd through a JSON PUT payload', () => {
+    const value = makeSnapshot();
+    const draft = parseRuntimeSettingsSnapshot(value).active;
+    const putBody = { expected_revision: value.revision, settings: draft };
+    const onWire = JSON.parse(JSON.stringify(putBody)) as typeof putBody;
+    expect(onWire.settings.osd).toEqual(draft.osd);
+
+    const reparsed = parseRuntimeSettingsSnapshot({ ...value, active: onWire.settings });
+    expect(reparsed.active.osd).toEqual(draft.osd);
   });
 
   it('parses a successful apply outcome separately from the snapshot', () => {
@@ -239,14 +288,100 @@ describe('runtime settings contracts', () => {
         },
       },
     })],
-    ['settings object with a third key that is not sub_stream', () => {
-      const { sub_stream: _subStream, ...rest } = makeSnapshot().active;
+    ['osd with an extra key', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: { ...makeSnapshot().active.osd, extra: 'unexpected' },
+      },
+    })],
+    ['osd items not an array', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: { enabled: true, items: 'nope' },
+      },
+    })],
+    ['osd item with an extra key', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'timestamp', text: '', position: 'top_left', extra: 'unexpected' }],
+        },
+      },
+    })],
+    ['osd item with an unknown type', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'weather', text: '', position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd item with an unknown position', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'timestamp', text: '', position: 'middle_center' }],
+        },
+      },
+    })],
+    ['osd item with non-string text', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'timestamp', text: 42, position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd with 9 items (exceeds the 8-item maximum)', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: Array.from({ length: 9 }, () => (
+            { type: 'timestamp', text: '', position: 'top_left' }
+          )),
+        },
+      },
+    })],
+    ['osd item with 65-char text (exceeds the 64-char maximum)', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'custom_text', text: 'x'.repeat(65), position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd item with empty custom_text text', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'custom_text', text: '', position: 'top_left' }],
+        },
+      },
+    })],
+    ['settings object with an extra key that is not sub_stream or osd', () => {
+      const { sub_stream: _subStream, osd: _osd, ...rest } = makeSnapshot().active;
       return {
         ...makeSnapshot(),
         active: { ...rest, bogus: 'unexpected' },
       };
     }],
-    ['settings object with four keys (camera, models, sub_stream, extra)', () => ({
+    ['settings object with an unrecognized extra key alongside sub_stream and osd', () => ({
       ...makeSnapshot(),
       active: { ...makeSnapshot().active, extra: 'unexpected' },
     })],

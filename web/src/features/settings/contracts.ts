@@ -19,6 +19,20 @@ export interface SubStreamRuntimeSettings {
   bitrate_kbps: number;
 }
 
+export type OsdItemType = 'timestamp' | 'camera_name' | 'custom_text';
+export type OsdPosition = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+
+export interface OsdItem {
+  type: OsdItemType;
+  text: string;
+  position: OsdPosition;
+}
+
+export interface OsdRuntimeSettings {
+  enabled: boolean;
+  items: OsdItem[];
+}
+
 export interface ModelRuntimeSettings {
   id: string;
   enabled: boolean;
@@ -28,6 +42,7 @@ export interface ModelRuntimeSettings {
 export interface RuntimeSettings {
   camera: CameraRuntimeSettings;
   sub_stream: SubStreamRuntimeSettings;
+  osd: OsdRuntimeSettings;
   models: ModelRuntimeSettings[];
 }
 
@@ -38,6 +53,12 @@ export const SUB_STREAM_RESOLUTIONS = [
 ] as const;
 
 export const SUB_STREAM_FPS_RANGE = { minimum: 5, maximum: 30 } as const;
+
+export const OSD_ITEM_TYPES: readonly OsdItemType[] = ['timestamp', 'camera_name', 'custom_text'];
+export const OSD_POSITIONS: readonly OsdPosition[] =
+  ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+export const MAX_OSD_ITEMS = 8;
+export const MAX_OSD_TEXT = 64;
 
 export interface CameraProfileCapability {
   id: string;
@@ -144,18 +165,14 @@ const hasExactKeys = (
 const hasKeysWithOptional = (
   value: unknown,
   keys: readonly string[],
-  optionalKey: string,
+  optionalKeys: readonly string[],
 ): value is Record<string, unknown> => {
   if (!isRecord(value) ||
       !keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
     return false;
   }
-  const size = Object.keys(value).length;
-  if (size === keys.length) {
-    return true;
-  }
-  return size === keys.length + 1 &&
-    Object.prototype.hasOwnProperty.call(value, optionalKey);
+  const allowed = new Set([...keys, ...optionalKeys]);
+  return Object.keys(value).every((key) => allowed.has(key));
 };
 
 const isNonemptyString = (value: unknown): value is string =>
@@ -254,6 +271,8 @@ const DEFAULT_SUB_STREAM: SubStreamRuntimeSettings = {
   bitrate_kbps: 1000,
 };
 
+const DEFAULT_OSD: OsdRuntimeSettings = { enabled: false, items: [] };
+
 function parseSubStream(
   value: unknown,
   capabilities: RuntimeSettingsCapabilities,
@@ -290,11 +309,40 @@ function parseSubStream(
   };
 }
 
+function parseOsdItem(value: unknown): OsdItem {
+  if (!hasExactKeys(value, ['type', 'text', 'position']) ||
+      typeof value.type !== 'string' || typeof value.text !== 'string' ||
+      typeof value.position !== 'string' ||
+      !OSD_ITEM_TYPES.includes(value.type as OsdItemType) ||
+      !OSD_POSITIONS.includes(value.position as OsdPosition) ||
+      value.text.length > MAX_OSD_TEXT ||
+      (value.type === 'custom_text' && value.text.length === 0)) {
+    return invalid();
+  }
+  return {
+    type: value.type as OsdItemType,
+    text: value.text,
+    position: value.position as OsdPosition,
+  };
+}
+
+function parseOsd(value: unknown): OsdRuntimeSettings {
+  if (value === undefined) {
+    return { ...DEFAULT_OSD };
+  }
+  if (!hasExactKeys(value, ['enabled', 'items']) ||
+      typeof value.enabled !== 'boolean' || !Array.isArray(value.items) ||
+      value.items.length > MAX_OSD_ITEMS) {
+    return invalid();
+  }
+  return { enabled: value.enabled, items: value.items.map(parseOsdItem) };
+}
+
 function parseRuntimeSettings(
   value: unknown,
   capabilities: RuntimeSettingsCapabilities,
 ): RuntimeSettings {
-  if (!hasKeysWithOptional(value, ['camera', 'models'], 'sub_stream') ||
+  if (!hasKeysWithOptional(value, ['camera', 'models'], ['sub_stream', 'osd']) ||
       !hasExactKeys(value.camera, ['profile_id', 'bitrate_kbps', 'gop']) ||
       !isNonemptyString(value.camera.profile_id) ||
       !isSafePositiveInteger(value.camera.bitrate_kbps) ||
@@ -333,6 +381,7 @@ function parseRuntimeSettings(
       gop: value.camera.gop,
     },
     sub_stream: parseSubStream(value.sub_stream, capabilities),
+    osd: parseOsd(value.osd),
     models,
   };
 }
