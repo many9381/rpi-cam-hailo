@@ -9,6 +9,7 @@ import {
 import { X } from 'lucide-react';
 
 import { IconButton } from '../../components/IconButton';
+import { useTranslation } from '../../i18n/LanguageContext';
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href]';
 
@@ -31,6 +32,7 @@ export function UserManagementDialog({
   children,
   onClose,
 }: UserManagementDialogProps) {
+  const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -89,7 +91,7 @@ export function UserManagementDialog({
       <button
         className="user-management-dialog-backdrop"
         type="button"
-        aria-label="Close dialog"
+        aria-label={t('users.closeDialog')}
         tabIndex={-1}
         onClick={requestClose}
       />
@@ -107,7 +109,7 @@ export function UserManagementDialog({
           <h2 id={titleId}>{title}</h2>
           <IconButton
             ref={closeButtonRef}
-            label={`Close ${title}`}
+            label={t('users.closeDialogWithTitle', { title })}
             onClick={requestClose}
             disabled={pending}
           >

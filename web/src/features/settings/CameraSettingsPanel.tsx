@@ -1,5 +1,6 @@
 import type { ChangeEvent } from 'react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
 import { SUB_STREAM_RESOLUTIONS } from './contracts';
 import type { RuntimeSettingsController } from './useRuntimeSettings';
 
@@ -15,6 +16,7 @@ const SUB_STREAM_FPS_OPTIONS = [10, 15, 25, 30] as const;
 export function CameraSettingsPanel({
   controller,
 }: CameraSettingsPanelProps) {
+  const { t } = useTranslation();
   const { draft, snapshot } = controller;
   if (draft === null || snapshot === null) {
     return (
@@ -22,13 +24,13 @@ export function CameraSettingsPanel({
         aria-labelledby="camera-settings-heading">
         <div className="section-heading">
           <div>
-            <h2 id="camera-settings-heading">Camera settings</h2>
+            <h2 id="camera-settings-heading">{t('settings.cameraSettingsHeading')}</h2>
           </div>
         </div>
         <p className="empty-row" role={controller.status === 'error' ? 'alert' : 'status'}>
           {controller.status === 'error'
-            ? 'Runtime settings are unavailable.'
-            : 'Loading runtime settings...'}
+            ? t('settings.unavailable')
+            : t('settings.loading')}
         </p>
       </section>
     );
@@ -53,21 +55,23 @@ export function CameraSettingsPanel({
       aria-labelledby="camera-settings-heading">
       <div className="section-heading">
         <div>
-          <h2 id="camera-settings-heading">Camera settings</h2>
+          <h2 id="camera-settings-heading">{t('settings.cameraSettingsHeading')}</h2>
           <p>
-            Active: {activeProfile?.label ?? snapshot.active.camera.profile_id}
-            {' / '}{snapshot.active.camera.bitrate_kbps} kbps
-            {' / '}GOP {snapshot.active.camera.gop}
+            {t('settings.activeCameraSummary', {
+              profile: activeProfile?.label ?? snapshot.active.camera.profile_id,
+              bitrate: snapshot.active.camera.bitrate_kbps,
+              gop: snapshot.active.camera.gop,
+            })}
           </p>
         </div>
         {snapshot.pending !== null && (
-          <span className="settings-state-label">Pending</span>
+          <span className="settings-state-label">{t('settings.pendingLabel')}</span>
         )}
       </div>
 
       <div className="camera-settings-grid">
         <div className="settings-field settings-field-wide">
-          <label htmlFor="runtime-camera-profile">Capture profile</label>
+          <label htmlFor="runtime-camera-profile">{t('settings.captureProfile')}</label>
           <select
             id="runtime-camera-profile"
             value={draft.camera.profile_id}
@@ -84,7 +88,7 @@ export function CameraSettingsPanel({
         </div>
 
         <div className="settings-field">
-          <label htmlFor="runtime-camera-bitrate">Bitrate</label>
+          <label htmlFor="runtime-camera-bitrate">{t('settings.bitrate')}</label>
           <div className="number-control">
             <input
               id="runtime-camera-bitrate"
@@ -96,12 +100,12 @@ export function CameraSettingsPanel({
               disabled={disabled}
               onChange={updateNumber('bitrate_kbps')}
             />
-            <span>kbps</span>
+            <span>{t('settings.kbps')}</span>
           </div>
         </div>
 
         <div className="settings-field">
-          <label htmlFor="runtime-camera-gop">GOP interval</label>
+          <label htmlFor="runtime-camera-gop">{t('settings.gopInterval')}</label>
           <input
             id="runtime-camera-gop"
             type="number"
@@ -117,13 +121,13 @@ export function CameraSettingsPanel({
 
       <div className="section-heading">
         <div>
-          <h3 id="sub-stream-settings-heading">Sub-stream</h3>
+          <h3 id="sub-stream-settings-heading">{t('settings.subStream')}</h3>
         </div>
       </div>
 
       <div className="camera-settings-grid">
         <div className="settings-field">
-          <label htmlFor="runtime-substream-enabled">Sub-stream</label>
+          <label htmlFor="runtime-substream-enabled">{t('settings.subStream')}</label>
           <input
             id="runtime-substream-enabled"
             type="checkbox"
@@ -137,7 +141,7 @@ export function CameraSettingsPanel({
         </div>
 
         <div className="settings-field">
-          <label htmlFor="runtime-substream-resolution">Resolution</label>
+          <label htmlFor="runtime-substream-resolution">{t('settings.resolution')}</label>
           <select
             id="runtime-substream-resolution"
             value={`${draft.sub_stream.width}x${draft.sub_stream.height}`}
@@ -165,7 +169,7 @@ export function CameraSettingsPanel({
         </div>
 
         <div className="settings-field">
-          <label htmlFor="runtime-substream-fps">Frame rate</label>
+          <label htmlFor="runtime-substream-fps">{t('settings.frameRate')}</label>
           <select
             id="runtime-substream-fps"
             value={draft.sub_stream.fps}
@@ -182,7 +186,7 @@ export function CameraSettingsPanel({
         </div>
 
         <div className="settings-field">
-          <label htmlFor="runtime-substream-bitrate">Sub-stream bitrate</label>
+          <label htmlFor="runtime-substream-bitrate">{t('settings.subStreamBitrate')}</label>
           <div className="number-control">
             <input
               id="runtime-substream-bitrate"
@@ -197,14 +201,12 @@ export function CameraSettingsPanel({
                 bitrate_kbps: Number(event.target.value),
               })}
             />
-            <span>kbps</span>
+            <span>{t('settings.kbps')}</span>
           </div>
         </div>
       </div>
 
-      <p>
-        Applying sub-stream changes briefly interrupts the sub-stream feed.
-      </p>
+      <p>{t('settings.subStreamApplyNotice')}</p>
     </section>
   );
 }

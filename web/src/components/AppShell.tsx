@@ -24,8 +24,10 @@ import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import { ProtectionNotice } from '../features/protection/ProtectionNotice';
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
+import { useTranslation } from '../i18n/LanguageContext';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
+import { LanguageSwitcher } from './LanguageSwitcher';
 
 interface AppShellProps {
   principal: Principal;
@@ -39,11 +41,11 @@ interface AppShellProps {
 }
 
 const navigation = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { label: 'Cameras', path: '/cameras', icon: Camera },
-  { label: 'AI', path: '/ai', icon: ScanSearch },
-  { label: 'System', path: '/system', icon: Settings },
-  { label: 'Users', path: '/users', icon: UsersRound },
+  { labelKey: 'nav.dashboard', path: '/dashboard', icon: LayoutDashboard },
+  { labelKey: 'nav.cameras', path: '/cameras', icon: Camera },
+  { labelKey: 'nav.ai', path: '/ai', icon: ScanSearch },
+  { labelKey: 'nav.system', path: '/system', icon: Settings },
+  { labelKey: 'nav.users', path: '/users', icon: UsersRound },
 ] as const;
 
 function RuntimeSettingsNotice({
@@ -51,6 +53,7 @@ function RuntimeSettingsNotice({
 }: {
   controller?: RuntimeSettingsController;
 }) {
+  const { t } = useTranslation();
   const snapshot = controller?.snapshot;
   if (snapshot === null || snapshot === undefined) {
     return null;
@@ -61,14 +64,14 @@ function RuntimeSettingsNotice({
   if (snapshot.last_apply.status === 'failed') {
     role = 'alert';
     message = snapshot.last_apply.restored
-      ? 'Apply failed. The previous camera runtime was restored.'
-      : 'Apply failed. Camera runtime recovery is required.';
+      ? t('status.applyFailedRestored')
+      : t('status.applyFailedRecoveryRequired');
   } else if (snapshot.state === 'recovery_required') {
-    message = 'Runtime settings need recovery.';
+    message = t('status.recoveryRequired');
   } else if (snapshot.state === 'applying' || controller?.status === 'applying') {
-    message = 'Runtime settings are being applied.';
+    message = t('status.applying');
   } else if (snapshot.pending !== null) {
-    message = 'Runtime settings are waiting to be applied.';
+    message = t('status.pending');
   }
 
   if (message === null) {
@@ -90,8 +93,8 @@ function RuntimeSettingsNotice({
     ? '/cameras'
     : '/ai';
   const linkLabel = settingsPath === '/cameras'
-    ? 'Review camera settings'
-    : 'Review AI settings';
+    ? t('status.reviewCameraSettings')
+    : t('status.reviewAiSettings');
 
   return (
     <div className={`settings-shell-notice settings-shell-${role}`} role={role}>
@@ -105,9 +108,10 @@ function NavigationLinks({ pathname, onSelect }: {
   pathname: string;
   onSelect?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <ul className="nav-list">
-      {navigation.map(({ label, path, icon: Icon }) => (
+      {navigation.map(({ labelKey, path, icon: Icon }) => (
         <li key={path}>
           <a
             className={pathname === path ? 'nav-link active' : 'nav-link'}
@@ -116,7 +120,7 @@ function NavigationLinks({ pathname, onSelect }: {
             onClick={onSelect}
           >
             <Icon size={19} aria-hidden="true" />
-            <span>{label}</span>
+            <span>{t(labelKey)}</span>
           </a>
         </li>
       ))}
@@ -134,11 +138,12 @@ export function AppShell({
   auditStatus,
   protection,
 }: AppShellProps) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const protectionState = protection?.snapshot?.state;
   const deviceState = protectionState === 'restricted'
-    ? 'Restricted'
-    : protectionState === 'checking' ? 'Checking' : 'Operational';
+    ? t('status.deviceRestricted')
+    : protectionState === 'checking' ? t('status.deviceChecking') : t('status.deviceOperational');
   const deviceStateClass = protectionState === 'restricted'
     ? 'device-state device-state-restricted'
     : protectionState === 'checking'
@@ -196,8 +201,8 @@ export function AppShell({
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="sidebar-brand"><span>CF</span> Camera Firmware</div>
-        <nav aria-label="Primary navigation">
+        <div className="sidebar-brand"><span>{t('common.brandShort')}</span> {t('common.brand')}</div>
+        <nav aria-label={t('nav.primaryLabel')}>
           <NavigationLinks pathname={pathname} />
         </nav>
       </aside>
@@ -207,7 +212,7 @@ export function AppShell({
           <IconButton
             ref={menuButtonRef}
             className="mobile-menu-button"
-            label="Open navigation"
+            label={t('nav.openNavigation')}
             aria-expanded={drawerOpen}
             onClick={() => setDrawerOpen(true)}
           >
@@ -218,9 +223,10 @@ export function AppShell({
           </span>
         </div>
         <div className="topbar-actions">
-          <IconButton label="Refresh device state" onClick={onRefresh}>
+          <IconButton label={t('status.refreshDeviceState')} onClick={onRefresh}>
             <RefreshCw size={18} aria-hidden="true" />
           </IconButton>
+          <LanguageSwitcher />
           <AccountMenu principal={principal} logout={logout} changePassword={changePassword} />
         </div>
       </header>
@@ -237,7 +243,7 @@ export function AppShell({
           <button
             type="button"
             className="drawer-backdrop"
-            aria-label="Dismiss navigation"
+            aria-label={t('nav.dismissNavigation')}
             tabIndex={-1}
             onClick={() => setDrawerOpen(false)}
           />
@@ -245,20 +251,20 @@ export function AppShell({
             className="mobile-drawer"
             role="dialog"
             aria-modal="true"
-            aria-label="Navigation"
+            aria-label={t('nav.navigationLabel')}
             onKeyDown={trapDrawerFocus}
           >
             <div className="drawer-header">
-              <span>Camera Firmware</span>
+              <span>{t('common.brand')}</span>
               <IconButton
                 ref={closeButtonRef}
-                label="Close navigation"
+                label={t('nav.closeNavigation')}
                 onClick={() => setDrawerOpen(false)}
               >
                 <X size={20} aria-hidden="true" />
               </IconButton>
             </div>
-            <nav aria-label="Drawer navigation">
+            <nav aria-label={t('nav.drawerLabel')}>
               <NavigationLinks
                 pathname={pathname}
                 onSelect={() => setDrawerOpen(false)}

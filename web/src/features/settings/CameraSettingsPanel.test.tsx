@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { CameraSettingsPanel } from './CameraSettingsPanel';
 import type { RuntimeSettings } from './contracts';
 import { makeSettingsController, makeSettingsSnapshot } from './testSupport';
@@ -18,7 +19,7 @@ const withSubStreamEnabled = (
 describe('CameraSettingsPanel', () => {
   it('offers only approved capture profiles and bounded encoder controls', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     const profile = screen.getByRole('combobox', { name: 'Capture profile' });
     expect(profile).toHaveValue('imx708-1080p50');
@@ -39,7 +40,7 @@ describe('CameraSettingsPanel', () => {
 
   it('updates profile, bitrate, and GOP through the shared draft controller', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Capture profile' }), {
       target: { value: 'imx708-720p50' },
@@ -72,7 +73,7 @@ describe('CameraSettingsPanel', () => {
         ...model, enabled: false,
       })) },
     });
-    const { rerender } = render(<CameraSettingsPanel controller={controller} />);
+    const { rerender } = render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('combobox', { name: 'Capture profile' })).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: 'Bitrate' })).toBeDisabled();
@@ -88,7 +89,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).not.toBeChecked();
   });
@@ -99,7 +100,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Sub-stream' }));
     expect(controller.updateSubStream).toHaveBeenLastCalledWith({
@@ -113,7 +114,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, true),
     });
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     const resolution = screen.getByRole('combobox', { name: 'Resolution' });
     expect(resolution).toBeEnabled();
@@ -151,7 +152,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />);
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('combobox', { name: 'Resolution' })).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Frame rate' })).toBeDisabled();
@@ -165,7 +166,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, true),
     });
-    const { rerender } = render(<CameraSettingsPanel controller={controller} />);
+    const { rerender } = render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).toBeDisabled();
 

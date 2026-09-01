@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
+import { LanguageProvider } from '../../i18n';
 import type { ManagedUser } from './contracts';
 import { makeUserManagementController } from './testSupport';
 import { AccountsTab } from './AccountsTab';
@@ -40,6 +41,7 @@ const renderAccounts = (
   }),
 ) => render(
   <AccountsTab controller={controller} createOpen={false} onCreateClose={vi.fn()} />,
+  { wrapper: LanguageProvider },
 );
 
 function CreateViewerHarness({
@@ -53,7 +55,7 @@ function CreateViewerHarness({
   const openerRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <>
+    <LanguageProvider>
       <button ref={openerRef} type="button" onClick={() => setOpen(true)}>
         Add viewer
       </button>
@@ -65,7 +67,7 @@ function CreateViewerHarness({
           setOpen(false);
         }}
       />
-    </>
+    </LanguageProvider>
   );
 }
 
@@ -423,6 +425,7 @@ describe('AccountsTab viewer workflows', () => {
     });
     const view = render(
       <AccountsTab controller={controller} createOpen={false} onCreateClose={vi.fn()} />,
+      { wrapper: LanguageProvider },
     );
 
     await user.click(screen.getByRole('switch', { name: 'Enable viewer.one' }));

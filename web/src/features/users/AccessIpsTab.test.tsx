@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
+import { LanguageProvider } from '../../i18n';
 import type { ManagementIp } from './contracts';
 import { makeUserManagementController } from './testSupport';
 import { AccessIpsTab } from './AccessIpsTab';
@@ -49,6 +50,7 @@ const renderAccessIps = (
         createOpen={false}
         onCreateClose={vi.fn()}
       />,
+      { wrapper: LanguageProvider },
     ),
   };
 };
@@ -62,7 +64,7 @@ function CreateAccessIpHarness({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <>
+    <LanguageProvider>
       <button type="button" onClick={() => setOpen(true)}>Add access IP</button>
       <AccessIpsTab
         controller={controller}
@@ -72,7 +74,7 @@ function CreateAccessIpHarness({
           setOpen(false);
         }}
       />
-    </>
+    </LanguageProvider>
   );
 }
 
@@ -161,6 +163,7 @@ describe('AccessIpsTab resource and protection states', () => {
         createOpen={false}
         onCreateClose={vi.fn()}
       />,
+      { wrapper: LanguageProvider },
     );
     expect(screen.getByText('Loading access IPs...')).toBeVisible();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
@@ -188,6 +191,7 @@ describe('AccessIpsTab resource and protection states', () => {
     });
     render(
       <AccessIpsTab controller={controller} createOpen={false} onCreateClose={vi.fn()} />,
+      { wrapper: LanguageProvider },
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -212,6 +216,7 @@ describe('AccessIpsTab resource and protection states', () => {
     });
     render(
       <AccessIpsTab controller={controller} createOpen={false} onCreateClose={vi.fn()} />,
+      { wrapper: LanguageProvider },
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -231,6 +236,7 @@ describe('AccessIpsTab resource and protection states', () => {
     });
     render(
       <AccessIpsTab controller={controller} createOpen={false} onCreateClose={vi.fn()} />,
+      { wrapper: LanguageProvider },
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(

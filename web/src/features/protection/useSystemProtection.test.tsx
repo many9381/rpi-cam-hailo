@@ -200,7 +200,7 @@ describe('useSystemProtection', () => {
 
     await act(async () => result.current.runIntegrityCheck());
 
-    expect(result.current.publicMessage).toBe('Protection check is already running.');
+    expect(result.current.publicMessage).toBe('protection.checkAlreadyRunning');
     expect(result.current.publicMessage).not.toContain('/private');
     expect(result.current.state).toBe('ready');
     expect(result.current.activeCommand).toBeNull();

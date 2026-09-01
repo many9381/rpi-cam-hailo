@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { SettingsActionBar } from './SettingsActionBar';
 import {
   makeSettings,
@@ -19,7 +20,9 @@ describe('SettingsActionBar', () => {
       draft: makeSettings('imx708-720p50', 5_000),
       dirty: true,
     });
-    const { rerender } = render(<SettingsActionBar controller={valid} />);
+    const { rerender } = render(<SettingsActionBar controller={valid} />, {
+      wrapper: LanguageProvider,
+    });
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
 
     rerender(<SettingsActionBar controller={{ ...valid, dirty: false }} />);
@@ -42,7 +45,7 @@ describe('SettingsActionBar', () => {
       draft: snapshot.active,
       dirty: false,
     });
-    render(<SettingsActionBar controller={controller} />);
+    render(<SettingsActionBar controller={controller} />, { wrapper: LanguageProvider });
 
     const save = screen.getByRole('button', { name: 'Save changes' });
     expect(save).toBeEnabled();
@@ -57,7 +60,7 @@ describe('SettingsActionBar', () => {
     const controller = makeSettingsController({ snapshot, draft: pending });
     const { rerender } = render(<SettingsActionBar controller={{
       ...controller, dirty: true,
-    }} />);
+    }} />, { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(controller.save).toHaveBeenCalledOnce();
@@ -75,7 +78,7 @@ describe('SettingsActionBar', () => {
       snapshot: makeSettingsSnapshot({ pending }),
       draft: pending,
     });
-    render(<SettingsActionBar controller={controller} />);
+    render(<SettingsActionBar controller={controller} />, { wrapper: LanguageProvider });
     const apply = screen.getByRole('button', { name: 'Apply pending' });
 
     await user.click(apply);
@@ -98,7 +101,9 @@ describe('SettingsActionBar', () => {
     const pending = makeSettings('imx708-720p50', 5_000);
     const snapshot = makeSettingsSnapshot({ pending });
     const controller = makeSettingsController({ snapshot, draft: pending });
-    const { rerender } = render(<SettingsActionBar controller={controller} />);
+    const { rerender } = render(<SettingsActionBar controller={controller} />, {
+      wrapper: LanguageProvider,
+    });
 
     await user.click(screen.getByRole('button', { name: 'Apply pending' }));
     await user.click(screen.getByRole('button', { name: 'Apply now' }));
@@ -121,7 +126,9 @@ describe('SettingsActionBar', () => {
       draft: failed.pending,
       error: { status: 503, code: 'E_SETTINGS_APPLY_FAILED' },
     });
-    const { rerender } = render(<SettingsActionBar controller={controller} />);
+    const { rerender } = render(<SettingsActionBar controller={controller} />, {
+      wrapper: LanguageProvider,
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Settings could not be applied. The previous runtime was restored.',

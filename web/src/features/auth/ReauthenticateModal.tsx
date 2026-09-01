@@ -7,20 +7,20 @@ import {
   useState,
 } from 'react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
+
 export interface ReauthenticateModalProps {
   reauthenticate: (password: string) => Promise<void>;
   onSuccess: () => void;
   onCancel: () => void;
 }
 
-const GENERIC_FAILURE = 'Unable to confirm password.';
-const EMPTY_PASSWORD = 'Enter your password.';
-
 export function ReauthenticateModal({
   reauthenticate,
   onSuccess,
   onCancel,
 }: ReauthenticateModalProps) {
+  const { t } = useTranslation();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -58,7 +58,7 @@ export function ReauthenticateModal({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (passwordRef.current.length === 0) {
-      setError(EMPTY_PASSWORD);
+      setError(t('auth.enterPassword'));
       return;
     }
 
@@ -70,7 +70,7 @@ export function ReauthenticateModal({
       succeeded = true;
     } catch {
       if (mounted.current) {
-        setError(GENERIC_FAILURE);
+        setError(t('auth.reauthFailed'));
       }
     } finally {
       clearPassword();
@@ -116,12 +116,12 @@ export function ReauthenticateModal({
         aria-labelledby="reauthenticate-title" aria-describedby="reauthenticate-error"
         tabIndex={-1} onKeyDown={onKeyDown}>
         <div className="change-password-dialog-header">
-          <h2 id="reauthenticate-title">Reauthentication required</h2>
+          <h2 id="reauthenticate-title">{t('auth.reauthHeading')}</h2>
         </div>
-        <p>Your administrative session needs to be reconfirmed to continue.</p>
+        <p>{t('auth.reauthDescription')}</p>
         <form onSubmit={(event) => void submit(event)} noValidate>
           <div className="field">
-            <label htmlFor="reauthenticate-password">Password</label>
+            <label htmlFor="reauthenticate-password">{t('common.password')}</label>
             <input
               ref={passwordInputRef}
               id="reauthenticate-password"
@@ -146,11 +146,11 @@ export function ReauthenticateModal({
           <div className="reauthenticate-dialog-actions">
             <button ref={cancelButtonRef} className="reauthenticate-cancel" type="button"
               onClick={cancel} disabled={pending}>
-              Cancel
+              {t('common.cancel')}
             </button>
             <button ref={confirmButtonRef} className="change-password-submit" type="submit"
               disabled={pending} aria-busy={pending ? true : undefined}>
-              {pending ? 'Confirming...' : 'Confirm'}
+              {pending ? t('auth.confirming') : t('auth.confirm')}
             </button>
           </div>
         </form>

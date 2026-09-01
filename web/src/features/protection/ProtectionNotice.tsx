@@ -1,5 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
 import type { SystemProtectionController } from './useSystemProtection';
 
 interface ProtectionNoticeProps {
@@ -7,6 +8,7 @@ interface ProtectionNoticeProps {
 }
 
 export function ProtectionNotice({ controller }: ProtectionNoticeProps) {
+  const { t } = useTranslation();
   if (controller?.snapshot?.state !== 'restricted') {
     return null;
   }
@@ -14,9 +16,9 @@ export function ProtectionNotice({ controller }: ProtectionNoticeProps) {
     <div className="settings-shell-notice protection-shell-notice" role="alert">
       <span>
         <AlertTriangle size={17} aria-hidden="true" />
-        System protection is restricted. Camera, stream, and AI runtime are stopped.
+        {t('protection.restrictedNotice')}
       </span>
-      <a href="#/system">Review system protection</a>
+      <a href="#/system">{t('protection.reviewProtection')}</a>
     </div>
   );
 }

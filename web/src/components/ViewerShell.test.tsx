@@ -4,6 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Principal } from '../api/types';
+import { LanguageProvider } from '../i18n';
 import '../styles.css';
 import { ViewerShell } from './ViewerShell';
 
@@ -11,11 +12,13 @@ const principal: Principal = { username: 'viewer.one', role: 'viewer' };
 
 function renderShell() {
   return render(
-    <HashRouter>
-      <ViewerShell principal={principal} logout={vi.fn()} changePassword={vi.fn()}>
-        Monitor content
-      </ViewerShell>
-    </HashRouter>,
+    <LanguageProvider>
+      <HashRouter>
+        <ViewerShell principal={principal} logout={vi.fn()} changePassword={vi.fn()}>
+          Monitor content
+        </ViewerShell>
+      </HashRouter>
+    </LanguageProvider>,
   );
 }
 

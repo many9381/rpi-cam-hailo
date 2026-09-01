@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Principal } from '../api/types';
 import type { AuthContextValue } from '../auth/AuthContext';
 import { ChangePasswordDialog } from '../features/users/ChangePasswordDialog';
+import { useTranslation } from '../i18n/LanguageContext';
 import { IconButton } from './IconButton';
 
 export interface AccountMenuProps {
@@ -13,6 +14,7 @@ export interface AccountMenuProps {
 }
 
 export function AccountMenu({ principal, logout, changePassword }: AccountMenuProps) {
+  const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const userMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -38,7 +40,7 @@ export function AccountMenu({ principal, logout, changePassword }: AccountMenuPr
       <div className="user-menu-wrap">
         <IconButton
           ref={userMenuButtonRef}
-          label="Open user menu"
+          label={t('account.openMenu')}
           aria-expanded={menuOpen}
           aria-controls="user-disclosure"
           onClick={() => setMenuOpen((open) => !open)}
@@ -50,7 +52,7 @@ export function AccountMenu({ principal, logout, changePassword }: AccountMenuPr
             <span className="user-role">{principal.role}</span>
             <button ref={changePasswordButtonRef} className="user-menu-change-password"
               type="button" onClick={() => setChangePasswordOpen(true)}>
-              Change password
+              {t('account.changePassword')}
             </button>
             <button className="user-menu-sign-out"
               type="button"
@@ -60,7 +62,7 @@ export function AccountMenu({ principal, logout, changePassword }: AccountMenuPr
               }}
             >
               <LogOut size={17} aria-hidden="true" />
-              Sign out
+              {t('account.signOut')}
             </button>
           </div>
         )}

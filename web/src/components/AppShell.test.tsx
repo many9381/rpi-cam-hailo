@@ -13,6 +13,7 @@ import {
   makeSettingsSnapshot,
 } from '../features/settings/testSupport';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
+import { LanguageProvider } from '../i18n';
 import { AppShell } from './AppShell';
 
 const principal: Principal = { username: 'operator.one', role: 'administrator' };
@@ -24,11 +25,13 @@ const renderShell = (
   auditStatus?: AuditStatusController,
   protection?: SystemProtectionController,
 ) => render(
-  <HashRouter>
-    <AppShell principal={principal} logout={logout}
-      changePassword={changePassword} runtimeSettings={runtimeSettings}
-      auditStatus={auditStatus} protection={protection}>Dashboard content</AppShell>
-  </HashRouter>,
+  <LanguageProvider>
+    <HashRouter>
+      <AppShell principal={principal} logout={logout}
+        changePassword={changePassword} runtimeSettings={runtimeSettings}
+        auditStatus={auditStatus} protection={protection}>Dashboard content</AppShell>
+    </HashRouter>
+  </LanguageProvider>,
 );
 
 const warningAuditStatus: AuditStatusController = {
@@ -191,10 +194,12 @@ describe('AppShell', () => {
       draft: aiPending,
     });
     rerender(
-      <HashRouter>
-        <AppShell principal={principal} logout={vi.fn()}
-          changePassword={vi.fn()} runtimeSettings={aiController}>Dashboard content</AppShell>
-      </HashRouter>,
+      <LanguageProvider>
+        <HashRouter>
+          <AppShell principal={principal} logout={vi.fn()}
+            changePassword={vi.fn()} runtimeSettings={aiController}>Dashboard content</AppShell>
+        </HashRouter>
+      </LanguageProvider>,
     );
     expect(screen.getByRole('link', { name: 'Review AI settings' }))
       .toHaveAttribute('href', '#/ai');
@@ -214,12 +219,14 @@ describe('AppShell', () => {
       lastApply: { status: 'failed', code: 'E_SETTINGS_APPLY_FAILED', restored: true },
     });
     rerender(
-      <HashRouter>
-        <AppShell principal={principal} logout={vi.fn()}
-          changePassword={vi.fn()} runtimeSettings={makeSettingsController({
-            status: 'error', snapshot: failed, draft: failed.pending,
-          })}>Dashboard content</AppShell>
-      </HashRouter>,
+      <LanguageProvider>
+        <HashRouter>
+          <AppShell principal={principal} logout={vi.fn()}
+            changePassword={vi.fn()} runtimeSettings={makeSettingsController({
+              status: 'error', snapshot: failed, draft: failed.pending,
+            })}>Dashboard content</AppShell>
+        </HashRouter>
+      </LanguageProvider>,
     );
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Apply failed. The previous camera runtime was restored.',

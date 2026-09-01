@@ -3,6 +3,7 @@ import { type KeyboardEvent, useState } from 'react';
 import { AccessIpsTab } from '../features/users/AccessIpsTab';
 import { AccountsTab } from '../features/users/AccountsTab';
 import type { UserManagementController } from '../features/users/useUserManagement';
+import { useTranslation } from '../i18n/LanguageContext';
 
 interface UsersPageProps {
   controller: UserManagementController;
@@ -12,25 +13,26 @@ type ActiveTab = 'accounts' | 'access_ips';
 
 const tabs: ReadonlyArray<{
   key: ActiveTab;
-  label: string;
+  labelKey: string;
   tabId: string;
   panelId: string;
 }> = [
   {
     key: 'accounts',
-    label: 'Accounts',
+    labelKey: 'users.tabAccounts',
     tabId: 'users-accounts-tab',
     panelId: 'users-accounts-panel',
   },
   {
     key: 'access_ips',
-    label: 'Access IPs',
+    labelKey: 'users.tabAccessIps',
     tabId: 'users-access-ips-tab',
     panelId: 'users-access-ips-panel',
   },
 ];
 
 export function UsersPage({ controller }: UsersPageProps) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ActiveTab>('accounts');
   const [createDialog, setCreateDialog] =
     useState<'viewer' | 'management_ip' | null>(null);
@@ -76,7 +78,7 @@ export function UsersPage({ controller }: UsersPageProps) {
   return (
     <div className="users-page">
       <header className="users-heading">
-        <h1>Users &amp; access</h1>
+        <h1>{t('users.pageTitle')}</h1>
         {activeTab === 'accounts' ? (
           <button
             className="users-create-button"
@@ -84,7 +86,7 @@ export function UsersPage({ controller }: UsersPageProps) {
             disabled={mutationPending}
             onClick={() => setCreateDialog('viewer')}
           >
-            Add viewer
+            {t('users.addViewer')}
           </button>
         ) : (
           <button
@@ -93,12 +95,12 @@ export function UsersPage({ controller }: UsersPageProps) {
             disabled={mutationPending}
             onClick={() => setCreateDialog('management_ip')}
           >
-            Add access IP
+            {t('users.addAccessIp')}
           </button>
         )}
       </header>
 
-      <div className="users-tabs" role="tablist" aria-label="Users and access">
+      <div className="users-tabs" role="tablist" aria-label={t('users.tabListLabel')}>
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -111,7 +113,7 @@ export function UsersPage({ controller }: UsersPageProps) {
             onClick={() => selectTab(tab.key, false)}
             onKeyDown={(event) => handleTabKeyDown(event, tab.key)}
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>

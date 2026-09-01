@@ -11,6 +11,7 @@ import {
   makeSettingsController,
   makeSettingsSnapshot,
 } from '../features/settings/testSupport';
+import { LanguageProvider } from '../i18n';
 import { DashboardPage } from './DashboardPage';
 
 vi.mock('../features/audit/AuditRecordsPanel', () => ({
@@ -143,7 +144,8 @@ describe('DashboardPage', () => {
   ] as const)(
     'renders the distinct %s management surface',
     (view, title, visibleSections, hiddenSections) => {
-      render(<DashboardPage client={client} controller={controller} view={view} />);
+      render(<DashboardPage client={client} controller={controller} view={view} />,
+        { wrapper: LanguageProvider });
 
       expect(screen.getByRole('heading', { name: title })).toBeVisible();
       for (const section of visibleSections) {
@@ -157,7 +159,7 @@ describe('DashboardPage', () => {
 
   it('mounts the audit panel with status only for the System view', () => {
     const view = render(<DashboardPage client={client} controller={controller}
-      auditStatus={auditStatus} view="dashboard" />);
+      auditStatus={auditStatus} view="dashboard" />, { wrapper: LanguageProvider });
     expect(screen.queryByTestId('audit-records-panel')).not.toBeInTheDocument();
 
     view.rerender(<DashboardPage client={client} controller={controller}
@@ -178,7 +180,8 @@ describe('DashboardPage', () => {
 
   it('places system protection above audit records only on the System view', () => {
     const view = render(<DashboardPage client={client} controller={controller}
-      protection={protection} auditStatus={auditStatus} view="dashboard" />);
+      protection={protection} auditStatus={auditStatus} view="dashboard" />,
+      { wrapper: LanguageProvider });
     expect(screen.queryByTestId('system-protection-panel')).not.toBeInTheDocument();
 
     view.rerender(<DashboardPage client={client} controller={controller}
@@ -201,7 +204,7 @@ describe('DashboardPage', () => {
         ...controller,
         state,
         data: null,
-      }} auditStatus={auditStatus} view="system" />);
+      }} auditStatus={auditStatus} view="system" />, { wrapper: LanguageProvider });
 
       expect(screen.getByText(operationalMessage)).toBeVisible();
       expect(screen.getByTestId('audit-records-panel')).toHaveAttribute(
@@ -215,7 +218,8 @@ describe('DashboardPage', () => {
   it('composes the authenticated live preview with operational data', async () => {
     const user = userEvent.setup();
     const refresh = vi.fn(async () => undefined);
-    render(<DashboardPage client={client} controller={{ ...controller, refresh }} />);
+    render(<DashboardPage client={client} controller={{ ...controller, refresh }} />,
+      { wrapper: LanguageProvider });
 
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
     expect(screen.getByText('Connecting preview...')).toBeVisible();
@@ -235,7 +239,8 @@ describe('DashboardPage', () => {
       ...controller,
       refresh: vi.fn(async () => undefined),
     }}
-      auditStatus={{ ...auditStatus, refresh: refreshAuditStatus }} />);
+      auditStatus={{ ...auditStatus, refresh: refreshAuditStatus }} />,
+      { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: /refresh operational data/i }));
 
@@ -245,7 +250,7 @@ describe('DashboardPage', () => {
   it('renders loading and unavailable states', () => {
     const { rerender } = render(<DashboardPage client={client} controller={{
       ...controller, state: 'loading', data: null,
-    }} />);
+    }} />, { wrapper: LanguageProvider });
     expect(screen.getByText('Loading operational data...')).toBeVisible();
 
     rerender(<DashboardPage client={client} controller={{
@@ -257,6 +262,7 @@ describe('DashboardPage', () => {
   it('feeds named live detections to the list, canvas source, and controller', async () => {
     const { container } = render(
       <DashboardPage client={client} controller={controller} />,
+      { wrapper: LanguageProvider },
     );
     const live = { events: [{
       camera_id: 'cam-a', model_id: 'pose', model_kind: 'pose',
@@ -280,7 +286,8 @@ describe('DashboardPage', () => {
       state: 'ready', reason: 'AI runtime ready' };
     vi.mocked(client.postJson).mockImplementation(async (_path, _body, parser) =>
       parser({ status: 'restarted', ai: restarted }));
-    render(<DashboardPage client={client} controller={controller} />);
+    render(<DashboardPage client={client} controller={controller} />,
+      { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: 'Restart AI runtime' }));
 
@@ -299,7 +306,8 @@ describe('DashboardPage', () => {
     const refresh = vi.fn(() => new Promise<void>((resolve) => {
       finishRefresh = resolve;
     }));
-    render(<DashboardPage client={client} controller={{ ...controller, refresh }} />);
+    render(<DashboardPage client={client} controller={{ ...controller, refresh }} />,
+      { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: 'Restart AI runtime' }));
     expect(refresh).toHaveBeenCalledOnce();
@@ -324,7 +332,8 @@ describe('DashboardPage', () => {
         cameras: [{ id: 'cam-a', state: 'error', snapshot_available: false }],
       },
     };
-    render(<DashboardPage client={client} controller={failedController} />);
+    render(<DashboardPage client={client} controller={failedController} />,
+      { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: 'Restart camera runtime' }));
 
@@ -337,7 +346,8 @@ describe('DashboardPage', () => {
   it('places camera and AI settings only in their operational views', () => {
     const settingsController = makeSettingsController();
     const { rerender } = render(<DashboardPage client={client}
-      controller={controller} runtimeSettings={settingsController} view="cameras" />);
+      controller={controller} runtimeSettings={settingsController} view="cameras" />,
+      { wrapper: LanguageProvider });
     expect(screen.getByRole('heading', { name: 'Camera settings' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Model settings' }))
       .not.toBeInTheDocument();
@@ -361,7 +371,7 @@ describe('DashboardPage', () => {
       draft: pending,
     });
     render(<DashboardPage client={client} controller={{ ...controller, refresh }}
-      runtimeSettings={settingsController} view="cameras" />);
+      runtimeSettings={settingsController} view="cameras" />, { wrapper: LanguageProvider });
 
     await user.click(screen.getByRole('button', { name: 'Apply pending' }));
     await user.click(screen.getByRole('button', { name: 'Apply now' }));

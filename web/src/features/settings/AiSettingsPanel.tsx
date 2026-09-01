@@ -1,5 +1,6 @@
 import type { ChangeEvent } from 'react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
 import type { RuntimeSettingsController } from './useRuntimeSettings';
 
 interface AiSettingsPanelProps {
@@ -10,18 +11,19 @@ const isBusy = (status: RuntimeSettingsController['status']): boolean =>
   status === 'saving' || status === 'applying';
 
 export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
+  const { t } = useTranslation();
   const { draft, snapshot } = controller;
   if (draft === null || snapshot === null) {
     return (
       <section className="operational-section settings-section"
         aria-labelledby="ai-settings-heading">
         <div className="section-heading">
-          <div><h2 id="ai-settings-heading">Model settings</h2></div>
+          <div><h2 id="ai-settings-heading">{t('settings.modelSettingsHeading')}</h2></div>
         </div>
         <p className="empty-row" role={controller.status === 'error' ? 'alert' : 'status'}>
           {controller.status === 'error'
-            ? 'Runtime settings are unavailable.'
-            : 'Loading runtime settings...'}
+            ? t('settings.unavailable')
+            : t('settings.loading')}
         </p>
       </section>
     );
@@ -39,16 +41,16 @@ export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
       aria-labelledby="ai-settings-heading">
       <div className="section-heading">
         <div>
-          <h2 id="ai-settings-heading">Model settings</h2>
-          <p>{snapshot.capabilities.models.length} configured models</p>
+          <h2 id="ai-settings-heading">{t('settings.modelSettingsHeading')}</h2>
+          <p>{t('settings.configuredModels', { count: snapshot.capabilities.models.length })}</p>
         </div>
         {snapshot.pending !== null && (
-          <span className="settings-state-label">Pending</span>
+          <span className="settings-state-label">{t('settings.pendingLabel')}</span>
         )}
       </div>
 
       {snapshot.capabilities.models.length === 0 ? (
-        <p className="empty-row">No AI models configured</p>
+        <p className="empty-row">{t('settings.noModelsConfigured')}</p>
       ) : (
         <div className="model-settings-list">
           {snapshot.capabilities.models.map((capability) => {
@@ -66,7 +68,7 @@ export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
                     <input
                       type="checkbox"
                       role="switch"
-                      aria-label={`${capability.id} enabled`}
+                      aria-label={t('settings.modelEnabledLabel', { id: capability.id })}
                       checked={model.enabled}
                       disabled={disabled}
                       onChange={(event) => controller.updateModel(capability.id, {
@@ -78,16 +80,16 @@ export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
                 </div>
 
                 <dl className="model-capabilities">
-                  <div><dt>Kind</dt><dd>{capability.kind}</dd></div>
-                  <div><dt>Input</dt><dd>{capability.input_width} x {capability.input_height}</dd></div>
-                  <div><dt>Format</dt><dd>{capability.input_format}</dd></div>
-                  <div><dt>Resize</dt><dd>{capability.letterbox ? 'Letterbox' : 'Stretch'}</dd></div>
-                  <div><dt>Labels</dt><dd>{capability.labels || 'None'}</dd></div>
+                  <div><dt>{t('settings.kind')}</dt><dd>{capability.kind}</dd></div>
+                  <div><dt>{t('ai.input')}</dt><dd>{capability.input_width} x {capability.input_height}</dd></div>
+                  <div><dt>{t('settings.format')}</dt><dd>{capability.input_format}</dd></div>
+                  <div><dt>{t('ai.resize')}</dt><dd>{capability.letterbox ? t('ai.letterbox') : t('settings.stretch')}</dd></div>
+                  <div><dt>{t('ai.labels')}</dt><dd>{capability.labels || t('settings.none')}</dd></div>
                 </dl>
 
                 <div className="confidence-control">
                   <label htmlFor={`confidence-range-${capability.id}`}>
-                    Confidence threshold
+                    {t('settings.confidenceThreshold')}
                   </label>
                   <div>
                     <input
@@ -97,7 +99,7 @@ export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
                       max={1}
                       step={0.01}
                       value={model.confidence_threshold}
-                      aria-label={`${capability.id} confidence`}
+                      aria-label={t('settings.modelConfidenceLabel', { id: capability.id })}
                       disabled={disabled}
                       onChange={updateConfidence(capability.id)}
                     />
@@ -107,7 +109,7 @@ export function AiSettingsPanel({ controller }: AiSettingsPanelProps) {
                       max={1}
                       step={0.01}
                       value={model.confidence_threshold}
-                      aria-label={`${capability.id} confidence value`}
+                      aria-label={t('settings.modelConfidenceValueLabel', { id: capability.id })}
                       disabled={disabled}
                       onChange={updateConfidence(capability.id)}
                     />

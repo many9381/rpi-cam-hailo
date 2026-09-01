@@ -4,6 +4,7 @@ import { StrictMode, useLayoutEffect, useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../../api/client';
+import { LanguageProvider } from '../../i18n';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 
 interface DialogHarnessProps {
@@ -20,7 +21,7 @@ function DialogHarness({ changePassword, onClosed = () => undefined }: DialogHar
   const openerRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <>
+    <LanguageProvider>
       <button ref={openerRef} type="button">Open password dialog</button>
       <ChangePasswordDialog
         open={open}
@@ -31,7 +32,7 @@ function DialogHarness({ changePassword, onClosed = () => undefined }: DialogHar
           setOpen(false);
         }}
       />
-    </>
+    </LanguageProvider>
   );
 }
 
@@ -56,6 +57,7 @@ describe('ChangePasswordDialog', () => {
     render(
       <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
         onClose={() => undefined} />,
+      { wrapper: LanguageProvider },
     );
 
     const dialog = screen.getByRole('dialog', { name: 'Change password' });
@@ -120,16 +122,20 @@ describe('ChangePasswordDialog', () => {
     const user = userEvent.setup();
     const changePassword = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
+    const openerRef = { current: document.createElement('button') };
+    // Render before installing the storage spies: LanguageProvider reads
+    // localStorage once at mount to resolve the active UI language, which is
+    // unrelated to (and must not mask) the password-change flow under test.
+    render(
+      <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
+        onClose={onClose} />,
+      { wrapper: LanguageProvider },
+    );
     const consoleLog = vi.spyOn(console, 'log');
     const consoleError = vi.spyOn(console, 'error');
     const storageGet = vi.spyOn(Storage.prototype, 'getItem');
     const storageSet = vi.spyOn(Storage.prototype, 'setItem');
-    const openerRef = { current: document.createElement('button') };
     try {
-      render(
-        <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
-          onClose={onClose} />,
-      );
       await fillPasswords(user);
 
       await user.click(screen.getByRole('button', { name: 'Change password' }));
@@ -186,6 +192,7 @@ describe('ChangePasswordDialog', () => {
         <ChangePasswordDialog open returnFocusRef={openerRef}
           changePassword={async () => undefined} onClose={onClose} />
       </StrictMode>,
+      { wrapper: LanguageProvider },
     );
     await fillPasswords(user);
 
@@ -203,6 +210,7 @@ describe('ChangePasswordDialog', () => {
           changePassword={async () => Promise.reject(new ApiError(400, 'E_PASSWORD_REUSE'))}
           onClose={() => undefined} />
       </StrictMode>,
+      { wrapper: LanguageProvider },
     );
     await fillPasswords(user);
 
@@ -219,6 +227,7 @@ describe('ChangePasswordDialog', () => {
     render(
       <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
         onClose={onClose} />,
+      { wrapper: LanguageProvider },
     );
     await fillPasswords(user);
 
@@ -255,6 +264,7 @@ describe('ChangePasswordDialog', () => {
     const view = render(
       <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
         onClose={onClose} />,
+      { wrapper: LanguageProvider },
     );
     await fillPasswords(user);
 
@@ -285,7 +295,7 @@ describe('ChangePasswordDialog', () => {
       }, [open]);
 
       return (
-        <>
+        <LanguageProvider>
           <button type="button" onClick={() => setOpen(false)}>Parent close</button>
           <ChangePasswordDialog
             open={open}
@@ -296,7 +306,7 @@ describe('ChangePasswordDialog', () => {
             }}
             onClose={onClose}
           />
-        </>
+        </LanguageProvider>
       );
     }
     render(<ImmediateCloseHarness />);
@@ -346,6 +356,7 @@ describe('ChangePasswordDialog', () => {
     const view = render(
       <ChangePasswordDialog open returnFocusRef={openerRef} changePassword={changePassword}
         onClose={() => undefined} />,
+      { wrapper: LanguageProvider },
     );
     await fillPasswords(user);
     await user.click(screen.getByRole('button', { name: 'Change password' }));

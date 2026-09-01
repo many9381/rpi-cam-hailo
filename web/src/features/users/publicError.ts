@@ -1,37 +1,44 @@
 import { ApiError, UnauthorizedError } from '../../api/client';
+import type { useTranslation } from '../../i18n/LanguageContext';
 
-const messages: Readonly<Record<string, string>> = {
-  E_USERNAME_RESERVED: 'This username is reserved.',
-  E_USERNAME_FORMAT: 'Enter a valid username.',
-  E_PASSWORD_LENGTH: 'Enter a password with the required length.',
-  E_PASSWORD_ASCII: 'Use only printable ASCII characters in the password.',
-  E_PASSWORD_USERNAME: 'The password cannot contain the username.',
-  E_PASSWORD_CLASS: 'Use the required mix of password character classes.',
-  E_PASSWORD_REPEAT: 'Avoid repeated characters in the password.',
-  E_PASSWORD_SEQUENCE: 'Avoid sequential characters in the password.',
-  E_PASSWORD_REUSE: 'The current or previous password cannot be reused.',
-  E_CURRENT_PASSWORD: 'The current password is incorrect.',
-  E_USER_DUPLICATE: 'That username already exists.',
-  E_VIEWER_LIMIT: 'The viewer account limit has been reached.',
-  E_USER_PROTECTED: 'This administrator account is protected.',
-  E_USER_CONFLICT: 'This account was changed. Refresh and try again.',
-  E_USER_NOT_FOUND: 'That account no longer exists.',
-  E_AUTHORIZATION_REQUIRED: 'You are not authorized to perform this action.',
-  E_MANAGEMENT_IP_INVALID: 'Enter one valid IPv4 or IPv6 host address.',
-  E_MANAGEMENT_IP_DUPLICATE: 'That address already exists for this role.',
-  E_MANAGEMENT_IP_LIMIT: 'The address limit for this role has been reached.',
-  E_MANAGEMENT_IP_PROTECTED: 'This administrator address is protected.',
-  E_MANAGEMENT_IP_ROLE_MISMATCH: 'That address belongs to a different role.',
-  E_MANAGEMENT_IP_NOT_FOUND: 'That address no longer exists.',
-  E_USER_MANAGEMENT_UNAVAILABLE: 'User management is temporarily unavailable.',
+type TFunc = ReturnType<typeof useTranslation>['t'];
+
+// Translation keys, not English text: userManagementErrorMessage takes `t`
+// and resolves through the caller's active language. See errors.* in
+// src/i18n/messages/en.ts for the source English text of each key.
+const messageKeys: Readonly<Record<string, string>> = {
+  E_USERNAME_RESERVED: 'errors.usernameReserved',
+  E_USERNAME_FORMAT: 'errors.usernameInvalid',
+  E_PASSWORD_LENGTH: 'errors.passwordLengthRequired',
+  E_PASSWORD_ASCII: 'errors.passwordAsciiOnly',
+  E_PASSWORD_USERNAME: 'errors.passwordContainsUsername',
+  E_PASSWORD_CLASS: 'errors.passwordClassMix',
+  E_PASSWORD_REPEAT: 'errors.passwordRepeatedChars',
+  E_PASSWORD_SEQUENCE: 'errors.passwordSequentialChars',
+  E_PASSWORD_REUSE: 'errors.passwordReused',
+  E_CURRENT_PASSWORD: 'errors.currentPasswordIncorrect',
+  E_USER_DUPLICATE: 'errors.usernameExists',
+  E_VIEWER_LIMIT: 'errors.viewerLimitReached',
+  E_USER_PROTECTED: 'errors.userProtected',
+  E_USER_CONFLICT: 'errors.userConflict',
+  E_USER_NOT_FOUND: 'errors.userNotFound',
+  E_AUTHORIZATION_REQUIRED: 'errors.notAuthorized',
+  E_MANAGEMENT_IP_INVALID: 'errors.managementIpInvalid',
+  E_MANAGEMENT_IP_DUPLICATE: 'errors.managementIpExists',
+  E_MANAGEMENT_IP_LIMIT: 'errors.managementIpLimitReached',
+  E_MANAGEMENT_IP_PROTECTED: 'errors.managementIpProtected',
+  E_MANAGEMENT_IP_ROLE_MISMATCH: 'errors.managementIpRoleMismatch',
+  E_MANAGEMENT_IP_NOT_FOUND: 'errors.managementIpNotFound',
+  E_USER_MANAGEMENT_UNAVAILABLE: 'errors.userManagementUnavailable',
 };
 
-export function userManagementErrorMessage(error: unknown, fallback: string): string {
+export function userManagementErrorMessage(error: unknown, fallback: string, t: TFunc): string {
   if (error instanceof UnauthorizedError) {
-    return 'Your session has ended.';
+    return t('errors.sessionEnded');
   }
   if (error instanceof ApiError) {
-    return messages[error.code] ?? fallback;
+    const key = messageKeys[error.code];
+    return key ? t(key) : fallback;
   }
   return fallback;
 }

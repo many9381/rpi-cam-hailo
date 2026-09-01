@@ -1,3 +1,5 @@
+import { useTranslation } from '../../i18n/LanguageContext';
+
 const PASSWORD_MASK = '••••••••••';
 
 export interface SetupReviewStepProps {
@@ -25,25 +27,26 @@ export function SetupReviewStep({
   onBack,
   onSubmit,
 }: SetupReviewStepProps) {
+  const { t } = useTranslation();
   return (
     <>
-      <h1 id="wizard-heading">Review and confirm</h1>
-      <p className="wizard-progress">Step 3 of 3 &middot; Review</p>
+      <h1 id="wizard-heading">{t('setup.reviewHeading')}</h1>
+      <p className="wizard-progress">{t('setup.stepReviewProgress')}</p>
       <dl className="wizard-review-list">
         <div className="wizard-review-row">
-          <dt>Username</dt>
+          <dt>{t('common.username')}</dt>
           <dd>{username}</dd>
         </div>
         <div className="wizard-review-row">
-          <dt>Password</dt>
-          <dd aria-label="Password (hidden)">{PASSWORD_MASK}</dd>
+          <dt>{t('common.password')}</dt>
+          <dd aria-label={t('setup.passwordHiddenLabel')}>{PASSWORD_MASK}</dd>
         </div>
         <div className="wizard-review-row">
-          <dt>Management addresses</dt>
+          <dt>{t('setup.managementAddressesLabel')}</dt>
           <dd>
             <ul className="management-host-list">
               <li>
-                {peerIp} <span className="management-host-tag">(current session)</span>
+                {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
               </li>
               {hosts.map((host) => <li key={host}>{host}</li>)}
             </ul>
@@ -52,7 +55,7 @@ export function SetupReviewStep({
       </dl>
       <div className="wizard-actions">
         <button type="button" className="secondary-button" onClick={onBack} disabled={submitting}>
-          Back
+          {t('setup.back')}
         </button>
         <button
           type="button"
@@ -60,7 +63,7 @@ export function SetupReviewStep({
           onClick={onSubmit}
           disabled={submitting}
         >
-          {submitting ? 'Completing setup...' : 'Complete setup'}
+          {submitting ? t('setup.completingSetup') : t('setup.completeSetup')}
         </button>
       </div>
     </>

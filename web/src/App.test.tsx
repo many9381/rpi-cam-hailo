@@ -1,13 +1,29 @@
 import '@testing-library/jest-dom/vitest';
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StrictMode } from 'react';
+import { StrictMode, type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiClient, UnauthorizedError } from './api/client';
 import type { CameraApiClient, SetupStatus } from './api/types';
 import { App } from './App';
+import { LanguageProvider } from './i18n';
+
+// App (mounted here the way main.tsx mounts it) renders AppShell/LoginPage,
+// both of which mount <LanguageSwitcher>. main.tsx supplies LanguageProvider
+// outside <App>, so every render in this file needs the same ancestor -
+// centralized here instead of wrapping ~24 call sites individually.
+function render(ui: ReactElement) {
+  return rtlRender(<LanguageProvider>{ui}</LanguageProvider>);
+}
 
 const administratorHooks = vi.hoisted(() => ({
   throwOnConstruction: false,
