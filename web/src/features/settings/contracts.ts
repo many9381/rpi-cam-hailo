@@ -187,6 +187,13 @@ const isSafePositiveInteger = (value: unknown): value is number =>
 const isConfidence = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 
+// Mirrors the backend's IsPrintableOsdText (src/settings/RuntimeSettings.cpp):
+// MAX_OSD_TEXT is a UTF-8 BYTE bound (not a UTF-16 code-unit/character count),
+// and control characters (< 0x20, or 0x7f/DEL) are rejected outright.
+const isPrintableOsdText = (text: string): boolean =>
+  new TextEncoder().encode(text).length <= MAX_OSD_TEXT &&
+  !/[\x00-\x1f\x7f]/.test(text);
+
 function invalid(): never {
   throw new Error('Invalid runtime settings response');
 }
@@ -272,6 +279,12 @@ const DEFAULT_SUB_STREAM: SubStreamRuntimeSettings = {
 };
 
 const DEFAULT_OSD: OsdRuntimeSettings = { enabled: false, items: [] };
+// Frozen so any accidental future aliasing of DEFAULT_OSD (or its items array)
+// throws immediately in dev instead of silently corrupting every parse result
+// that shares the reference. parseOsd's default branch still must return a
+// FRESH items array on every call - freezing alone does not do that.
+Object.freeze(DEFAULT_OSD);
+Object.freeze(DEFAULT_OSD.items);
 
 function parseSubStream(
   value: unknown,
@@ -315,7 +328,7 @@ function parseOsdItem(value: unknown): OsdItem {
       typeof value.position !== 'string' ||
       !OSD_ITEM_TYPES.includes(value.type as OsdItemType) ||
       !OSD_POSITIONS.includes(value.position as OsdPosition) ||
-      value.text.length > MAX_OSD_TEXT ||
+      !isPrintableOsdText(value.text) ||
       (value.type === 'custom_text' && value.text.length === 0)) {
     return invalid();
   }
@@ -328,7 +341,9 @@ function parseOsdItem(value: unknown): OsdItem {
 
 function parseOsd(value: unknown): OsdRuntimeSettings {
   if (value === undefined) {
-    return { ...DEFAULT_OSD };
+    // A fresh items array on every call - DEFAULT_OSD.items must never be
+    // shared across parse results (they may be mutated independently later).
+    return { ...DEFAULT_OSD, items: [] };
   }
   if (!hasExactKeys(value, ['enabled', 'items']) ||
       typeof value.enabled !== 'boolean' || !Array.isArray(value.items) ||

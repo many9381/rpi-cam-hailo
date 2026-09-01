@@ -181,6 +181,43 @@ describe('runtime settings contracts', () => {
     expect(parsed.pending?.osd).toEqual(defaultOsd);
   });
 
+  it('never aliases a shared items array across defaulted osd results', () => {
+    const value = makeSnapshot();
+    const { osd: _activeOsd, ...activeRest } = value.active;
+    const { osd: _pendingOsd, ...pendingRest } = value.pending;
+    const withoutOsd = { ...value, active: activeRest, pending: pendingRest };
+
+    const first = parseRuntimeSettingsSnapshot(withoutOsd);
+    first.active.osd.items.push({ type: 'timestamp', text: '', position: 'top_left' });
+
+    expect(first.active.osd.items).toHaveLength(1);
+    // A sibling default from the very same parse call must not be the same array.
+    expect(first.pending?.osd.items).toHaveLength(0);
+
+    // A wholly independent parse call must not observe the mutation either -
+    // proves the shared module-level default itself was never mutated.
+    const second = parseRuntimeSettingsSnapshot(withoutOsd);
+    expect(second.active.osd.items).toHaveLength(0);
+    expect(second.pending?.osd.items).toHaveLength(0);
+  });
+
+  it('parses osd text at exactly the 64-byte UTF-8 boundary', () => {
+    const text = 'x'.repeat(64);
+    const parsed = parseRuntimeSettingsSnapshot({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'custom_text', text, position: 'top_left' }],
+        },
+      },
+    });
+    expect(parsed.active.osd.items).toEqual([
+      { type: 'custom_text', text, position: 'top_left' },
+    ]);
+  });
+
   it('round-trips osd through a JSON PUT payload', () => {
     const value = makeSnapshot();
     const draft = parseRuntimeSettingsSnapshot(value).active;
@@ -361,6 +398,37 @@ describe('runtime settings contracts', () => {
         osd: {
           enabled: true,
           items: [{ type: 'custom_text', text: 'x'.repeat(65), position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd item text exceeding 64 UTF-8 bytes despite being under 64 UTF-16 units', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          // 30 Hangul syllables: 30 UTF-16 units (well under 64) but 90 UTF-8 bytes.
+          items: [{ type: 'custom_text', text: '가'.repeat(30), position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd item text containing a newline control character', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'custom_text', text: 'front\nporch', position: 'top_left' }],
+        },
+      },
+    })],
+    ['osd item text containing a DEL control character', () => ({
+      ...makeSnapshot(),
+      active: {
+        ...makeSnapshot().active,
+        osd: {
+          enabled: true,
+          items: [{ type: 'custom_text', text: 'front\x7Fporch', position: 'top_left' }],
         },
       },
     })],
