@@ -8,6 +8,7 @@ import {
   parseRuntimeSettingsSnapshot,
   type CameraRuntimeSettings,
   type ModelRuntimeSettings,
+  type OsdRuntimeSettings,
   type PublicApiError,
   type RuntimeSettings,
   type RuntimeSettingsSnapshot,
@@ -22,6 +23,7 @@ export interface RuntimeSettingsController {
   error: PublicApiError | null;
   updateCamera(next: CameraRuntimeSettings): void;
   updateSubStream(next: SubStreamRuntimeSettings): void;
+  updateOsd(next: OsdRuntimeSettings): void;
   updateModel(id: string, patch: Partial<ModelRuntimeSettings>): void;
   save(): Promise<void>;
   apply(): Promise<void>;
@@ -47,6 +49,13 @@ const settingsEqual = (
     left.sub_stream.height === right.sub_stream.height &&
     left.sub_stream.fps === right.sub_stream.fps &&
     left.sub_stream.bitrate_kbps === right.sub_stream.bitrate_kbps &&
+    left.osd.enabled === right.osd.enabled &&
+    left.osd.items.length === right.osd.items.length &&
+    left.osd.items.every((item, index) => {
+      const other = right.osd.items[index];
+      return other !== undefined && item.type === other.type &&
+        item.text === other.text && item.position === other.position;
+    }) &&
     left.models.length === right.models.length &&
     left.models.every((model, index) => {
       const other = right.models[index];
@@ -299,6 +308,14 @@ export function useRuntimeSettings(
     replaceDraft({ ...current, sub_stream: next });
   }, [replaceDraft]);
 
+  const updateOsd = useCallback((next: OsdRuntimeSettings) => {
+    const current = draftRef.current;
+    if (current === null) {
+      return;
+    }
+    replaceDraft({ ...current, osd: next });
+  }, [replaceDraft]);
+
   const updateModel = useCallback((
     id: string,
     patch: Partial<ModelRuntimeSettings>,
@@ -323,6 +340,7 @@ export function useRuntimeSettings(
     error,
     updateCamera,
     updateSubStream,
+    updateOsd,
     updateModel,
     save,
     apply,

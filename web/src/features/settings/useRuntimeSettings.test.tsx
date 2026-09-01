@@ -136,6 +136,48 @@ describe('useRuntimeSettings', () => {
     expect(result.current.snapshot?.active).toEqual(settings());
   });
 
+  it('updates osd draft values and marks the draft dirty', async () => {
+    const { client } = makeClient();
+    const { result } = renderHook(() => useRuntimeSettings(client));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    act(() => {
+      result.current.updateOsd({
+        enabled: true,
+        items: [{ type: 'timestamp', text: '', position: 'bottom_right' }],
+      });
+    });
+
+    expect(result.current.dirty).toBe(true);
+    expect(result.current.draft?.osd).toEqual({
+      enabled: true,
+      items: [{ type: 'timestamp', text: '', position: 'bottom_right' }],
+    });
+    expect(result.current.snapshot?.active).toEqual(settings());
+  });
+
+  it('clears dirty when osd is set back to the saved value', async () => {
+    const { client } = makeClient();
+    const { result } = renderHook(() => useRuntimeSettings(client));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    const savedOsd = settings().osd;
+
+    act(() => {
+      result.current.updateOsd({
+        enabled: true,
+        items: [{ type: 'custom_text', text: 'hello', position: 'top_left' }],
+      });
+    });
+    expect(result.current.dirty).toBe(true);
+
+    act(() => {
+      result.current.updateOsd(savedOsd);
+    });
+
+    expect(result.current.dirty).toBe(false);
+    expect(result.current.draft?.osd).toEqual(savedOsd);
+  });
+
   it('saves a full draft with the expected revision and adopts returned pending state', async () => {
     const { client } = makeClient();
     const { result } = renderHook(() => useRuntimeSettings(client));

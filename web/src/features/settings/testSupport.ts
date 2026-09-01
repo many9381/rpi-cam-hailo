@@ -75,6 +75,7 @@ export const makeSettingsController = (
     error: null,
     updateCamera: vi.fn(),
     updateSubStream: vi.fn(),
+    updateOsd: vi.fn(),
     updateModel: vi.fn(),
     save: vi.fn(async () => undefined),
     apply: vi.fn(async () => undefined),
