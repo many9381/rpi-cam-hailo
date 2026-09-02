@@ -232,6 +232,10 @@ export const en = {
     subStreamApplyNotice:
       'Applying sub-stream changes briefly interrupts the sub-stream feed.',
 
+    tabCamera: 'Camera',
+    tabSubStream: 'Sub-stream',
+    tabOsd: 'OSD',
+
     modelSettingsHeading: 'Model settings',
     configuredModels: '{count} configured models',
     noModelsConfigured: 'No AI models configured',

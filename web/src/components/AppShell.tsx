@@ -1,6 +1,8 @@
 import {
   Camera,
+  ChevronDown,
   LayoutDashboard,
+  type LucideIcon,
   Menu,
   RefreshCw,
   ScanSearch,
@@ -15,7 +17,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
 import type { AuthContextValue } from '../auth/AuthContext';
@@ -40,13 +42,30 @@ interface AppShellProps {
   protection?: SystemProtectionController;
 }
 
-const navigation = [
+type NavChild = { labelKey: string; path: string };
+type NavItem = {
+  labelKey: string;
+  path: string;
+  icon: LucideIcon;
+  children?: readonly NavChild[];
+};
+
+const navigation: readonly NavItem[] = [
   { labelKey: 'nav.dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { labelKey: 'nav.cameras', path: '/cameras', icon: Camera },
+  {
+    labelKey: 'nav.cameras',
+    path: '/cameras',
+    icon: Camera,
+    children: [
+      { labelKey: 'settings.tabCamera', path: '/cameras' },
+      { labelKey: 'settings.tabSubStream', path: '/cameras/sub-stream' },
+      { labelKey: 'settings.tabOsd', path: '/cameras/osd' },
+    ],
+  },
   { labelKey: 'nav.ai', path: '/ai', icon: ScanSearch },
   { labelKey: 'nav.system', path: '/system', icon: Settings },
   { labelKey: 'nav.users', path: '/users', icon: UsersRound },
-] as const;
+];
 
 function RuntimeSettingsNotice({
   controller,
@@ -104,6 +123,65 @@ function RuntimeSettingsNotice({
   );
 }
 
+function NavGroup({ item, pathname, onSelect }: {
+  item: NavItem;
+  pathname: string;
+  onSelect?: () => void;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const Icon = item.icon;
+  const active = pathname === item.path || pathname.startsWith(`${item.path}/`);
+  const [expanded, setExpanded] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setExpanded(true);
+    }
+  }, [active]);
+
+  return (
+    <li className="nav-group">
+      <button
+        type="button"
+        className={active ? 'nav-link nav-group-toggle active' : 'nav-link nav-group-toggle'}
+        aria-expanded={expanded}
+        onClick={() => {
+          const next = !expanded;
+          setExpanded(next);
+          if (next) {
+            navigate(item.path);
+            onSelect?.();
+          }
+        }}
+      >
+        <Icon size={19} aria-hidden="true" />
+        <span>{t(item.labelKey)}</span>
+        <ChevronDown
+          size={16}
+          aria-hidden="true"
+          className={expanded ? 'nav-chevron open' : 'nav-chevron'}
+        />
+      </button>
+      {expanded && item.children !== undefined && (
+        <ul className="nav-sublist">
+          {item.children.map((child) => (
+            <li key={child.path}>
+              <a
+                className={pathname === child.path ? 'nav-sublink active' : 'nav-sublink'}
+                href={`#${child.path}`}
+                aria-current={pathname === child.path ? 'page' : undefined}
+                onClick={onSelect}
+              >
+                <span>{t(child.labelKey)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 function NavigationLinks({ pathname, onSelect }: {
   pathname: string;
   onSelect?: () => void;
@@ -111,19 +189,27 @@ function NavigationLinks({ pathname, onSelect }: {
   const { t } = useTranslation();
   return (
     <ul className="nav-list">
-      {navigation.map(({ labelKey, path, icon: Icon }) => (
-        <li key={path}>
-          <a
-            className={pathname === path ? 'nav-link active' : 'nav-link'}
-            href={`#${path}`}
-            aria-current={pathname === path ? 'page' : undefined}
-            onClick={onSelect}
-          >
-            <Icon size={19} aria-hidden="true" />
-            <span>{t(labelKey)}</span>
-          </a>
-        </li>
-      ))}
+      {navigation.map((item) => {
+        if (item.children !== undefined) {
+          return (
+            <NavGroup key={item.path} item={item} pathname={pathname} onSelect={onSelect} />
+          );
+        }
+        const Icon = item.icon;
+        return (
+          <li key={item.path}>
+            <a
+              className={pathname === item.path ? 'nav-link active' : 'nav-link'}
+              href={`#${item.path}`}
+              aria-current={pathname === item.path ? 'page' : undefined}
+              onClick={onSelect}
+            >
+              <Icon size={19} aria-hidden="true" />
+              <span>{t(item.labelKey)}</span>
+            </a>
+          </li>
+        );
+      })}
     </ul>
   );
 }

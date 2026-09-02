@@ -157,6 +157,22 @@ describe('DashboardPage', () => {
     },
   );
 
+  it.each([
+    ['cameras', 'Camera settings'],
+    ['cameras-substream', 'Sub-stream'],
+    ['cameras-osd', 'OSD'],
+  ] as const)(
+    'renders the %s camera settings section',
+    (view, sectionHeading) => {
+      render(<DashboardPage client={client} controller={controller}
+        runtimeSettings={makeSettingsController()} view={view} />,
+      { wrapper: LanguageProvider });
+
+      expect(screen.getByRole('heading', { name: sectionHeading, level: 2 }))
+        .toBeInTheDocument();
+    },
+  );
+
   it('mounts the audit panel with status only for the System view', () => {
     const view = render(<DashboardPage client={client} controller={controller}
       auditStatus={auditStatus} view="dashboard" />, { wrapper: LanguageProvider });

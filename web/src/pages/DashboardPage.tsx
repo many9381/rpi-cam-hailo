@@ -12,7 +12,7 @@ import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import { SystemProtectionPanel } from '../features/protection/SystemProtectionPanel';
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
-import { CameraSettingsPanel } from '../features/settings/CameraSettingsPanel';
+import { CameraSettingsPanel, type CameraSettingsSection } from '../features/settings/CameraSettingsPanel';
 import { SettingsActionBar } from '../features/settings/SettingsActionBar';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { useDetectionStream } from '../hooks/useDetectionStream';
@@ -29,7 +29,13 @@ interface DashboardPageProps {
   view?: OperationalView;
 }
 
-export type OperationalView = 'dashboard' | 'cameras' | 'ai' | 'system';
+export type OperationalView =
+  | 'dashboard'
+  | 'cameras'
+  | 'cameras-substream'
+  | 'cameras-osd'
+  | 'ai'
+  | 'system';
 
 const viewHeadings: Record<OperationalView, { titleKey: string; subtitleKey: string }> = {
   dashboard: {
@@ -37,6 +43,14 @@ const viewHeadings: Record<OperationalView, { titleKey: string; subtitleKey: str
     subtitleKey: 'dashboard.dashboardSubtitle',
   },
   cameras: {
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
+  },
+  'cameras-substream': {
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
+  },
+  'cameras-osd': {
     titleKey: 'dashboard.camerasTitle',
     subtitleKey: 'dashboard.camerasSubtitle',
   },
@@ -121,8 +135,14 @@ export function DashboardPage({
   }
 
   const data = controller.data;
-  const showPreview = view === 'dashboard' || view === 'cameras' || view === 'ai';
-  const showStatus = view === 'dashboard' || view === 'cameras' || view === 'system';
+  const cameraSection: CameraSettingsSection | null =
+    view === 'cameras' ? 'camera'
+      : view === 'cameras-substream' ? 'sub_stream'
+        : view === 'cameras-osd' ? 'osd'
+          : null;
+  const isCameraView = cameraSection !== null;
+  const showPreview = view === 'dashboard' || isCameraView || view === 'ai';
+  const showStatus = view === 'dashboard' || isCameraView || view === 'system';
   const showStream = view === 'dashboard' || view === 'system';
   const showAi = view === 'dashboard' || view === 'ai';
   return (
@@ -168,9 +188,9 @@ export function DashboardPage({
         <AuditRecordsPanel client={client} auditStatus={auditStatus}
           routeFragment={auditFragment} />
       )}
-      {data !== null && view === 'cameras' && runtimeSettings !== undefined && (
+      {data !== null && cameraSection !== null && runtimeSettings !== undefined && (
         <>
-          <CameraSettingsPanel controller={runtimeSettings} />
+          <CameraSettingsPanel controller={runtimeSettings} section={cameraSection} />
           <SettingsActionBar controller={runtimeSettings}
             onApplySettled={() => void controller.refresh().catch(() => undefined)} />
         </>

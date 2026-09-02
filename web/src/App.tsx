@@ -295,10 +295,20 @@ export function BootstrapGate({
   );
 }
 
-const administratorPaths = new Set(['/dashboard', '/cameras', '/ai', '/system', '/users']);
+const administratorPaths = new Set([
+  '/dashboard',
+  '/cameras',
+  '/cameras/sub-stream',
+  '/cameras/osd',
+  '/ai',
+  '/system',
+  '/users',
+]);
 const operationalViews: Record<string, OperationalView> = {
   '/dashboard': 'dashboard',
   '/cameras': 'cameras',
+  '/cameras/sub-stream': 'cameras-substream',
+  '/cameras/osd': 'cameras-osd',
   '/ai': 'ai',
   '/system': 'system',
 };

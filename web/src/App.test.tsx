@@ -538,7 +538,7 @@ describe('App bootstrap gate', () => {
       ([path]) => path === '/api/v1/settings/runtime',
     )).toHaveLength(1));
 
-    await user.click(screen.getByRole('link', { name: 'Cameras' }));
+    await user.click(screen.getByRole('button', { name: 'Cameras' }));
     await screen.findByRole('heading', { name: 'Cameras' });
     await user.click(screen.getByRole('link', { name: 'AI' }));
     await screen.findByRole('heading', { name: 'AI inference' });

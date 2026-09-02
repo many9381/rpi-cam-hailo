@@ -77,7 +77,9 @@ describe('AppShell', () => {
 
     const navigation = screen.getByRole('navigation', { name: /primary/i });
     expect(within(navigation).getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
+      .toEqual(['Dashboard', 'AI', 'System', 'Users']);
+    expect(within(navigation).getByRole('button', { name: 'Cameras' }))
+      .toHaveAttribute('aria-expanded', 'false');
     for (const name of ['Open navigation', 'Refresh device state', 'Open user menu']) {
       const button = screen.getByRole('button', { name });
       expect(button).toHaveAttribute('title', name);
@@ -85,6 +87,24 @@ describe('AppShell', () => {
     }
     expect(screen.getByText('Dashboard content')).toBeVisible();
     expect(screen.getByText('Operational')).toBeVisible();
+  });
+
+  it('expands the Cameras sub-tree into Camera, Sub-stream, and OSD links', async () => {
+    const user = userEvent.setup();
+    renderShell();
+    const navigation = screen.getByRole('navigation', { name: /primary/i });
+    const camerasToggle = within(navigation).getByRole('button', { name: 'Cameras' });
+
+    expect(within(navigation).queryByRole('link', { name: 'Sub-stream' })).not.toBeInTheDocument();
+    await user.click(camerasToggle);
+
+    expect(camerasToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(within(navigation).getByRole('link', { name: 'Camera' }))
+      .toHaveAttribute('href', '#/cameras');
+    expect(within(navigation).getByRole('link', { name: 'Sub-stream' }))
+      .toHaveAttribute('href', '#/cameras/sub-stream');
+    expect(within(navigation).getByRole('link', { name: 'OSD' }))
+      .toHaveAttribute('href', '#/cameras/osd');
   });
 
   it('places one audit capacity warning before route content without changing navigation', () => {
@@ -97,7 +117,7 @@ describe('AppShell', () => {
       .toHaveAttribute('href', '#/system#audit-records');
     expect(within(screen.getByRole('navigation', { name: /primary/i }))
       .getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
+      .toEqual(['Dashboard', 'AI', 'System', 'Users']);
   });
 
   it('places the restricted protection notice before route content', () => {
@@ -121,7 +141,8 @@ describe('AppShell', () => {
     const drawer = screen.getByRole('dialog', { name: /navigation/i });
     expect(drawer).toHaveAttribute('aria-modal', 'true');
     expect(within(drawer).getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['Dashboard', 'Cameras', 'AI', 'System', 'Users']);
+      .toEqual(['Dashboard', 'AI', 'System', 'Users']);
+    expect(within(drawer).getByRole('button', { name: 'Cameras' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveFocus();
     await user.keyboard('{Escape}');
 
@@ -135,7 +156,7 @@ describe('AppShell', () => {
     const trigger = screen.getByRole('button', { name: 'Open navigation' });
     await user.click(trigger);
 
-    await user.click(within(screen.getByRole('dialog')).getByRole('link', { name: 'Cameras' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cameras' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(window.location.hash).toBe('#/cameras');

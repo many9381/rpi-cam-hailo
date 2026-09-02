@@ -233,6 +233,10 @@ export const ko: Messages = {
     subStreamApplyNotice:
       '서브 스트림 변경 사항을 적용하면 서브 스트림 피드가 잠시 중단됩니다.',
 
+    tabCamera: '카메라',
+    tabSubStream: '서브 스트림',
+    tabOsd: 'OSD',
+
     modelSettingsHeading: '모델 설정',
     configuredModels: '구성된 모델 {count}개',
     noModelsConfigured: '구성된 AI 모델이 없습니다',

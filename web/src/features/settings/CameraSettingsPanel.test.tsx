@@ -21,10 +21,54 @@ const withOsd = (
   osd: RuntimeSettings['osd'],
 ): RuntimeSettings => ({ ...base, osd });
 
+// The panel renders one camera sub-section at a time, chosen by the `section`
+// prop (the left-nav sub-tree selects it via the route). Camera is the default.
+describe('CameraSettingsPanel sections', () => {
+  it('renders only the camera controls for the camera section', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} section="camera" />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('heading', { name: 'Camera settings', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Capture profile' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Sub-stream' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Show OSD' })).not.toBeInTheDocument();
+  });
+
+  it('renders only the sub-stream controls for the sub_stream section', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withSubStreamEnabled(snapshot.active, true),
+    });
+    render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('heading', { name: 'Sub-stream', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Resolution' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Capture profile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Show OSD' })).not.toBeInTheDocument();
+  });
+
+  it('renders only the OSD controls for the osd section', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('heading', { name: 'OSD', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Show OSD' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Capture profile' })).not.toBeInTheDocument();
+  });
+
+  it('defaults to the camera section when no section is given', () => {
+    const controller = makeSettingsController();
+    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+
+    expect(screen.getByRole('combobox', { name: 'Capture profile' })).toBeInTheDocument();
+  });
+});
+
 describe('CameraSettingsPanel', () => {
   it('offers only approved capture profiles and bounded encoder controls', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="camera" />, { wrapper: LanguageProvider });
 
     const profile = screen.getByRole('combobox', { name: 'Capture profile' });
     expect(profile).toHaveValue('imx708-1080p50');
@@ -45,7 +89,7 @@ describe('CameraSettingsPanel', () => {
 
   it('updates profile, bitrate, and GOP through the shared draft controller', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="camera" />, { wrapper: LanguageProvider });
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Capture profile' }), {
       target: { value: 'imx708-720p50' },
@@ -78,12 +122,12 @@ describe('CameraSettingsPanel', () => {
         ...model, enabled: false,
       })) },
     });
-    const { rerender } = render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    const { rerender } = render(<CameraSettingsPanel controller={controller} section="camera" />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('combobox', { name: 'Capture profile' })).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: 'Bitrate' })).toBeDisabled();
 
-    rerender(<CameraSettingsPanel controller={{ ...controller, status: 'ready' }} />);
+    rerender(<CameraSettingsPanel controller={{ ...controller, status: 'ready' }} section="camera" />);
     expect(screen.getByRole('combobox', { name: 'Capture profile' })).toBeEnabled();
     expect(screen.getByRole('spinbutton', { name: 'Bitrate' })).toBeEnabled();
   });
@@ -94,7 +138,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).not.toBeChecked();
   });
@@ -105,7 +149,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Sub-stream' }));
     expect(controller.updateSubStream).toHaveBeenLastCalledWith({
@@ -119,7 +163,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, true),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
 
     const resolution = screen.getByRole('combobox', { name: 'Resolution' });
     expect(resolution).toBeEnabled();
@@ -157,7 +201,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, false),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('combobox', { name: 'Resolution' })).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Frame rate' })).toBeDisabled();
@@ -171,25 +215,25 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withSubStreamEnabled(snapshot.active, true),
     });
-    const { rerender } = render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    const { rerender } = render(<CameraSettingsPanel controller={controller} section="sub_stream" />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).toBeDisabled();
 
-    rerender(<CameraSettingsPanel controller={{ ...controller, status: 'ready' }} />);
+    rerender(<CameraSettingsPanel controller={{ ...controller, status: 'ready' }} section="sub_stream" />);
     expect(screen.getByRole('checkbox', { name: 'Sub-stream' })).toBeEnabled();
   });
 
   it('renders the OSD section with a heading and enabled toggle', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
-    expect(screen.getByRole('heading', { name: 'OSD', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'OSD', level: 2 })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Show OSD' })).not.toBeChecked();
   });
 
   it('toggles the OSD enabled checkbox and calls updateOsd with enabled flipped', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Show OSD' }));
     expect(controller.updateOsd).toHaveBeenLastCalledWith({ enabled: true, items: [] });
@@ -197,7 +241,7 @@ describe('CameraSettingsPanel', () => {
 
   it('adds a default OSD item and calls updateOsd', () => {
     const controller = makeSettingsController();
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
     expect(controller.updateOsd).toHaveBeenLastCalledWith({
@@ -215,7 +259,7 @@ describe('CameraSettingsPanel', () => {
         items: [{ type: 'custom_text', text: 'hello', position: 'top_left' }],
       }),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Type' }), {
       target: { value: 'timestamp' },
@@ -254,7 +298,7 @@ describe('CameraSettingsPanel', () => {
         ],
       }),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
     expect(controller.updateOsd).toHaveBeenLastCalledWith({
@@ -272,7 +316,7 @@ describe('CameraSettingsPanel', () => {
       snapshot,
       draft: withOsd(snapshot.active, { enabled: true, items }),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('button', { name: 'Add item' })).toBeDisabled();
   });
@@ -286,7 +330,7 @@ describe('CameraSettingsPanel', () => {
         items: [{ type: 'custom_text', text: '', position: 'top_left' }],
       }),
     });
-    render(<CameraSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
 
     const textInput = screen.getByRole('textbox', { name: 'Text' }) as HTMLInputElement;
     expect(textInput.maxLength).toBe(MAX_OSD_TEXT);
