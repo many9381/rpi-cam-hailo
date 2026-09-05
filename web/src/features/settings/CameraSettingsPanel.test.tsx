@@ -307,6 +307,27 @@ describe('CameraSettingsPanel', () => {
     });
   });
 
+  it('flags an empty custom text item as invalid until text is entered', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, {
+        enabled: true,
+        items: [
+          { type: 'custom_text', text: '', position: 'top_left' },
+          { type: 'custom_text', text: 'Front door', position: 'top_right' },
+        ],
+      }),
+    });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
+
+    const [empty, filled] = screen.getAllByRole('textbox', { name: 'Text' });
+    expect(empty).toHaveAttribute('aria-invalid', 'true');
+    expect(empty).toHaveAccessibleDescription('Enter the text to display.');
+    expect(filled).not.toHaveAttribute('aria-invalid');
+    expect(screen.getAllByText('Enter the text to display.')).toHaveLength(1);
+  });
+
   it('disables Add item once MAX_OSD_ITEMS items are present', () => {
     const snapshot = makeSettingsSnapshot();
     const items = Array.from({ length: MAX_OSD_ITEMS }, () => ({

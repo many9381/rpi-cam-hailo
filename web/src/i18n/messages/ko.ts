@@ -295,6 +295,7 @@ export const ko: Messages = {
     posBottomLeft: '좌측 하단',
     posBottomRight: '우측 하단',
     timestampFormatPlaceholder: '포맷 (선택)',
+    customTextRequired: '표시할 텍스트를 입력하세요.',
     applyNotice: 'OSD 항목은 저장되지만 아직 영상에 표시되지 않습니다.',
   },
   users: {

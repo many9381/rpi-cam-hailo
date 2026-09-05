@@ -37,6 +37,28 @@ describe('SettingsActionBar', () => {
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   });
 
+  it('disables Save while a custom OSD item has no text', () => {
+    const snapshot = makeSettingsSnapshot();
+    const draft = makeSettings('imx708-720p50', 5_000);
+    draft.osd = {
+      enabled: true,
+      items: [{ type: 'custom_text', text: '', position: 'top_left' }],
+    };
+    const controller = makeSettingsController({ snapshot, draft, dirty: true });
+    const { rerender } = render(<SettingsActionBar controller={controller} />, {
+      wrapper: LanguageProvider,
+    });
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+    rerender(<SettingsActionBar controller={{
+      ...controller,
+      draft: { ...draft, osd: { enabled: true, items: [
+        { type: 'custom_text', text: 'Front door', position: 'top_left' },
+      ] } },
+    }} />);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
   it('allows an unchanged recovery draft to replace invalid stored state', async () => {
     const user = userEvent.setup();
     const snapshot = makeSettingsSnapshot({ state: 'recovery_required' });

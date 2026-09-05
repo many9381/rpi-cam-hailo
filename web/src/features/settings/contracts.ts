@@ -194,6 +194,18 @@ const isPrintableOsdText = (text: string): boolean =>
   new TextEncoder().encode(text).length <= MAX_OSD_TEXT &&
   !/[\x00-\x1f\x7f]/.test(text);
 
+// Mirrors the backend's ValidateOsdSettings (unconditional: items are checked
+// even while OSD is disabled). Shared by the response parser and the draft
+// gate so Save is disabled instead of the request bouncing with a 422.
+export const isOsdItemValid = (item: OsdItem): boolean =>
+  OSD_ITEM_TYPES.includes(item.type) &&
+  OSD_POSITIONS.includes(item.position) &&
+  isPrintableOsdText(item.text) &&
+  !(item.type === 'custom_text' && item.text.length === 0);
+
+export const isOsdSettingsValid = (osd: OsdRuntimeSettings): boolean =>
+  osd.items.length <= MAX_OSD_ITEMS && osd.items.every(isOsdItemValid);
+
 function invalid(): never {
   throw new Error('Invalid runtime settings response');
 }
@@ -325,18 +337,18 @@ function parseSubStream(
 function parseOsdItem(value: unknown): OsdItem {
   if (!hasExactKeys(value, ['type', 'text', 'position']) ||
       typeof value.type !== 'string' || typeof value.text !== 'string' ||
-      typeof value.position !== 'string' ||
-      !OSD_ITEM_TYPES.includes(value.type as OsdItemType) ||
-      !OSD_POSITIONS.includes(value.position as OsdPosition) ||
-      !isPrintableOsdText(value.text) ||
-      (value.type === 'custom_text' && value.text.length === 0)) {
+      typeof value.position !== 'string') {
     return invalid();
   }
-  return {
+  const item: OsdItem = {
     type: value.type as OsdItemType,
     text: value.text,
     position: value.position as OsdPosition,
   };
+  if (!isOsdItemValid(item)) {
+    return invalid();
+  }
+  return item;
 }
 
 function parseOsd(value: unknown): OsdRuntimeSettings {

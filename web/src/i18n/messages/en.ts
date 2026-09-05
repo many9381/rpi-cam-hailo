@@ -294,6 +294,7 @@ export const en = {
     posBottomLeft: 'Bottom left',
     posBottomRight: 'Bottom right',
     timestampFormatPlaceholder: 'Format (optional)',
+    customTextRequired: 'Enter the text to display.',
     applyNotice: 'OSD items are saved but not yet drawn on the video.',
   },
   users: {

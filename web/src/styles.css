@@ -141,6 +141,13 @@ select:focus-visible {
   line-height: 1.45;
 }
 
+.settings-field-error {
+  margin: 4px 0 0;
+  color: #a63535;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
 .initial-credential-panel {
   margin-top: 20px;
 }

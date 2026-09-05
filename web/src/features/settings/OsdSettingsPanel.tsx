@@ -32,6 +32,11 @@ const OSD_POSITION_LABEL_KEYS: Record<OsdPosition, string> = {
 // A factory (not a shared constant) so every "Add item" click produces its
 // own object identity - items are never mutated in place, but a hoisted
 // singleton could still end up referenced by more than one array slot.
+// The backend rejects a custom_text item with no text (E_SETTINGS_OSD), so
+// the field is flagged inline and SettingsActionBar keeps Save disabled.
+const isCustomTextMissing = (item: OsdItem): boolean =>
+  item.type === 'custom_text' && item.text.length === 0;
+
 const makeDefaultOsdItem = (): OsdItem => ({
   type: 'custom_text',
   text: '',
@@ -113,8 +118,17 @@ export function OsdSettingsPanel({ osd, disabled, onChange }: OsdSettingsPanelPr
                     ? t('osd.timestampFormatPlaceholder')
                     : undefined}
                   disabled={disabled}
+                  aria-invalid={isCustomTextMissing(item) ? true : undefined}
+                  aria-describedby={isCustomTextMissing(item)
+                    ? `runtime-osd-item-${index}-text-error`
+                    : undefined}
                   onChange={(event) => updateOsdItem(index, { text: event.target.value })}
                 />
+                {isCustomTextMissing(item) && (
+                  <p id={`runtime-osd-item-${index}-text-error`} className="settings-field-error">
+                    {t('osd.customTextRequired')}
+                  </p>
+                )}
               </div>
             )}
 

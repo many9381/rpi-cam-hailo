@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_OSD_ITEMS,
+  type OsdItem,
+  isOsdSettingsValid,
   parseRuntimeSettingsApplyResponse,
   parseRuntimeSettingsSnapshot,
 } from './contracts';
@@ -216,6 +219,36 @@ describe('runtime settings contracts', () => {
     expect(parsed.active.osd.items).toEqual([
       { type: 'custom_text', text, position: 'top_left' },
     ]);
+  });
+
+  describe('isOsdSettingsValid', () => {
+    const custom = (text: string): OsdItem => ({ type: 'custom_text', text, position: 'top_left' });
+
+    it('accepts items the backend accepts, including a timestamp with empty text', () => {
+      expect(isOsdSettingsValid({ enabled: true, items: [
+        { type: 'timestamp', text: '', position: 'top_right' },
+        { type: 'camera_name', text: '', position: 'bottom_left' },
+        custom('Front door'),
+      ] })).toBe(true);
+      expect(isOsdSettingsValid({ enabled: false, items: [] })).toBe(true);
+    });
+
+    it('rejects a custom text item with no text, even while OSD is disabled', () => {
+      expect(isOsdSettingsValid({ enabled: true, items: [custom('')] })).toBe(false);
+      expect(isOsdSettingsValid({ enabled: false, items: [custom('')] })).toBe(false);
+    });
+
+    it('rejects more than MAX_OSD_ITEMS items', () => {
+      const items = Array.from({ length: MAX_OSD_ITEMS + 1 }, () => custom('x'));
+      expect(isOsdSettingsValid({ enabled: true, items })).toBe(false);
+      expect(isOsdSettingsValid({ enabled: true, items: items.slice(0, MAX_OSD_ITEMS) })).toBe(true);
+    });
+
+    it('rejects text over 64 UTF-8 bytes or containing control characters', () => {
+      expect(isOsdSettingsValid({ enabled: true, items: [custom('가'.repeat(22))] })).toBe(false);
+      expect(isOsdSettingsValid({ enabled: true, items: [custom('가'.repeat(21))] })).toBe(true);
+      expect(isOsdSettingsValid({ enabled: true, items: [custom('a\tb')] })).toBe(false);
+    });
   });
 
   it('round-trips osd through a JSON PUT payload', () => {

@@ -2,10 +2,11 @@ import { Check, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { useTranslation } from '../../i18n/LanguageContext';
-import type {
-  RuntimeSettings,
-  RuntimeSettingsErrorCode,
-  RuntimeSettingsSnapshot,
+import {
+  isOsdSettingsValid,
+  type RuntimeSettings,
+  type RuntimeSettingsErrorCode,
+  type RuntimeSettingsSnapshot,
 } from './contracts';
 import { ApplySettingsDialog } from './ApplySettingsDialog';
 import type { RuntimeSettingsController } from './useRuntimeSettings';
@@ -28,7 +29,8 @@ const isDraftValid = (
       !Number.isSafeInteger(draft.camera.gop) ||
       draft.camera.gop < snapshot.capabilities.gop.minimum ||
       draft.camera.gop > snapshot.capabilities.gop.maximum ||
-      draft.models.length !== snapshot.capabilities.models.length) {
+      draft.models.length !== snapshot.capabilities.models.length ||
+      !isOsdSettingsValid(draft.osd)) {
     return false;
   }
   return draft.models.every((model, index) =>
