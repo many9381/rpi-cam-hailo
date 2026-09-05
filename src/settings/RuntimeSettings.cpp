@@ -246,6 +246,14 @@ common::Result<config::AppConfig> BuildEffectiveConfig(
   effective.camera.sub_stream.fps = settings.sub_stream.fps;
   effective.camera.sub_stream.bitrate_kbps = settings.sub_stream.bitrate_kbps;
 
+  effective.camera.osd.enabled = settings.osd.enabled;
+  effective.camera.osd.items.clear();
+  effective.camera.osd.items.reserve(settings.osd.items.size());
+  for (const auto& item : settings.osd.items) {
+    effective.camera.osd.items.push_back(
+        config::CameraOsdItem{item.type, item.text, item.position});
+  }
+
   effective.camera.ai.model_ids.clear();
   for (std::size_t index = 0; index < effective.ai.models.size(); ++index) {
     auto& model = effective.ai.models[index];

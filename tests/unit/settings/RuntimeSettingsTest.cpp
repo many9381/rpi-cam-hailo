@@ -611,3 +611,41 @@ TEST(RuntimeSettingsTest, BuildsEffectiveConfigWithoutChangingUnmanagedFields) {
   EXPECT_EQ(effective.value().ai.models[0].hef_path, base.ai.models[0].hef_path);
   EXPECT_EQ(effective.value().ai.models[1].kind, base.ai.models[1].kind);
 }
+
+TEST(RuntimeSettingsTest, BuildEffectiveConfigMapsOsd) {
+  const auto base = MakeBaseConfig();
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  auto settings = MakeRuntimeSettings();
+  settings.osd.enabled = true;
+  settings.osd.items = {
+      OsdItemRuntimeSettings{"timestamp", "", "top_left"},
+      OsdItemRuntimeSettings{"camera_name", "", "top_right"},
+      OsdItemRuntimeSettings{"custom_text", "Front door", "bottom_right"},
+  };
+  const auto effective =
+      camera_firmware::settings::BuildEffectiveConfig(base, settings, catalog);
+  ASSERT_TRUE(effective.ok()) << effective.error().message;
+  const auto& osd = effective.value().camera.osd;
+  EXPECT_TRUE(osd.enabled);
+  ASSERT_EQ(osd.items.size(), 3U);
+  EXPECT_EQ(osd.items[0].type, "timestamp");
+  EXPECT_EQ(osd.items[0].position, "top_left");
+  EXPECT_EQ(osd.items[1].type, "camera_name");
+  EXPECT_EQ(osd.items[1].position, "top_right");
+  EXPECT_EQ(osd.items[2].type, "custom_text");
+  EXPECT_EQ(osd.items[2].text, "Front door");
+  EXPECT_EQ(osd.items[2].position, "bottom_right");
+}
+
+TEST(RuntimeSettingsTest, BuildEffectiveConfigClearsStaleBaseOsdItems) {
+  auto base = MakeBaseConfig();
+  base.camera.osd.enabled = true;
+  base.camera.osd.items = {{"custom_text", "stale", "top_left"}};
+  const auto catalog = CameraProfileCatalog::Rpi5Imx708();
+  const auto settings = MakeRuntimeSettings();  // osd default: disabled, empty
+  const auto effective =
+      camera_firmware::settings::BuildEffectiveConfig(base, settings, catalog);
+  ASSERT_TRUE(effective.ok()) << effective.error().message;
+  EXPECT_FALSE(effective.value().camera.osd.enabled);
+  EXPECT_TRUE(effective.value().camera.osd.items.empty());
+}
