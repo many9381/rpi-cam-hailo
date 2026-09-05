@@ -95,3 +95,31 @@ TEST(CameraPipelineConfigTest, ReportsMainFallbackAiSourceBeforeCaptureStarts) {
   ASSERT_EQ(statuses.size(), 1U);
   EXPECT_EQ(statuses.front().ai_source, "main-fallback");
 }
+
+TEST(CameraPipelineConfigTest, AcceptsAValidOsdWithoutOpeningTheCamera) {
+  camera_firmware::media::SnapshotTap snapshot_tap;
+  camera_firmware::ai::AiFrameTap ai_frame_tap;
+  camera_firmware::media::EncodedRing encoded_ring(8U);
+  camera_firmware::media::CameraPipeline pipeline(snapshot_tap, ai_frame_tap,
+                                                  encoded_ring);
+  camera_firmware::config::AppConfig config;
+  config.camera.osd.enabled = true;
+  config.camera.osd.items = {{"timestamp", "", "top_left"},
+                             {"custom_text", "Front door", "bottom_right"}};
+  const auto result = pipeline.ValidateConfigOnly(config);
+  EXPECT_TRUE(result.ok()) << result.error().message;
+}
+
+TEST(CameraPipelineConfigTest, RejectsAnInvalidOsdItemEvenWhenDisabled) {
+  camera_firmware::media::SnapshotTap snapshot_tap;
+  camera_firmware::ai::AiFrameTap ai_frame_tap;
+  camera_firmware::media::EncodedRing encoded_ring(8U);
+  camera_firmware::media::CameraPipeline pipeline(snapshot_tap, ai_frame_tap,
+                                                  encoded_ring);
+  camera_firmware::config::AppConfig config;
+  config.camera.osd.enabled = false;
+  config.camera.osd.items = {{"custom_text", "", "top_left"}};
+  const auto result = pipeline.ValidateConfigOnly(config);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_CAMERA_OSD");
+}
