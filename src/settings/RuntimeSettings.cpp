@@ -250,8 +250,8 @@ common::Result<config::AppConfig> BuildEffectiveConfig(
   effective.camera.osd.items.clear();
   effective.camera.osd.items.reserve(settings.osd.items.size());
   for (const auto& item : settings.osd.items) {
-    effective.camera.osd.items.push_back(
-        config::CameraOsdItem{item.type, item.text, item.position});
+    effective.camera.osd.items.push_back(config::CameraOsdItem{
+        .type = item.type, .text = item.text, .position = item.position});
   }
 
   effective.camera.ai.model_ids.clear();

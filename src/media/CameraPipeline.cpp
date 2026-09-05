@@ -295,6 +295,7 @@ struct CameraPipeline::Impl {
         return Result<void>::Err(compositor.error());
       }
       osd_.emplace(std::move(compositor).value());
+      osd_stamp_warned_ = false;
       Logger::instance().log(Logger::Level::kInfo,
                              "OSD burn-in active: " +
                                  std::to_string(config.camera.osd.items.size()) +
@@ -771,6 +772,12 @@ struct CameraPipeline::Impl {
       auto view = ResolveMappedNv12(*main_buffer, main_frame.value());
       if (view.ok()) {
         osd_->Stamp(view.value(), std::time(nullptr));
+      } else if (!osd_stamp_warned_) {
+        // Permanent-shaped failure (an unmapped buffer never becomes mapped):
+        // say so once instead of once per frame.
+        osd_stamp_warned_ = true;
+        Logger::instance().log(Logger::Level::kWarn,
+                               "OSD stamp skipped: " + view.error().message);
       }
     }
 
@@ -1106,6 +1113,7 @@ struct CameraPipeline::Impl {
   X264Encoder encoder;
   std::optional<TextRasterizer> osd_font_;
   std::optional<OsdCompositor> osd_;
+  bool osd_stamp_warned_{false};
   EncodeMailbox encode_mailbox;
   std::thread encoder_thread;
   config::CameraConfig configured_camera;

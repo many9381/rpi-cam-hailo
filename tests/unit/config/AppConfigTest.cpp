@@ -1509,6 +1509,16 @@ TEST(AppConfigTest, AcceptsEightOsdItemsAndRejectsNine) {
   EXPECT_EQ(result.error().code, "E_CONFIG_CAMERA_OSD");
 }
 
+TEST(AppConfigTest, AppConfigSemanticsAcceptAValidEnabledCameraOsd) {
+  auto config = ValidSecurityConfig();
+  config.camera.osd.enabled = true;
+  config.camera.osd.items = {{"timestamp", "", "top_left"},
+                             {"custom_text", "Front door", "bottom_right"}};
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+  EXPECT_TRUE(result.ok()) << result.error().message;
+}
+
 TEST(AppConfigTest, AppConfigSemanticsRejectInvalidCameraOsd) {
   auto config = ValidSecurityConfig();
   config.camera.osd.items.push_back({"clock", "x", "top_left"});

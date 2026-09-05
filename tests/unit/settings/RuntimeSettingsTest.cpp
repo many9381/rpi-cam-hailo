@@ -629,8 +629,10 @@ TEST(RuntimeSettingsTest, BuildEffectiveConfigMapsOsd) {
   EXPECT_TRUE(osd.enabled);
   ASSERT_EQ(osd.items.size(), 3U);
   EXPECT_EQ(osd.items[0].type, "timestamp");
+  EXPECT_EQ(osd.items[0].text, "");
   EXPECT_EQ(osd.items[0].position, "top_left");
   EXPECT_EQ(osd.items[1].type, "camera_name");
+  EXPECT_EQ(osd.items[1].text, "");
   EXPECT_EQ(osd.items[1].position, "top_right");
   EXPECT_EQ(osd.items[2].type, "custom_text");
   EXPECT_EQ(osd.items[2].text, "Front door");

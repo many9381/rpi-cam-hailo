@@ -266,6 +266,8 @@ describe('runtime settings contracts', () => {
     it('detects a changed flag, item, or item count', () => {
       expect(osdSettingsEqual(base, { ...base, enabled: false })).toBe(false);
       expect(osdSettingsEqual(base, { enabled: true, items: [{ ...base.items[0], text: 'Back door' }] })).toBe(false);
+      expect(osdSettingsEqual(base, { enabled: true, items: [{ ...base.items[0], type: 'timestamp' }] })).toBe(false);
+      expect(osdSettingsEqual(base, { enabled: true, items: [{ ...base.items[0], position: 'bottom_right' }] })).toBe(false);
       expect(osdSettingsEqual(base, { enabled: true, items: [] })).toBe(false);
     });
   });

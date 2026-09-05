@@ -45,6 +45,9 @@ struct Frame {
     std::fill_n(uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard, kGuardByte);
   }
   Frame(int w, int h) : Frame(w, h, w) {}
+  void FillChroma(std::uint8_t value) {
+    std::fill(uv_storage.begin() + kGuard, uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), value);
+  }
   Nv12MutableView view() {
     return {y_storage.data() + kGuard, uv_storage.data() + kGuard, y_stride, uv_stride, width, height};
   }
@@ -155,6 +158,46 @@ TEST(OsdCompositorTest, RightAlignsRightCornersAndStacksBottomCornersUpward) {
   EXPECT_EQ(rects[2].y + rects[2].height, 1080 - m.inset_px);
   EXPECT_EQ(rects[1].y + rects[1].height + m.gap_px, rects[2].y);
   EXPECT_EQ(rects[1].x, m.inset_px);
+  EXPECT_TRUE(frame.GuardsIntact());
+}
+
+TEST(OsdCompositorTest, StacksTopCornerItemsDownwardFromTheInset) {
+  auto font = Font();
+  auto compositor = Make(Config({
+      {"custom_text", "first", "top_right"},
+      {"custom_text", "second", "top_right"},
+  }), font);
+  const auto rects = compositor.SpriteRects();
+  ASSERT_EQ(rects.size(), 2U);
+  const auto m = OsdLayoutMetrics::For(1920, 1080);
+  EXPECT_EQ(rects[0].y, m.inset_px);
+  EXPECT_EQ(rects[1].y, rects[0].y + m.box_height() + m.gap_px);
+  EXPECT_EQ(rects[0].x + rects[0].width, 1920 - m.inset_px);
+  EXPECT_EQ(rects[1].x + rects[1].width, 1920 - m.inset_px);
+}
+
+TEST(OsdCompositorTest, PullsChromaAboveNeutralDownToExactlyNeutralUnderFullText) {
+  auto font = Font();
+  auto compositor = Make(Config({{"custom_text", "WWWW", "top_left"}}), font);
+  Frame frame(1920, 1080);
+  frame.FillChroma(200);
+  compositor.Stamp(frame.view(), At(14, 30, 7));
+  const auto rects = compositor.SpriteRects();
+  ASSERT_EQ(rects.size(), 1U);
+  // Box darkening toward neutral: (200*55 + 128*45 + 50) / 100 = 168.
+  EXPECT_EQ(frame.U(rects[0].x, rects[0].y), 168);
+  int lowest = 255;
+  int highest = 0;
+  for (int y = rects[0].y; y < rects[0].y + rects[0].height; y += 2) {
+    for (int x = rects[0].x; x < rects[0].x + rects[0].width; x += 2) {
+      lowest = std::min<int>(lowest, frame.U(x, y));
+      highest = std::max<int>(highest, frame.U(x, y));
+    }
+  }
+  // Fully covered glyph interiors land exactly on neutral (symmetric rounding),
+  // never below it, and nothing inside the box stays brighter than the box tint.
+  EXPECT_EQ(lowest, 128);
+  EXPECT_LE(highest, 168);
   EXPECT_TRUE(frame.GuardsIntact());
 }
 

@@ -1,5 +1,3 @@
-enable_language(ASM)
-
 set(CF_OSD_FONT_PATH "${PROJECT_SOURCE_DIR}/vendor/fonts/NanumGothicBold.ttf")
 configure_file(OsdFontData.S.in "${CMAKE_CURRENT_BINARY_DIR}/OsdFontData.S" @ONLY)
 set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/OsdFontData.S"
