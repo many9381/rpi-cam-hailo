@@ -13,6 +13,7 @@ import { SystemProtectionPanel } from '../features/protection/SystemProtectionPa
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
 import { CameraSettingsPanel, type CameraSettingsSection } from '../features/settings/CameraSettingsPanel';
+import { osdSettingsEqual } from '../features/settings/contracts';
 import { SettingsActionBar } from '../features/settings/SettingsActionBar';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { useDetectionStream } from '../hooks/useDetectionStream';
@@ -143,13 +144,15 @@ export function DashboardPage({
   const isCameraView = cameraSection !== null;
   const showPreview = view === 'dashboard' || isCameraView || view === 'ai';
   const showStatus = view === 'dashboard' || isCameraView || view === 'system';
-  // The OSD editor previews the unsaved draft so edits show up as they are
-  // made; every other preview mirrors what the firmware currently applies.
-  const previewOsd = runtimeSettings === undefined
-    ? undefined
-    : view === 'cameras-osd'
-      ? runtimeSettings.draft?.osd ?? runtimeSettings.snapshot?.active.osd
-      : runtimeSettings.snapshot?.active.osd;
+  // The video already carries the applied OSD (burned in by the firmware), so
+  // the overlay only previews an OSD draft that differs from what is applied,
+  // and only on the OSD editor.
+  const draftOsd = runtimeSettings?.draft?.osd;
+  const activeOsd = runtimeSettings?.snapshot?.active.osd;
+  const previewOsd = view === 'cameras-osd' && draftOsd !== undefined &&
+    activeOsd !== undefined && !osdSettingsEqual(draftOsd, activeOsd)
+    ? draftOsd
+    : undefined;
   const showStream = view === 'dashboard' || view === 'system';
   const showAi = view === 'dashboard' || view === 'ai';
   return (

@@ -4,6 +4,7 @@ import { ApiError, UnauthorizedError } from '../../api/client';
 import type { CameraApiClient } from '../../api/types';
 import {
   isRuntimeSettingsErrorCode,
+  osdSettingsEqual,
   parseRuntimeSettingsApplyResponse,
   parseRuntimeSettingsSnapshot,
   type CameraRuntimeSettings,
@@ -49,13 +50,7 @@ const settingsEqual = (
     left.sub_stream.height === right.sub_stream.height &&
     left.sub_stream.fps === right.sub_stream.fps &&
     left.sub_stream.bitrate_kbps === right.sub_stream.bitrate_kbps &&
-    left.osd.enabled === right.osd.enabled &&
-    left.osd.items.length === right.osd.items.length &&
-    left.osd.items.every((item, index) => {
-      const other = right.osd.items[index];
-      return other !== undefined && item.type === other.type &&
-        item.text === other.text && item.position === other.position;
-    }) &&
+    osdSettingsEqual(left.osd, right.osd) &&
     left.models.length === right.models.length &&
     left.models.every((model, index) => {
       const other = right.models[index];

@@ -229,6 +229,8 @@ describe('CameraSettingsPanel', () => {
 
     expect(screen.getByRole('heading', { name: 'OSD', level: 2 })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Show OSD' })).not.toBeChecked();
+    expect(screen.getByText('OSD items are drawn on the video after you apply the settings.')).toBeInTheDocument();
+    expect(screen.getByText('Dashed items preview unapplied changes; the video shows what is currently applied.')).toBeInTheDocument();
   });
 
   it('toggles the OSD enabled checkbox and calls updateOsd with enabled flipped', () => {

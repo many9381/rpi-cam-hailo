@@ -232,23 +232,22 @@ describe('DashboardPage', () => {
     },
   );
 
+  const osdWith = (text: string) => ({
+    enabled: true,
+    items: [{ type: 'custom_text' as const, text, position: 'top_left' as const }],
+  });
+
   it.each([
-    ['cameras-osd', 'DRAFT OSD', 'ACTIVE OSD'],
-    ['cameras', 'ACTIVE OSD', 'DRAFT OSD'],
-    ['dashboard', 'ACTIVE OSD', 'DRAFT OSD'],
+    ['cameras-osd', 'DRAFT OSD', true],
+    ['cameras', 'DRAFT OSD', false],
+    ['dashboard', 'DRAFT OSD', false],
   ] as const)(
-    'previews the %s view with the "%s" OSD text',
-    (view, shownText, hiddenText) => {
+    'on the %s view an unapplied OSD draft is overlaid: %s',
+    (view, draftText, overlaid) => {
       const active = makeSettings();
-      active.osd = {
-        enabled: true,
-        items: [{ type: 'custom_text', text: 'ACTIVE OSD', position: 'top_left' }],
-      };
+      active.osd = osdWith('ACTIVE OSD');
       const draft = makeSettings();
-      draft.osd = {
-        enabled: true,
-        items: [{ type: 'custom_text', text: 'DRAFT OSD', position: 'bottom_right' }],
-      };
+      draft.osd = osdWith(draftText);
       const settingsController = makeSettingsController({
         snapshot: { ...makeSettingsSnapshot(), active },
         draft,
@@ -257,10 +256,27 @@ describe('DashboardPage', () => {
       render(<DashboardPage client={client} controller={controller}
         runtimeSettings={settingsController} view={view} />, { wrapper: LanguageProvider });
 
-      expect(screen.getByText(shownText)).toHaveClass('osd-item');
-      expect(screen.queryByText(hiddenText)).not.toBeInTheDocument();
+      if (overlaid) {
+        expect(screen.getByText(draftText)).toHaveClass('osd-item');
+      } else {
+        expect(screen.queryByText(draftText)).not.toBeInTheDocument();
+      }
+      expect(screen.queryByText('ACTIVE OSD')).not.toBeInTheDocument();
     },
   );
+
+  it('hides the overlay on the OSD view once the draft matches the applied OSD', () => {
+    const active = makeSettings();
+    active.osd = osdWith('SAME OSD');
+    const settingsController = makeSettingsController({
+      snapshot: { ...makeSettingsSnapshot(), active },
+      draft: { ...makeSettings(), osd: osdWith('SAME OSD') },
+    });
+    render(<DashboardPage client={client} controller={controller}
+      runtimeSettings={settingsController} view="cameras-osd" />, { wrapper: LanguageProvider });
+
+    expect(screen.queryByText('SAME OSD')).not.toBeInTheDocument();
+  });
 
   it('composes the authenticated live preview with operational data', async () => {
     const user = userEvent.setup();

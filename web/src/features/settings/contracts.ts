@@ -206,6 +206,18 @@ export const isOsdItemValid = (item: OsdItem): boolean =>
 export const isOsdSettingsValid = (osd: OsdRuntimeSettings): boolean =>
   osd.items.length <= MAX_OSD_ITEMS && osd.items.every(isOsdItemValid);
 
+export const osdSettingsEqual = (
+  left: OsdRuntimeSettings,
+  right: OsdRuntimeSettings,
+): boolean =>
+  left.enabled === right.enabled &&
+  left.items.length === right.items.length &&
+  left.items.every((item, index) => {
+    const other = right.items[index];
+    return other !== undefined && item.type === other.type &&
+      item.text === other.text && item.position === other.position;
+  });
+
 function invalid(): never {
   throw new Error('Invalid runtime settings response');
 }

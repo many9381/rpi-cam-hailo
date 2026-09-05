@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_OSD_ITEMS,
   type OsdItem,
+  type OsdRuntimeSettings,
   isOsdSettingsValid,
+  osdSettingsEqual,
   parseRuntimeSettingsApplyResponse,
   parseRuntimeSettingsSnapshot,
 } from './contracts';
@@ -248,6 +250,23 @@ describe('runtime settings contracts', () => {
       expect(isOsdSettingsValid({ enabled: true, items: [custom('가'.repeat(22))] })).toBe(false);
       expect(isOsdSettingsValid({ enabled: true, items: [custom('가'.repeat(21))] })).toBe(true);
       expect(isOsdSettingsValid({ enabled: true, items: [custom('a\tb')] })).toBe(false);
+    });
+  });
+
+  describe('osdSettingsEqual', () => {
+    const base: OsdRuntimeSettings = {
+      enabled: true,
+      items: [{ type: 'custom_text', text: 'Front door', position: 'top_left' }],
+    };
+
+    it('treats structurally identical settings as equal', () => {
+      expect(osdSettingsEqual(base, { enabled: true, items: [{ ...base.items[0] }] })).toBe(true);
+    });
+
+    it('detects a changed flag, item, or item count', () => {
+      expect(osdSettingsEqual(base, { ...base, enabled: false })).toBe(false);
+      expect(osdSettingsEqual(base, { enabled: true, items: [{ ...base.items[0], text: 'Back door' }] })).toBe(false);
+      expect(osdSettingsEqual(base, { enabled: true, items: [] })).toBe(false);
     });
   });
 

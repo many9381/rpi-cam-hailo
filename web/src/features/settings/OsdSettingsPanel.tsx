@@ -166,6 +166,7 @@ export function OsdSettingsPanel({ osd, disabled, onChange }: OsdSettingsPanelPr
       </button>
 
       <p>{t('osd.applyNotice')}</p>
+      <p>{t('osd.pendingHint')}</p>
     </>
   );
 }

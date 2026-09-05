@@ -295,7 +295,8 @@ export const en = {
     posBottomRight: 'Bottom right',
     timestampFormatPlaceholder: 'Format (optional)',
     customTextRequired: 'Enter the text to display.',
-    applyNotice: 'OSD items are saved but not yet drawn on the video.',
+    applyNotice: 'OSD items are drawn on the video after you apply the settings.',
+    pendingHint: 'Dashed items preview unapplied changes; the video shows what is currently applied.',
   },
   users: {
     pageTitle: 'Users & access',

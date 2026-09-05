@@ -2288,6 +2288,8 @@ select:focus-visible {
   background: rgb(0 0 0 / 45%);
   white-space: pre;
   text-overflow: ellipsis;
+  outline: 1px dashed rgb(255 255 255 / 70%);
+  outline-offset: -1px;
 }
 
 .camera-stage-state {
