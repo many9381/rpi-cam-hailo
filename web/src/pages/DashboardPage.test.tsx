@@ -271,6 +271,7 @@ describe('DashboardPage', () => {
     const settingsController = makeSettingsController({
       snapshot: { ...makeSettingsSnapshot(), active },
       draft: { ...makeSettings(), osd: osdWith('SAME OSD') },
+      dirty: false,  // an unchanged draft: the burned-in video already shows it
     });
     render(<DashboardPage client={client} controller={controller}
       runtimeSettings={settingsController} view="cameras-osd" />, { wrapper: LanguageProvider });

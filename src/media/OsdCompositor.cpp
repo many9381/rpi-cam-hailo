@@ -180,6 +180,9 @@ void OsdCompositor::Stamp(const Nv12MutableView& frame, std::time_t now) {
   if (sprites_.empty()) {
     return;
   }
+  // Once per wall-clock second: the glyph cache makes this a coverage clear
+  // plus blits of already-rasterized glyphs (tens of microseconds on the
+  // device), so it stays inside the capture callback deliberately.
   if (has_timestamp_ && now != last_second_) {
     for (auto& sprite : sprites_) {
       if (sprite.item.type == "timestamp") {
@@ -227,6 +230,9 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
     std::memcpy(row, scratch, static_cast<std::size_t>(n));
   }
   // Chroma: one sample per 2x2 luma block; text coverage is the block mean.
+  // A box edge on an odd luma coordinate darkens the whole straddling block
+  // (a half-sample fringe at 4:2:0); fractional weighting is not worth the
+  // per-pixel cost on this path.
   const int chroma_rows = (frame.height + 1) / 2;
   const int chroma_cols = (frame.width + 1) / 2;
   const int cy0 = y0 / 2;

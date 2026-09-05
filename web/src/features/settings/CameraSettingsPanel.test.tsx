@@ -330,6 +330,27 @@ describe('CameraSettingsPanel', () => {
     expect(screen.getAllByText('Enter the text to display.')).toHaveLength(1);
   });
 
+  it('shows the UTF-8 byte usage and flags custom text over 64 bytes', () => {
+    const snapshot = makeSettingsSnapshot();
+    const controller = makeSettingsController({
+      snapshot,
+      draft: withOsd(snapshot.active, {
+        enabled: true,
+        items: [
+          { type: 'custom_text', text: 'Front door', position: 'top_left' },
+          { type: 'custom_text', text: '가'.repeat(22), position: 'top_right' },  // 66 bytes
+        ],
+      }),
+    });
+    render(<CameraSettingsPanel controller={controller} section="osd" />, { wrapper: LanguageProvider });
+
+    const [fits, over] = screen.getAllByRole('textbox', { name: 'Text' });
+    expect(fits).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByText('10/64 bytes')).toHaveClass('settings-field-hint');
+    expect(over).toHaveAttribute('aria-invalid', 'true');
+    expect(over).toHaveAccessibleDescription('66/64 bytes — the limit is 64 UTF-8 bytes.');
+  });
+
   it('disables Add item once MAX_OSD_ITEMS items are present', () => {
     const snapshot = makeSettingsSnapshot();
     const items = Array.from({ length: MAX_OSD_ITEMS }, () => ({

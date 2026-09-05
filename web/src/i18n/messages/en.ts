@@ -295,6 +295,8 @@ export const en = {
     posBottomRight: 'Bottom right',
     timestampFormatPlaceholder: 'Format (optional)',
     customTextRequired: 'Enter the text to display.',
+    textBytes: '{used}/{max} bytes',
+    textTooLong: '{used}/{max} bytes — the limit is {max} UTF-8 bytes.',
     applyNotice: 'OSD items are drawn on the video after you apply the settings.',
     pendingHint: 'Dashed items preview unapplied changes; the video shows what is currently applied.',
   },
