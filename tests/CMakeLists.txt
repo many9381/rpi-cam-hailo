@@ -232,6 +232,7 @@ add_executable(camera_firmware_media_tests
     unit/media/SnapshotTapTest.cpp
     unit/media/SubStreamEncoderTest.cpp
     unit/media/SubStreamTapTest.cpp
+    unit/media/TextRasterizerTest.cpp
 )
 
 target_link_libraries(camera_firmware_media_tests
