@@ -63,7 +63,9 @@ class TextRasterizer {
   std::unique_ptr<Impl> impl_;
 };
 
-// Decodes UTF-8 into code points; each malformed sequence yields one U+FFFD.
+// Decodes UTF-8 into code points. Every byte that cannot start or continue a
+// valid sequence becomes one U+FFFD, so a partially valid multi-byte sequence
+// may produce several.
 [[nodiscard]] std::u32string DecodeUtf8(std::string_view utf8);
 
 }  // namespace camera_firmware::media

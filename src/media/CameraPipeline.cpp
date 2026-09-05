@@ -818,6 +818,8 @@ struct CameraPipeline::Impl {
         }
         // A missing or failed lores buffer drops this AI frame only; the
         // demand stays armed for the next capture.
+      // Main-stream fallback: this lease is the STAMPED frame, so detection sees the
+      // burned-in OSD (spec §10 accepts this; the lores path above never does).
       } else {
         ai_frame_tap.PublishLatest(main_lease.CloneRef());
       }

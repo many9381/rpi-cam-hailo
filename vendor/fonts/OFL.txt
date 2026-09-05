@@ -104,13 +104,3 @@ License: OFL-1.1
  DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
  OTHER DEALINGS IN THE FONT SOFTWARE.
-
-Files: debian/*
-Copyright: 2010-2018, Changwoo Ryu <cwryu@debian.org>
-License: GPL-3+
- See /usr/share/common-licenses/GPL-3 for the full license.
-
-Files: debian/*.metainfo.xml
-Copyright: 2018, Changwoo Ryu
-License: CC0-1.0
- See /usr/share/common-licenses/CC0-1.0 for the full license.

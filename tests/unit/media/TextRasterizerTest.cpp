@@ -35,6 +35,7 @@ TEST(TextRasterizerTest, CoversLatinAndHangulButNotUnassignedCodepoints) {
   EXPECT_TRUE(font.HasGlyph(U'가'));  // 가
   EXPECT_TRUE(font.HasGlyph(U'힣'));  // 힣 (last modern syllable)
   EXPECT_FALSE(font.HasGlyph(U'͸'));  // unassigned
+  EXPECT_GT(font.GetGlyph(U'͸', 38).width, 0);
 }
 
 TEST(TextRasterizerTest, ShapesLatinAndHangulLeftToRight) {

@@ -26,7 +26,8 @@ std::uint8_t Darken(std::uint8_t sample, int target) {
 }
 
 std::uint8_t Toward(std::uint8_t sample, int target, int coverage) {
-  return static_cast<std::uint8_t>(sample + ((target - sample) * coverage + 127) / 255);
+  const int delta = (target - sample) * coverage;
+  return static_cast<std::uint8_t>(sample + (delta >= 0 ? (delta + 127) / 255 : -((-delta + 127) / 255)));
 }
 
 }  // namespace

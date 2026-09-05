@@ -187,7 +187,7 @@ const isSafePositiveInteger = (value: unknown): value is number =>
 const isConfidence = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 
-// Mirrors the backend's IsPrintableOsdText (src/settings/RuntimeSettings.cpp):
+// Mirrors the backend's IsPrintableOsdText (src/config/OsdRules.cpp):
 // MAX_OSD_TEXT is a UTF-8 BYTE bound (not a UTF-16 code-unit/character count),
 // and control characters (< 0x20, or 0x7f/DEL) are rejected outright.
 const isPrintableOsdText = (text: string): boolean =>

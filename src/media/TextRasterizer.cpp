@@ -93,12 +93,12 @@ std::u32string DecodeUtf8(std::string_view utf8) {
 }
 
 struct TextRasterizer::Impl {
-  std::span<const std::uint8_t> data;
   stbtt_fontinfo info{};
   std::unordered_map<std::uint64_t, std::unique_ptr<GlyphBitmap>> cache;
 
+  // font_px is the em size, exactly like the CSS font-size the web overlay uses.
   [[nodiscard]] float Scale(int pixel_height) const {
-    return stbtt_ScaleForPixelHeight(&info, static_cast<float>(pixel_height));
+    return stbtt_ScaleForMappingEmToPixels(&info, static_cast<float>(pixel_height));
   }
 };
 
@@ -109,7 +109,6 @@ TextRasterizer& TextRasterizer::operator=(TextRasterizer&&) noexcept = default;
 
 common::Result<TextRasterizer> TextRasterizer::Load(std::span<const std::uint8_t> ttf) {
   auto impl = std::make_unique<Impl>();
-  impl->data = ttf;
   if (ttf.empty()) {
     return common::Result<TextRasterizer>::Err({"E_OSD_FONT", "OSD font is empty"});
   }

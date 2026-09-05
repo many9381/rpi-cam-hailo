@@ -30,24 +30,26 @@ constexpr std::uint8_t kGuardByte = 0xA5U;
 struct Frame {
   int width;
   int height;
+  int y_stride;   // luma row stride; may exceed width when the caller pads rows
   int uv_stride;  // NV12 chroma rows hold 2 * ceil(width / 2) bytes
   std::vector<std::uint8_t> y_storage;
   std::vector<std::uint8_t> uv_storage;
 
-  Frame(int w, int h)
-      : width(w), height(h), uv_stride(w + (w % 2)),
-        y_storage(kGuard + static_cast<std::size_t>(w) * h + kGuard, 128U),
+  Frame(int w, int h, int y_stride)
+      : width(w), height(h), y_stride(y_stride), uv_stride(w + (w % 2)),
+        y_storage(kGuard + static_cast<std::size_t>(y_stride) * h + kGuard, 128U),
         uv_storage(kGuard + static_cast<std::size_t>(uv_stride) * ((h + 1) / 2) + kGuard, 128U) {
     std::fill_n(y_storage.begin(), kGuard, kGuardByte);
     std::fill_n(y_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard, kGuardByte);
     std::fill_n(uv_storage.begin(), kGuard, kGuardByte);
     std::fill_n(uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard, kGuardByte);
   }
+  Frame(int w, int h) : Frame(w, h, w) {}
   Nv12MutableView view() {
-    return {y_storage.data() + kGuard, uv_storage.data() + kGuard, width, uv_stride, width, height};
+    return {y_storage.data() + kGuard, uv_storage.data() + kGuard, y_stride, uv_stride, width, height};
   }
   std::uint8_t Y(int x, int y) const {
-    return y_storage[kGuard + static_cast<std::size_t>(y) * width + x];
+    return y_storage[kGuard + static_cast<std::size_t>(y) * y_stride + x];
   }
   std::uint8_t U(int x, int y) const {  // chroma sample for luma (x, y)
     return uv_storage[kGuard + static_cast<std::size_t>(y / 2) * uv_stride + (x / 2) * 2];
@@ -208,6 +210,20 @@ TEST(OsdCompositorTest, HandlesOddFrameGeometryWithoutTouchingGuards) {
   auto compositor = Make(Config({{"custom_text", "odd", "bottom_right"}}), font, 321, 181);
   Frame frame(321, 181);
   compositor.Stamp(frame.view(), At(14, 30, 7));
+  EXPECT_TRUE(frame.GuardsIntact());
+}
+
+TEST(OsdCompositorTest, HonoursALumaStrideWiderThanTheFrame) {
+  auto font = Font();
+  auto compositor = Make(Config({{"custom_text", "Front door", "top_left"},
+                                 {"custom_text", "Back door", "bottom_right"}}), font);
+  Frame frame(1920, 1080, 2048);
+  compositor.Stamp(frame.view(), At(14, 30, 7));
+  const auto rects = compositor.SpriteRects();
+  ASSERT_EQ(rects.size(), 2U);
+  EXPECT_EQ(frame.Y(rects[0].x, rects[0].y), 78);
+  EXPECT_EQ(frame.Y(rects[1].x + rects[1].width - 1, rects[1].y + rects[1].height - 1), 78);
+  EXPECT_EQ(frame.Y(rects[0].x + rects[0].width, rects[0].y), 128);
   EXPECT_TRUE(frame.GuardsIntact());
 }
 
