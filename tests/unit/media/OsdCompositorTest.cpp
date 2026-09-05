@@ -213,6 +213,15 @@ TEST(OsdCompositorTest, HandlesOddFrameGeometryWithoutTouchingGuards) {
   EXPECT_TRUE(frame.GuardsIntact());
 }
 
+TEST(OsdCompositorTest, IgnoresAFrameWhoseGeometryDiffersFromItsOwn) {
+  auto font = Font();
+  auto compositor = Make(Config({{"custom_text", "Front door", "top_left"}}), font, 640, 360);
+  Frame frame(1920, 1080);
+  compositor.Stamp(frame.view(), At(14, 30, 7));
+  EXPECT_TRUE(frame.Untouched());
+  EXPECT_TRUE(frame.GuardsIntact());
+}
+
 TEST(OsdCompositorTest, HonoursALumaStrideWiderThanTheFrame) {
   auto font = Font();
   auto compositor = Make(Config({{"custom_text", "Front door", "top_left"},

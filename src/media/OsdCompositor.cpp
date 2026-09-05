@@ -172,6 +172,11 @@ void OsdCompositor::BuildSprites(std::time_t now) {
 }
 
 void OsdCompositor::Stamp(const Nv12MutableView& frame, std::time_t now) {
+  // Sprites were laid out for width_ x height_ and row_scratch_ is sized for
+  // it; a frame of any other geometry is ignored rather than misplaced.
+  if (frame.width != width_ || frame.height != height_) {
+    return;
+  }
   if (sprites_.empty()) {
     return;
   }
