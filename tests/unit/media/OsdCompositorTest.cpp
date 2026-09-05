@@ -118,8 +118,8 @@ TEST(OsdCompositorTest, DarkensTheBoxAndBrightensTheTextAtTheTopLeftInset) {
   EXPECT_EQ(rects[0].y, m.inset_px);
   EXPECT_EQ(rects[0].height, m.box_height());
   EXPECT_GT(rects[0].width, 2 * m.pad_x);
-  // Box corner pixel: 45% toward Y=16 -> (128*55 + 16*45 + 50)/100 = 77.
-  EXPECT_EQ(frame.Y(rects[0].x, rects[0].y), 77);
+  // Box corner pixel: 45% toward Y=16, rounded -> (128*55 + 16*45 + 50)/100 = 78.
+  EXPECT_EQ(frame.Y(rects[0].x, rects[0].y), 78);
   EXPECT_EQ(frame.U(rects[0].x, rects[0].y), 128);
   // Just outside the box nothing changed.
   EXPECT_EQ(frame.Y(rects[0].x - 1, rects[0].y), 128);

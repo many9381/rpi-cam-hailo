@@ -20,14 +20,9 @@ constexpr int kNeutralChroma = 128;
 constexpr int kTextLuma = 235;
 constexpr int kBoxOpacityPercent = 45;
 
-// Truncating (not rounded) blend: sample moved kBoxOpacityPercent% of the way
-// toward target. Deliberately not "+ 50) / 100" rounding-to-nearest -- the
-// box corner over a Y=128 field must land on exactly 77 (128*55 + 16*45 =
-// 7760, / 100 truncates to 77), matching OsdCompositorTest's
-// DarkensTheBoxAndBrightensTheTextAtTheTopLeftInset expectation.
 std::uint8_t Darken(std::uint8_t sample, int target) {
   return static_cast<std::uint8_t>(
-      (sample * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent) / 100);
+      (sample * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent + 50) / 100);
 }
 
 std::uint8_t Toward(std::uint8_t sample, int target, int coverage) {
