@@ -1,6 +1,8 @@
 import {
   Camera,
+  ChevronDown,
   LayoutDashboard,
+  type LucideIcon,
   Menu,
   RefreshCw,
   ScanSearch,
@@ -15,7 +17,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { Principal } from '../api/types';
 import type { AuthContextValue } from '../auth/AuthContext';
@@ -24,8 +26,10 @@ import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import { ProtectionNotice } from '../features/protection/ProtectionNotice';
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
+import { useTranslation } from '../i18n/LanguageContext';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
+import { LanguageSwitcher } from './LanguageSwitcher';
 
 interface AppShellProps {
   principal: Principal;
@@ -38,19 +42,37 @@ interface AppShellProps {
   protection?: SystemProtectionController;
 }
 
-const navigation = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { label: 'Cameras', path: '/cameras', icon: Camera },
-  { label: 'AI', path: '/ai', icon: ScanSearch },
-  { label: 'System', path: '/system', icon: Settings },
-  { label: 'Users', path: '/users', icon: UsersRound },
-] as const;
+type NavChild = { labelKey: string; path: string };
+type NavItem = {
+  labelKey: string;
+  path: string;
+  icon: LucideIcon;
+  children?: readonly NavChild[];
+};
+
+const navigation: readonly NavItem[] = [
+  { labelKey: 'nav.dashboard', path: '/dashboard', icon: LayoutDashboard },
+  {
+    labelKey: 'nav.cameras',
+    path: '/cameras',
+    icon: Camera,
+    children: [
+      { labelKey: 'settings.tabCamera', path: '/cameras' },
+      { labelKey: 'settings.tabSubStream', path: '/cameras/sub-stream' },
+      { labelKey: 'settings.tabOsd', path: '/cameras/osd' },
+    ],
+  },
+  { labelKey: 'nav.ai', path: '/ai', icon: ScanSearch },
+  { labelKey: 'nav.system', path: '/system', icon: Settings },
+  { labelKey: 'nav.users', path: '/users', icon: UsersRound },
+];
 
 function RuntimeSettingsNotice({
   controller,
 }: {
   controller?: RuntimeSettingsController;
 }) {
+  const { t } = useTranslation();
   const snapshot = controller?.snapshot;
   if (snapshot === null || snapshot === undefined) {
     return null;
@@ -61,14 +83,14 @@ function RuntimeSettingsNotice({
   if (snapshot.last_apply.status === 'failed') {
     role = 'alert';
     message = snapshot.last_apply.restored
-      ? 'Apply failed. The previous camera runtime was restored.'
-      : 'Apply failed. Camera runtime recovery is required.';
+      ? t('status.applyFailedRestored')
+      : t('status.applyFailedRecoveryRequired');
   } else if (snapshot.state === 'recovery_required') {
-    message = 'Runtime settings need recovery.';
+    message = t('status.recoveryRequired');
   } else if (snapshot.state === 'applying' || controller?.status === 'applying') {
-    message = 'Runtime settings are being applied.';
+    message = t('status.applying');
   } else if (snapshot.pending !== null) {
-    message = 'Runtime settings are waiting to be applied.';
+    message = t('status.pending');
   }
 
   if (message === null) {
@@ -90,8 +112,8 @@ function RuntimeSettingsNotice({
     ? '/cameras'
     : '/ai';
   const linkLabel = settingsPath === '/cameras'
-    ? 'Review camera settings'
-    : 'Review AI settings';
+    ? t('status.reviewCameraSettings')
+    : t('status.reviewAiSettings');
 
   return (
     <div className={`settings-shell-notice settings-shell-${role}`} role={role}>
@@ -101,25 +123,93 @@ function RuntimeSettingsNotice({
   );
 }
 
+function NavGroup({ item, pathname, onSelect }: {
+  item: NavItem;
+  pathname: string;
+  onSelect?: () => void;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const Icon = item.icon;
+  const active = pathname === item.path || pathname.startsWith(`${item.path}/`);
+  const [expanded, setExpanded] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setExpanded(true);
+    }
+  }, [active]);
+
+  return (
+    <li className="nav-group">
+      <button
+        type="button"
+        className={active ? 'nav-link nav-group-toggle active' : 'nav-link nav-group-toggle'}
+        aria-expanded={expanded}
+        onClick={() => {
+          const next = !expanded;
+          setExpanded(next);
+          if (next) {
+            navigate(item.path);
+            onSelect?.();
+          }
+        }}
+      >
+        <Icon size={19} aria-hidden="true" />
+        <span>{t(item.labelKey)}</span>
+        <ChevronDown
+          size={16}
+          aria-hidden="true"
+          className={expanded ? 'nav-chevron open' : 'nav-chevron'}
+        />
+      </button>
+      {expanded && item.children !== undefined && (
+        <ul className="nav-sublist">
+          {item.children.map((child) => (
+            <li key={child.path}>
+              <a
+                className={pathname === child.path ? 'nav-sublink active' : 'nav-sublink'}
+                href={`#${child.path}`}
+                aria-current={pathname === child.path ? 'page' : undefined}
+                onClick={onSelect}
+              >
+                <span>{t(child.labelKey)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 function NavigationLinks({ pathname, onSelect }: {
   pathname: string;
   onSelect?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <ul className="nav-list">
-      {navigation.map(({ label, path, icon: Icon }) => (
-        <li key={path}>
-          <a
-            className={pathname === path ? 'nav-link active' : 'nav-link'}
-            href={`#${path}`}
-            aria-current={pathname === path ? 'page' : undefined}
-            onClick={onSelect}
-          >
-            <Icon size={19} aria-hidden="true" />
-            <span>{label}</span>
-          </a>
-        </li>
-      ))}
+      {navigation.map((item) => {
+        if (item.children !== undefined) {
+          return (
+            <NavGroup key={item.path} item={item} pathname={pathname} onSelect={onSelect} />
+          );
+        }
+        const Icon = item.icon;
+        return (
+          <li key={item.path}>
+            <a
+              className={pathname === item.path ? 'nav-link active' : 'nav-link'}
+              href={`#${item.path}`}
+              aria-current={pathname === item.path ? 'page' : undefined}
+              onClick={onSelect}
+            >
+              <Icon size={19} aria-hidden="true" />
+              <span>{t(item.labelKey)}</span>
+            </a>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -134,11 +224,12 @@ export function AppShell({
   auditStatus,
   protection,
 }: AppShellProps) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const protectionState = protection?.snapshot?.state;
   const deviceState = protectionState === 'restricted'
-    ? 'Restricted'
-    : protectionState === 'checking' ? 'Checking' : 'Operational';
+    ? t('status.deviceRestricted')
+    : protectionState === 'checking' ? t('status.deviceChecking') : t('status.deviceOperational');
   const deviceStateClass = protectionState === 'restricted'
     ? 'device-state device-state-restricted'
     : protectionState === 'checking'
@@ -196,8 +287,8 @@ export function AppShell({
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="sidebar-brand"><span>CF</span> Camera Firmware</div>
-        <nav aria-label="Primary navigation">
+        <div className="sidebar-brand"><span>{t('common.brandShort')}</span> {t('common.brand')}</div>
+        <nav aria-label={t('nav.primaryLabel')}>
           <NavigationLinks pathname={pathname} />
         </nav>
       </aside>
@@ -207,7 +298,7 @@ export function AppShell({
           <IconButton
             ref={menuButtonRef}
             className="mobile-menu-button"
-            label="Open navigation"
+            label={t('nav.openNavigation')}
             aria-expanded={drawerOpen}
             onClick={() => setDrawerOpen(true)}
           >
@@ -218,9 +309,10 @@ export function AppShell({
           </span>
         </div>
         <div className="topbar-actions">
-          <IconButton label="Refresh device state" onClick={onRefresh}>
+          <IconButton label={t('status.refreshDeviceState')} onClick={onRefresh}>
             <RefreshCw size={18} aria-hidden="true" />
           </IconButton>
+          <LanguageSwitcher />
           <AccountMenu principal={principal} logout={logout} changePassword={changePassword} />
         </div>
       </header>
@@ -237,7 +329,7 @@ export function AppShell({
           <button
             type="button"
             className="drawer-backdrop"
-            aria-label="Dismiss navigation"
+            aria-label={t('nav.dismissNavigation')}
             tabIndex={-1}
             onClick={() => setDrawerOpen(false)}
           />
@@ -245,20 +337,20 @@ export function AppShell({
             className="mobile-drawer"
             role="dialog"
             aria-modal="true"
-            aria-label="Navigation"
+            aria-label={t('nav.navigationLabel')}
             onKeyDown={trapDrawerFocus}
           >
             <div className="drawer-header">
-              <span>Camera Firmware</span>
+              <span>{t('common.brand')}</span>
               <IconButton
                 ref={closeButtonRef}
-                label="Close navigation"
+                label={t('nav.closeNavigation')}
                 onClick={() => setDrawerOpen(false)}
               >
                 <X size={20} aria-hidden="true" />
               </IconButton>
             </div>
-            <nav aria-label="Drawer navigation">
+            <nav aria-label={t('nav.drawerLabel')}>
               <NavigationLinks
                 pathname={pathname}
                 onSelect={() => setDrawerOpen(false)}

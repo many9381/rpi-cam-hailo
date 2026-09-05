@@ -104,9 +104,15 @@ bool HasExactKeys(const Json::Value& object,
   return true;
 }
 
-bool HasKeysWithOptional(const Json::Value& object,
-                         std::initializer_list<std::string_view> required_keys,
-                         std::string_view optional_key) {
+// `object` must contain every key in `required_keys`. It may additionally
+// contain any subset (including none, or all) of `optional_keys`, but no
+// other key. This keeps `sub_stream` and `osd` independently optional: a
+// legacy request may omit both, a request may carry either alone, or both
+// together.
+bool HasKeysWithOptional(
+    const Json::Value& object,
+    std::initializer_list<std::string_view> required_keys,
+    std::initializer_list<std::string_view> optional_keys) {
   if (!object.isObject()) {
     return false;
   }
@@ -115,15 +121,13 @@ bool HasKeysWithOptional(const Json::Value& object,
       return false;
     }
   }
-  const auto required_count = required_keys.size();
-  if (object.size() == required_count) {
-    return true;
+  std::size_t optional_present = 0U;
+  for (const auto key : optional_keys) {
+    if (object.isMember(std::string(key))) {
+      ++optional_present;
+    }
   }
-  if (object.size() == required_count + 1U &&
-      object.isMember(std::string(optional_key))) {
-    return true;
-  }
-  return false;
+  return object.size() == required_keys.size() + optional_present;
 }
 
 bool IsIntegralJsonValue(const Json::Value& value) {
@@ -176,7 +180,8 @@ common::Result<unsigned int> ParseUnsigned(const Json::Value& value) {
 
 common::Result<settings::RuntimeSettings> ParseSettings(
     const Json::Value& value) {
-  if (!HasKeysWithOptional(value, {"camera", "models"}, "sub_stream") ||
+  if (!HasKeysWithOptional(value, {"camera", "models"},
+                           {"sub_stream", "osd"}) ||
       !HasExactKeys(value["camera"],
                     {"profile_id", "bitrate_kbps", "gop"}) ||
       !value["camera"]["profile_id"].isString() ||
@@ -216,6 +221,30 @@ common::Result<settings::RuntimeSettings> ParseSettings(
     parsed.sub_stream = {false, 640U, 360U, 15U, 1000U};
   }
 
+  if (value.isMember("osd")) {
+    const auto& osd_value = value["osd"];
+    if (!HasExactKeys(osd_value, {"enabled", "items"}) ||
+        !osd_value["enabled"].isBool() || !osd_value["items"].isArray()) {
+      return InvalidRequest<settings::RuntimeSettings>();
+    }
+    parsed.osd.enabled = osd_value["enabled"].asBool();
+    parsed.osd.items.reserve(osd_value["items"].size());
+    for (const auto& item_value : osd_value["items"]) {
+      if (!HasExactKeys(item_value, {"type", "text", "position"}) ||
+          !item_value["type"].isString() || !item_value["text"].isString() ||
+          !item_value["position"].isString()) {
+        return InvalidRequest<settings::RuntimeSettings>();
+      }
+      const std::string type = item_value["type"].asString();
+      const std::string text = item_value["text"].asString();
+      const std::string position = item_value["position"].asString();
+      if (!IsValidUtf8(type) || !IsValidUtf8(text) || !IsValidUtf8(position)) {
+        return InvalidRequest<settings::RuntimeSettings>();
+      }
+      parsed.osd.items.push_back({type, text, position});
+    }
+  }  // else: parsed.osd already default-initialized (disabled, no items).
+
   parsed.models.reserve(value["models"].size());
   for (const auto& model : value["models"]) {
     if (!HasExactKeys(model,
@@ -252,6 +281,19 @@ Json::Value BuildSettingsJson(const settings::RuntimeSettings& settings) {
   sub_stream["fps"] = settings.sub_stream.fps;
   sub_stream["bitrate_kbps"] = settings.sub_stream.bitrate_kbps;
   json["sub_stream"] = std::move(sub_stream);
+
+  Json::Value osd(Json::objectValue);
+  osd["enabled"] = settings.osd.enabled;
+  Json::Value osd_items(Json::arrayValue);
+  for (const auto& item : settings.osd.items) {
+    Json::Value item_json(Json::objectValue);
+    item_json["type"] = item.type;
+    item_json["text"] = item.text;
+    item_json["position"] = item.position;
+    osd_items.append(std::move(item_json));
+  }
+  osd["items"] = std::move(osd_items);
+  json["osd"] = std::move(osd);
 
   Json::Value models(Json::arrayValue);
   for (const auto& model : settings.models) {
@@ -319,6 +361,7 @@ PublicError MapPublicError(const common::Error& error) {
       error.code == "E_RUNTIME_SETTINGS_AI_DISABLED" ||
       error.code.starts_with("E_RUNTIME_SETTINGS_MODEL_") ||
       error.code.starts_with("E_RUNTIME_SETTINGS_SUB") ||
+      error.code == "E_SETTINGS_OSD" ||
       error.code.starts_with("E_CONFIG_") ||
       error.code == "E_PIPELINE_CANDIDATE" ||
       error.code == "E_SETTINGS_UNSUPPORTED") {

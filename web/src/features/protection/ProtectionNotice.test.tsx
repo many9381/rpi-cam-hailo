@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import type { ProtectionSnapshot } from './contracts';
 import { ProtectionNotice } from './ProtectionNotice';
 import type { SystemProtectionController } from './useSystemProtection';
@@ -31,7 +32,9 @@ afterEach(cleanup);
 
 describe('ProtectionNotice', () => {
   it('links the full-width restricted notice to the System page', () => {
-    render(<ProtectionNotice controller={controller('restricted')} />);
+    render(<ProtectionNotice controller={controller('restricted')} />, {
+      wrapper: LanguageProvider,
+    });
 
     const notice = screen.getByRole('alert');
     expect(notice).toHaveClass('protection-shell-notice');
@@ -43,7 +46,9 @@ describe('ProtectionNotice', () => {
   it.each(['operational', 'checking'] as const)(
     'does not show a restricted notice while %s',
     (state) => {
-      render(<ProtectionNotice controller={controller(state)} />);
+      render(<ProtectionNotice controller={controller(state)} />, {
+        wrapper: LanguageProvider,
+      });
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     },
   );
@@ -53,7 +58,7 @@ describe('ProtectionNotice', () => {
       ...controller('operational'),
       state: 'unavailable',
       snapshot: null,
-    }} />);
+    }} />, { wrapper: LanguageProvider });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

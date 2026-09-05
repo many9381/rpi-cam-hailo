@@ -19,6 +19,20 @@ export interface SubStreamRuntimeSettings {
   bitrate_kbps: number;
 }
 
+export type OsdItemType = 'timestamp' | 'camera_name' | 'custom_text';
+export type OsdPosition = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+
+export interface OsdItem {
+  type: OsdItemType;
+  text: string;
+  position: OsdPosition;
+}
+
+export interface OsdRuntimeSettings {
+  enabled: boolean;
+  items: OsdItem[];
+}
+
 export interface ModelRuntimeSettings {
   id: string;
   enabled: boolean;
@@ -28,6 +42,7 @@ export interface ModelRuntimeSettings {
 export interface RuntimeSettings {
   camera: CameraRuntimeSettings;
   sub_stream: SubStreamRuntimeSettings;
+  osd: OsdRuntimeSettings;
   models: ModelRuntimeSettings[];
 }
 
@@ -38,6 +53,12 @@ export const SUB_STREAM_RESOLUTIONS = [
 ] as const;
 
 export const SUB_STREAM_FPS_RANGE = { minimum: 5, maximum: 30 } as const;
+
+export const OSD_ITEM_TYPES: readonly OsdItemType[] = ['timestamp', 'camera_name', 'custom_text'];
+export const OSD_POSITIONS: readonly OsdPosition[] =
+  ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+export const MAX_OSD_ITEMS = 8;
+export const MAX_OSD_TEXT = 64;
 
 export interface CameraProfileCapability {
   id: string;
@@ -144,18 +165,14 @@ const hasExactKeys = (
 const hasKeysWithOptional = (
   value: unknown,
   keys: readonly string[],
-  optionalKey: string,
+  optionalKeys: readonly string[],
 ): value is Record<string, unknown> => {
   if (!isRecord(value) ||
       !keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
     return false;
   }
-  const size = Object.keys(value).length;
-  if (size === keys.length) {
-    return true;
-  }
-  return size === keys.length + 1 &&
-    Object.prototype.hasOwnProperty.call(value, optionalKey);
+  const allowed = new Set([...keys, ...optionalKeys]);
+  return Object.keys(value).every((key) => allowed.has(key));
 };
 
 const isNonemptyString = (value: unknown): value is string =>
@@ -169,6 +186,37 @@ const isSafePositiveInteger = (value: unknown): value is number =>
 
 const isConfidence = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+
+// Mirrors the backend's IsPrintableOsdText (src/config/OsdRules.cpp):
+// MAX_OSD_TEXT is a UTF-8 BYTE bound (not a UTF-16 code-unit/character count),
+// and control characters (< 0x20, or 0x7f/DEL) are rejected outright.
+const isPrintableOsdText = (text: string): boolean =>
+  new TextEncoder().encode(text).length <= MAX_OSD_TEXT &&
+  !/[\x00-\x1f\x7f]/.test(text);
+
+// Mirrors the backend's ValidateOsdSettings (unconditional: items are checked
+// even while OSD is disabled). Shared by the response parser and the draft
+// gate so Save is disabled instead of the request bouncing with a 422.
+export const isOsdItemValid = (item: OsdItem): boolean =>
+  OSD_ITEM_TYPES.includes(item.type) &&
+  OSD_POSITIONS.includes(item.position) &&
+  isPrintableOsdText(item.text) &&
+  !(item.type === 'custom_text' && item.text.length === 0);
+
+export const isOsdSettingsValid = (osd: OsdRuntimeSettings): boolean =>
+  osd.items.length <= MAX_OSD_ITEMS && osd.items.every(isOsdItemValid);
+
+export const osdSettingsEqual = (
+  left: OsdRuntimeSettings,
+  right: OsdRuntimeSettings,
+): boolean =>
+  left.enabled === right.enabled &&
+  left.items.length === right.items.length &&
+  left.items.every((item, index) => {
+    const other = right.items[index];
+    return other !== undefined && item.type === other.type &&
+      item.text === other.text && item.position === other.position;
+  });
 
 function invalid(): never {
   throw new Error('Invalid runtime settings response');
@@ -254,6 +302,14 @@ const DEFAULT_SUB_STREAM: SubStreamRuntimeSettings = {
   bitrate_kbps: 1000,
 };
 
+const DEFAULT_OSD: OsdRuntimeSettings = { enabled: false, items: [] };
+// Frozen so any accidental future aliasing of DEFAULT_OSD (or its items array)
+// throws immediately in dev instead of silently corrupting every parse result
+// that shares the reference. parseOsd's default branch still must return a
+// FRESH items array on every call - freezing alone does not do that.
+Object.freeze(DEFAULT_OSD);
+Object.freeze(DEFAULT_OSD.items);
+
 function parseSubStream(
   value: unknown,
   capabilities: RuntimeSettingsCapabilities,
@@ -290,11 +346,42 @@ function parseSubStream(
   };
 }
 
+function parseOsdItem(value: unknown): OsdItem {
+  if (!hasExactKeys(value, ['type', 'text', 'position']) ||
+      typeof value.type !== 'string' || typeof value.text !== 'string' ||
+      typeof value.position !== 'string') {
+    return invalid();
+  }
+  const item: OsdItem = {
+    type: value.type as OsdItemType,
+    text: value.text,
+    position: value.position as OsdPosition,
+  };
+  if (!isOsdItemValid(item)) {
+    return invalid();
+  }
+  return item;
+}
+
+function parseOsd(value: unknown): OsdRuntimeSettings {
+  if (value === undefined) {
+    // A fresh items array on every call - DEFAULT_OSD.items must never be
+    // shared across parse results (they may be mutated independently later).
+    return { ...DEFAULT_OSD, items: [] };
+  }
+  if (!hasExactKeys(value, ['enabled', 'items']) ||
+      typeof value.enabled !== 'boolean' || !Array.isArray(value.items) ||
+      value.items.length > MAX_OSD_ITEMS) {
+    return invalid();
+  }
+  return { enabled: value.enabled, items: value.items.map(parseOsdItem) };
+}
+
 function parseRuntimeSettings(
   value: unknown,
   capabilities: RuntimeSettingsCapabilities,
 ): RuntimeSettings {
-  if (!hasKeysWithOptional(value, ['camera', 'models'], 'sub_stream') ||
+  if (!hasKeysWithOptional(value, ['camera', 'models'], ['sub_stream', 'osd']) ||
       !hasExactKeys(value.camera, ['profile_id', 'bitrate_kbps', 'gop']) ||
       !isNonemptyString(value.camera.profile_id) ||
       !isSafePositiveInteger(value.camera.bitrate_kbps) ||
@@ -333,6 +420,7 @@ function parseRuntimeSettings(
       gop: value.camera.gop,
     },
     sub_stream: parseSubStream(value.sub_stream, capabilities),
+    osd: parseOsd(value.osd),
     models,
   };
 }

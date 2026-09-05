@@ -1,10 +1,19 @@
 import '@testing-library/jest-dom/vitest';
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render as rtlRender, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { SetupIpStep } from './SetupIpStep';
+
+// SetupIpStep now calls useTranslation(), so every render needs a
+// LanguageProvider ancestor - centralized here the same way App.test.tsx
+// does it, instead of wrapping each call site individually.
+function render(ui: ReactElement) {
+  return rtlRender(<LanguageProvider>{ui}</LanguageProvider>);
+}
 
 afterEach(cleanup);
 
@@ -57,16 +66,20 @@ describe('SetupIpStep', () => {
     expect(onAddHost).toHaveBeenCalledWith('198.51.100.20');
 
     rerender(
-      <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20']} onAddHost={onAddHost}
-        onBack={vi.fn()} onNext={vi.fn()} />,
+      <LanguageProvider>
+        <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20']} onAddHost={onAddHost}
+          onBack={vi.fn()} onNext={vi.fn()} />
+      </LanguageProvider>,
     );
     await user.type(screen.getByLabelText(/add a management address/i), '203.0.113.7');
     await user.click(screen.getByRole('button', { name: /add host/i }));
     expect(onAddHost).toHaveBeenCalledWith('203.0.113.7');
 
     rerender(
-      <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20', '203.0.113.7']}
-        onAddHost={onAddHost} onBack={vi.fn()} onNext={vi.fn()} />,
+      <LanguageProvider>
+        <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20', '203.0.113.7']}
+          onAddHost={onAddHost} onBack={vi.fn()} onNext={vi.fn()} />
+      </LanguageProvider>,
     );
     expect(screen.getByText('198.51.100.20')).toBeVisible();
     expect(screen.getByText('203.0.113.7')).toBeVisible();

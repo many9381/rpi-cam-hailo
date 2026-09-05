@@ -8,6 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { evaluatePasswordRequirements, type PasswordRequirementId } from '../../security/setupPolicy';
 import { SetupCredentialsStep } from './SetupCredentialsStep';
 
@@ -41,15 +42,17 @@ function Harness({ onNext }: { onNext: () => void }) {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   return (
-    <SetupCredentialsStep
-      username={username}
-      password={password}
-      confirmation={confirmation}
-      onUsernameChange={setUsername}
-      onPasswordChange={setPassword}
-      onConfirmationChange={setConfirmation}
-      onNext={onNext}
-    />
+    <LanguageProvider>
+      <SetupCredentialsStep
+        username={username}
+        password={password}
+        confirmation={confirmation}
+        onUsernameChange={setUsername}
+        onPasswordChange={setPassword}
+        onConfirmationChange={setConfirmation}
+        onNext={onNext}
+      />
+    </LanguageProvider>
   );
 }
 
@@ -158,15 +161,17 @@ describe('SetupCredentialsStep', () => {
 
   it('preserves entered values when re-rendered after navigating back', () => {
     const { rerender } = render(
-      <SetupCredentialsStep
-        username="operator.one"
-        password="NorthStar!9"
-        confirmation="NorthStar!9"
-        onUsernameChange={vi.fn()}
-        onPasswordChange={vi.fn()}
-        onConfirmationChange={vi.fn()}
-        onNext={vi.fn()}
-      />,
+      <LanguageProvider>
+        <SetupCredentialsStep
+          username="operator.one"
+          password="NorthStar!9"
+          confirmation="NorthStar!9"
+          onUsernameChange={vi.fn()}
+          onPasswordChange={vi.fn()}
+          onConfirmationChange={vi.fn()}
+          onNext={vi.fn()}
+        />
+      </LanguageProvider>,
     );
 
     expect(screen.getByLabelText(/^username$/i)).toHaveValue('operator.one');
@@ -174,15 +179,17 @@ describe('SetupCredentialsStep', () => {
     expect(screen.getByLabelText(/confirm password/i)).toHaveValue('NorthStar!9');
 
     rerender(
-      <SetupCredentialsStep
-        username="operator.one"
-        password="NorthStar!9"
-        confirmation="NorthStar!9"
-        onUsernameChange={vi.fn()}
-        onPasswordChange={vi.fn()}
-        onConfirmationChange={vi.fn()}
-        onNext={vi.fn()}
-      />,
+      <LanguageProvider>
+        <SetupCredentialsStep
+          username="operator.one"
+          password="NorthStar!9"
+          confirmation="NorthStar!9"
+          onUsernameChange={vi.fn()}
+          onPasswordChange={vi.fn()}
+          onConfirmationChange={vi.fn()}
+          onNext={vi.fn()}
+        />
+      </LanguageProvider>,
     );
     expect(screen.getByLabelText(/^username$/i)).toHaveValue('operator.one');
   });

@@ -15,8 +15,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -28,7 +30,9 @@
 #include "camera_firmware/media/CameraTiming.hpp"
 #include "camera_firmware/media/EncodeMailbox.hpp"
 #include "camera_firmware/media/LoresGeometry.hpp"
+#include "camera_firmware/media/OsdCompositor.hpp"
 #include "camera_firmware/media/SubStreamTap.hpp"
+#include "camera_firmware/media/TextRasterizer.hpp"
 
 namespace camera_firmware::media {
 namespace {
@@ -161,6 +165,11 @@ struct CameraPipeline::Impl {
       return Result<void>::Err(
           {"E_CAMERA_CONFIG", "only camera.encoder.backend=x264 is supported"});
     }
+    const auto osd_semantics =
+        config::ValidateCameraOsdSemantics(config.camera.osd);
+    if (!osd_semantics.ok()) {
+      return Result<void>::Err(osd_semantics.error());
+    }
     if (config.camera.encoder.gop == 0U ||
         config.camera.encoder.preset.empty()) {
       return Result<void>::Err(
@@ -256,7 +265,9 @@ struct CameraPipeline::Impl {
       return allocated;
     }
 
-    auto mapped = MapBuffers();
+    const bool osd_active =
+        config.camera.osd.enabled && !config.camera.osd.items.empty();
+    auto mapped = MapBuffers(osd_active);
     if (!mapped.ok()) {
       Stop();
       return mapped;
@@ -266,6 +277,29 @@ struct CameraPipeline::Impl {
     if (!encoder_result.ok()) {
       Stop();
       return encoder_result;
+    }
+
+    if (osd_active) {
+      auto font = TextRasterizer::LoadEmbedded();
+      if (!font.ok()) {
+        Stop();
+        return Result<void>::Err(font.error());
+      }
+      osd_font_.emplace(std::move(font).value());
+      auto compositor = OsdCompositor::Create(
+          config.camera.osd, camera_id,
+          static_cast<int>(stream_config.size.width),
+          static_cast<int>(stream_config.size.height), *osd_font_);
+      if (!compositor.ok()) {
+        Stop();
+        return Result<void>::Err(compositor.error());
+      }
+      osd_.emplace(std::move(compositor).value());
+      osd_stamp_warned_ = false;
+      Logger::instance().log(Logger::Level::kInfo,
+                             "OSD burn-in active: " +
+                                 std::to_string(config.camera.osd.items.size()) +
+                                 " item(s)");
     }
 
     auto request_result = CreateRequests();
@@ -377,6 +411,8 @@ struct CameraPipeline::Impl {
 
     {
       std::scoped_lock lock(mutex);
+      osd_.reset();
+      osd_font_.reset();
       requests.clear();
       for (auto& [buffer, mapping] : mapped_buffers) {
         (void)buffer;
@@ -590,7 +626,8 @@ struct CameraPipeline::Impl {
     return Result<void>::Ok();
   }
 
-  Result<void> MapBuffers() {
+  Result<void> MapBuffers(bool writable) {
+    const int protection = PROT_READ | (writable ? PROT_WRITE : 0);
     for (const auto& buffer : allocator->buffers(stream)) {
       MappedBuffer mapped;
       for (const auto& plane : buffer->planes()) {
@@ -605,11 +642,13 @@ struct CameraPipeline::Impl {
         const std::size_t map_length =
             static_cast<std::size_t>(plane.offset) + plane.length;
         void* address =
-            mmap(nullptr, map_length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+            mmap(nullptr, map_length, protection, MAP_SHARED, plane.fd.get(), 0);
         if (address == MAP_FAILED) {
           UnmapBuffer(mapped);
           return Result<void>::Err(
-              {"E_CAMERA_MMAP", "failed to mmap libcamera DMABUF plane"});
+              {"E_CAMERA_MMAP",
+               writable ? "failed to mmap libcamera DMABUF plane writable (OSD)"
+                        : "failed to mmap libcamera DMABUF plane"});
         }
         mapped.planes.push_back({address, map_length});
       }
@@ -725,6 +764,23 @@ struct CameraPipeline::Impl {
       return;
     }
 
+    // Burn the OSD in before any lease exists: this is the only moment the
+    // buffer is exclusively ours. Every downstream reader (x264, the sub
+    // downscaler, libjpeg) is CPU code on this same mapping, so no dmabuf
+    // sync is needed; a hardware consumer added later would need one.
+    if (osd_.has_value()) {
+      auto view = ResolveMappedNv12(*main_buffer, main_frame.value());
+      if (view.ok()) {
+        osd_->Stamp(view.value(), std::time(nullptr));
+      } else if (!osd_stamp_warned_) {
+        // Permanent-shaped failure (an unmapped buffer never becomes mapped):
+        // say so once instead of once per frame.
+        osd_stamp_warned_ = true;
+        Logger::instance().log(Logger::Level::kWarn,
+                               "OSD stamp skipped: " + view.error().message);
+      }
+    }
+
     std::weak_ptr<RequeueContext> weak_context = requeue_context;
     // Owns nothing; its only job is to run the requeue when the last lease
     // that captured it drops. shared_ptr<void>(nullptr, deleter) is non-empty
@@ -769,6 +825,8 @@ struct CameraPipeline::Impl {
         }
         // A missing or failed lores buffer drops this AI frame only; the
         // demand stays armed for the next capture.
+      // Main-stream fallback: this lease is the STAMPED frame, so detection sees the
+      // burned-in OSD (spec §10 accepts this; the lores path above never does).
       } else {
         ai_frame_tap.PublishLatest(main_lease.CloneRef());
       }
@@ -917,21 +975,21 @@ struct CameraPipeline::Impl {
     return Result<FrameHandle>::Ok(std::move(handle));
   }
 
-  Result<EncodedAccessUnit> EncodeBuffer(const libcamera::FrameBuffer& buffer,
-                                         const FrameHandle& frame) {
+  // Y/UV pointers for a completed buffer from the mapping made in MapBuffers.
+  Result<Nv12MutableView> ResolveMappedNv12(const libcamera::FrameBuffer& buffer,
+                                            const FrameHandle& frame) {
     const auto mapped = mapped_buffers.find(&buffer);
     if (mapped == mapped_buffers.end() || mapped->second.planes.empty()) {
-      return Result<EncodedAccessUnit>::Err(
+      return Result<Nv12MutableView>::Err(
           {"E_H264_ENCODER", "completed frame buffer is not mapped"});
     }
-
     const auto& planes = buffer.planes();
     auto* y_plane = static_cast<std::uint8_t*>(mapped->second.planes[0].address) +
                     planes[0].offset;
     std::uint8_t* uv_plane = nullptr;
     if (planes.size() >= 2U) {
       if (mapped->second.planes.size() < 2U) {
-        return Result<EncodedAccessUnit>::Err(
+        return Result<Nv12MutableView>::Err(
             {"E_H264_ENCODER", "NV12 chroma DMABUF plane is not mapped"});
       }
       uv_plane = static_cast<std::uint8_t*>(mapped->second.planes[1].address) +
@@ -939,6 +997,20 @@ struct CameraPipeline::Impl {
     } else {
       uv_plane = y_plane + frame.planes[0].length;
     }
+    return Result<Nv12MutableView>::Ok(Nv12MutableView{
+        y_plane, uv_plane, static_cast<int>(stream_config.stride),
+        static_cast<int>(stream_config.stride),
+        static_cast<int>(frame.width), static_cast<int>(frame.height)});
+  }
+
+  Result<EncodedAccessUnit> EncodeBuffer(const libcamera::FrameBuffer& buffer,
+                                         const FrameHandle& frame) {
+    auto view = ResolveMappedNv12(buffer, frame);
+    if (!view.ok()) {
+      return Result<EncodedAccessUnit>::Err(view.error());
+    }
+    std::uint8_t* y_plane = view.value().y;
+    std::uint8_t* uv_plane = view.value().uv;
 
     x264_picture_t picture_in{};
     x264_picture_t picture_out{};
@@ -1039,6 +1111,9 @@ struct CameraPipeline::Impl {
   std::unordered_map<const libcamera::FrameBuffer*, MappedBuffer> mapped_buffers;
   std::shared_ptr<RequeueContext> requeue_context;
   X264Encoder encoder;
+  std::optional<TextRasterizer> osd_font_;
+  std::optional<OsdCompositor> osd_;
+  bool osd_stamp_warned_{false};
   EncodeMailbox encode_mailbox;
   std::thread encoder_thread;
   config::CameraConfig configured_camera;

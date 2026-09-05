@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeUserManagementController } from '../features/users/testSupport';
+import { LanguageProvider } from '../i18n';
 import { UsersPage } from './UsersPage';
 
 afterEach(cleanup);
@@ -11,7 +12,7 @@ describe('UsersPage tab composition', () => {
   it('renders the exact heading, tabs, active panel, and active command', async () => {
     const user = userEvent.setup();
     const controller = makeUserManagementController();
-    render(<UsersPage controller={controller} />);
+    render(<UsersPage controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('heading', { level: 1, name: 'Users & access' }))
       .toBeVisible();
@@ -55,7 +56,9 @@ describe('UsersPage tab composition', () => {
 
   it('switches tabs and moves focus with arrows, Home, and End', async () => {
     const user = userEvent.setup();
-    render(<UsersPage controller={makeUserManagementController()} />);
+    render(<UsersPage controller={makeUserManagementController()} />, {
+      wrapper: LanguageProvider,
+    });
     const accountsTab = screen.getByRole('tab', { name: 'Accounts' });
     const accessIpsTab = screen.getByRole('tab', { name: 'Access IPs' });
 
@@ -83,7 +86,9 @@ describe('UsersPage tab composition', () => {
 
   it('passes controlled create state only to the active child and resets it', async () => {
     const user = userEvent.setup();
-    render(<UsersPage controller={makeUserManagementController()} />);
+    render(<UsersPage controller={makeUserManagementController()} />, {
+      wrapper: LanguageProvider,
+    });
 
     await user.click(screen.getByRole('button', { name: 'Add viewer' }));
     expect(screen.getByRole('dialog', { name: 'Add viewer' })).toBeVisible();
@@ -107,7 +112,7 @@ describe('UsersPage tab composition', () => {
   it('disables the active create command during any mutation', async () => {
     const user = userEvent.setup();
     const controller = makeUserManagementController({ mutation: 'reset_viewer_password' });
-    render(<UsersPage controller={controller} />);
+    render(<UsersPage controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('button', { name: 'Add viewer' })).toBeDisabled();
     await user.click(screen.getByRole('tab', { name: 'Access IPs' }));

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CameraApiClient, DetectionSnapshot } from '../api/types';
 import type { MonitoringController } from '../hooks/useMonitoringData';
+import { LanguageProvider } from '../i18n';
 import { MonitorPage } from './MonitorPage';
 
 const useMonitoringData = vi.fn();
@@ -88,7 +89,7 @@ describe('MonitorPage', () => {
     const user = userEvent.setup();
     const first = controller();
     useMonitoringData.mockReturnValue(first);
-    const page = render(<MonitorPage client={makeClient()} />);
+    const page = render(<MonitorPage client={makeClient()} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('button', { name: 'Preview cam-a' })).toBeVisible();
     expect(useDetectionStream).toHaveBeenCalledWith({ events: [] }, true);
@@ -116,7 +117,7 @@ describe('MonitorPage', () => {
     useSnapshot.mockReturnValue({
       state: 'ready', objectUrl: 'blob:cam-a', refresh: refreshSnapshot,
     });
-    render(<MonitorPage client={makeClient()} />);
+    render(<MonitorPage client={makeClient()} />, { wrapper: LanguageProvider });
 
     expect(screen.getByRole('heading', { name: 'Live monitoring' })).toBeVisible();
     expect(screen.getByRole('img', { name: 'cam-a camera snapshot' }))
@@ -132,7 +133,7 @@ describe('MonitorPage', () => {
   it('bounds loading, stale, error, and unavailable snapshot states', async () => {
     const monitoring = controller({ state: 'loading', cameras: [], selectedCameraId: '' });
     useMonitoringData.mockReturnValue(monitoring);
-    const { rerender } = render(<MonitorPage client={makeClient()} />);
+    const { rerender } = render(<MonitorPage client={makeClient()} />, { wrapper: LanguageProvider });
     expect(screen.getByText('Loading camera monitoring...')).toBeVisible();
 
     useMonitoringData.mockReturnValue(controller({ state: 'error', cameras: [], selectedCameraId: '' }));
@@ -151,7 +152,7 @@ describe('MonitorPage', () => {
   it('does not render administrator surfaces or call administrator endpoints', () => {
     const client = makeClient();
     useMonitoringData.mockReturnValue(controller());
-    render(<MonitorPage client={client} />);
+    render(<MonitorPage client={client} />, { wrapper: LanguageProvider });
 
     expect(screen.queryByText(/health|stream connection|AI runtime|settings|restart|users|IP/i))
       .not.toBeInTheDocument();

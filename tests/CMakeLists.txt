@@ -107,6 +107,7 @@ gtest_discover_tests(camera_firmware_crypto_tests)
 
 add_executable(camera_firmware_config_tests
     unit/config/AppConfigTest.cpp
+    unit/config/OsdRulesTest.cpp
 )
 
 target_link_libraries(camera_firmware_config_tests
@@ -228,9 +229,12 @@ add_executable(camera_firmware_media_tests
     unit/media/JpegEncoderTest.cpp
     unit/media/LoresGeometryTest.cpp
     unit/media/Nv12DownscalerTest.cpp
+    unit/media/OsdCompositorTest.cpp
+    unit/media/OsdLayoutMetricsTest.cpp
     unit/media/SnapshotTapTest.cpp
     unit/media/SubStreamEncoderTest.cpp
     unit/media/SubStreamTapTest.cpp
+    unit/media/TextRasterizerTest.cpp
 )
 
 target_link_libraries(camera_firmware_media_tests

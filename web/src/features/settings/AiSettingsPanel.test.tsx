@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import { AiSettingsPanel } from './AiSettingsPanel';
 import { makeSettingsController, makeSettingsSnapshot } from './testSupport';
 
@@ -9,7 +10,7 @@ afterEach(cleanup);
 describe('AiSettingsPanel', () => {
   it('renders one enable switch and synchronized confidence controls per model', () => {
     const controller = makeSettingsController();
-    render(<AiSettingsPanel controller={controller} />);
+    render(<AiSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     expect(screen.getAllByRole('switch')).toHaveLength(2);
     expect(screen.getByRole('switch', { name: 'objects enabled' })).toBeChecked();
@@ -27,7 +28,9 @@ describe('AiSettingsPanel', () => {
       hef_path: '/opt/models/private-object.hef',
       output_name: 'private_output0',
     });
-    render(<AiSettingsPanel controller={makeSettingsController({ snapshot })} />);
+    render(<AiSettingsPanel controller={makeSettingsController({ snapshot })} />, {
+      wrapper: LanguageProvider,
+    });
 
     expect(screen.getByText('object_detection')).toBeVisible();
     expect(screen.getAllByText('640 x 640')).toHaveLength(2);
@@ -40,7 +43,7 @@ describe('AiSettingsPanel', () => {
 
   it('updates model enablement and confidence by stable model ID', () => {
     const controller = makeSettingsController();
-    render(<AiSettingsPanel controller={controller} />);
+    render(<AiSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     fireEvent.click(screen.getByRole('switch', { name: 'objects enabled' }));
     expect(controller.updateModel).toHaveBeenLastCalledWith('objects', {
@@ -67,7 +70,7 @@ describe('AiSettingsPanel', () => {
     const controller = makeSettingsController({
       status: 'saving', snapshot, draft: snapshot.active,
     });
-    render(<AiSettingsPanel controller={controller} />);
+    render(<AiSettingsPanel controller={controller} />, { wrapper: LanguageProvider });
 
     for (const control of [
       ...screen.getAllByRole('switch'),

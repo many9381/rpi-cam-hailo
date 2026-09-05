@@ -98,9 +98,15 @@ bool HasExactKeys(const Json::Value& object,
   return true;
 }
 
-bool HasKeysWithOptional(const Json::Value& object,
-                         std::initializer_list<std::string_view> required_keys,
-                         std::string_view optional_key) {
+// `object` must contain every key in `required_keys`. It may additionally
+// contain any subset (including none, or all) of `optional_keys`, but no
+// other key. This keeps `sub_stream` and `osd` independently optional: a
+// legacy document may omit both, a document may carry either alone, or both
+// together.
+bool HasKeysWithOptional(
+    const Json::Value& object,
+    std::initializer_list<std::string_view> required_keys,
+    std::initializer_list<std::string_view> optional_keys) {
   if (!object.isObject()) {
     return false;
   }
@@ -109,15 +115,13 @@ bool HasKeysWithOptional(const Json::Value& object,
       return false;
     }
   }
-  const auto required_count = required_keys.size();
-  if (object.size() == required_count) {
-    return true;
+  std::size_t optional_present = 0U;
+  for (const auto key : optional_keys) {
+    if (object.isMember(std::string(key))) {
+      ++optional_present;
+    }
   }
-  if (object.size() == required_count + 1U &&
-      object.isMember(std::string(optional_key))) {
-    return true;
-  }
-  return false;
+  return object.size() == required_keys.size() + optional_present;
 }
 
 bool IsPublicApplyCode(std::string_view code) {
@@ -159,7 +163,8 @@ common::Result<RuntimeSettings> DecodeSettings(
     const Json::Value& value,
     const config::AppConfig& base_config,
     const CameraProfileCatalog& profiles) {
-  if (!HasKeysWithOptional(value, {"camera", "models"}, "sub_stream") ||
+  if (!HasKeysWithOptional(value, {"camera", "models"},
+                           {"sub_stream", "osd"}) ||
       !HasExactKeys(value["camera"], {"profile_id", "bitrate_kbps", "gop"}) ||
       !value["camera"]["profile_id"].isString() ||
       !IsValidUtf8(value["camera"]["profile_id"].asString()) ||
@@ -200,6 +205,31 @@ common::Result<RuntimeSettings> DecodeSettings(
                            base_config.camera.sub_stream.fps,
                            base_config.camera.sub_stream.bitrate_kbps};
   }
+
+  if (value.isMember("osd")) {
+    const auto& osd_value = value["osd"];
+    if (!HasExactKeys(osd_value, {"enabled", "items"}) ||
+        !osd_value["enabled"].isBool() || !osd_value["items"].isArray()) {
+      return InvalidDocument<RuntimeSettings>();
+    }
+    settings.osd.enabled = osd_value["enabled"].asBool();
+    settings.osd.items.reserve(osd_value["items"].size());
+    for (const auto& item_value : osd_value["items"]) {
+      if (!HasExactKeys(item_value, {"type", "text", "position"}) ||
+          !item_value["type"].isString() || !item_value["text"].isString() ||
+          !item_value["position"].isString()) {
+        return InvalidDocument<RuntimeSettings>();
+      }
+      const std::string type = item_value["type"].asString();
+      const std::string text = item_value["text"].asString();
+      const std::string position = item_value["position"].asString();
+      if (!IsValidUtf8(type) || !IsValidUtf8(text) || !IsValidUtf8(position)) {
+        return InvalidDocument<RuntimeSettings>();
+      }
+      settings.osd.items.push_back({type, text, position});
+    }
+  }  // else: leave settings.osd at default (disabled, empty) for legacy
+     // documents written before OSD support existed.
 
   settings.models.reserve(value["models"].size());
   for (const auto& model_value : value["models"]) {
@@ -333,7 +363,23 @@ void AppendSettings(std::string& output, const RuntimeSettings& settings) {
   AppendUnsigned(output, settings.sub_stream.fps);
   output.append(",\"bitrate_kbps\":");
   AppendUnsigned(output, settings.sub_stream.bitrate_kbps);
-  output.append("},\"models\":[");
+  output.append("},\"osd\":{\"enabled\":");
+  output.append(settings.osd.enabled ? "true" : "false");
+  output.append(",\"items\":[");
+  for (std::size_t index = 0U; index < settings.osd.items.size(); ++index) {
+    if (index != 0U) {
+      output.push_back(',');
+    }
+    const auto& item = settings.osd.items[index];
+    output.append("{\"type\":");
+    AppendString(output, item.type);
+    output.append(",\"text\":");
+    AppendString(output, item.text);
+    output.append(",\"position\":");
+    AppendString(output, item.position);
+    output.push_back('}');
+  }
+  output.append("]},\"models\":[");
   for (std::size_t index = 0U; index < settings.models.size(); ++index) {
     if (index != 0U) {
       output.push_back(',');
@@ -370,6 +416,12 @@ bool IsValidSettingsForDocument(const RuntimeSettings& settings,
   }
   for (const auto& model : settings.models) {
     if (!IsValidUtf8(model.id)) {
+      return false;
+    }
+  }
+  for (const auto& item : settings.osd.items) {
+    if (!IsValidUtf8(item.type) || !IsValidUtf8(item.text) ||
+        !IsValidUtf8(item.position)) {
       return false;
     }
   }

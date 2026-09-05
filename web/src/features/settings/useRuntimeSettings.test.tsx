@@ -3,14 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ApiError, UnauthorizedError } from '../../api/client';
 import type { CameraApiClient, Parser } from '../../api/types';
-import type { RuntimeSettingsSnapshot } from './contracts';
+import type { RuntimeSettings, RuntimeSettingsSnapshot } from './contracts';
 import { useRuntimeSettings } from './useRuntimeSettings';
 
-const settings = (profileId = 'imx708-1080p50', bitrateKbps = 6_000) => ({
+const settings = (
+  profileId = 'imx708-1080p50',
+  bitrateKbps = 6_000,
+): RuntimeSettings => ({
   camera: { profile_id: profileId, bitrate_kbps: bitrateKbps, gop: 25 },
   sub_stream: {
     enabled: false, width: 640, height: 360, fps: 15, bitrate_kbps: 1_000,
   },
+  osd: { enabled: false, items: [] },
   models: [
     { id: 'objects', enabled: true, confidence_threshold: 0.4 },
     { id: 'pose', enabled: false, confidence_threshold: 0.5 },
@@ -130,6 +134,48 @@ describe('useRuntimeSettings', () => {
       enabled: true, width: 854, height: 480, fps: 24, bitrate_kbps: 1_500,
     });
     expect(result.current.snapshot?.active).toEqual(settings());
+  });
+
+  it('updates osd draft values and marks the draft dirty', async () => {
+    const { client } = makeClient();
+    const { result } = renderHook(() => useRuntimeSettings(client));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    act(() => {
+      result.current.updateOsd({
+        enabled: true,
+        items: [{ type: 'timestamp', text: '', position: 'bottom_right' }],
+      });
+    });
+
+    expect(result.current.dirty).toBe(true);
+    expect(result.current.draft?.osd).toEqual({
+      enabled: true,
+      items: [{ type: 'timestamp', text: '', position: 'bottom_right' }],
+    });
+    expect(result.current.snapshot?.active).toEqual(settings());
+  });
+
+  it('clears dirty when osd is set back to the saved value', async () => {
+    const { client } = makeClient();
+    const { result } = renderHook(() => useRuntimeSettings(client));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    const savedOsd = settings().osd;
+
+    act(() => {
+      result.current.updateOsd({
+        enabled: true,
+        items: [{ type: 'custom_text', text: 'hello', position: 'top_left' }],
+      });
+    });
+    expect(result.current.dirty).toBe(true);
+
+    act(() => {
+      result.current.updateOsd(savedOsd);
+    });
+
+    expect(result.current.dirty).toBe(false);
+    expect(result.current.draft?.osd).toEqual(savedOsd);
   });
 
   it('saves a full draft with the expected revision and adopts returned pending state', async () => {

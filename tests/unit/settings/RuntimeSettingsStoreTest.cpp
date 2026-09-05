@@ -312,6 +312,14 @@ void ExpectSettingsEqual(const RuntimeSettings& actual,
   EXPECT_EQ(actual.sub_stream.height, expected.sub_stream.height);
   EXPECT_EQ(actual.sub_stream.fps, expected.sub_stream.fps);
   EXPECT_EQ(actual.sub_stream.bitrate_kbps, expected.sub_stream.bitrate_kbps);
+  EXPECT_EQ(actual.osd.enabled, expected.osd.enabled);
+  ASSERT_EQ(actual.osd.items.size(), expected.osd.items.size());
+  for (std::size_t index = 0; index < expected.osd.items.size(); ++index) {
+    EXPECT_EQ(actual.osd.items[index].type, expected.osd.items[index].type);
+    EXPECT_EQ(actual.osd.items[index].text, expected.osd.items[index].text);
+    EXPECT_EQ(actual.osd.items[index].position,
+             expected.osd.items[index].position);
+  }
   ASSERT_EQ(actual.models.size(), expected.models.size());
   for (std::size_t index = 0; index < expected.models.size(); ++index) {
     EXPECT_EQ(actual.models[index].id, expected.models[index].id);
@@ -368,6 +376,15 @@ std::string ValidDocumentWithActiveSubStream() {
   return ReplaceOnce(
       ValidDocument(), "\"gop\":25},\"models\":",
       "\"gop\":25},\"sub_stream\":{\"enabled\":false,\"width\":640,\"height\":360,\"fps\":15,\"bitrate_kbps\":1000},\"models\":");
+}
+
+// ValidDocument() with a valid (disabled, empty-items) osd object inserted
+// into the active settings, for tests that need to mutate the osd shape
+// itself.
+std::string ValidDocumentWithActiveOsd() {
+  return ReplaceOnce(
+      ValidDocument(), "\"gop\":25},\"models\":",
+      "\"gop\":25},\"osd\":{\"enabled\":false,\"items\":[]},\"models\":");
 }
 
 void ExpectDecodeFailure(std::string_view document) {
@@ -518,7 +535,7 @@ TEST(RuntimeSettingsStoreTest,
   ASSERT_TRUE(encoded.ok()) << encoded.error().message;
   EXPECT_EQ(
       encoded.value(),
-      R"json({"schema_version":1,"revision":7,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]},"last_apply":{"status":"failed","code":"E_CAMERA_START","restored":true}})json");
+      R"json({"schema_version":1,"revision":7,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"osd":{"enabled":false,"items":[]},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"sub_stream":{"enabled":false,"width":640,"height":360,"fps":15,"bitrate_kbps":1000},"osd":{"enabled":false,"items":[]},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]},"last_apply":{"status":"failed","code":"E_CAMERA_START","restored":true}})json");
   EXPECT_EQ(encoded.value().find("recovery_required"), std::string::npos);
   EXPECT_EQ(encoded.value().find("recovery_code"), std::string::npos);
   EXPECT_EQ(encoded.value().find("hef_path"), std::string::npos);
@@ -576,6 +593,102 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveSubStreamObject) {
   // 4. fractional / negative numeric field (must fail DecodeUnsigned).
   ExpectDecodeFailure(ReplaceOnce(base, "\"width\":640,", "\"width\":-1,"));
   ExpectDecodeFailure(ReplaceOnce(base, "\"width\":640,", "\"width\":640.5,"));
+}
+
+TEST(RuntimeSettingsStoreTest, LegacyDocumentWithoutOsdDecodesDisabledEmpty) {
+  const auto decoded = DecodeRuntimeSettingsDocument(ValidDocument(), MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  const auto& osd = decoded.value().active.osd;
+  EXPECT_FALSE(osd.enabled);
+  EXPECT_TRUE(osd.items.empty());
+}
+
+TEST(RuntimeSettingsStoreTest, RoundTripsOsdItems) {
+  RuntimeSettingsDocument doc = MakeDocument();
+  doc.active.osd = {true,
+                    {{"custom_text", "Camera 1", "bottom_right"},
+                     {"timestamp", "", "top_left"}}};
+  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+
+  const auto& osd = decoded.value().active.osd;
+  EXPECT_TRUE(osd.enabled);
+  ASSERT_EQ(osd.items.size(), 2U);
+  EXPECT_EQ(osd.items[0].type, "custom_text");
+  EXPECT_EQ(osd.items[0].text, "Camera 1");
+  EXPECT_EQ(osd.items[0].position, "bottom_right");
+  EXPECT_EQ(osd.items[1].type, "timestamp");
+  EXPECT_EQ(osd.items[1].text, "");
+  EXPECT_EQ(osd.items[1].position, "top_left");
+}
+
+TEST(RuntimeSettingsStoreTest, RoundTripsOsdTextContainingQuotesAndBackslashes) {
+  RuntimeSettingsDocument doc = MakeDocument();
+  doc.active.osd = {true, {{"custom_text", R"(say "hi" \ bye)", "top_right"}}};
+  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+
+  // Prove the text was actually escaped on the wire (not hand-concatenated
+  // unescaped), rather than only checking the round trip, which could mask a
+  // symmetrical bug.
+  EXPECT_NE(encoded.value().find(R"(say \"hi\" \\ bye)"), std::string::npos);
+
+  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(decoded.ok()) << decoded.error().message;
+  ASSERT_EQ(decoded.value().active.osd.items.size(), 1U);
+  EXPECT_EQ(decoded.value().active.osd.items[0].text, R"(say "hi" \ bye)");
+}
+
+TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveOsdObject) {
+  const std::string base = ValidDocumentWithActiveOsd();
+  // Sanity: the unmutated base document decodes successfully, so a failure
+  // below is attributable to the mutation, not a malformed base fixture.
+  const auto sanity = DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
+  ASSERT_TRUE(sanity.ok()) << sanity.error().message;
+
+  // 1. extra/unknown key on the osd object (must be rejected by the outer
+  // HasExactKeys, which requires exactly the two known keys).
+  ExpectDecodeFailure(ReplaceOnce(base, "\"enabled\":false,\"items\":[]",
+                                  "\"enabled\":false,\"items\":[],\"foo\":0"));
+
+  // 2. missing required key (drop "items").
+  ExpectDecodeFailure(ReplaceOnce(base, ",\"items\":[]", ""));
+
+  // 3. non-bool `enabled`.
+  ExpectDecodeFailure(ReplaceOnce(base, "\"enabled\":false,\"items\":[]",
+                                  "\"enabled\":1,\"items\":[]"));
+  ExpectDecodeFailure(ReplaceOnce(base, "\"enabled\":false,\"items\":[]",
+                                  "\"enabled\":\"false\",\"items\":[]"));
+
+  // 4. non-array `items`.
+  ExpectDecodeFailure(ReplaceOnce(base, "\"items\":[]", "\"items\":{}"));
+
+  // 5. item with wrong key set (extra unknown key).
+  ExpectDecodeFailure(ReplaceOnce(
+      base, "\"items\":[]",
+      "\"items\":[{\"type\":\"timestamp\",\"text\":\"\",\"position\":\"top_left\",\"foo\":0}]"));
+
+  // 6. item missing a required key (drop "text").
+  ExpectDecodeFailure(ReplaceOnce(
+      base, "\"items\":[]",
+      "\"items\":[{\"type\":\"timestamp\",\"position\":\"top_left\"}]"));
+
+  // 7. non-string `type`.
+  ExpectDecodeFailure(ReplaceOnce(
+      base, "\"items\":[]",
+      "\"items\":[{\"type\":1,\"text\":\"\",\"position\":\"top_left\"}]"));
+
+  // 8. non-string `text`.
+  ExpectDecodeFailure(ReplaceOnce(
+      base, "\"items\":[]",
+      "\"items\":[{\"type\":\"timestamp\",\"text\":1,\"position\":\"top_left\"}]"));
+
+  // 9. non-string `position`.
+  ExpectDecodeFailure(ReplaceOnce(
+      base, "\"items\":[]",
+      "\"items\":[{\"type\":\"timestamp\",\"text\":\"\",\"position\":1}]"));
 }
 
 TEST(RuntimeSettingsStoreTest, RoundTripsMaximumUnsignedRevision) {
@@ -680,6 +793,16 @@ TEST(RuntimeSettingsStoreTest, RejectsInvalidDocumentStatesDuringEncoding) {
 
   invalid = MakeDocument();
   invalid.last_apply = {ApplyStatus::kSuccess, "E_UNEXPECTED", false};
+  encoded = EncodeRuntimeSettingsDocument(invalid, MakeBaseConfig(), Catalog());
+  ASSERT_FALSE(encoded.ok());
+  EXPECT_EQ(encoded.error().code, "E_RUNTIME_SETTINGS_DOCUMENT");
+
+  // Invalid UTF-8 in an osd item's text mirrors the existing profile_id /
+  // model.id guard: IsPrintableOsdText only rejects control bytes, so a lone
+  // continuation byte (0x80) would otherwise slip through and produce a
+  // document that fails IsValidUtf8 on the next reload.
+  invalid = MakeDocument();
+  invalid.active.osd = {true, {{"custom_text", "\x80", "top_left"}}};
   encoded = EncodeRuntimeSettingsDocument(invalid, MakeBaseConfig(), Catalog());
   ASSERT_FALSE(encoded.ok());
   EXPECT_EQ(encoded.error().code, "E_RUNTIME_SETTINGS_DOCUMENT");

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { LanguageProvider } from '../../i18n';
 import { ReauthenticateModal } from './ReauthenticateModal';
 
 afterEach(cleanup);
@@ -11,11 +12,13 @@ describe('ReauthenticateModal', () => {
     const reauthenticate = vi.fn().mockResolvedValue(undefined);
     const onSuccess = vi.fn();
     render(
-      <ReauthenticateModal
-        reauthenticate={reauthenticate}
-        onSuccess={onSuccess}
-        onCancel={() => undefined}
-      />);
+      <LanguageProvider>
+        <ReauthenticateModal
+          reauthenticate={reauthenticate}
+          onSuccess={onSuccess}
+          onCancel={() => undefined}
+        />
+      </LanguageProvider>);
 
     await userEvent.type(screen.getByLabelText(/password/i), 'StrongPass9!');
     await userEvent.click(screen.getByRole('button', { name: /confirm/i }));
@@ -30,11 +33,13 @@ describe('ReauthenticateModal', () => {
       .mockRejectedValue(new Error('E_AUTHENTICATION_FAILED'));
     const onSuccess = vi.fn();
     render(
-      <ReauthenticateModal
-        reauthenticate={reauthenticate}
-        onSuccess={onSuccess}
-        onCancel={() => undefined}
-      />);
+      <LanguageProvider>
+        <ReauthenticateModal
+          reauthenticate={reauthenticate}
+          onSuccess={onSuccess}
+          onCancel={() => undefined}
+        />
+      </LanguageProvider>);
 
     await userEvent.type(screen.getByLabelText(/password/i), 'WrongPass9!');
     await userEvent.click(screen.getByRole('button', { name: /confirm/i }));

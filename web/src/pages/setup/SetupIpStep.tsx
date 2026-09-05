@@ -1,5 +1,7 @@
 import { type FormEvent, useState } from 'react';
 
+import { useTranslation } from '../../i18n/LanguageContext';
+
 const IPV4_PATTERN =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
@@ -20,7 +22,11 @@ const IPV6_PATTERN = new RegExp(
   ')$',
 );
 
-const ONLY_SINGLE_HOSTS_REASON = 'Only single hosts may be registered.';
+// Translation keys, not literal text: validateManagementHost runs at module
+// scope (no access to t()), so it returns a stable key and the component
+// resolves it via t() when the error is set. See the shared externalization
+// pattern's "module-scope literals" rule.
+const ONLY_SINGLE_HOSTS_KEY = 'setup.singleHostsOnly';
 
 // The C++ side of this rule is g_inet_address_get_is_any() in
 // NormalizeManagementIp (src/security/UserManagementService.cpp) — IPv6's
@@ -44,7 +50,7 @@ function isUnspecifiedIpv6(value: string): boolean {
 function validateManagementHost(rawValue: string): string | null {
   const value = rawValue.trim();
   if (value.length === 0) {
-    return 'Enter a management IP address.';
+    return 'setup.ipAddressRequired';
   }
   const lowered = value.toLowerCase();
   if (
@@ -54,15 +60,15 @@ function validateManagementHost(rawValue: string): string | null {
     lowered === 'any' ||
     value === '0.0.0.0'
   ) {
-    return ONLY_SINGLE_HOSTS_REASON;
+    return ONLY_SINGLE_HOSTS_KEY;
   }
   const isIpv4 = IPV4_PATTERN.test(value);
   const isIpv6 = IPV6_PATTERN.test(value);
   if (!isIpv4 && !isIpv6) {
-    return 'Enter a valid IPv4 or IPv6 address.';
+    return 'setup.invalidIpAddress';
   }
   if (isIpv6 && isUnspecifiedIpv6(value)) {
-    return ONLY_SINGLE_HOSTS_REASON;
+    return ONLY_SINGLE_HOSTS_KEY;
   }
   return null;
 }
@@ -88,6 +94,7 @@ export interface SetupIpStepProps {
  * for review in step 3.
  */
 export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupIpStepProps) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const atCapacity = hosts.length >= MAXIMUM_ADDITIONAL_HOSTS;
@@ -99,7 +106,7 @@ export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupI
     }
     const validationError = validateManagementHost(draft);
     if (validationError) {
-      setError(validationError);
+      setError(t(validationError));
       return;
     }
     onAddHost(draft.trim());
@@ -109,23 +116,22 @@ export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupI
 
   return (
     <>
-      <h1 id="wizard-heading">Register management access</h1>
-      <p className="wizard-progress">Step 2 of 3 &middot; Management access</p>
+      <h1 id="wizard-heading">{t('setup.registerAccessHeading')}</h1>
+      <p className="wizard-progress">{t('setup.stepAccessProgress')}</p>
       <p>
-        Only single hosts may manage this camera &mdash; no ranges, wildcards,
-        or CIDR blocks. Your current address is already registered.
+        {t('setup.singleHostsDescription')}
       </p>
       {/* Explicit role: list-style none strips the implicit list role (and
           with it the aria-label) in WebKit accessibility trees. */}
-      <ul className="management-host-list" role="list" aria-label="Registered management hosts">
+      <ul className="management-host-list" role="list" aria-label={t('setup.registeredHostsLabel')}>
         <li>
-          {peerIp} <span className="management-host-tag">(current session)</span>
+          {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
         </li>
         {hosts.map((host) => <li key={host}>{host}</li>)}
       </ul>
       <form className="auth-form" onSubmit={addHost} noValidate>
         <div className="field">
-          <label htmlFor="wizard-add-host">Add a management address</label>
+          <label htmlFor="wizard-add-host">{t('setup.addHostLabel')}</label>
           <input
             id="wizard-add-host"
             value={draft}
@@ -137,18 +143,17 @@ export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupI
           {error && <p className="form-error" id="wizard-add-host-error">{error}</p>}
           {atCapacity && (
             <p className="form-error">
-              Up to {MAXIMUM_ADDITIONAL_HOSTS} additional hosts may be registered
-              (32 total, including your current session).
+              {t('setup.hostCapacityReached', { max: MAXIMUM_ADDITIONAL_HOSTS })}
             </p>
           )}
         </div>
         <button className="secondary-button" type="submit" disabled={atCapacity}>
-          Add host
+          {t('setup.addHost')}
         </button>
       </form>
       <div className="wizard-actions">
-        <button type="button" className="secondary-button" onClick={onBack}>Back</button>
-        <button type="button" className="primary-button" onClick={onNext}>Next</button>
+        <button type="button" className="secondary-button" onClick={onBack}>{t('setup.back')}</button>
+        <button type="button" className="primary-button" onClick={onNext}>{t('setup.next')}</button>
       </div>
     </>
   );

@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 
 import type { AiStatus, DetectionSnapshot } from '../api/types';
 import type { DetectionStreamStatus } from '../hooks/useDetectionStream';
+import { useTranslation } from '../i18n/LanguageContext';
 import { IconButton } from './IconButton';
 
 interface AiPanelProps {
@@ -12,14 +13,15 @@ interface AiPanelProps {
   onRestart(): Promise<void>;
 }
 
-const streamLabels: Record<DetectionStreamStatus, string> = {
-  connecting: 'Connecting',
-  live: 'Live',
-  reconnecting: 'Reconnecting',
-  closed: 'Closed',
+const streamStatusKeys: Record<DetectionStreamStatus, string> = {
+  connecting: 'ai.streamConnecting',
+  live: 'ai.streamLive',
+  reconnecting: 'ai.streamReconnecting',
+  closed: 'ai.streamClosed',
 };
 
 export function AiPanel({ ai, detections, streamStatus, onRestart }: AiPanelProps) {
+  const { t } = useTranslation();
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
@@ -47,55 +49,64 @@ export function AiPanel({ ai, detections, streamStatus, onRestart }: AiPanelProp
     <section className="operational-section" aria-labelledby="ai-heading">
       <div className="section-heading">
         <div>
-          <h2 id="ai-heading">Hailo AI runtime</h2>
+          <h2 id="ai-heading">{t('ai.title')}</h2>
           <p>{ai.reason}</p>
         </div>
         <div className="ai-heading-controls">
           <span className={`status-value ${ai.enabled ? 'status-good' : 'status-neutral'}`}>
-            {ai.enabled ? `${ai.backend} / ${ai.state}` : 'Disabled'}
+            {ai.enabled ? `${ai.backend} / ${ai.state}` : t('ai.disabled')}
           </span>
-          <IconButton label="Restart AI runtime" onClick={() => void restart()}
+          <IconButton label={t('ai.restartRuntime')} onClick={() => void restart()}
             disabled={pending}>
             <RotateCw size={17} aria-hidden="true" />
           </IconButton>
         </div>
       </div>
-      {error && <p className="command-error" role="alert">AI restart failed. Try again.</p>}
+      {error && <p className="command-error" role="alert">{t('ai.restartFailed')}</p>}
       <div className="ai-columns">
         <div>
-          <h3>Models <span>{ai.model_count}</span></h3>
+          <h3>{t('ai.models')} <span>{ai.model_count}</span></h3>
           <div className="data-list">
-            {ai.models.length === 0 && <p className="empty-row">No AI models</p>}
+            {ai.models.length === 0 && <p className="empty-row">{t('ai.noModels')}</p>}
             {ai.models.map((model) => (
               <article className="data-card model-row" key={model.id}>
                 <div><strong>{model.id}</strong><span>{model.kind}</span></div>
                 <dl>
-                  <div><dt>Input</dt><dd>{model.input_width} x {model.input_height} {model.input_format}</dd></div>
-                  <div><dt>Resize</dt><dd>{model.letterbox ? 'Letterbox' : 'Direct'}</dd></div>
-                  <div><dt>Output</dt><dd>{model.output_name}</dd></div>
-                  <div><dt>Threshold</dt><dd>{model.confidence_threshold}</dd></div>
-                  <div><dt>Labels</dt><dd>{model.labels}</dd></div>
+                  <div><dt>{t('ai.input')}</dt><dd>{model.input_width} x {model.input_height} {model.input_format}</dd></div>
+                  <div><dt>{t('ai.resize')}</dt><dd>{model.letterbox ? t('ai.letterbox') : t('ai.direct')}</dd></div>
+                  <div><dt>{t('ai.output')}</dt><dd>{model.output_name}</dd></div>
+                  <div><dt>{t('ai.threshold')}</dt><dd>{model.confidence_threshold}</dd></div>
+                  <div><dt>{t('ai.labels')}</dt><dd>{model.labels}</dd></div>
                 </dl>
               </article>
             ))}
           </div>
         </div>
         <div>
-          <h3>Runners <span>{ai.runner_count}</span></h3>
+          <h3>{t('ai.runners')} <span>{ai.runner_count}</span></h3>
           <div className="data-list">
-            {ai.runners.length === 0 && <p className="empty-row">No AI runners</p>}
+            {ai.runners.length === 0 && <p className="empty-row">{t('ai.noRunners')}</p>}
             {ai.runners.map((runner) => (
               <article className={`data-card runner-row ${runner.last_error_code
                 ? 'runner-error' : ''}`} key={`${runner.camera_id}:${runner.model_id}`}>
                 <div><strong>{runner.model_id}</strong><span>{runner.model_kind}</span></div>
                 <p>{runner.camera_id}</p>
-                <p>Submitted {runner.submitted_frames} / processed {runner.processed_frames} / dropped {runner.dropped_frames}</p>
-                <p>Frame {runner.last_processed_sequence} / preprocess {' '}
-                  {runner.last_preprocess_ms.toFixed(1)} ms / inference {' '}
-                  {runner.last_inference_ms.toFixed(1)} ms</p>
+                <p>{t('ai.submittedProcessedDropped', {
+                  submitted: runner.submitted_frames,
+                  processed: runner.processed_frames,
+                  dropped: runner.dropped_frames,
+                })}</p>
+                <p>{t('ai.frameStats', {
+                  sequence: runner.last_processed_sequence,
+                  preprocess: runner.last_preprocess_ms.toFixed(1),
+                  inference: runner.last_inference_ms.toFixed(1),
+                })}</p>
                 <p>{runner.last_error_code
-                  ? `${runner.last_error_code}: ${runner.last_error_message || 'unknown'}`
-                  : 'Runner healthy'}</p>
+                  ? t('ai.runnerErrorFormat', {
+                    code: runner.last_error_code,
+                    message: runner.last_error_message || t('ai.unknownError'),
+                  })
+                  : t('ai.runnerHealthy')}</p>
               </article>
             ))}
           </div>
@@ -103,14 +114,14 @@ export function AiPanel({ ai, detections, streamStatus, onRestart }: AiPanelProp
       </div>
       <div className="detection-results">
         <h3>
-          <span>Detections {detectionRows.length}</span>
+          <span>{t('ai.detections')} {detectionRows.length}</span>
           <span className={`detection-stream detection-stream-${streamStatus}`}>
-            {streamLabels[streamStatus]}
+            {t(streamStatusKeys[streamStatus])}
           </span>
         </h3>
         <div className="data-list">
           {detectionRows.length === 0 && (
-            <p className="empty-row">No current detections</p>
+            <p className="empty-row">{t('ai.noDetections')}</p>
           )}
           {detectionRows.map(({ event, detection, index }) => (
             <p className="detection-row"

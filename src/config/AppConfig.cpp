@@ -1,5 +1,7 @@
 #include "camera_firmware/config/AppConfig.hpp"
 
+#include "camera_firmware/config/OsdRules.hpp"
+
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
@@ -309,6 +311,20 @@ common::Result<void> ValidateCameraSubStreamSemantics(
   return common::Result<void>::Ok();
 }
 
+common::Result<void> ValidateCameraOsdSemantics(const CameraOsdConfig& config) {
+  if (config.items.size() > kMaxOsdItems) {
+    return common::Result<void>::Err(
+        {"E_CONFIG_CAMERA_OSD", "camera.osd has too many items"});
+  }
+  for (const auto& item : config.items) {
+    if (!IsValidOsdItem(item.type, item.text, item.position)) {
+      return common::Result<void>::Err(
+          {"E_CONFIG_CAMERA_OSD", "camera.osd contains an invalid item"});
+    }
+  }
+  return common::Result<void>::Ok();
+}
+
 common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
   if (config.security.audit.max_events < 1U ||
       config.security.audit.max_events > 1000000U ||
@@ -369,6 +385,11 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
       ValidateCameraSubStreamSemantics(config.camera.sub_stream);
   if (!sub_stream_semantics.ok()) {
     return common::Result<void>::Err(sub_stream_semantics.error());
+  }
+
+  const auto osd_semantics = ValidateCameraOsdSemantics(config.camera.osd);
+  if (!osd_semantics.ok()) {
+    return common::Result<void>::Err(osd_semantics.error());
   }
 
   const auto ai_semantics =

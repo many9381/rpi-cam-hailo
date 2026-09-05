@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(camera_firmware LANGUAGES CXX)
+project(camera_firmware LANGUAGES CXX ASM)
+
+# Default to an optimized build with debug info when the caller did not pick a
+# build type (an empty CMAKE_BUILD_TYPE compiles everything at -O0). Asserts
+# stay enabled: -DNDEBUG is stripped so invariant checks behave exactly as in
+# an unoptimized build. Pass -DCMAKE_BUILD_TYPE=Debug for an -O0 build.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+      Debug Release RelWithDebInfo MinSizeRel)
+endif()
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO
+    "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+string(REPLACE "-DNDEBUG" "" CMAKE_C_FLAGS_RELWITHDEBINFO
+    "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

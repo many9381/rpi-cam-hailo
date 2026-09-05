@@ -1,5 +1,6 @@
 add_library(camera_firmware_config STATIC
     AppConfig.cpp
+    OsdRules.cpp
 )
 
 target_include_directories(camera_firmware_config

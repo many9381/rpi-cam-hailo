@@ -2,13 +2,14 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../i18n';
 import { StatusPanel } from './StatusPanel';
 
 afterEach(cleanup);
 
 describe('StatusPanel', () => {
   it('renders health and selectable camera inventory', () => {
-    render(<StatusPanel
+    render(<LanguageProvider><StatusPanel
       health={{ status: 'ok' }}
       cameras={[
         { id: 'cam-a', state: 'streaming', snapshot_available: true },
@@ -17,7 +18,7 @@ describe('StatusPanel', () => {
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
       onRestartRuntime={async () => undefined}
-    />);
+    /></LanguageProvider>);
 
     expect(screen.getByText('ok')).toBeVisible();
     expect(screen.getByRole('radio', { name: /cam-a/i })).toBeChecked();
@@ -27,7 +28,7 @@ describe('StatusPanel', () => {
   });
 
   it('shows encoder health metrics when the camera reports them', () => {
-    render(<StatusPanel
+    render(<LanguageProvider><StatusPanel
       health={{ status: 'ok' }}
       cameras={[{
         id: 'cam-a', state: 'streaming', snapshot_available: true,
@@ -36,7 +37,7 @@ describe('StatusPanel', () => {
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
       onRestartRuntime={async () => undefined}
-    />);
+    /></LanguageProvider>);
 
     // encoded_fps well below capture_fps signals encoder backlog.
     expect(screen.getByText(/capture 49\.8/i)).toBeVisible();
@@ -45,26 +46,26 @@ describe('StatusPanel', () => {
   });
 
   it('omits the metrics line when the camera reports none', () => {
-    render(<StatusPanel
+    render(<LanguageProvider><StatusPanel
       health={{ status: 'ok' }}
       cameras={[{ id: 'cam-a', state: 'streaming', snapshot_available: true }]}
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
       onRestartRuntime={async () => undefined}
-    />);
+    /></LanguageProvider>);
     expect(screen.queryByText(/capture/i)).not.toBeInTheDocument();
   });
 
   it('offers one bounded runtime retry for an error camera', async () => {
     const user = userEvent.setup();
     const restart = vi.fn(() => new Promise<void>(() => {}));
-    render(<StatusPanel
+    render(<LanguageProvider><StatusPanel
       health={{ status: 'ok' }}
       cameras={[{ id: 'cam-a', state: 'error', snapshot_available: false }]}
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
       onRestartRuntime={restart}
-    />);
+    /></LanguageProvider>);
 
     const button = screen.getByRole('button', { name: 'Restart camera runtime' });
     await user.click(button);
@@ -76,13 +77,13 @@ describe('StatusPanel', () => {
 
   it('shows generic runtime retry feedback without backend details', async () => {
     const user = userEvent.setup();
-    render(<StatusPanel
+    render(<LanguageProvider><StatusPanel
       health={{ status: 'ok' }}
       cameras={[{ id: 'cam-a', state: 'error', snapshot_available: false }]}
       selectedCameraId="cam-a"
       onSelectCamera={() => undefined}
       onRestartRuntime={async () => { throw new Error('private detail'); }}
-    />);
+    /></LanguageProvider>);
 
     await user.click(screen.getByRole('button', { name: 'Restart camera runtime' }));
 

@@ -1,13 +1,16 @@
 import { ApiError } from '../../api/client';
+import type { useTranslation } from '../../i18n/LanguageContext';
 
-export function auditErrorMessage(error: unknown): string {
+type TFunc = ReturnType<typeof useTranslation>['t'];
+
+export function auditErrorMessage(error: unknown, t: TFunc): string {
   if (error instanceof ApiError) {
     switch (error.code) {
       case 'E_AUDIT_QUERY_INVALID':
-        return 'Audit query is invalid.';
+        return t('errors.auditQueryInvalid');
       case 'E_AUDIT_UNAVAILABLE':
-        return 'Audit records are temporarily unavailable.';
+        return t('audit.recordsUnavailable');
     }
   }
-  return 'Audit request failed.';
+  return t('errors.auditRequestFailed');
 }

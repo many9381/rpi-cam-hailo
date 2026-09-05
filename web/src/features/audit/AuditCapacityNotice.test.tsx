@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LanguageProvider } from '../../i18n';
 import type { AuditStatusController } from './useAuditStatus';
 import { AuditCapacityNotice } from './AuditCapacityNotice';
 
@@ -29,6 +30,7 @@ describe('AuditCapacityNotice', () => {
   it('does not make a capacity claim without an authoritative warning', () => {
     const { rerender } = render(
       <AuditCapacityNotice controller={undefined} />,
+      { wrapper: LanguageProvider },
     );
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
@@ -51,7 +53,9 @@ describe('AuditCapacityNotice', () => {
   });
 
   it('shows one persistent warning with exact capacity and System link', () => {
-    render(<AuditCapacityNotice controller={makeController()} />);
+    render(<AuditCapacityNotice controller={makeController()} />, {
+      wrapper: LanguageProvider,
+    });
 
     const warning = screen.getByRole('alert');
     expect(warning).toHaveTextContent('90 of 100 audit records');
@@ -62,7 +66,9 @@ describe('AuditCapacityNotice', () => {
   });
 
   it('keeps the prior warning visible while status is stale', () => {
-    render(<AuditCapacityNotice controller={makeController({ state: 'stale' })} />);
+    render(<AuditCapacityNotice controller={makeController({ state: 'stale' })} />, {
+      wrapper: LanguageProvider,
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent('90 of 100 audit records');
     expect(screen.getByRole('alert')).toHaveTextContent(

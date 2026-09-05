@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { parseInitializeResult } from '../api/contracts';
 import type { CameraApiClient } from '../api/types';
+import { useTranslation } from '../i18n/LanguageContext';
 
 interface RuntimeRecoveryPageProps {
   client: CameraApiClient;
@@ -16,6 +17,7 @@ export function RuntimeRecoveryPage({
   onStarted,
   onStartFailed,
 }: RuntimeRecoveryPageProps) {
+  const { t } = useTranslation();
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -42,16 +44,16 @@ export function RuntimeRecoveryPage({
   return (
     <main className="auth-surface">
       <section className="auth-panel" aria-labelledby="runtime-recovery-heading">
-        <div className="brand-mark" aria-hidden="true">CF</div>
-        <h1 id="runtime-recovery-heading">Start camera runtime</h1>
+        <div className="brand-mark" aria-hidden="true">{t('common.brandShort')}</div>
+        <h1 id="runtime-recovery-heading">{t('auth.runtimeRecoveryHeading')}</h1>
         <div className="auth-form">
           <div className="field">
-            <label htmlFor="runtime-peer-ip">Management peer address</label>
+            <label htmlFor="runtime-peer-ip">{t('auth.managementPeerAddress')}</label>
             <input id="runtime-peer-ip" value={peerIp} readOnly />
           </div>
           {failed && (
             <p className="form-error" role="alert">
-              Camera runtime could not be started. Try again.
+              {t('auth.runtimeStartFailed')}
             </p>
           )}
           <button
@@ -60,7 +62,7 @@ export function RuntimeRecoveryPage({
             disabled={submitting}
             onClick={() => void start()}
           >
-            {submitting ? 'Starting runtime...' : 'Start runtime'}
+            {submitting ? t('auth.startingRuntime') : t('auth.startRuntime')}
           </button>
         </div>
       </section>

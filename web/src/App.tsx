@@ -19,6 +19,7 @@ import type { CameraApiClient, Parser, SetupStatus } from './api/types';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AppShell } from './components/AppShell';
 import { ViewerShell } from './components/ViewerShell';
+import { useTranslation } from './i18n/LanguageContext';
 import { LoginPage } from './pages/LoginPage';
 import { RuntimeRecoveryPage } from './pages/RuntimeRecoveryPage';
 import { SetupWizard } from './pages/setup/SetupWizard';
@@ -127,10 +128,9 @@ interface BootstrapGateProps {
 
 export function BootstrapGate({
   client,
-  operationalChild = (
-    <main className="loading-surface">Checking session...</main>
-  ),
+  operationalChild,
 }: BootstrapGateProps) {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const [attempt, setAttempt] = useState(0);
@@ -241,15 +241,15 @@ export function BootstrapGate({
   }, [client]);
 
   if (state.kind === 'checking') {
-    return <main className="loading-surface">Checking camera setup...</main>;
+    return <main className="loading-surface">{t('app.checkingSetup')}</main>;
   }
   if (state.kind === 'unavailable') {
     return (
       <main className="loading-surface">
         <div>
-          <p role="alert">Camera management is unavailable.</p>
+          <p role="alert">{t('app.managementUnavailable')}</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       </main>
@@ -290,13 +290,25 @@ export function BootstrapGate({
       <LoginPage login={bootstrapLogin} initialCredential={initialCredential} />
     );
   }
-  return operationalChild;
+  return operationalChild ?? (
+    <main className="loading-surface">{t('app.checkingSession')}</main>
+  );
 }
 
-const administratorPaths = new Set(['/dashboard', '/cameras', '/ai', '/system', '/users']);
+const administratorPaths = new Set([
+  '/dashboard',
+  '/cameras',
+  '/cameras/sub-stream',
+  '/cameras/osd',
+  '/ai',
+  '/system',
+  '/users',
+]);
 const operationalViews: Record<string, OperationalView> = {
   '/dashboard': 'dashboard',
   '/cameras': 'cameras',
+  '/cameras/sub-stream': 'cameras-substream',
+  '/cameras/osd': 'cameras-osd',
   '/ai': 'ai',
   '/system': 'system',
 };
@@ -476,6 +488,7 @@ function AuthenticatedApplication({ child, client }: {
   child?: ReactNode;
   client: CameraApiClient;
 }) {
+  const { t } = useTranslation();
   const auth = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -487,7 +500,7 @@ function AuthenticatedApplication({ child, client }: {
   }, [auth.state, location.pathname, navigate]);
 
   if (auth.state === 'checking') {
-    return <main className="loading-surface">Checking session...</main>;
+    return <main className="loading-surface">{t('app.checkingSession')}</main>;
   }
   if (auth.state === 'anonymous') {
     return <LoginPage login={auth.login} />;

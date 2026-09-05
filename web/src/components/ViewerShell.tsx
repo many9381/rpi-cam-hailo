@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useLocation } from 'react-router-dom';
 
+import { useTranslation } from '../i18n/LanguageContext';
 import { AccountMenu, type AccountMenuProps } from './AccountMenu';
 import { IconButton } from './IconButton';
 
@@ -16,21 +17,22 @@ export interface ViewerShellProps extends AccountMenuProps {
 }
 
 const viewerNavigation = [
-  { label: 'Live', path: '/monitor', icon: Camera },
+  { labelKey: 'nav.live', path: '/monitor', icon: Camera },
 ] as const;
 
 function NavigationLinks({ pathname, onSelect }: {
   pathname: string;
   onSelect?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <ul className="nav-list">
-      {viewerNavigation.map(({ label, path, icon: Icon }) => (
+      {viewerNavigation.map(({ labelKey, path, icon: Icon }) => (
         <li key={path}>
           <a className={pathname === path ? 'nav-link active' : 'nav-link'} href={`#${path}`}
             aria-current={pathname === path ? 'page' : undefined} onClick={onSelect}>
             <Icon size={19} aria-hidden="true" />
-            <span>{label}</span>
+            <span>{t(labelKey)}</span>
           </a>
         </li>
       ))}
@@ -39,6 +41,7 @@ function NavigationLinks({ pathname, onSelect }: {
 }
 
 export function ViewerShell({ principal, logout, changePassword, children }: ViewerShellProps) {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -92,13 +95,13 @@ export function ViewerShell({ principal, logout, changePassword, children }: Vie
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="sidebar-brand"><span>CF</span> Camera Firmware</div>
-        <nav aria-label="Primary navigation"><NavigationLinks pathname={pathname} /></nav>
+        <div className="sidebar-brand"><span>{t('common.brandShort')}</span> {t('common.brand')}</div>
+        <nav aria-label={t('nav.primaryLabel')}><NavigationLinks pathname={pathname} /></nav>
       </aside>
 
       <header className="topbar">
         <div className="topbar-leading">
-          <IconButton ref={menuButtonRef} className="mobile-menu-button" label="Open navigation"
+          <IconButton ref={menuButtonRef} className="mobile-menu-button" label={t('nav.openNavigation')}
             aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}>
             <Menu size={20} aria-hidden="true" />
           </IconButton>
@@ -112,18 +115,18 @@ export function ViewerShell({ principal, logout, changePassword, children }: Vie
 
       {drawerOpen && (
         <div className="drawer-layer">
-          <button type="button" className="drawer-backdrop" aria-label="Dismiss navigation"
+          <button type="button" className="drawer-backdrop" aria-label={t('nav.dismissNavigation')}
             tabIndex={-1} onClick={() => setDrawerOpen(false)} />
-          <aside className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation"
+          <aside className="mobile-drawer" role="dialog" aria-modal="true" aria-label={t('nav.navigationLabel')}
             onKeyDown={trapDrawerFocus}>
             <div className="drawer-header">
-              <span>Camera Firmware</span>
-              <IconButton ref={closeButtonRef} label="Close navigation"
+              <span>{t('common.brand')}</span>
+              <IconButton ref={closeButtonRef} label={t('nav.closeNavigation')}
                 onClick={() => setDrawerOpen(false)}>
                 <X size={20} aria-hidden="true" />
               </IconButton>
             </div>
-            <nav aria-label="Drawer navigation">
+            <nav aria-label={t('nav.drawerLabel')}>
               <NavigationLinks pathname={pathname} onSelect={() => setDrawerOpen(false)} />
             </nav>
           </aside>

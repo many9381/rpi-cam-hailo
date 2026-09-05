@@ -1,10 +1,12 @@
 import { Check, RotateCcw, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type {
-  PublicApiError,
-  RuntimeSettings,
-  RuntimeSettingsSnapshot,
+import { useTranslation } from '../../i18n/LanguageContext';
+import {
+  isOsdSettingsValid,
+  type RuntimeSettings,
+  type RuntimeSettingsErrorCode,
+  type RuntimeSettingsSnapshot,
 } from './contracts';
 import { ApplySettingsDialog } from './ApplySettingsDialog';
 import type { RuntimeSettingsController } from './useRuntimeSettings';
@@ -27,7 +29,8 @@ const isDraftValid = (
       !Number.isSafeInteger(draft.camera.gop) ||
       draft.camera.gop < snapshot.capabilities.gop.minimum ||
       draft.camera.gop > snapshot.capabilities.gop.maximum ||
-      draft.models.length !== snapshot.capabilities.models.length) {
+      draft.models.length !== snapshot.capabilities.models.length ||
+      !isOsdSettingsValid(draft.osd)) {
     return false;
   }
   return draft.models.every((model, index) =>
@@ -37,50 +40,36 @@ const isDraftValid = (
     model.confidence_threshold >= 0 && model.confidence_threshold <= 1);
 };
 
-const errorText = (error: PublicApiError): string => {
-  switch (error.code) {
-    case 'E_SETTINGS_REVISION_CONFLICT':
-      return 'Settings changed on the device. Review and save your changes again.';
-    case 'E_SETTINGS_NO_PENDING':
-      return 'There are no pending settings to apply or discard.';
-    case 'E_SETTINGS_BUSY':
-      return 'Another settings command is in progress.';
-    case 'E_SETTINGS_UNSUPPORTED':
-      return 'The selected runtime settings are not supported.';
-    case 'E_SETTINGS_STORE':
-      return 'Runtime settings could not be stored.';
-    case 'E_SETTINGS_UNAVAILABLE':
-      return 'Runtime settings are unavailable.';
-    case 'E_SETTINGS_REQUEST_INVALID':
-      return 'Runtime settings could not be validated.';
-    case 'E_SETTINGS_APPLY_FAILED':
-      return 'Settings could not be applied.';
-    case 'E_SETTINGS_REQUEST_FAILED':
-      return 'The settings request could not be completed.';
-  }
+const errorTextKeys: Record<RuntimeSettingsErrorCode, string> = {
+  E_SETTINGS_REVISION_CONFLICT: 'settings.errorRevisionConflict',
+  E_SETTINGS_NO_PENDING: 'settings.errorNoPending',
+  E_SETTINGS_BUSY: 'settings.errorBusy',
+  E_SETTINGS_UNSUPPORTED: 'settings.errorUnsupported',
+  E_SETTINGS_STORE: 'settings.errorStore',
+  E_SETTINGS_UNAVAILABLE: 'settings.unavailable',
+  E_SETTINGS_REQUEST_INVALID: 'settings.errorRequestInvalid',
+  E_SETTINGS_APPLY_FAILED: 'settings.errorApplyFailed',
+  E_SETTINGS_REQUEST_FAILED: 'settings.errorRequestFailed',
 };
 
-const noticeFor = (controller: RuntimeSettingsController): {
+const noticeKeyFor = (controller: RuntimeSettingsController): {
   role: 'alert' | 'status';
-  text: string;
+  key: string;
 } | null => {
   const { snapshot } = controller;
   if (snapshot?.last_apply.status === 'failed') {
     return snapshot.last_apply.restored
-      ? { role: 'alert',
-        text: 'Settings could not be applied. The previous runtime was restored.' }
-      : { role: 'alert',
-        text: 'Settings could not be applied and the camera runtime needs attention.' };
+      ? { role: 'alert', key: 'settings.noticeApplyFailedRestored' }
+      : { role: 'alert', key: 'settings.noticeApplyFailedNeedsAttention' };
   }
   if (controller.error !== null) {
-    return { role: 'alert', text: errorText(controller.error) };
+    return { role: 'alert', key: errorTextKeys[controller.error.code] };
   }
   if (snapshot?.state === 'recovery_required') {
-    return { role: 'status',
-      text: 'Save runtime settings to replace the invalid stored state.' };
+    return { role: 'status', key: 'settings.noticeRecoveryRequired' };
   }
   if (snapshot?.pending !== null && snapshot?.pending !== undefined) {
-    return { role: 'status', text: 'Saved settings are waiting to be applied.' };
+    return { role: 'status', key: 'settings.noticePendingSaved' };
   }
   return null;
 };
@@ -89,6 +78,7 @@ export function SettingsActionBar({
   controller,
   onApplySettled = () => undefined,
 }: SettingsActionBarProps) {
+  const { t } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const applyButtonRef = useRef<HTMLButtonElement>(null);
   const restoreApplyFocus = useRef(false);
@@ -97,7 +87,7 @@ export function SettingsActionBar({
   const hasPending = controller.snapshot?.pending !== null &&
     controller.snapshot?.pending !== undefined;
   const recoveryRequired = controller.snapshot?.state === 'recovery_required';
-  const notice = noticeFor(controller);
+  const noticeKey = noticeKeyFor(controller);
 
   useEffect(() => {
     if (!dialogOpen && restoreApplyFocus.current) {
@@ -118,34 +108,34 @@ export function SettingsActionBar({
 
   return (
     <div className="settings-actions-wrap">
-      {notice !== null && (
-        <p className={`settings-command-notice settings-command-${notice.role}`}
-          role={notice.role}>{notice.text}</p>
+      {noticeKey !== null && (
+        <p className={`settings-command-notice settings-command-${noticeKey.role}`}
+          role={noticeKey.role}>{t(noticeKey.key)}</p>
       )}
-      <div className="settings-action-bar" aria-label="Runtime settings actions">
+      <div className="settings-action-bar" aria-label={t('settings.actionsLabel')}>
         <span className="settings-revision">
-          Revision {controller.snapshot?.revision ?? '-'}
+          {t('settings.revisionLabel', { revision: controller.snapshot?.revision ?? '-' })}
         </span>
         <div>
           <button type="button" disabled={busy || !hasPending || controller.dirty}
             onClick={() => void controller.discard()}>
             <RotateCcw size={16} aria-hidden="true" />
-            Discard pending
+            {t('settings.discardPending')}
           </button>
           <button type="button"
             disabled={busy || (!controller.dirty && !recoveryRequired) || !valid}
             onClick={() => void controller.save()}>
             <Save size={16} aria-hidden="true" />
-            Save changes
+            {t('settings.saveChanges')}
           </button>
           <button ref={applyButtonRef} className="settings-primary-action"
             type="button" disabled={busy || !hasPending || controller.dirty}
             aria-label={controller.status === 'applying'
-              ? 'Applying settings'
-              : 'Apply pending'}
+              ? t('settings.applyingSettings')
+              : t('settings.applyPending')}
             onClick={() => setDialogOpen(true)}>
             <Check size={16} aria-hidden="true" />
-            {controller.status === 'applying' ? 'Applying...' : 'Apply pending'}
+            {controller.status === 'applying' ? t('settings.applying') : t('settings.applyPending')}
           </button>
         </div>
       </div>

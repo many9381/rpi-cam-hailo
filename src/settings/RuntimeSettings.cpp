@@ -1,5 +1,7 @@
 #include "camera_firmware/settings/RuntimeSettings.hpp"
 
+#include "camera_firmware/config/OsdRules.hpp"
+
 #include <cstddef>
 #include <cmath>
 #include <unordered_set>
@@ -47,6 +49,21 @@ common::Result<void> ValidateSubStreamSettings(
     return common::Result<void>::Err(
         {"E_RUNTIME_SETTINGS_SUB_BITRATE",
          "sub-stream bitrate must be between 500 and 20000 kbps"});
+  }
+  return common::Result<void>::Ok();
+}
+
+common::Result<void> ValidateOsdSettings(const RuntimeSettings& settings) {
+  const auto& osd = settings.osd;
+  if (osd.items.size() > config::kMaxOsdItems) {
+    return common::Result<void>::Err(
+        {"E_SETTINGS_OSD", "too many OSD items"});
+  }
+  for (const auto& item : osd.items) {  // unconditional: validate even if disabled
+    if (!config::IsValidOsdItem(item.type, item.text, item.position)) {
+      return common::Result<void>::Err(
+          {"E_SETTINGS_OSD", "invalid OSD item"});
+    }
   }
   return common::Result<void>::Ok();
 }
@@ -199,6 +216,10 @@ common::Result<void> ValidateRuntimeSettings(
   if (!sub_stream_result.ok()) {
     return sub_stream_result;
   }
+  const auto osd_result = ValidateOsdSettings(settings);
+  if (!osd_result.ok()) {
+    return osd_result;
+  }
   return ValidateModelSettings(settings, base);
 }
 
@@ -224,6 +245,14 @@ common::Result<config::AppConfig> BuildEffectiveConfig(
   effective.camera.sub_stream.height = settings.sub_stream.height;
   effective.camera.sub_stream.fps = settings.sub_stream.fps;
   effective.camera.sub_stream.bitrate_kbps = settings.sub_stream.bitrate_kbps;
+
+  effective.camera.osd.enabled = settings.osd.enabled;
+  effective.camera.osd.items.clear();
+  effective.camera.osd.items.reserve(settings.osd.items.size());
+  for (const auto& item : settings.osd.items) {
+    effective.camera.osd.items.push_back(config::CameraOsdItem{
+        .type = item.type, .text = item.text, .position = item.position});
+  }
 
   effective.camera.ai.model_ids.clear();
   for (std::size_t index = 0; index < effective.ai.models.size(); ++index) {

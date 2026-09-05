@@ -6,10 +6,12 @@ import { IconButton } from '../components/IconButton';
 import { useDetectionStream } from '../hooks/useDetectionStream';
 import { useMonitoringData } from '../hooks/useMonitoringData';
 import { useSnapshot } from '../hooks/useSnapshot';
+import { useTranslation } from '../i18n/LanguageContext';
 
 const emptyDetections: DetectionSnapshot = { events: [] };
 
 export function MonitorPage({ client }: { client: CameraApiClient }) {
+  const { t } = useTranslation();
   const monitoring = useMonitoringData(client);
   const detections = useDetectionStream(
     emptyDetections,
@@ -24,13 +26,13 @@ export function MonitorPage({ client }: { client: CameraApiClient }) {
 
   if (monitoring.cameras.length === 0) {
     if (monitoring.state === 'loading') {
-      return <section className="monitor-page monitor-state">Loading camera monitoring...</section>;
+      return <section className="monitor-page monitor-state">{t('monitor.loading')}</section>;
     }
     return (
       <section className="monitor-page monitor-state">
-        <p role="alert">Camera monitoring is unavailable.</p>
+        <p role="alert">{t('monitor.unavailable')}</p>
         <button type="button" onClick={() => void monitoring.refresh().catch(() => undefined)}>
-          Retry
+          {t('common.retry')}
         </button>
       </section>
     );
@@ -40,13 +42,13 @@ export function MonitorPage({ client }: { client: CameraApiClient }) {
   return (
     <div className="monitor-page">
       <header className="monitor-heading">
-        <h1>Live monitoring</h1>
-        <IconButton label="Refresh monitoring and snapshot" onClick={refreshPage}>
+        <h1>{t('monitor.title')}</h1>
+        <IconButton label={t('monitor.refreshMonitoring')} onClick={refreshPage}>
           <RefreshCw size={18} aria-hidden="true" />
         </IconButton>
       </header>
       {monitoring.state === 'stale' && (
-        <p className="monitor-stale-notice" role="status">Showing last available cameras.</p>
+        <p className="monitor-stale-notice" role="status">{t('monitor.staleNotice')}</p>
       )}
       <CameraPreview cameras={monitoring.cameras}
         selectedCameraId={selectedCameraId}
@@ -54,18 +56,18 @@ export function MonitorPage({ client }: { client: CameraApiClient }) {
         snapshot={detections.snapshot} />
       <section className="monitor-snapshot-section" aria-labelledby="snapshot-heading">
         <div className="section-heading">
-          <h2 id="snapshot-heading">Snapshot</h2>
-          <IconButton label={`Refresh snapshot for ${selectedCameraId}`}
+          <h2 id="snapshot-heading">{t('monitor.snapshotHeading')}</h2>
+          <IconButton label={t('monitor.refreshSnapshotFor', { id: selectedCameraId })}
             onClick={() => void snapshot.refresh().catch(() => undefined)}>
             <RefreshCw size={17} aria-hidden="true" />
           </IconButton>
         </div>
         <div className="monitor-snapshot-stage" aria-busy={snapshot.state === 'loading'}>
           {snapshot.state === 'ready' && snapshot.objectUrl !== null
-            ? <img src={snapshot.objectUrl} alt={`${selectedCameraId} camera snapshot`} />
+            ? <img src={snapshot.objectUrl} alt={t('monitor.cameraSnapshotAlt', { id: selectedCameraId })} />
             : <p role="status">{snapshot.state === 'loading'
-              ? 'Loading snapshot...'
-              : 'Snapshot unavailable.'}</p>}
+              ? t('monitor.loadingSnapshot')
+              : t('monitor.snapshotUnavailable')}</p>}
         </div>
       </section>
     </div>

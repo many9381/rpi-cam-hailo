@@ -12,11 +12,13 @@ import type { AuditStatusController } from '../features/audit/useAuditStatus';
 import { SystemProtectionPanel } from '../features/protection/SystemProtectionPanel';
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import { AiSettingsPanel } from '../features/settings/AiSettingsPanel';
-import { CameraSettingsPanel } from '../features/settings/CameraSettingsPanel';
+import { CameraSettingsPanel, type CameraSettingsSection } from '../features/settings/CameraSettingsPanel';
+import { osdSettingsEqual } from '../features/settings/contracts';
 import { SettingsActionBar } from '../features/settings/SettingsActionBar';
 import type { RuntimeSettingsController } from '../features/settings/useRuntimeSettings';
 import { useDetectionStream } from '../hooks/useDetectionStream';
 import type { OperationalController } from '../hooks/useOperationalData';
+import { useTranslation } from '../i18n/LanguageContext';
 
 interface DashboardPageProps {
   client: CameraApiClient;
@@ -28,24 +30,38 @@ interface DashboardPageProps {
   view?: OperationalView;
 }
 
-export type OperationalView = 'dashboard' | 'cameras' | 'ai' | 'system';
+export type OperationalView =
+  | 'dashboard'
+  | 'cameras'
+  | 'cameras-substream'
+  | 'cameras-osd'
+  | 'ai'
+  | 'system';
 
-const viewHeadings: Record<OperationalView, { title: string; subtitle: string }> = {
+const viewHeadings: Record<OperationalView, { titleKey: string; subtitleKey: string }> = {
   dashboard: {
-    title: 'Dashboard',
-    subtitle: 'Camera, secure stream, and Hailo runtime status',
+    titleKey: 'dashboard.dashboardTitle',
+    subtitleKey: 'dashboard.dashboardSubtitle',
   },
   cameras: {
-    title: 'Cameras',
-    subtitle: 'Live preview and camera inventory',
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
+  },
+  'cameras-substream': {
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
+  },
+  'cameras-osd': {
+    titleKey: 'dashboard.camerasTitle',
+    subtitleKey: 'dashboard.camerasSubtitle',
   },
   ai: {
-    title: 'AI inference',
-    subtitle: 'Hailo model runners and current detections',
+    titleKey: 'dashboard.aiTitle',
+    subtitleKey: 'dashboard.aiSubtitle',
   },
   system: {
-    title: 'System',
-    subtitle: 'Device health and secure stream transport',
+    titleKey: 'dashboard.systemTitle',
+    subtitleKey: 'dashboard.systemSubtitle',
   },
 };
 
@@ -58,6 +74,7 @@ export function DashboardPage({
   auditFragment,
   view = 'dashboard',
 }: DashboardPageProps) {
+  const { t } = useTranslation();
   const refresh = () => {
     void controller.refresh().catch(() => undefined);
     if (runtimeSettings !== undefined) {
@@ -107,9 +124,9 @@ export function DashboardPage({
 
   const heading = viewHeadings[view];
   const operationalState = controller.state === 'loading'
-    ? <p>Loading operational data...</p>
-    : <><p role="alert">Operational data is unavailable.</p>
-      <button type="button" onClick={refresh}>Retry</button></>;
+    ? <p>{t('dashboard.loadingOperationalData')}</p>
+    : <><p role="alert">{t('dashboard.operationalDataUnavailable')}</p>
+      <button type="button" onClick={refresh}>{t('common.retry')}</button></>;
   if (controller.data === null && view !== 'system') {
     return (
       <section className="dashboard-page dashboard-state">
@@ -119,26 +136,41 @@ export function DashboardPage({
   }
 
   const data = controller.data;
-  const showPreview = view === 'dashboard' || view === 'cameras' || view === 'ai';
-  const showStatus = view === 'dashboard' || view === 'cameras' || view === 'system';
+  const cameraSection: CameraSettingsSection | null =
+    view === 'cameras' ? 'camera'
+      : view === 'cameras-substream' ? 'sub_stream'
+        : view === 'cameras-osd' ? 'osd'
+          : null;
+  const isCameraView = cameraSection !== null;
+  const showPreview = view === 'dashboard' || isCameraView || view === 'ai';
+  const showStatus = view === 'dashboard' || isCameraView || view === 'system';
+  // The video already carries the applied OSD (burned in by the firmware), so
+  // the overlay only previews an OSD draft that differs from what is applied,
+  // and only on the OSD editor.
+  const draftOsd = runtimeSettings?.draft?.osd;
+  const activeOsd = runtimeSettings?.snapshot?.active.osd;
+  const previewOsd = view === 'cameras-osd' && draftOsd !== undefined &&
+    activeOsd !== undefined && !osdSettingsEqual(draftOsd, activeOsd)
+    ? draftOsd
+    : undefined;
   const showStream = view === 'dashboard' || view === 'system';
   const showAi = view === 'dashboard' || view === 'ai';
   return (
     <div className="dashboard-page">
       <header className="dashboard-heading">
         <div>
-          <h1>{heading.title}</h1>
-          <p>{heading.subtitle}</p>
+          <h1>{t(heading.titleKey)}</h1>
+          <p>{t(heading.subtitleKey)}</p>
         </div>
         <button className="refresh-button" type="button"
-          aria-label="Refresh operational data" title="Refresh operational data"
+          aria-label={t('dashboard.refreshOperationalData')} title={t('dashboard.refreshOperationalData')}
           onClick={refresh}>
           <RefreshCw size={17} aria-hidden="true" />
-          Refresh
+          {t('dashboard.refresh')}
         </button>
       </header>
       {controller.state === 'stale' && (
-        <p className="stale-notice" role="status">Showing the last available status.</p>
+        <p className="stale-notice" role="status">{t('dashboard.staleNotice')}</p>
       )}
       {data === null && (
         <section className="dashboard-state">{operationalState}</section>
@@ -146,7 +178,8 @@ export function DashboardPage({
       {data !== null && showPreview && (
         <CameraPreview cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
-          onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot} />
+          onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot}
+          osd={previewOsd} />
       )}
       {data !== null && showStatus && (
         <StatusPanel health={data.health} cameras={data.cameras}
@@ -166,9 +199,9 @@ export function DashboardPage({
         <AuditRecordsPanel client={client} auditStatus={auditStatus}
           routeFragment={auditFragment} />
       )}
-      {data !== null && view === 'cameras' && runtimeSettings !== undefined && (
+      {data !== null && cameraSection !== null && runtimeSettings !== undefined && (
         <>
-          <CameraSettingsPanel controller={runtimeSettings} />
+          <CameraSettingsPanel controller={runtimeSettings} section={cameraSection} />
           <SettingsActionBar controller={runtimeSettings}
             onApplySettled={() => void controller.refresh().catch(() => undefined)} />
         </>

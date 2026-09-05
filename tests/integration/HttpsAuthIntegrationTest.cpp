@@ -1090,10 +1090,11 @@ bool HasExpectedPersistedPendingSettings(const HttpResult& response) {
   const auto& camera = pending["camera"];
   const auto& models = pending["models"];
   const auto& sub_stream = pending["sub_stream"];
+  const auto& osd = pending["osd"];
   return root["schema_version"].asUInt() == 1U &&
          root["revision"].asUInt64() == 1U &&
          root["state"].asString() == "pending" && pending.isObject() &&
-         pending.size() == 3U && camera.isObject() && camera.size() == 3U &&
+         pending.size() == 4U && camera.isObject() && camera.size() == 3U &&
          camera["profile_id"].asString() == "imx708-1080p30" &&
          camera["bitrate_kbps"].asUInt() == 8000U &&
          camera["gop"].asUInt() == 30U && models.isArray() &&
@@ -1112,7 +1113,9 @@ bool HasExpectedPersistedPendingSettings(const HttpResult& response) {
          sub_stream["width"].asUInt() == 640U &&
          sub_stream["height"].asUInt() == 360U &&
          sub_stream["fps"].asUInt() == 15U &&
-         sub_stream["bitrate_kbps"].asUInt() == 1000U;
+         sub_stream["bitrate_kbps"].asUInt() == 1000U && osd.isObject() &&
+         osd.size() == 2U && !osd["enabled"].asBool() &&
+         osd["items"].isArray() && osd["items"].empty();
 }
 
 int RunRuntimeSettingsPersistenceLifecycle(
