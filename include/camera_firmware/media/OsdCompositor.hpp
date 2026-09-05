@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -86,6 +87,9 @@ class OsdCompositor {
   TextRasterizer* rasterizer_{nullptr};
   OsdLayoutMetrics metrics_;
   std::vector<Sprite> sprites_;
+  // One cached row of scratch: the capture buffers are mapped non-cacheable,
+  // so rows are copied in with memcpy, blended here, and copied back.
+  mutable std::vector<std::uint8_t> row_scratch_;
   bool has_timestamp_{false};
   std::time_t last_second_{-1};
 };

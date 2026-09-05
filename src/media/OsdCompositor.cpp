@@ -1,8 +1,10 @@
 #include "camera_firmware/media/OsdCompositor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <ctime>
 #include <string_view>
 #include <utility>
@@ -20,10 +22,17 @@ constexpr int kNeutralChroma = 128;
 constexpr int kTextLuma = 235;
 constexpr int kBoxOpacityPercent = 45;
 
-std::uint8_t Darken(std::uint8_t sample, int target) {
-  return static_cast<std::uint8_t>(
-      (sample * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent + 50) / 100);
+constexpr std::array<std::uint8_t, 256> MakeDarkenLut(int target) {
+  std::array<std::uint8_t, 256> lut{};
+  for (int v = 0; v < 256; ++v) {
+    lut[static_cast<std::size_t>(v)] = static_cast<std::uint8_t>(
+        (v * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent + 50) / 100);
+  }
+  return lut;
 }
+
+constexpr auto kDarkenLumaLut = MakeDarkenLut(kBoxLuma);
+constexpr auto kDarkenChromaLut = MakeDarkenLut(kNeutralChroma);
 
 std::uint8_t Toward(std::uint8_t sample, int target, int coverage) {
   const int delta = (target - sample) * coverage;
@@ -72,7 +81,11 @@ OsdCompositor::OsdCompositor(config::CameraOsdConfig config, std::string camera_
                              int width, int height, TextRasterizer& rasterizer)
     : config_(std::move(config)), camera_id_(std::move(camera_id)),
       width_(width), height_(height), rasterizer_(&rasterizer),
-      metrics_(OsdLayoutMetrics::For(width, height)) {}
+      metrics_(OsdLayoutMetrics::For(width, height)) {
+  // A luma row segment is at most `width` bytes; a chroma row segment is at
+  // most 2 * ((width + 1) / 2) bytes. Both fit with room to spare.
+  row_scratch_.assign(static_cast<std::size_t>(width) + 2U, 0U);
+}
 
 std::string OsdCompositor::TextFor(const config::CameraOsdItem& item,
                                    std::time_t now) const {
@@ -188,26 +201,41 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
   if (x0 >= x1 || y0 >= y1) {
     return;
   }
+  // The capture buffer is mapped non-cacheable: touch it only through
+  // memcpy bursts into this cached scratch row, blend here, copy back.
+  std::uint8_t* const scratch = row_scratch_.data();
   // Luma: darken the box, then lift text pixels toward white.
   for (int y = y0; y < y1; ++y) {
-    std::uint8_t* row = frame.y + static_cast<std::ptrdiff_t>(y) * frame.y_stride;
-    const std::uint8_t* cover =
-        sprite.coverage.data() + static_cast<std::size_t>(y - sprite.y) * sprite.width;
-    for (int x = x0; x < x1; ++x) {
-      std::uint8_t sample = Darken(row[x], kBoxLuma);
-      const int coverage = cover[x - sprite.x];
+    std::uint8_t* row = frame.y + static_cast<std::ptrdiff_t>(y) * frame.y_stride + x0;
+    const int n = x1 - x0;
+    std::memcpy(scratch, row, static_cast<std::size_t>(n));
+    const std::uint8_t* cover = sprite.coverage.data() +
+        static_cast<std::size_t>(y - sprite.y) * sprite.width + (x0 - sprite.x);
+    for (int i = 0; i < n; ++i) {
+      std::uint8_t sample = kDarkenLumaLut[scratch[i]];
+      const int coverage = cover[i];
       if (coverage > 0) {
         sample = Toward(sample, kTextLuma, coverage);
       }
-      row[x] = sample;
+      scratch[i] = sample;
     }
+    std::memcpy(row, scratch, static_cast<std::size_t>(n));
   }
   // Chroma: one sample per 2x2 luma block; text coverage is the block mean.
   const int chroma_rows = (frame.height + 1) / 2;
   const int chroma_cols = (frame.width + 1) / 2;
-  for (int cy = y0 / 2; cy < std::min(chroma_rows, (y1 + 1) / 2); ++cy) {
-    std::uint8_t* row = frame.uv + static_cast<std::ptrdiff_t>(cy) * frame.uv_stride;
-    for (int cx = x0 / 2; cx < std::min(chroma_cols, (x1 + 1) / 2); ++cx) {
+  const int cy0 = y0 / 2;
+  const int cy1 = std::min(chroma_rows, (y1 + 1) / 2);
+  const int cx0 = x0 / 2;
+  const int cx1 = std::min(chroma_cols, (x1 + 1) / 2);
+  if (cx0 >= cx1) {
+    return;
+  }
+  for (int cy = cy0; cy < cy1; ++cy) {
+    std::uint8_t* row = frame.uv + static_cast<std::ptrdiff_t>(cy) * frame.uv_stride + cx0 * 2;
+    const int n = (cx1 - cx0) * 2;
+    std::memcpy(scratch, row, static_cast<std::size_t>(n));
+    for (int cx = cx0; cx < cx1; ++cx) {
       int sum = 0;
       int count = 0;
       for (int dy = 0; dy < 2; ++dy) {
@@ -227,13 +255,15 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
       }
       const int coverage = sum / count;
       for (int component = 0; component < 2; ++component) {
-        std::uint8_t sample = Darken(row[cx * 2 + component], kNeutralChroma);
+        const int idx = (cx - cx0) * 2 + component;
+        std::uint8_t sample = kDarkenChromaLut[scratch[idx]];
         if (coverage > 0) {
           sample = Toward(sample, kNeutralChroma, coverage);
         }
-        row[cx * 2 + component] = sample;
+        scratch[idx] = sample;
       }
     }
+    std::memcpy(row, scratch, static_cast<std::size_t>(n));
   }
 }
 
