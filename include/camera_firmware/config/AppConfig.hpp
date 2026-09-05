@@ -81,6 +81,20 @@ struct CameraSubStreamConfig {
   std::string mount{"/imx708/sub"};
 };
 
+// One on-screen-display item. `type` is timestamp | camera_name | custom_text,
+// `position` one of the four corners; `text` is the custom text (unused for
+// the other types). Set only through runtime settings, never parsed from YAML.
+struct CameraOsdItem {
+  std::string type;
+  std::string text;
+  std::string position;
+};
+
+struct CameraOsdConfig {
+  bool enabled{false};
+  std::vector<CameraOsdItem> items;
+};
+
 struct AiModelInputConfig {
   unsigned int width{640};
   unsigned int height{640};
@@ -110,6 +124,7 @@ struct CameraConfig {
   CameraVideoConfig video;
   CameraEncoderConfig encoder;
   CameraSubStreamConfig sub_stream;
+  CameraOsdConfig osd;
   CameraAiConfig ai;
 };
 
@@ -178,6 +193,9 @@ struct AppConfig {
 
 common::Result<AppConfig> LoadConfigFile(const std::string& path);
 common::Result<void> ValidateAppConfigSemantics(const AppConfig& config);
+// Unconditional (checked even when disabled) so a stored or derived item the
+// web client would refuse to render can never reach the pipeline or the UI.
+common::Result<void> ValidateCameraOsdSemantics(const CameraOsdConfig& config);
 common::Result<void> ValidateAiConfigSemantics(
     const AiConfig& ai_config,
     const CameraConfig& camera_config);

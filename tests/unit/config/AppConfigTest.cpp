@@ -1480,3 +1480,40 @@ TEST(AppConfigTest, AcceptsDisabledSubStreamWithNonZeroGeometry) {
   EXPECT_FALSE(config.value().camera.sub_stream.enabled);
   EXPECT_EQ(config.value().camera.sub_stream.width, 800u);
 }
+
+TEST(AppConfigTest, DefaultsCameraOsdToDisabledWithNoItems) {
+  camera_firmware::config::AppConfig config;
+  EXPECT_FALSE(config.camera.osd.enabled);
+  EXPECT_TRUE(config.camera.osd.items.empty());
+}
+
+TEST(AppConfigTest, ValidatesCameraOsdItemsEvenWhenDisabled) {
+  camera_firmware::config::CameraOsdConfig osd;
+  osd.enabled = false;
+  osd.items.push_back({"custom_text", "", "top_left"});
+  const auto result = camera_firmware::config::ValidateCameraOsdSemantics(osd);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_CAMERA_OSD");
+}
+
+TEST(AppConfigTest, AcceptsEightOsdItemsAndRejectsNine) {
+  camera_firmware::config::CameraOsdConfig osd;
+  osd.enabled = true;
+  for (int i = 0; i < 8; ++i) {
+    osd.items.push_back({"timestamp", "", "top_left"});
+  }
+  EXPECT_TRUE(camera_firmware::config::ValidateCameraOsdSemantics(osd).ok());
+  osd.items.push_back({"timestamp", "", "top_left"});
+  const auto result = camera_firmware::config::ValidateCameraOsdSemantics(osd);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_CAMERA_OSD");
+}
+
+TEST(AppConfigTest, AppConfigSemanticsRejectInvalidCameraOsd) {
+  auto config = ValidSecurityConfig();
+  config.camera.osd.items.push_back({"clock", "x", "top_left"});
+  const auto result =
+      camera_firmware::config::ValidateAppConfigSemantics(config);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, "E_CONFIG_CAMERA_OSD");
+}

@@ -107,6 +107,7 @@ gtest_discover_tests(camera_firmware_crypto_tests)
 
 add_executable(camera_firmware_config_tests
     unit/config/AppConfigTest.cpp
+    unit/config/OsdRulesTest.cpp
 )
 
 target_link_libraries(camera_firmware_config_tests
