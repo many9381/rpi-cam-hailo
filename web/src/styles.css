@@ -1706,7 +1706,7 @@ select:focus-visible {
   border: none;
   background: transparent;
   cursor: pointer;
-  font: inherit;
+  font-family: inherit;
   text-align: left;
 }
 
