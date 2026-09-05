@@ -143,6 +143,13 @@ export function DashboardPage({
   const isCameraView = cameraSection !== null;
   const showPreview = view === 'dashboard' || isCameraView || view === 'ai';
   const showStatus = view === 'dashboard' || isCameraView || view === 'system';
+  // The OSD editor previews the unsaved draft so edits show up as they are
+  // made; every other preview mirrors what the firmware currently applies.
+  const previewOsd = runtimeSettings === undefined
+    ? undefined
+    : view === 'cameras-osd'
+      ? runtimeSettings.draft?.osd ?? runtimeSettings.snapshot?.active.osd
+      : runtimeSettings.snapshot?.active.osd;
   const showStream = view === 'dashboard' || view === 'system';
   const showAi = view === 'dashboard' || view === 'ai';
   return (
@@ -168,7 +175,8 @@ export function DashboardPage({
       {data !== null && showPreview && (
         <CameraPreview cameras={data.cameras}
           selectedCameraId={controller.selectedCameraId}
-          onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot} />
+          onSelectCamera={controller.selectCamera} snapshot={detectionStream.snapshot}
+          osd={previewOsd} />
       )}
       {data !== null && showStatus && (
         <StatusPanel health={data.health} cameras={data.cameras}

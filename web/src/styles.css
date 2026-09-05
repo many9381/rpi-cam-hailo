@@ -2238,6 +2238,51 @@ select:focus-visible {
   pointer-events: none;
 }
 
+/* OSD preview overlay. Geometry (frame rect, font size, inset) comes from
+   OsdOverlay inline styles via the shared osdLayout ratios; only the visual
+   treatment lives here so the burn-in renderer can mirror it. */
+.osd-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.osd-frame {
+  position: absolute;
+  display: grid;
+  box-sizing: border-box;
+  grid-template: 'top_left top_right' 1fr 'bottom_left bottom_right' 1fr / 1fr 1fr;
+  gap: 0.5em;
+  line-height: 1.2;
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+}
+
+.osd-corner {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25em;
+}
+
+.osd-corner-top_left { grid-area: top_left; align-self: start; align-items: flex-start; }
+.osd-corner-top_right { grid-area: top_right; align-self: start; align-items: flex-end; }
+.osd-corner-bottom_left { grid-area: bottom_left; align-self: end; align-items: flex-start; }
+.osd-corner-bottom_right { grid-area: bottom_right; align-self: end; align-items: flex-end; }
+
+.osd-item {
+  max-width: 100%;
+  padding: 0.15em 0.4em;
+  border-radius: 0.2em;
+  overflow: hidden;
+  color: #ffffff;
+  background: rgb(0 0 0 / 45%);
+  white-space: pre;
+  text-overflow: ellipsis;
+}
+
 .camera-stage-state {
   z-index: 2;
   margin: 0;

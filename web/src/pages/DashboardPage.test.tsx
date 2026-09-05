@@ -8,6 +8,7 @@ import type { ProtectionSnapshot } from '../features/protection/contracts';
 import type { SystemProtectionController } from '../features/protection/useSystemProtection';
 import type { OperationalController } from '../hooks/useOperationalData';
 import {
+  makeSettings,
   makeSettingsController,
   makeSettingsSnapshot,
 } from '../features/settings/testSupport';
@@ -228,6 +229,36 @@ describe('DashboardPage', () => {
         'true',
       );
       expect(screen.getByRole('heading', { name: 'Audit records' })).toBeVisible();
+    },
+  );
+
+  it.each([
+    ['cameras-osd', 'DRAFT OSD', 'ACTIVE OSD'],
+    ['cameras', 'ACTIVE OSD', 'DRAFT OSD'],
+    ['dashboard', 'ACTIVE OSD', 'DRAFT OSD'],
+  ] as const)(
+    'previews the %s view with the "%s" OSD text',
+    (view, shownText, hiddenText) => {
+      const active = makeSettings();
+      active.osd = {
+        enabled: true,
+        items: [{ type: 'custom_text', text: 'ACTIVE OSD', position: 'top_left' }],
+      };
+      const draft = makeSettings();
+      draft.osd = {
+        enabled: true,
+        items: [{ type: 'custom_text', text: 'DRAFT OSD', position: 'bottom_right' }],
+      };
+      const settingsController = makeSettingsController({
+        snapshot: { ...makeSettingsSnapshot(), active },
+        draft,
+        dirty: true,
+      });
+      render(<DashboardPage client={client} controller={controller}
+        runtimeSettings={settingsController} view={view} />, { wrapper: LanguageProvider });
+
+      expect(screen.getByText(shownText)).toHaveClass('osd-item');
+      expect(screen.queryByText(hiddenText)).not.toBeInTheDocument();
     },
   );
 

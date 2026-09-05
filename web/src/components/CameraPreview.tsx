@@ -2,16 +2,20 @@ import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { CameraStatus, DetectionSnapshot } from '../api/types';
+import type { OsdRuntimeSettings } from '../features/settings/contracts';
 import { useLivePreview } from '../hooks/useLivePreview';
 import { useTranslation } from '../i18n/LanguageContext';
 import { DetectionOverlay } from './DetectionOverlay';
 import { IconButton } from './IconButton';
+import { OsdOverlay } from './OsdOverlay';
 
 interface CameraPreviewProps {
   cameras: CameraStatus[];
   selectedCameraId: string;
   onSelectCamera(id: string): void;
   snapshot: DetectionSnapshot;
+  // When supplied, mirrors the OSD items over the live frame (see OsdOverlay).
+  osd?: OsdRuntimeSettings;
 }
 
 interface ImageDimensions {
@@ -25,6 +29,7 @@ export function CameraPreview({
   selectedCameraId,
   onSelectCamera,
   snapshot,
+  osd,
 }: CameraPreviewProps) {
   const { t } = useTranslation();
   const selectedCamera = cameras.find(({ id }) => id === selectedCameraId);
@@ -85,6 +90,11 @@ export function CameraPreview({
               imageWidth={currentImageSize.width}
               imageHeight={currentImageSize.height} />
           )}
+        {osd !== undefined && previewCameraId.length > 0 && (
+          <OsdOverlay osd={osd} cameraId={selectedCameraId}
+            imageWidth={currentImageSize?.width}
+            imageHeight={currentImageSize?.height} />
+        )}
         <p className="camera-stage-state" role="status">{stageStatus}</p>
       </div>
     </section>

@@ -4,6 +4,7 @@ import { createRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DetectionSnapshot } from '../api/types';
+import type { OsdRuntimeSettings } from '../features/settings/contracts';
 import type { LivePreviewController } from '../hooks/useLivePreview';
 import { LanguageProvider } from '../i18n';
 import { CameraPreview } from './CameraPreview';
@@ -24,6 +25,19 @@ vi.mock('./DetectionOverlay', () => ({
     imageHeight: number;
   }) => (
     <div data-testid="detection-overlay"
+      data-image-width={imageWidth} data-image-height={imageHeight} />
+  ),
+}));
+
+vi.mock('./OsdOverlay', () => ({
+  OsdOverlay: ({ osd, cameraId, imageWidth, imageHeight }: {
+    osd: OsdRuntimeSettings;
+    cameraId: string;
+    imageWidth?: number;
+    imageHeight?: number;
+  }) => (
+    <div data-testid="osd-overlay" data-camera-id={cameraId}
+      data-enabled={String(osd.enabled)} data-item-count={osd.items.length}
       data-image-width={imageWidth} data-image-height={imageHeight} />
   ),
 }));
@@ -110,6 +124,39 @@ describe('CameraPreview', () => {
 
     expect(screen.queryByTestId('detection-overlay')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Preview reconnecting...');
+  });
+
+  it('mirrors supplied OSD settings over the stage and sizes them from video metadata', () => {
+    previewController = controller({ state: 'live' });
+    const osd: OsdRuntimeSettings = {
+      enabled: true,
+      items: [{ type: 'custom_text', text: 'Front door', position: 'top_left' }],
+    };
+    render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={() => undefined} snapshot={detections} osd={osd} /></LanguageProvider>);
+
+    const overlay = screen.getByTestId('osd-overlay');
+    expect(overlay).toHaveAttribute('data-camera-id', 'cam-a');
+    expect(overlay).toHaveAttribute('data-item-count', '1');
+    expect(overlay).not.toHaveAttribute('data-image-width');
+
+    const video = screen.getByLabelText('cam-a camera preview');
+    Object.defineProperties(video, {
+      videoWidth: { configurable: true, value: 1920 },
+      videoHeight: { configurable: true, value: 1080 },
+    });
+    fireEvent.loadedMetadata(video);
+
+    expect(screen.getByTestId('osd-overlay')).toHaveAttribute('data-image-width', '1920');
+    expect(screen.getByTestId('osd-overlay')).toHaveAttribute('data-image-height', '1080');
+  });
+
+  it('omits the OSD overlay when no OSD settings are supplied', () => {
+    previewController = controller({ state: 'live' });
+    render(<LanguageProvider><CameraPreview cameras={cameras} selectedCameraId="cam-a"
+      onSelectCamera={() => undefined} snapshot={detections} /></LanguageProvider>);
+
+    expect(screen.queryByTestId('osd-overlay')).not.toBeInTheDocument();
   });
 
   it('announces a concise no-camera state', () => {
