@@ -296,6 +296,8 @@ export const ko: Messages = {
     posBottomRight: '우측 하단',
     timestampFormatPlaceholder: '포맷 (선택)',
     customTextRequired: '표시할 텍스트를 입력하세요.',
+    textBytes: '{used}/{max} 바이트',
+    textTooLong: '{used}/{max} 바이트 — 최대 {max}바이트(UTF-8)까지 가능합니다.',
     applyNotice: 'OSD 항목은 설정을 적용한 뒤 영상에 표시됩니다.',
     pendingHint: '점선 항목은 아직 적용되지 않은 변경 사항의 미리보기이며, 영상에는 현재 적용된 값이 표시됩니다.',
   },

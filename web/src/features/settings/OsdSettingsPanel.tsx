@@ -37,6 +37,17 @@ const OSD_POSITION_LABEL_KEYS: Record<OsdPosition, string> = {
 const isCustomTextMissing = (item: OsdItem): boolean =>
   item.type === 'custom_text' && item.text.length === 0;
 
+// The backend bounds text by UTF-8 BYTES (MAX_OSD_TEXT), not characters, so
+// the field shows the byte usage and flags overflow before Save is attempted
+// (the input's maxLength is only a loose character cap).
+const textByteLength = (text: string): number => new TextEncoder().encode(text).length;
+
+type TextProblem = 'missing' | 'too_long' | null;
+const textProblemFor = (item: OsdItem): TextProblem =>
+  isCustomTextMissing(item) ? 'missing'
+    : textByteLength(item.text) > MAX_OSD_TEXT ? 'too_long'
+      : null;
+
 const makeDefaultOsdItem = (): OsdItem => ({
   type: 'custom_text',
   text: '',
@@ -106,31 +117,38 @@ export function OsdSettingsPanel({ osd, disabled, onChange }: OsdSettingsPanelPr
               </select>
             </div>
 
-            {item.type !== 'camera_name' && (
-              <div className="settings-field">
-                <label htmlFor={`runtime-osd-item-${index}-text`}>{t('osd.text')}</label>
-                <input
-                  id={`runtime-osd-item-${index}-text`}
-                  type="text"
-                  maxLength={MAX_OSD_TEXT}
-                  value={item.text}
-                  placeholder={item.type === 'timestamp'
-                    ? t('osd.timestampFormatPlaceholder')
-                    : undefined}
-                  disabled={disabled}
-                  aria-invalid={isCustomTextMissing(item) ? true : undefined}
-                  aria-describedby={isCustomTextMissing(item)
-                    ? `runtime-osd-item-${index}-text-error`
-                    : undefined}
-                  onChange={(event) => updateOsdItem(index, { text: event.target.value })}
-                />
-                {isCustomTextMissing(item) && (
-                  <p id={`runtime-osd-item-${index}-text-error`} className="settings-field-error">
-                    {t('osd.customTextRequired')}
-                  </p>
-                )}
-              </div>
-            )}
+            {item.type !== 'camera_name' && (() => {
+              const problem = textProblemFor(item);
+              const errorId = `runtime-osd-item-${index}-text-error`;
+              const bytes = { used: String(textByteLength(item.text)), max: String(MAX_OSD_TEXT) };
+              return (
+                <div className="settings-field">
+                  <label htmlFor={`runtime-osd-item-${index}-text`}>{t('osd.text')}</label>
+                  <input
+                    id={`runtime-osd-item-${index}-text`}
+                    type="text"
+                    maxLength={MAX_OSD_TEXT}
+                    value={item.text}
+                    placeholder={item.type === 'timestamp'
+                      ? t('osd.timestampFormatPlaceholder')
+                      : undefined}
+                    disabled={disabled}
+                    aria-invalid={problem !== null ? true : undefined}
+                    aria-describedby={problem !== null ? errorId : undefined}
+                    onChange={(event) => updateOsdItem(index, { text: event.target.value })}
+                  />
+                  {problem === 'missing' && (
+                    <p id={errorId} className="settings-field-error">{t('osd.customTextRequired')}</p>
+                  )}
+                  {problem === 'too_long' && (
+                    <p id={errorId} className="settings-field-error">{t('osd.textTooLong', bytes)}</p>
+                  )}
+                  {problem === null && (
+                    <p className="settings-field-hint">{t('osd.textBytes', bytes)}</p>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="settings-field">
               <label htmlFor={`runtime-osd-item-${index}-position`}>{t('osd.position')}</label>
