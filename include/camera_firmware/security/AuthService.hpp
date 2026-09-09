@@ -41,10 +41,11 @@ struct LoginResult {
 
 enum class ManagementActivity { kNone, kManagement };
 
-struct Principal {
-  // The static analyzer cannot see through Result<T>::value() && (a
-  // std::variant move) and reports this initialized field as garbage.
-  std::int64_t user_id{0};  // NOLINT(clang-analyzer-core.uninitialized.Assign)
+// The static analyzer cannot see through Result<T>::value() && (a
+// std::variant move) and reports the default-initialised user_id as garbage
+// in the implicit move constructor.
+struct Principal {  // NOLINT(clang-analyzer-core.uninitialized.Assign)
+  std::int64_t user_id{0};
   std::string username;
   UserRole role{UserRole::kAdministrator};
   SessionIdentity session_identity;
