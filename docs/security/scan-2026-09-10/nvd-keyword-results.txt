@@ -1,0 +1,4 @@
+stb_truetype 13 results: [('CVE-2020-6617', 'HIGH'), ('CVE-2020-6618', 'HIGH'), ('CVE-2020-6619', 'HIGH'), ('CVE-2020-6620', 'HIGH'), ('CVE-2020-6621', 'HIGH'), ('CVE-2020-6622', 'HIGH'), ('CVE-2020-6623', 'HIGH'), ('CVE-2022-25514', 'HIGH'), ('CVE-2022-25515', 'MEDIUM'), ('CVE-2022-25516', 'MEDIUM'), ('CVE-2026-5314', 'MEDIUM'), ('CVE-2026-5315', 'MEDIUM')]
+libcamera    2 results: [('CVE-2016-0826', '?'), ('CVE-2024-50175', 'HIGH')]
+hailort      0 results: []
+drogon       5 results: [('CVE-2021-35397', 'HIGH'), ('CVE-2022-25297', 'HIGH'), ('CVE-2022-3959', 'LOW'), ('CVE-2023-26137', 'HIGH'), ('CVE-2023-26138', 'MEDIUM')]

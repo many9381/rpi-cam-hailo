@@ -1,0 +1,1506 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.5",
+ "serialNumber": "urn:uuid:2d58281b-3ac9-465b-b264-652bbb2b0148",
+ "version": 1,
+ "metadata": {
+  "timestamp": "2026-09-09T15:13:14+00:00",
+  "tools": [
+   {
+    "name": "generate_sbom.py",
+    "version": "1"
+   }
+  ],
+  "component": {
+   "type": "application",
+   "name": "camera-firmware",
+   "version": "9f33fb5",
+   "description": "Raspberry Pi 5 + Hailo camera firmware (native binary)"
+  }
+ },
+ "components": [
+  {
+   "type": "library",
+   "name": "hailort",
+   "version": "4.24.0",
+   "purl": "pkg:deb/raspberrypi/hailort@4.24.0?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "hailort"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libatomic1",
+   "version": "14.2.0-19",
+   "purl": "pkg:deb/debian/libatomic1@14.2.0-19?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gcc-14"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://gcc.gnu.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libavutil59",
+   "version": "8:7.1.5-0+deb13u1+rpt2",
+   "purl": "pkg:deb/raspberrypi/libavutil59@8:7.1.5-0+deb13u1+rpt2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "ffmpeg"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://ffmpeg.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libblkid1",
+   "version": "2.41.5-0+deb13u1",
+   "purl": "pkg:deb/debian/libblkid1@2.41.5-0+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "util-linux"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/util-linux/util-linux"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libboost-filesystem1.83.0",
+   "version": "1.83.0-4.2",
+   "purl": "pkg:deb/debian/libboost-filesystem1.83.0@1.83.0-4.2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "boost1.83"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://boost.org/libs/filesystem/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libboost-log1.83.0",
+   "version": "1.83.0-4.2",
+   "purl": "pkg:deb/debian/libboost-log1.83.0@1.83.0-4.2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "boost1.83"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://www.boost.org/libs/log/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libboost-thread1.83.0",
+   "version": "1.83.0-4.2",
+   "purl": "pkg:deb/debian/libboost-thread1.83.0@1.83.0-4.2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "boost1.83"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://www.boost.org/libs/thread/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libbz2-1.0",
+   "version": "1.0.8-6",
+   "purl": "pkg:deb/debian/libbz2-1.0@1.0.8-6?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "bzip2"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://sourceware.org/bzip2/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libc6",
+   "version": "2.41-12+rpt1+deb13u3",
+   "purl": "pkg:deb/raspberrypi/libc6@2.41-12+rpt1+deb13u3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "glibc"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.gnu.org/software/libc/libc.html"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libcamera0.7",
+   "version": "0.7.2+rpt20260817-1",
+   "purl": "pkg:deb/raspberrypi/libcamera0.7@0.7.2+rpt20260817-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libcamera"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://libcamera.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libcap2",
+   "version": "1:2.75-10+deb13u1+b1",
+   "purl": "pkg:deb/debian/libcap2@1:2.75-10+deb13u1+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libcap2"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://sites.google.com/site/fullycapable/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libdrm2",
+   "version": "2.4.134-3~bpo13+1+rpt1",
+   "purl": "pkg:deb/raspberrypi/libdrm2@2.4.134-3~bpo13+1+rpt1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libdrm"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gitlab.freedesktop.org/mesa/libdrm/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libdw1t64",
+   "version": "0.192-4",
+   "purl": "pkg:deb/debian/libdw1t64@0.192-4?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "elfutils"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://sourceware.org/elfutils/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libelf1t64",
+   "version": "0.192-4",
+   "purl": "pkg:deb/debian/libelf1t64@0.192-4?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "elfutils"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://sourceware.org/elfutils/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libffi8",
+   "version": "3.4.8-2",
+   "purl": "pkg:deb/debian/libffi8@3.4.8-2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libffi"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://sourceware.org/libffi/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgcc-s1",
+   "version": "14.2.0-19",
+   "purl": "pkg:deb/debian/libgcc-s1@14.2.0-19?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gcc-14"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://gcc.gnu.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libglib2.0-0t64",
+   "version": "2.84.4-3~deb13u3",
+   "purl": "pkg:deb/debian/libglib2.0-0t64@2.84.4-3~deb13u3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "glib2.0"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gitlab.gnome.org/GNOME/glib"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgmp10",
+   "version": "2:6.3.0+dfsg-3",
+   "purl": "pkg:deb/debian/libgmp10@2:6.3.0+dfsg-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gmp"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gmplib.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgnutls30t64",
+   "version": "3.8.9-3+deb13u4",
+   "purl": "pkg:deb/debian/libgnutls30t64@3.8.9-3+deb13u4?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gnutls28"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.gnutls.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgstreamer-plugins-base1.0-0",
+   "version": "1.26.2-1+rpt3+deb13u1",
+   "purl": "pkg:deb/raspberrypi/libgstreamer-plugins-base1.0-0@1.26.2-1+rpt3+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gst-plugins-base1.0"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gstreamer.freedesktop.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgstreamer1.0-0",
+   "version": "1.26.2-2",
+   "purl": "pkg:deb/debian/libgstreamer1.0-0@1.26.2-2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gstreamer1.0"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gstreamer.freedesktop.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libgstrtspserver-1.0-0",
+   "version": "1.26.2-1",
+   "purl": "pkg:deb/debian/libgstrtspserver-1.0-0@1.26.2-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gst-rtsp-server1.0"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://gstreamer.freedesktop.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libhogweed6t64",
+   "version": "3.10.1-1",
+   "purl": "pkg:deb/debian/libhogweed6t64@3.10.1-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "nettle"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.lysator.liu.se/~nisse/nettle/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libidn2-0",
+   "version": "2.3.8-2",
+   "purl": "pkg:deb/debian/libidn2-0@2.3.8-2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libidn2"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.gnu.org/software/libidn/#libidn2"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libjpeg62-turbo",
+   "version": "1:2.1.5-4",
+   "purl": "pkg:deb/debian/libjpeg62-turbo@1:2.1.5-4?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libjpeg-turbo"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.libjpeg-turbo.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libjsoncpp26",
+   "version": "1.9.6-3",
+   "purl": "pkg:deb/debian/libjsoncpp26@1.9.6-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libjsoncpp"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/open-source-parsers/jsoncpp"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "liblttng-ust-common1t64",
+   "version": "2.13.9-1",
+   "purl": "pkg:deb/debian/liblttng-ust-common1t64@2.13.9-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "ust"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://lttng.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "liblttng-ust1t64",
+   "version": "2.13.9-1",
+   "purl": "pkg:deb/debian/liblttng-ust1t64@2.13.9-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "ust"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://lttng.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "liblzma5",
+   "version": "5.8.1-1+deb13u1",
+   "purl": "pkg:deb/debian/liblzma5@5.8.1-1+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "xz-utils"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://tukaani.org/xz/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libmount1",
+   "version": "2.41.5-0+deb13u1",
+   "purl": "pkg:deb/debian/libmount1@2.41.5-0+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "util-linux"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/util-linux/util-linux"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libnettle8t64",
+   "version": "3.10.1-1",
+   "purl": "pkg:deb/debian/libnettle8t64@3.10.1-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "nettle"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.lysator.liu.se/~nisse/nettle/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libnuma1",
+   "version": "2.0.19-1",
+   "purl": "pkg:deb/debian/libnuma1@2.0.19-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "numactl"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/numactl/numactl"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "liborc-0.4-0t64",
+   "version": "1:0.4.41-1",
+   "purl": "pkg:deb/debian/liborc-0.4-0t64@1:0.4.41-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "orc"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://cgit.freedesktop.org/gstreamer/orc"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libp11-kit0",
+   "version": "0.25.5-3",
+   "purl": "pkg:deb/debian/libp11-kit0@0.25.5-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "p11-kit"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://p11-glue.github.io/p11-glue/p11-kit.html"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libpcre2-8-0",
+   "version": "10.46-1~deb13u1",
+   "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "pcre2"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/PCRE2Project/pcre2"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libpisp1",
+   "version": "1.7.0-1",
+   "purl": "pkg:deb/raspberrypi/libpisp1@1.7.0-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libpisp"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/raspberrypi/libpisp"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libselinux1",
+   "version": "3.8.1-1",
+   "purl": "pkg:deb/debian/libselinux1@3.8.1-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libselinux"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/SELinuxProject"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libsqlite3-0",
+   "version": "3.46.1-7+deb13u1",
+   "purl": "pkg:deb/debian/libsqlite3-0@3.46.1-7+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "sqlite3"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.sqlite.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libssl3t64",
+   "version": "3.5.7-1~deb13u2",
+   "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "openssl"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://openssl-library.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libstdc++6",
+   "version": "14.2.0-19",
+   "purl": "pkg:deb/debian/libstdc++6@14.2.0-19?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "gcc-14"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://gcc.gnu.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libswscale8",
+   "version": "8:7.1.5-0+deb13u1+rpt2",
+   "purl": "pkg:deb/raspberrypi/libswscale8@8:7.1.5-0+deb13u1+rpt2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "ffmpeg"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://ffmpeg.org/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libtasn1-6",
+   "version": "4.20.0-2+deb13u1",
+   "purl": "pkg:deb/debian/libtasn1-6@4.20.0-2+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libtasn1-6"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.gnu.org/software/libtasn1/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libudev1",
+   "version": "257.13-1~deb13u1",
+   "purl": "pkg:deb/debian/libudev1@257.13-1~deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "systemd"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://systemd.io"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libunistring5",
+   "version": "1.3-2",
+   "purl": "pkg:deb/debian/libunistring5@1.3-2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libunistring"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.gnu.org/software/libunistring/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libuuid1",
+   "version": "2.41.5-0+deb13u1",
+   "purl": "pkg:deb/debian/libuuid1@2.41.5-0+deb13u1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "util-linux"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/util-linux/util-linux"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libva-drm2",
+   "version": "2.22.0-3",
+   "purl": "pkg:deb/debian/libva-drm2@2.22.0-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libva"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/intel/libva"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libva-x11-2",
+   "version": "2.22.0-3",
+   "purl": "pkg:deb/debian/libva-x11-2@2.22.0-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libva"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/intel/libva"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libva2",
+   "version": "2.22.0-3",
+   "purl": "pkg:deb/debian/libva2@2.22.0-3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libva"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/intel/libva"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libvdpau1",
+   "version": "1.5-3+b1",
+   "purl": "pkg:deb/debian/libvdpau1@1.5-3+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libvdpau"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.freedesktop.org/wiki/Software/VDPAU/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libx11-6",
+   "version": "2:1.8.12-1",
+   "purl": "pkg:deb/debian/libx11-6@2:1.8.12-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libx11"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libx11-xcb1",
+   "version": "2:1.8.12-1",
+   "purl": "pkg:deb/debian/libx11-xcb1@2:1.8.12-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libx11"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libx264-164",
+   "version": "2:0.164.3108+git31e19f9-2+b1",
+   "purl": "pkg:deb/debian/libx264-164@2:0.164.3108+git31e19f9-2+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "x264"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://www.videolan.org/developers/x264.html"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxau6",
+   "version": "1:1.0.11-1",
+   "purl": "pkg:deb/debian/libxau6@1:1.0.11-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxau"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxcb-dri3-0",
+   "version": "1.17.0-2+b1",
+   "purl": "pkg:deb/debian/libxcb-dri3-0@1.17.0-2+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxcb"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://xcb.freedesktop.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxcb1",
+   "version": "1.17.0-2+b1",
+   "purl": "pkg:deb/debian/libxcb1@1.17.0-2+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxcb"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://xcb.freedesktop.org"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxdmcp6",
+   "version": "1:1.1.5-1",
+   "purl": "pkg:deb/debian/libxdmcp6@1:1.1.5-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxdmcp"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxext6",
+   "version": "2:1.3.4-1+b3",
+   "purl": "pkg:deb/debian/libxext6@2:1.3.4-1+b3?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxext"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libxfixes3",
+   "version": "1:6.0.0-2+b4",
+   "purl": "pkg:deb/debian/libxfixes3@1:6.0.0-2+b4?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libxfixes"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libyaml-0-2",
+   "version": "0.2.5-2",
+   "purl": "pkg:deb/debian/libyaml-0-2@0.2.5-2?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libyaml"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/yaml/libyaml"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libyaml-cpp0.8",
+   "version": "0.8.0+dfsg-7",
+   "purl": "pkg:deb/debian/libyaml-cpp0.8@0.8.0+dfsg-7?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "yaml-cpp"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/jbeder/yaml-cpp"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "libzstd1",
+   "version": "1.5.7+dfsg-1",
+   "purl": "pkg:deb/debian/libzstd1@1.5.7+dfsg-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "libzstd"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/facebook/zstd"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "ocl-icd-libopencl1",
+   "version": "2.3.3-1",
+   "purl": "pkg:deb/debian/ocl-icd-libopencl1@2.3.3-1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "ocl-icd"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "https://github.com/OCL-dev/ocl-icd"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "zlib1g",
+   "version": "1:1.3.dfsg+really1.3.1-1+b1",
+   "purl": "pkg:deb/debian/zlib1g@1:1.3.dfsg+really1.3.1-1+b1?arch=arm64",
+   "properties": [
+    {
+     "name": "debian:source",
+     "value": "zlib"
+    },
+    {
+     "name": "firmware:linkage",
+     "value": "shared-library (ldd)"
+    }
+   ],
+   "externalReferences": [
+    {
+     "type": "website",
+     "url": "http://zlib.net/"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "drogon",
+   "version": "1.9.0",
+   "purl": "pkg:github/drogonframework/drogon@f215cb15a0f53abd0ca7ee8b95ed8c9c3b40d262",
+   "properties": [
+    {
+     "name": "firmware:linkage",
+     "value": "vendored source, static"
+    },
+    {
+     "name": "firmware:patches",
+     "value": "drogon-1.9.0-async-stream-response.patch, drogon-1.9.0-preserve-raw-cookie-headers.patch"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "trantor",
+   "version": "1.5.20",
+   "purl": "pkg:github/an-tao/trantor@79e1ffc59aa1b9c8226c2988fe2e1185e97cd795",
+   "properties": [
+    {
+     "name": "firmware:linkage",
+     "value": "vendored source, static"
+    },
+    {
+     "name": "firmware:patches",
+     "value": "trantor-1.5.20-bounded-async-stream.patch"
+    }
+   ]
+  },
+  {
+   "type": "library",
+   "name": "stb_truetype.h",
+   "version": "1.26",
+   "purl": "pkg:github/nothings/stb@master#stb_truetype.h",
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab"
+    }
+   ],
+   "properties": [
+    {
+     "name": "firmware:linkage",
+     "value": "vendored header, compiled into camera_firmware_media"
+    },
+    {
+     "name": "firmware:input-trust",
+     "value": "parses only the embedded NanumGothicBold font (build-time asset)"
+    }
+   ]
+  },
+  {
+   "type": "data",
+   "name": "NanumGothicBold.ttf",
+   "version": "fonts-nanum 20200506-1",
+   "purl": "pkg:deb/debian/fonts-nanum@20200506-1",
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "454eb3f503f377782a99eb84fc4bb7dde22a0f075d41b47427737f2985053bc9"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "OFL-1.1"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "firmware:linkage",
+     "value": "embedded in .rodata (.incbin)"
+    }
+   ]
+  },
+  {
+   "type": "operating-system",
+   "name": "linux-rpi",
+   "version": "6.18.39+rpt-rpi-2712",
+   "purl": "pkg:generic/raspberrypi/linux@6.18.39+rpt-rpi-2712",
+   "properties": [
+    {
+     "name": "firmware:role",
+     "value": "kernel image covered by the integrity manifest"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "gcc",
+   "version": "14.2.0",
+   "purl": "pkg:deb/debian/gcc-14@14.2.0",
+   "properties": [
+    {
+     "name": "firmware:role",
+     "value": "build toolchain"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "cmake",
+   "version": "3.31.6",
+   "purl": "pkg:deb/debian/cmake@3.31.6",
+   "properties": [
+    {
+     "name": "firmware:role",
+     "value": "build toolchain"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "node",
+   "version": "20.19.2",
+   "purl": "pkg:generic/nodejs@20.19.2",
+   "properties": [
+    {
+     "name": "firmware:role",
+     "value": "web build toolchain"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "npm",
+   "version": "9.2.0",
+   "purl": "pkg:npm/npm@9.2.0",
+   "properties": [
+    {
+     "name": "firmware:role",
+     "value": "web build toolchain"
+    }
+   ]
+  }
+ ]
+}
