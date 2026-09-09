@@ -976,6 +976,8 @@ void RtspDigestCredentialStore::Clear() noexcept {
     AccumulateAudit(CleanseDummies(&impl_->dummy_ha1s), &impl_->audit);
     impl_->terminal = true;
   } catch (...) {
+    // swallowed: Clear() is noexcept; the audit tally is best effort once the
+    // store is terminal
   }
 }
 

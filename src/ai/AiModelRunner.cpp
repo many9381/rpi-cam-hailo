@@ -403,6 +403,7 @@ void AiModelRunner::NotifySubmissionResolved(bool accepted) const noexcept {
   try {
     submission_resolved_observer_(accepted);
   } catch (...) {
+    // swallowed: observer errors must not escape this noexcept notifier
   }
 }
 

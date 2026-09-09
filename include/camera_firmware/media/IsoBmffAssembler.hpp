@@ -27,10 +27,10 @@ struct IsoBmffSegment {
     std::span<const std::uint8_t> fragment) noexcept;
 
 struct IsoBmffAssemblerLimits {
-  std::size_t max_buffer_bytes{32U * 1024U * 1024U};
-  std::size_t max_box_bytes{16U * 1024U * 1024U};
-  std::size_t max_init_segment_bytes{2U * 1024U * 1024U};
-  std::size_t max_media_fragment_bytes{16U * 1024U * 1024U};
+  std::size_t max_buffer_bytes{std::size_t{32} * 1024U * 1024U};
+  std::size_t max_box_bytes{std::size_t{16} * 1024U * 1024U};
+  std::size_t max_init_segment_bytes{std::size_t{2} * 1024U * 1024U};
+  std::size_t max_media_fragment_bytes{std::size_t{16} * 1024U * 1024U};
 };
 
 class IsoBmffAssembler {

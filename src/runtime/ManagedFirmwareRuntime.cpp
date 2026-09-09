@@ -55,6 +55,7 @@ ManagedFirmwareRuntime::~ManagedFirmwareRuntime() {
   try {
     Stop();
   } catch (...) {
+    // swallowed: Stop() errors cannot leave a destructor
   }
 }
 
@@ -331,6 +332,7 @@ void ManagedFirmwareRuntime::StopRuntime(
   try {
     runtime->Stop();
   } catch (...) {
+    // swallowed: stop is best effort while the runtime is being replaced
   }
 }
 

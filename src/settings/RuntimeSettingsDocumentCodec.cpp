@@ -19,7 +19,7 @@
 namespace camera_firmware::settings::internal {
 namespace {
 
-constexpr std::size_t kMaximumDocumentBytes = 16U * 1024U;
+constexpr std::size_t kMaximumDocumentBytes = std::size_t{16} * 1024U;
 constexpr std::size_t kMaximumApplyCodeBytes = 64U;
 
 common::Error DocumentError() {
@@ -47,13 +47,12 @@ bool IsValidUtf8(std::string_view input) {
     } else if (byte == 0xe0U) {
       length = 3U;
       minimum_second = 0xa0U;
-    } else if (byte >= 0xe1U && byte <= 0xecU) {
+    } else if ((byte >= 0xe1U && byte <= 0xecU) ||
+               (byte >= 0xeeU && byte <= 0xefU)) {
       length = 3U;
     } else if (byte == 0xedU) {
       length = 3U;
       maximum_second = 0x9fU;
-    } else if (byte >= 0xeeU && byte <= 0xefU) {
-      length = 3U;
     } else if (byte == 0xf0U) {
       length = 4U;
       minimum_second = 0x90U;

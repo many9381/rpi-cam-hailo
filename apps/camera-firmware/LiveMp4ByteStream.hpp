@@ -33,7 +33,8 @@ class LiveMp4ByteStream {
       if (!next.ok()) {
         return 0U;  // terminal: cancelled / generation replaced
       }
-      if (!next.value().has_value()) {
+      auto& fragment = next.value();
+      if (!fragment.has_value()) {
         // Plain timeout tick -- not EOF. Keep waiting until a fragment
         // arrives or the stream has been silent for maximum_idle_.
         if (std::chrono::steady_clock::now() - idle_started >=
@@ -42,10 +43,10 @@ class LiveMp4ByteStream {
         }
         continue;
       }
-      if (!next.value()->bytes || next.value()->bytes->empty()) {
+      if (!fragment->bytes || fragment->bytes->empty()) {
         return 0U;
       }
-      current_bytes_ = std::move(next).value()->bytes;
+      current_bytes_ = fragment->bytes;
     }
 
     const auto count =

@@ -41,7 +41,6 @@
 namespace camera_firmware::rtsp {
 namespace {
 
-using camera_firmware::common::Error;
 using camera_firmware::common::Logger;
 using camera_firmware::common::Result;
 
@@ -128,7 +127,7 @@ struct MediaFeedState {
   // FragmentedMp4Hub): the raw capture timestamps are large and, once the pump
   // skips frames under load, would feed h264parse/rtph264pay non-normalized
   // PTS that stall RTP output. base_pts anchors the first keyframe at 0.
-  std::optional<std::chrono::nanoseconds> base_pts;
+  std::chrono::nanoseconds base_pts{0};
   GstClockTime last_pts{0};
   bool have_last_pts{false};
 
@@ -141,7 +140,7 @@ struct MediaFeedState {
     }
     started = true;
     seen_keyframe = false;  // a re-prepared shared media serves a new client
-    base_pts.reset();
+    base_pts = std::chrono::nanoseconds{0};
     have_last_pts = false;
     stop.store(false, std::memory_order_release);
     appsrc = GST_APP_SRC(gst_object_ref(source));
@@ -198,7 +197,7 @@ struct MediaFeedState {
       // FragmentedMp4Hub) so h264parse/rtph264pay produce a clean RTP stream.
       constexpr GstClockTime kFallbackStep = GST_MSECOND * 10;
       GstClockTime pts = 0U;
-      const auto relative = access_unit->timestamp - *base_pts;
+      const auto relative = access_unit->timestamp - base_pts;
       if (relative.count() > 0) {
         pts = static_cast<GstClockTime>(relative.count());
       }
@@ -356,16 +355,14 @@ GstElement* RequestRtcpEncoder(GstElement* rtpbin,
                           "rtcp_sink_" + std::to_string(session));
 }
 
-struct _CfSecureRtspMedia {
+struct CfSecureRtspMedia {
   GstRTSPMedia parent;
 };
 
-struct _CfSecureRtspMediaClass {
+struct CfSecureRtspMediaClass {
   GstRTSPMediaClass parent_class;
 };
 
-using CfSecureRtspMedia = struct _CfSecureRtspMedia;
-using CfSecureRtspMediaClass = struct _CfSecureRtspMediaClass;
 
 G_DEFINE_TYPE(CfSecureRtspMedia, cf_secure_rtsp_media, GST_TYPE_RTSP_MEDIA)
 

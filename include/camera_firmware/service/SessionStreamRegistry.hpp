@@ -57,10 +57,12 @@ class SessionStreamRevocationScope {
       Origin origin) noexcept;
   ~SessionStreamRevocationScope();
 
+ public:
   SessionStreamRevocationScope(const SessionStreamRevocationScope&) = delete;
   SessionStreamRevocationScope& operator=(
       const SessionStreamRevocationScope&) = delete;
 
+ private:
   [[nodiscard]] static bool HandlerOriginatesFromSend() noexcept;
   [[nodiscard]] static bool HandlerOriginatesFromRead(
       const std::shared_ptr<SessionStreamLease>& lease) noexcept;

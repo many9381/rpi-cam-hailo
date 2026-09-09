@@ -24,18 +24,15 @@ struct GstCfRtspDigestAuthState {
   bool closing{false};
 };
 
-struct _GstCfRtspDigestAuth {
+struct GstCfRtspDigestAuth {
   GstRTSPAuth parent;
   GstCfRtspDigestAuthState* state;
   GstRTSPToken* viewer_token;
 };
 
-struct _GstCfRtspDigestAuthClass {
+struct GstCfRtspDigestAuthClass {
   GstRTSPAuthClass parent_class;
 };
-
-using GstCfRtspDigestAuth = struct _GstCfRtspDigestAuth;
-using GstCfRtspDigestAuthClass = struct _GstCfRtspDigestAuthClass;
 
 G_DEFINE_FINAL_TYPE(GstCfRtspDigestAuth,
                     gst_cf_rtsp_digest_auth,
@@ -80,6 +77,8 @@ class ActiveAdapterCallback {
         state_->drained.notify_all();
       }
     } catch (...) {
+      // swallowed: destructors must not throw; the drained signal is best
+      // effort
     }
   }
 
@@ -105,6 +104,7 @@ void LogAdapterFailure(std::string_view code,
     message.append(category);
     Logger::instance().log(Logger::Level::kError, message);
   } catch (...) {
+    // swallowed: logging is best effort inside a GStreamer vfunc
   }
 }
 

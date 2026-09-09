@@ -73,7 +73,7 @@ constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kIdentityDirectoryMode = 0700;
 constexpr mode_t kPrivateKeyMode = 0600;
 constexpr mode_t kCertificateMode = 0644;
-constexpr std::size_t kMaximumPemBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumPemBytes = std::size_t{1024} * 1024U;
 constexpr long kCertificateLifetimeSeconds = 5L * 365L * 24L * 60L * 60L;
 
 class UniqueFd {
@@ -605,6 +605,9 @@ common::Result<void> ScavengeTemporaryIdentity(int state_directory,
   std::optional<ValidatedStaleEntry> private_key;
   while (true) {
     errno = 0;
+    // Private DIR stream: glibc's readdir is safe per stream and readdir_r
+    // is deprecated.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const struct dirent* entry = ::readdir(entries.get());
     if (entry == nullptr) {
       if (errno != 0) {
@@ -677,6 +680,9 @@ common::Result<void> ScavengeTemporaryIdentities(int state_directory) {
   std::vector<std::string> temporary_names;
   while (true) {
     errno = 0;
+    // Private DIR stream: glibc's readdir is safe per stream and readdir_r
+    // is deprecated.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const struct dirent* entry = ::readdir(entries.get());
     if (entry == nullptr) {
       if (errno != 0) {

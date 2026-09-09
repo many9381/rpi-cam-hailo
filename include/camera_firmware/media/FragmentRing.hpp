@@ -27,7 +27,7 @@ struct FragmentedMp4Chunk {
 
 struct FragmentRingLimits {
   std::size_t max_fragments{8U};
-  std::size_t max_bytes{32U * 1024U * 1024U};
+  std::size_t max_bytes{std::size_t{32} * 1024U * 1024U};
   std::size_t max_readers{4U};
 };
 

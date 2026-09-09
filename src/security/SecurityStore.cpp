@@ -2373,10 +2373,10 @@ constexpr const char* kRevisionThreeMigrationStatements[] = {
      setup_completed_at_seconds >= 0)
   )
 );)sql",
-    "INSERT INTO device_state "
-    "(id, state, schema_revision, setup_completed_at_seconds) "
-    "SELECT id, state, 3, setup_completed_at_seconds "
-    "FROM device_state_revision_two;",
+    R"sql(INSERT INTO device_state
+      (id, state, schema_revision, setup_completed_at_seconds)
+      SELECT id, state, 3, setup_completed_at_seconds
+      FROM device_state_revision_two;)sql",
     "DROP TABLE device_state_revision_two;",
     "ALTER TABLE management_ips RENAME TO management_ips_revision_two;",
     R"sql(CREATE TABLE management_ips (
@@ -2387,10 +2387,10 @@ constexpr const char* kRevisionThreeMigrationStatements[] = {
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
   created_at_seconds INTEGER NOT NULL CHECK (created_at_seconds >= 0)
 );)sql",
-    "INSERT INTO management_ips "
-    "(id, normalized_ip, role_scope, enabled, created_at_seconds) "
-    "SELECT id, normalized_ip, role_scope, enabled, created_at_seconds "
-    "FROM management_ips_revision_two;",
+    R"sql(INSERT INTO management_ips
+      (id, normalized_ip, role_scope, enabled, created_at_seconds)
+      SELECT id, normalized_ip, role_scope, enabled, created_at_seconds
+      FROM management_ips_revision_two;)sql",
     "DROP TABLE management_ips_revision_two;",
     R"sql(CREATE UNIQUE INDEX management_ips_role_ip_unique
   ON management_ips(role_scope, normalized_ip);)sql",
@@ -2423,12 +2423,12 @@ constexpr const char* kRevisionThreeMigrationStatements[] = {
   subject_identity TEXT NOT NULL DEFAULT ''
     CHECK (length(subject_identity) <= 64)
 );)sql",
-    "INSERT INTO audit_events "
-    "(sequence, server_timestamp_seconds, event_type, outcome, actor_user_id, "
-    "peer_ip, detail_code, subject_type, subject_identity) "
-    "SELECT sequence, server_timestamp_seconds, event_type, outcome, "
-    "actor_user_id, peer_ip, detail_code, '', '' "
-    "FROM audit_events_revision_two;",
+    R"sql(INSERT INTO audit_events
+      (sequence, server_timestamp_seconds, event_type, outcome, actor_user_id,
+      peer_ip, detail_code, subject_type, subject_identity)
+      SELECT sequence, server_timestamp_seconds, event_type, outcome,
+      actor_user_id, peer_ip, detail_code, '', ''
+      FROM audit_events_revision_two;)sql",
     "DROP TABLE audit_events_revision_two;",
     R"sql(CREATE INDEX audit_events_timestamp_index
   ON audit_events(server_timestamp_seconds);)sql"};
@@ -2452,10 +2452,10 @@ constexpr const char* kRevisionFourMigrationStatements[] = {
      setup_completed_at_seconds >= 0)
   )
 );)sql",
-    "INSERT INTO device_state "
-    "(id, state, schema_revision, setup_completed_at_seconds) "
-    "SELECT id, state, 4, setup_completed_at_seconds "
-    "FROM device_state_revision_three;",
+    R"sql(INSERT INTO device_state
+      (id, state, schema_revision, setup_completed_at_seconds)
+      SELECT id, state, 4, setup_completed_at_seconds
+      FROM device_state_revision_three;)sql",
     "DROP TABLE device_state_revision_three;",
     "ALTER TABLE audit_events RENAME TO audit_events_revision_three;",
     R"sql(CREATE TABLE audit_events (
@@ -2526,10 +2526,10 @@ constexpr const char* kRevisionFiveMigrationStatements[] = {
      setup_completed_at_seconds >= 0)
   )
 );)sql",
-    "INSERT INTO device_state "
-    "(id, state, schema_revision, setup_completed_at_seconds) "
-    "SELECT id, state, 5, setup_completed_at_seconds "
-    "FROM device_state_revision_four;",
+    R"sql(INSERT INTO device_state
+      (id, state, schema_revision, setup_completed_at_seconds)
+      SELECT id, state, 5, setup_completed_at_seconds
+      FROM device_state_revision_four;)sql",
     "DROP TABLE device_state_revision_four;",
     "ALTER TABLE sessions RENAME TO sessions_revision_four;",
     R"sql(CREATE TABLE sessions (

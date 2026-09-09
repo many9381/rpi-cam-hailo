@@ -87,9 +87,9 @@ class SensitiveBytes {
  private:
   void Cleanse() noexcept {
     if (bytes_.size() != 0U) {
-      const std::size_t allocation_size = bytes_.size();
       OPENSSL_cleanse(bytes_.data(), bytes_.size());
 #ifdef CAMERA_FIRMWARE_SECURITY_SELF_TESTING
+      const std::size_t allocation_size = bytes_.size();
       const bool all_zero =
           std::all_of(bytes_.data(), bytes_.data() + bytes_.size(),
                       [](unsigned char value) { return value == 0U; });
@@ -145,6 +145,8 @@ void RecordZeroization(SensitiveBuffer buffer,
     ZeroizationObservations().push_back(
         {PublicBuffer(buffer), allocation_size, all_zero});
   } catch (...) {
+    // swallowed: test-hook bookkeeping must not throw out of the zeroization
+    // path
   }
 }
 #endif
@@ -152,8 +154,8 @@ void RecordZeroization(SensitiveBuffer buffer,
 bool ShouldInjectFailure(CryptoOperation operation) noexcept {
 #ifdef CAMERA_FIRMWARE_SECURITY_SELF_TESTING
   std::lock_guard lock(TestHookMutex());
-  return InjectedOperation().has_value() &&
-         *InjectedOperation() == operation;
+  const auto& injected = InjectedOperation();
+  return injected.has_value() && *injected == operation;
 #else
   (void)operation;
   return false;

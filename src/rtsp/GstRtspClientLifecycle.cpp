@@ -32,6 +32,8 @@ struct GstRtspClientLifecycle::Impl {
         self->drained.notify_all();
       }
     } catch (...) {
+      // swallowed: runs inside a GStreamer signal handler, which cannot unwind
+      // C++ exceptions
     }
   }
 

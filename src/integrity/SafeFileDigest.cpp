@@ -21,7 +21,7 @@
 namespace camera_firmware::integrity {
 namespace {
 
-constexpr std::size_t kReadBufferSize = 32U * 1024U;
+constexpr std::size_t kReadBufferSize = std::size_t{32} * 1024U;
 constexpr unsigned int kMaximumEintrRetries = 3U;
 constexpr std::size_t kHexCharactersPerByte = 2U;
 constexpr char kHexDigits[] = "0123456789abcdef";

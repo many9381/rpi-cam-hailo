@@ -77,6 +77,8 @@ void PauseAfterLiveMp4StartPublicationForTesting() noexcept {
     try {
       published->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
   if (release_publication.valid()) {
@@ -223,6 +225,7 @@ void NotifyUserManagementRequestBodyCleanupForTesting(
   try {
     observer(source_size, source_cleansed, copied_to_secure_owner);
   } catch (...) {
+    // swallowed: test observer errors must not escape this noexcept notifier
   }
 }
 #else
@@ -452,6 +455,8 @@ class LiveMp4PumpState final {
         try {
           stream.cancel();
         } catch (...) {
+          // swallowed: cancel is best effort on a stream that is already being
+          // discarded
         }
       }
 
@@ -500,7 +505,7 @@ class LiveMp4PumpState final {
   }
 
   void Pump() noexcept {
-    std::array<char, 16U * 1024U> buffer{};
+    std::array<char, std::size_t{16} * 1024U> buffer{};
     std::size_t sent_bytes = 0U;
     const bool unbounded = maximum_response_bytes_ == 0U;
     try {
@@ -547,6 +552,8 @@ class LiveMp4PumpState final {
         sent_bytes += size;
       }
     } catch (...) {
+      // swallowed: a failed send ends the pump; CancelAndClose() below tears
+      // the stream down
     }
     CancelAndClose();
   }
@@ -596,6 +603,8 @@ class LiveMp4PumpState final {
         MediaCallbackScope callback_scope(owner_manager);
         cancel();
       } catch (...) {
+        // swallowed: cancel is best effort; the stream is already being torn
+        // down
       }
     }
     stream_lease.reset();
@@ -713,6 +722,7 @@ class LiveMp4PumpState final {
     try {
       output->close();
     } catch (...) {
+      // swallowed: close is best effort on a stream that is already going away
     }
   }
 
@@ -969,7 +979,7 @@ struct ServiceState {
   bool shutting_down{false};
 };
 
-constexpr std::size_t kMaximumTransportBodyBytes = 64U * 1024U;
+constexpr std::size_t kMaximumTransportBodyBytes = std::size_t{64} * 1024U;
 static_assert(kMaximumTransportBodyBytes >
               kMaximumRuntimeSettingsBodyBytes);
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
@@ -1716,6 +1726,8 @@ void CleanseSecretRequestBody(const drogon::HttpRequestPtr& request,
   try {
     request->setBody(std::string{});
   } catch (...) {
+    // swallowed: releasing the request body is best effort after it was
+    // cleansed
   }
   internal::NotifyUserManagementRequestBodyCleanupForTesting(
       body.size(), source_cleansed, copied_to_secure_owner);
@@ -1971,6 +1983,8 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
       completion->Deny(
           {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
     } catch (...) {
+      // swallowed: the completion is being denied because the first attempt
+      // threw; nothing else can be done
     }
   }
 }
@@ -2008,6 +2022,8 @@ void QueueAuditLogResponse(trantor::EventLoop* event_loop,
     try {
       QueueResponse(event_loop, callback, AuditLogUnavailableResponse());
     } catch (...) {
+      // swallowed: the fallback response is best effort after the primary
+      // response threw
     }
   }
 }
@@ -2201,6 +2217,8 @@ class ThreadCompletionReporter {
     try {
       completion_->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
 
@@ -4841,6 +4859,8 @@ void DetectionSsePendingResponse::SetTimeoutCancellation(
     try {
       cancel_immediately();
     } catch (...) {
+      // swallowed: cancel_immediately is best effort while the stream is
+      // discarded
     }
   }
 }
@@ -4936,6 +4956,8 @@ void DetectionSsePendingResponse::Finish(
       auto callback_scope = callback_runtime_lease->EnterCallback();
       cancel_timeout();
     } catch (...) {
+      // swallowed: cancel_timeout is best effort while the subscription is torn
+      // down
     }
   }
   if (callback) {
@@ -4943,6 +4965,8 @@ void DetectionSsePendingResponse::Finish(
       auto callback_scope = callback_runtime_lease->EnterCallback();
       callback(BuildDetectionSseResponse(events));
     } catch (...) {
+      // swallowed: the response callback is external code; the subscription is
+      // already ending
     }
   }
   {
@@ -5142,6 +5166,8 @@ drogon::HttpResponsePtr BuildRuntimeRestartResponse(
       restarted = restart_callback();
     }
   } catch (...) {
+    // swallowed: a throwing restart callback is reported as runtime unavailable
+    // below
   }
   if (!restarted.ok()) {
     Json::Value body(Json::objectValue);
@@ -5905,6 +5931,8 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
           try {
             drained->set_value();
           } catch (...) {
+            // swallowed: set_value throws if the promise was already satisfied;
+            // the waiter is released either way
           }
         });
         if (drained_future.wait_for(kServiceThreadStopTimeout) !=

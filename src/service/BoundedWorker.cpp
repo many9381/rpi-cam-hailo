@@ -115,6 +115,7 @@ void BoundedWorker::Run(const std::shared_ptr<State>& state) noexcept {
     try {
       task();
     } catch (...) {
+      // swallowed: a throwing task must not take down the worker thread
     }
   }
 }

@@ -6,8 +6,8 @@
 
 namespace camera_firmware::security {
 
-SessionIdentity::SessionIdentity(const SessionIdentity& other) noexcept
-    : bytes(other.bytes) {}
+SessionIdentity::SessionIdentity(const SessionIdentity& other) noexcept =
+    default;
 
 SessionIdentity& SessionIdentity::operator=(
     const SessionIdentity& other) noexcept {
@@ -49,6 +49,8 @@ void PublishSessionRevocations(
     revoke_sessions(identities);
     return;
   } catch (...) {
+    // swallowed: fall through to the broader stream revocation when the session
+    // hook throws
   }
 
   if (revoke_all_streams) {
@@ -56,6 +58,8 @@ void PublishSessionRevocations(
       revoke_all_streams();
       return;
     } catch (...) {
+      // swallowed: fall through to clearing the identities when the stream hook
+      // throws
     }
   }
   for (auto& identity : identities) {

@@ -104,10 +104,11 @@ bool AiFrameTap::ConsumeDemand() noexcept {
 
 std::optional<media::FrameLease> AiFrameTap::Latest() const {
   std::lock_guard lock(shared_state_->mutex);
-  if (!shared_state_->latest.has_value()) {
+  const auto& latest = shared_state_->latest;
+  if (!latest.has_value()) {
     return std::nullopt;
   }
-  return shared_state_->latest->CloneRef();
+  return latest->CloneRef();
 }
 
 AiFrameTap::Subscription AiFrameTap::Subscribe(Subscriber subscriber) {

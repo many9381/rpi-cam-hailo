@@ -13,7 +13,7 @@
 namespace camera_firmware::service {
 
 inline constexpr std::size_t kMaximumRuntimeSettingsBodyBytes =
-    16U * 1024U;
+    std::size_t{16} * 1024U;
 
 struct RuntimeSettingsUpdateRequest {
   std::uint64_t expected_revision;

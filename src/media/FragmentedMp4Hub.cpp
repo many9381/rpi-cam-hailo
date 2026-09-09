@@ -309,7 +309,7 @@ struct FragmentedMp4Hub::Impl {
 
   void WorkerMain(EncodedRing::Reader input_reader) {
     GstBus* bus = pipeline == nullptr ? nullptr : gst_element_get_bus(pipeline);
-    std::optional<std::chrono::nanoseconds> base_timestamp;
+    std::chrono::nanoseconds base_timestamp{0};  // valid once seen_keyframe
     std::optional<GstClockTime> last_pts;
     const GstClockTime frame_duration = GST_SECOND / config.fps;
     bool seen_keyframe = false;
@@ -357,7 +357,7 @@ struct FragmentedMp4Hub::Impl {
       }
 
       GstClockTime pts = 0U;
-      const auto relative = access_unit.timestamp - *base_timestamp;
+      const auto relative = access_unit.timestamp - base_timestamp;
       if (relative.count() > 0) {
         pts = static_cast<GstClockTime>(relative.count());
       }

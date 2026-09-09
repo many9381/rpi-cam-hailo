@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <exception>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -21,7 +22,6 @@ namespace {
 using camera_firmware::common::Error;
 using camera_firmware::common::Result;
 using camera_firmware::integrity::DigestRegularFile;
-using camera_firmware::integrity::IntegrityCategory;
 using camera_firmware::integrity::IntegrityEntry;
 using camera_firmware::integrity::IntegrityManifest;
 using camera_firmware::integrity::kMaximumIntegrityManifestEntries;
@@ -238,9 +238,7 @@ void PrintError(const Error& error) {
   (void)std::fputc('\n', stderr);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+int RunCommand(int argc, char** argv) {
   if (argc < 2) {
     PrintError(kUsageError);
     return 2;
@@ -281,4 +279,17 @@ int main(int argc, char** argv) {
   }
   PrintError(kUsageError);
   return 2;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  try {
+    return RunCommand(argc, argv);
+  } catch (const std::exception& error) {
+    PrintError({"E_UNHANDLED_EXCEPTION", error.what()});
+  } catch (...) {
+    PrintError({"E_UNHANDLED_EXCEPTION", "unknown exception"});
+  }
+  return 1;
 }

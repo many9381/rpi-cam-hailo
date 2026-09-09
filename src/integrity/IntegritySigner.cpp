@@ -34,7 +34,7 @@
 namespace camera_firmware::integrity {
 namespace {
 
-constexpr std::size_t kMaximumArtifactBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumArtifactBytes = std::size_t{1024} * 1024U;
 constexpr std::size_t kMaximumPathBytes = 4096U;
 constexpr std::size_t kMaximumTemporaryAttempts = 128U;
 constexpr unsigned int kMaximumEintrRetries = 3U;

@@ -19,7 +19,7 @@
 namespace camera_firmware::integrity {
 namespace {
 
-constexpr std::size_t kMaximumManifestBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumManifestBytes = std::size_t{1024} * 1024U;
 constexpr std::size_t kMaximumPathBytes = 4096U;
 constexpr std::size_t kMaximumYamlDepth = 16U;
 constexpr std::size_t kMaximumYamlEvents =

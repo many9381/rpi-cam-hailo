@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <exception>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -50,10 +51,15 @@ class Result {
 
   [[nodiscard]] const Error& error() const& noexcept {
     assert(!ok());
-    if (state_.index() == 1U) {
-      return std::get<1U>(state_);
+    if (const auto* owned = std::get_if<1U>(&state_)) {
+      return *owned;
     }
-    return *std::get<2U>(state_);
+    if (const auto* const* static_error = std::get_if<2U>(&state_)) {
+      return **static_error;
+    }
+    // error() on an Ok result violates the precondition above; under
+    // noexcept the former bad_variant_access terminated as well.
+    std::terminate();
   }
 
  private:

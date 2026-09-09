@@ -243,7 +243,8 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
     return;
   }
   for (int cy = cy0; cy < cy1; ++cy) {
-    std::uint8_t* row = frame.uv + static_cast<std::ptrdiff_t>(cy) * frame.uv_stride + cx0 * 2;
+    std::uint8_t* row = frame.uv + static_cast<std::ptrdiff_t>(cy) * frame.uv_stride +
+                        static_cast<std::ptrdiff_t>(cx0) * 2;
     const int n = (cx1 - cx0) * 2;
     std::memcpy(scratch, row, static_cast<std::size_t>(n));
     for (int cx = cx0; cx < cx1; ++cx) {

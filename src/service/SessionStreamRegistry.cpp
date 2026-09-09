@@ -73,6 +73,8 @@ void PauseAfterFirstMarkForTesting() {
     try {
       first_marked->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
   if (release_marking.valid()) {
@@ -178,6 +180,8 @@ void SessionStreamLeaseState::InvokePending() noexcept {
   try {
     (*invoke)();
   } catch (...) {
+    // swallowed: revocation handlers are external code; the registry state is
+    // already consistent
   }
   {
     std::lock_guard lock(mutex);

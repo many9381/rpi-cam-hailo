@@ -235,13 +235,18 @@ common::Result<void> AiRuntime::SubmitFrame(media::FrameLease frame) {
 
   common::Result<void> first_error = common::Result<void>::Ok();
 
-  for (std::size_t index = 0; index < runners.size(); ++index) {
-    auto submitted =
-        index + 1U < runners.size() ? runners[index]->Submit(frame.CloneRef())
-                                    : runners[index]->Submit(std::move(frame));
+  const auto record_error = [&first_error](const common::Result<void>& submitted) {
     if (!submitted.ok() && first_error.ok()) {
       first_error = common::Result<void>::Err(submitted.error());
     }
+  };
+  // Every runner but the last gets a shared reference; the last one takes
+  // ownership of the frame.
+  for (std::size_t index = 0; index + 1U < runners.size(); ++index) {
+    record_error(runners[index]->Submit(frame.CloneRef()));
+  }
+  if (!runners.empty()) {
+    record_error(runners.back()->Submit(std::move(frame)));
   }
 
   if (!first_error.ok()) {

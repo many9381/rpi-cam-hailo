@@ -305,10 +305,11 @@ common::Result<FragmentRing::Reader> FragmentRing::OpenReaderInternal(
   }
   if (maximum_age.has_value()) {
     const auto current_time = state_->now();
+    const auto& last_publication_at = state_->last_publication_at;
     if (*maximum_age <= std::chrono::milliseconds::zero() ||
-        !state_->last_publication_at.has_value() ||
-        current_time < *state_->last_publication_at ||
-        current_time - *state_->last_publication_at > *maximum_age) {
+        !last_publication_at.has_value() ||
+        current_time < *last_publication_at ||
+        current_time - *last_publication_at > *maximum_age) {
       return common::Result<Reader>::Err(
           {"E_LIVE_STALE", "live stream has stopped producing fragments"});
     }

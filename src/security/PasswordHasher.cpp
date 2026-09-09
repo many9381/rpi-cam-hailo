@@ -41,6 +41,7 @@ class AuditedScratch {
     try {
       (*audit_)({after.count - before.count, after.last_verified});
     } catch (...) {
+      // swallowed: audit observer errors must not escape this noexcept probe
     }
   }
 

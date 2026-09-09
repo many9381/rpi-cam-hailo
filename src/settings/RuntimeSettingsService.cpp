@@ -93,6 +93,8 @@ RuntimeSettingsService::ApplyingGuard::~ApplyingGuard() noexcept {
     try {
       owner_.PublishApplyCompletion(std::nullopt);
     } catch (...) {
+      // swallowed: destructors must not throw; the completion is published best
+      // effort
     }
   }
 }
@@ -247,7 +249,7 @@ SettingsApplyResult RuntimeSettingsService::Apply(
       applying_guard.Dismiss();
       return failed;
     }
-    PublishApplyCompletion(std::move(*promoted_document));
+    PublishApplyCompletion(std::move(promoted_document));
     applying_guard.Dismiss();
     return {Snapshot(), true, false, {}};
   }

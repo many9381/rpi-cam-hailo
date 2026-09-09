@@ -180,7 +180,7 @@ Result<Options> ParseOptions(int argc, char** argv) {
     }
   }
 
-  if (!has_file || !has_username || !has_realm || !has_algorithm) {
+  if (!has_file || !has_username || !has_realm || !algorithm.has_value()) {
     return UsageError();
   }
   auto parsed_algorithm = ParseRtspDigestAlgorithm(*algorithm);
@@ -305,12 +305,12 @@ Result<SecureBytes> ReadPasswordFromTty() {
 }
 
 int ReportError(std::string_view code, std::string_view category, int status) {
-  std::fprintf(stderr,
+  static_cast<void>(std::fprintf(stderr,
                "%.*s: category=%.*s\n",
                static_cast<int>(code.size()),
                code.data(),
                static_cast<int>(category.size()),
-               category.data());
+               category.data()));
   return status;
 }
 
@@ -345,7 +345,7 @@ int Run(int argc, char** argv) {
     return ReportError(provisioned.error().code, "provision", 1);
   }
 
-  std::fputs("RTSP Digest credential updated\n", stdout);
+  static_cast<void>(std::fputs("RTSP Digest credential updated\n", stdout));
   return 0;
 }
 

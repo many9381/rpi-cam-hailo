@@ -189,7 +189,7 @@ common::Result<SrtpSessionKey> LoadSrtpSessionKey(
     }
     if (read < chunk.size()) {
       if (std::ferror(file) != 0) {
-        std::fclose(file);
+        static_cast<void>(std::fclose(file));  // read-only stream
         ZeroizeArray(chunk);
         buffer.clear();
         PublishDiagnostics(buffer, diagnostics);
@@ -199,7 +199,7 @@ common::Result<SrtpSessionKey> LoadSrtpSessionKey(
       break;
     }
   }
-  std::fclose(file);
+  static_cast<void>(std::fclose(file));  // read-only stream
   ZeroizeArray(chunk);
 
   if (too_large) {

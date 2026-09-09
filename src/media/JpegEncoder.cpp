@@ -2,7 +2,7 @@
 
 #include <fcntl.h>
 #include <linux/dma-buf.h>
-#include <setjmp.h>
+#include <csetjmp>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -272,6 +272,9 @@ struct JpegCompressionState {
 
 void JpegErrorExit(j_common_ptr cinfo) {
   auto* manager = reinterpret_cast<JpegErrorManager*>(cinfo->err);
+  // libjpeg reports errors through its error_exit hook, which must not
+  // return; longjmp is the documented way out.
+  // NOLINTNEXTLINE(cert-err52-cpp)
   longjmp(manager->jump, 1);
 }
 
@@ -291,6 +294,7 @@ common::Result<JpegImage> EncodeRgbJpeg(unsigned int width,
   state->error.pub.error_exit = JpegErrorExit;
   state->error.pub.output_message = SuppressJpegMessage;
 
+  // NOLINTNEXTLINE(cert-err52-cpp): pairs with JpegErrorExit above.
   if (setjmp(state->error.jump) != 0) {
     if (state->creation_attempted) {
       jpeg_destroy_compress(&state->compressor);

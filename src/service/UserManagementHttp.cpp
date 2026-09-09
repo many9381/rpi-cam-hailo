@@ -43,6 +43,7 @@ void NotifySecretCleanup(std::string_view label,
     try {
       observer(label, before, after);
     } catch (...) {
+      // swallowed: test observer errors must not escape this noexcept notifier
     }
   }
 #else

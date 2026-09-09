@@ -527,6 +527,7 @@ void FirmwareRuntime::UnwindStartedComponents() noexcept {
         dependencies_.stop_live();
       }
     } catch (...) {
+      // swallowed: a throwing stop hook must not skip the remaining stop hooks
     }
     live_started_ = false;
   }
@@ -536,6 +537,7 @@ void FirmwareRuntime::UnwindStartedComponents() noexcept {
         dependencies_.stop_camera();
       }
     } catch (...) {
+      // swallowed: a throwing stop hook must not skip the remaining stop hooks
     }
     camera_started_ = false;
   }
@@ -545,6 +547,7 @@ void FirmwareRuntime::UnwindStartedComponents() noexcept {
         dependencies_.stop_ai();
       }
     } catch (...) {
+      // swallowed: a throwing stop hook must not skip the remaining stop hooks
     }
     ai_started_ = false;
   }
@@ -554,6 +557,7 @@ void FirmwareRuntime::UnwindStartedComponents() noexcept {
         dependencies_.stop_rtsp();
       }
     } catch (...) {
+      // swallowed: a throwing stop hook must not skip the remaining stop hooks
     }
     rtsp_started_ = false;
   }

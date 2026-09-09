@@ -444,17 +444,17 @@ GstFlowReturn ProtectBuffer(GstCfSecureSrtpEnc* self,
   return gst_pad_push(src, output);
 }
 
-GstFlowReturn RtpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
+GstFlowReturn RtpChain(GstPad* /*pad*/, GstObject* parent, GstBuffer* buffer) {
   auto* self = GST_CF_SECURE_SRTP_ENC(parent);
   return ProtectBuffer(self, buffer, self->rtp_src, false);
 }
 
-GstFlowReturn RtcpChain(GstPad* pad, GstObject* parent, GstBuffer* buffer) {
+GstFlowReturn RtcpChain(GstPad* /*pad*/, GstObject* parent, GstBuffer* buffer) {
   auto* self = GST_CF_SECURE_SRTP_ENC(parent);
   return ProtectBuffer(self, buffer, self->rtcp_src, true);
 }
 
-GstPad* CreatePad(GstCfSecureSrtpEnc* self,
+GstPad* CreatePad(GstCfSecureSrtpEnc* /*self*/,
                   GstStaticPadTemplate* static_template,
                   const gchar* name) {
   GstPadTemplate* pad_template =
@@ -468,7 +468,7 @@ GstPad* CreatePad(GstCfSecureSrtpEnc* self,
 GstPad* RequestNewPad(GstElement* element,
                       GstPadTemplate* template_info,
                       const gchar* name,
-                      const GstCaps* caps) {
+                      const GstCaps* /*caps*/) {
   auto* self = GST_CF_SECURE_SRTP_ENC(element);
   const gchar* template_name = GST_PAD_TEMPLATE_NAME_TEMPLATE(template_info);
 

@@ -239,6 +239,8 @@ class ActiveNonceOperation {
         lifecycle_->drained.notify_all();
       }
     } catch (...) {
+      // swallowed: destructors must not throw; the drained signal is best
+      // effort
     }
   }
 
@@ -702,6 +704,8 @@ void RtspDigestNonceManager::Clear() noexcept {
     impl_->pending_identifiers.clear();
     impl_->lifecycle.terminal = true;
   } catch (...) {
+    // swallowed: this terminal cleanse is noexcept; the audit tally is best
+    // effort
   }
 }
 

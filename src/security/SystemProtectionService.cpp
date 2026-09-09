@@ -236,6 +236,7 @@ class SystemProtectionService::Impl {
         worker_.join();
       }
     } catch (...) {
+      // swallowed: join errors cannot escape this noexcept stop
     }
   }
 
@@ -588,7 +589,10 @@ class SystemProtectionService::Impl {
           worker_exited_ = true;
           return;
         }
-        work = std::move(pending_work_);
+        if (!pending_work_.has_value()) {
+          continue;  // unreachable: the wait predicate requires pending work
+        }
+        work = std::move(*pending_work_);
         pending_work_.reset();
         worker_active_ = true;
       }
@@ -690,6 +694,8 @@ class SystemProtectionService::Impl {
         return EpochSeconds(dependencies_.wall_now());
       }
     } catch (...) {
+      // swallowed: the wall-clock hook is external; fall back to the system
+      // clock
     }
     return EpochSeconds(std::chrono::system_clock::now());
   }
@@ -700,6 +706,8 @@ class SystemProtectionService::Impl {
         return dependencies_.steady_now();
       }
     } catch (...) {
+      // swallowed: the steady-clock hook is external; fall back to the system
+      // clock
     }
     return std::chrono::steady_clock::now();
   }

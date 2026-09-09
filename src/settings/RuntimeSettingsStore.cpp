@@ -41,7 +41,7 @@ static_assert(std::is_nothrow_move_assignable_v<RuntimeSettingsDocument>);
 constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kSettingsFileMode = 0600;
 constexpr mode_t kPermissionAndSpecialModeMask = 07777;
-constexpr std::size_t kMaximumDocumentBytes = 16U * 1024U;
+constexpr std::size_t kMaximumDocumentBytes = std::size_t{16} * 1024U;
 constexpr std::size_t kMaximumInterruptedRetries = 128U;
 constexpr std::size_t kMaximumTemporaryNameAttempts = 128U;
 constexpr std::string_view kSettingsName = "runtime-settings.json";
@@ -941,12 +941,15 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
 
     RuntimeSettingsDocument snapshot;
     DurableMarkerState marker_state = DurableMarkerState::kNone;
-    const bool has_previous_marker = previous_text.value().has_value();
-    if (rollback_text.value().has_value()) {
+    const std::optional<std::string>& document_marker = document_text.value();
+    const std::optional<std::string>& rollback_marker = rollback_text.value();
+    const std::optional<std::string>& previous_marker = previous_text.value();
+    const bool has_previous_marker = previous_marker.has_value();
+    if (rollback_marker.has_value()) {
       marker_state = DurableMarkerState::kRollback;
-      if (!rollback_text.value()->empty()) {
+      if (!rollback_marker->empty()) {
         auto decoded = internal::DecodeRuntimeSettingsDocument(
-            *rollback_text.value(), base_config, profiles);
+            *rollback_marker, base_config, profiles);
         if (decoded.ok()) {
           snapshot = std::move(decoded).value();
         } else {
@@ -959,14 +962,14 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
       snapshot.recovery_code =
           "E_RUNTIME_SETTINGS_STORE_INDETERMINATE";
     } else {
-      marker_state = previous_text.value().has_value()
+      marker_state = previous_marker.has_value()
                          ? DurableMarkerState::kPrevious
                          : DurableMarkerState::kNone;
-      if (!document_text.value().has_value()) {
+      if (!document_marker.has_value()) {
         snapshot.active = std::move(base_active);
       } else {
         auto decoded = internal::DecodeRuntimeSettingsDocument(
-            *document_text.value(), base_config, profiles);
+            *document_marker, base_config, profiles);
         if (decoded.ok()) {
           snapshot = std::move(decoded).value();
         } else {

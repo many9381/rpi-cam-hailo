@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <csignal>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -68,10 +69,16 @@ int PrintError(const Error& error) {
   return EXIT_FAILURE;
 }
 
+// std::getenv is unsafe only against a concurrent setenv/putenv. The firmware
+// never mutates its environment, so reading it is safe from any thread.
+[[maybe_unused]] const char* ReadEnvironment(const char* name) noexcept {
+  return std::getenv(name);  // NOLINT(concurrency-mt-unsafe)
+}
+
 std::string IntegrityPublicKeyPem() {
 #if defined(CAMERA_FIRMWARE_TEST_INTEGRITY_TRUST_ANCHOR)
   if (const char* test_public_key =
-          std::getenv("CF_TEST_INTEGRITY_PUBLIC_KEY_PEM");
+          ReadEnvironment("CF_TEST_INTEGRITY_PUBLIC_KEY_PEM");
       test_public_key != nullptr) {
     return test_public_key;
   }
@@ -83,7 +90,7 @@ std::string IntegrityPublicKeyPem() {
 #if defined(CAMERA_FIRMWARE_TEST_PROTECTION_RUNTIME_PROBE)
 void SignalProtectionRuntimeStartForTesting() noexcept {
   const char* descriptor_text =
-      std::getenv("CF_TEST_PROTECTION_RUNTIME_START_FD");
+      ReadEnvironment("CF_TEST_PROTECTION_RUNTIME_START_FD");
   if (descriptor_text == nullptr || *descriptor_text == '\0') {
     return;
   }
@@ -107,14 +114,16 @@ void SignalProtectionRuntimeStartForTesting() noexcept {
 #if defined(CAMERA_FIRMWARE_TEST_CRYPTO_SELF_TEST_HOOK)
 bool ForceCryptoSelfTestFailureForTesting() noexcept {
   const char* forced =
-      std::getenv("CAMERA_FIRMWARE_FORCE_CRYPTO_SELF_TEST_FAILURE");
+      ReadEnvironment("CAMERA_FIRMWARE_FORCE_CRYPTO_SELF_TEST_FAILURE");
   return forced != nullptr && *forced != '\0';
 }
 #endif
 
 void InstallSignalHandlers() {
-  std::signal(SIGINT, HandleSignal);
-  std::signal(SIGTERM, HandleSignal);
+  if (std::signal(SIGINT, HandleSignal) == SIG_ERR ||
+      std::signal(SIGTERM, HandleSignal) == SIG_ERR) {
+    std::cerr << "E_SIGNAL_HANDLER: failed to install shutdown handlers\n";
+  }
   drogon::app().setIntSignalHandler(RequestShutdown);
   drogon::app().setTermSignalHandler(RequestShutdown);
 }
@@ -478,7 +487,7 @@ int RunFirmware(const std::string& config_path) {
           initial_config, CreateProductionRuntime);
   std::unique_ptr<camera_firmware::settings::RuntimeSettingsService>
       runtime_settings;
-  if (runtime_settings_store) {
+  if (runtime_settings_store && runtime_profiles.has_value()) {
     runtime_settings =
         std::make_unique<camera_firmware::settings::RuntimeSettingsService>(
             base_config, std::move(*runtime_profiles),
@@ -669,14 +678,19 @@ int RunFirmware(const std::string& config_path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc == 3 && std::string(argv[1]) == "--validate-config") {
-    return ValidateConfig(argv[2]);
+  try {
+    if (argc == 3 && std::string(argv[1]) == "--validate-config") {
+      return ValidateConfig(argv[2]);
+    }
+    if (argc == 2) {
+      InstallSignalHandlers();
+      return RunFirmware(argv[1]);
+    }
+    std::cerr << "usage: camera-firmware [--validate-config] <config.yaml>\n";
+  } catch (const std::exception& error) {
+    std::cerr << "E_UNHANDLED_EXCEPTION: " << error.what() << '\n';
+  } catch (...) {
+    std::cerr << "E_UNHANDLED_EXCEPTION: unknown exception\n";
   }
-  if (argc == 2) {
-    InstallSignalHandlers();
-    return RunFirmware(argv[1]);
-  }
-
-  std::cerr << "usage: camera-firmware [--validate-config] <config.yaml>\n";
   return EXIT_FAILURE;
 }

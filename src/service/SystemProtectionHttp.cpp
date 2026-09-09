@@ -113,8 +113,10 @@ bool ValidSuite(const ProtectionSuiteSnapshot& snapshot,
 
 Json::Value BuildSuiteJson(const ProtectionSuiteSnapshot& snapshot) {
   Json::Value json(Json::objectValue);
-  json["suite"] = std::string(*SuiteName(snapshot.suite));
-  json["trigger"] = std::string(*TriggerName(snapshot.trigger));
+  // Both names were validated before this builder runs.
+  json["suite"] = std::string(SuiteName(snapshot.suite).value_or("unknown"));
+  json["trigger"] =
+      std::string(TriggerName(snapshot.trigger).value_or("unknown"));
   json["passed"] = snapshot.passed;
   json["started_at_seconds"] = Json::Int64(snapshot.started_at_seconds);
   json["finished_at_seconds"] = Json::Int64(snapshot.finished_at_seconds);

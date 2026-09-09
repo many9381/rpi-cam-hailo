@@ -24,7 +24,8 @@ namespace camera_firmware::security {
 class SecurityStore;
 class AuthServiceTestAccess;
 
-inline constexpr std::int64_t kDefaultSessionIdleTimeoutSeconds = 10 * 60;
+inline constexpr std::int64_t kDefaultSessionIdleTimeoutSeconds =
+    std::int64_t{10} * 60;
 
 struct LoginRequest {
   std::string username;
@@ -41,7 +42,9 @@ struct LoginResult {
 enum class ManagementActivity { kNone, kManagement };
 
 struct Principal {
-  std::int64_t user_id{0};
+  // The static analyzer cannot see through Result<T>::value() && (a
+  // std::variant move) and reports this initialized field as garbage.
+  std::int64_t user_id{0};  // NOLINT(clang-analyzer-core.uninitialized.Assign)
   std::string username;
   UserRole role{UserRole::kAdministrator};
   SessionIdentity session_identity;

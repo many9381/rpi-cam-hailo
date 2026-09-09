@@ -316,6 +316,7 @@ void FirmwareBootCoordinator::StopRuntimeDependency() noexcept {
   try {
     dependencies_.stop_runtime();
   } catch (...) {
+    // swallowed: a throwing stop hook must not abort the rest of the teardown
   }
 }
 
@@ -323,6 +324,8 @@ void FirmwareBootCoordinator::QuiesceServiceDependency() noexcept {
   try {
     dependencies_.quiesce_service();
   } catch (...) {
+    // swallowed: a throwing quiesce hook must not abort the rest of the
+    // teardown
   }
 }
 
@@ -330,6 +333,7 @@ void FirmwareBootCoordinator::StopServiceDependency() noexcept {
   try {
     dependencies_.stop_service();
   } catch (...) {
+    // swallowed: a throwing stop hook must not abort the rest of the teardown
   }
 }
 

@@ -460,6 +460,7 @@ void RecordRequestSecretAudit(common::ZeroizeAudit retired,
     std::lock_guard lock(state->mutex);
     AccumulateAudit(retired, &state->audit);
   } catch (...) {
+    // swallowed: audit accumulation is best effort on this noexcept path
   }
 }
 
