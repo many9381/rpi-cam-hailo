@@ -1,0 +1,22 @@
+# Source-weakness / style gate (TTA 10.1). Google C++ style, which the code base
+# already follows (2-space indent, left-aligned pointers), pinned so that
+# `clang-format --dry-run --Werror` can gate every commit.
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 80
+IndentWidth: 2
+ContinuationIndentWidth: 4
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Left
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBraces: Attach
+InsertBraces: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1

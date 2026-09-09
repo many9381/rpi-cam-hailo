@@ -20,6 +20,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Always emit compile_commands.json so clang-tidy (tools/ci/check.sh) can analyse
+# every build directory without a separate configure.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 include(CTest)
 include(cmake/Dependencies.cmake)
 include(cmake/EmbedIntegrityPublicKey.cmake)

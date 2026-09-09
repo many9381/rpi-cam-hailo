@@ -1,0 +1,60 @@
+# Static analysis gate (TTA 10.1). Bug-prone patterns, CERT rules, the Clang
+# static analyzer, concurrency, performance and portability checks are on;
+# stylistic families that produce noise without a security or correctness
+# payoff (magic numbers, trailing return types, member-variable privacy) are off.
+# Third-party code (vendor/, the copied Drogon/Trantor tree, system headers) is
+# excluded through HeaderFilterRegex and by only running on our own sources.
+#
+# Disabled on purpose:
+#   clang-analyzer-optin.core.EnumCastOutOfRange - GLib/GStreamer flag enums
+#     (GParamFlags, GstBufferCopyFlags, GstMessageType) are combined with |
+#     and cast back; the check has no notion of flag enums.
+#   performance-enum-size - shrinking enum storage is not a weakness fix and
+#     changes the ABI of serialized/config types for no measurable gain.
+# bugprone-empty-catch: an empty catch is allowed only when its body carries a
+#   "swallowed: <reason>" comment (IgnoreCatchWithKeywords below), so every
+#   deliberately ignored exception is documented at the site.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  -cert-err58-cpp,
+  clang-analyzer-*,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  concurrency-*,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-use-anonymous-namespace,
+  -misc-const-correctness,
+  modernize-avoid-bind,
+  modernize-deprecated-headers,
+  modernize-use-emplace,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-use-nullptr,
+  modernize-use-override,
+  performance-*,
+  -performance-enum-size,
+  portability-*,
+  readability-braces-around-statements,
+  readability-container-size-empty,
+  readability-delete-null-pointer,
+  readability-misleading-indentation,
+  readability-redundant-string-cstr
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/(include/camera_firmware|src|apps|plugins|tests)/.*\.hpp$'
+FormatStyle: file
+CheckOptions:
+  - key: bugprone-empty-catch.IgnoreCatchWithKeywords
+    value: 'swallowed:'
+  - key: bugprone-narrowing-conversions.WarnOnIntegerNarrowingConversion
+    value: 'false'
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '1'

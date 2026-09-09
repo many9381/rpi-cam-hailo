@@ -1,0 +1,24 @@
+name: ci
+
+# The firmware only builds on the target platform (libcamera, PiSP, HailoRT,
+# aarch64), so the job runs on a self-hosted ARM64 runner that has the build
+# dependencies, clang-format-18 / clang-tidy-18, and the pinned Drogon/Trantor
+# checkouts. tools/ci/check.sh runs format, clang-tidy, the C++ build and
+# tests, then the web tests and build, and stops at the first failure.
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 120
+    env:
+      CAMERA_FIRMWARE_DROGON_SOURCE_DIR: /home/many/src/drogon-1.9.0
+      CAMERA_FIRMWARE_TRANTOR_SOURCE_DIR: /home/many/src/trantor-1.5.20
+      CF_CI_BUILD_DIR: ${{ github.workspace }}/build-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: format, clang-tidy, build, C++ tests, web tests
+        run: tools/ci/check.sh
