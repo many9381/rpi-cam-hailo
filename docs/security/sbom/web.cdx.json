@@ -1,10 +1,10 @@
 {
  "bomFormat": "CycloneDX",
  "specVersion": "1.5",
- "serialNumber": "urn:uuid:b38d237b-7ce7-4c7e-9e12-481f89438fc3",
+ "serialNumber": "urn:uuid:c2f95ca8-6145-4d22-8210-d28f5163d0f7",
  "version": 1,
  "metadata": {
-  "timestamp": "2026-09-09T15:13:14+00:00",
+  "timestamp": "2026-09-09T18:12:05+00:00",
   "tools": [
    {
     "name": "generate_sbom.py",
@@ -14,7 +14,7 @@
   "component": {
    "type": "application",
    "name": "camera-firmware-web",
-   "version": "9f33fb5",
+   "version": "a5a2598",
    "description": "Management web UI served by the firmware (web/dist)"
   }
  },
@@ -706,8 +706,8 @@
   {
    "type": "library",
    "name": "@testing-library/jest-dom",
-   "version": "6.4.8",
-   "purl": "pkg:npm/@testing-library/jest-dom@6.4.8",
+   "version": "7.0.1",
+   "purl": "pkg:npm/@testing-library/jest-dom@7.0.1",
    "scope": "excluded",
    "properties": [
     {
@@ -718,7 +718,7 @@
    "hashes": [
     {
      "alg": "SHA-512",
-     "content": "JD0G+Zc38f5MBHA4NgxQMR5XtO5Jx9g86jqturNTt2WUfRmLDIY7iKkWHDCCTiDuFMre6nxAD5wHw9W5kI4rGw=="
+     "content": "oMDTC3oA+6CXSO2JZnvOI7CA6oVub6kij5ggk9ohwye5slmkwxYDXcPOVxgMw/RQlticjtO0C1RZkR97HgrWMw=="
     }
    ]
   },
@@ -1010,25 +1010,6 @@
   {
    "type": "library",
    "name": "ansi-styles",
-   "version": "4.3.0",
-   "purl": "pkg:npm/ansi-styles@4.3.0",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "ansi-styles",
    "version": "5.2.0",
    "purl": "pkg:npm/ansi-styles@5.2.0",
    "scope": "excluded",
@@ -1137,63 +1118,6 @@
     {
      "alg": "SHA-512",
      "content": "NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "chalk",
-   "version": "3.0.0",
-   "purl": "pkg:npm/chalk@3.0.0",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "4D3B6Wf41KOYRFdszmDqMCGq5VV/uMAB273JILmO+3jAlh8X4qDtdtgCR3fxtbLEMzSx22QdhnDcJvu2u1fVwg=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "color-convert",
-   "version": "2.0.1",
-   "purl": "pkg:npm/color-convert@2.0.1",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "color-name",
-   "version": "1.1.4",
-   "purl": "pkg:npm/color-name@1.1.4",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA=="
     }
    ]
   },
@@ -1769,25 +1693,6 @@
   },
   {
    "type": "library",
-   "name": "has-flag",
-   "version": "4.0.0",
-   "purl": "pkg:npm/has-flag@4.0.0",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ=="
-    }
-   ]
-  },
-  {
-   "type": "library",
    "name": "has-symbols",
    "version": "1.1.0",
    "purl": "pkg:npm/has-symbols@1.1.0",
@@ -2220,25 +2125,6 @@
     {
      "alg": "SHA-512",
      "content": "Amq9B/SoZYdDi1kFrojnoqPLxYhQ4Wo5XiL8EVJrVsB8ARoC1PWW6VGtT0WKCemjy8aC+louJnjS7U18x3b06Q=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "lodash",
-   "version": "4.18.1",
-   "purl": "pkg:npm/lodash@4.18.1",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q=="
     }
    ]
   },
@@ -3037,25 +2923,6 @@
     {
      "alg": "SHA-512",
      "content": "laJTa3Jb+VQpaC6DseHhF7dXVqHTfJPCRDaEbid/drOhgitgYku/letMUqOXFoWV0zIIUbjpdH2t+tYj4bQMRQ=="
-    }
-   ]
-  },
-  {
-   "type": "library",
-   "name": "supports-color",
-   "version": "7.2.0",
-   "purl": "pkg:npm/supports-color@7.2.0",
-   "scope": "excluded",
-   "properties": [
-    {
-     "name": "web:dependency-kind",
-     "value": "transitive, dev"
-    }
-   ],
-   "hashes": [
-    {
-     "alg": "SHA-512",
-     "content": "qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="
     }
    ]
   },

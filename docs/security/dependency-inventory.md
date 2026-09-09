@@ -92,7 +92,7 @@ Generated 2026-09-10 on the development Raspberry Pi 5 (Debian 13 "trixie" arm64
 
 ## 4. Web UI (web/)
 
-Direct dependencies (versions as resolved in `package-lock.json`, 181 packages in total including transitive):
+Direct dependencies (versions as resolved in `package-lock.json`, 174 packages in total including transitive):
 
 | Package | Version | Kind |
 |---|---|---|
@@ -103,7 +103,7 @@ Direct dependencies (versions as resolved in `package-lock.json`, 181 packages i
 | react-dom | 18.3.1 | runtime |
 | react-router-dom | 7.18.3 | runtime |
 | @playwright/test | 1.61.1 | dev |
-| @testing-library/jest-dom | 6.4.8 | dev |
+| @testing-library/jest-dom | 7.0.1 | dev |
 | @testing-library/react | 16.0.0 | dev |
 | @testing-library/user-event | 14.5.2 | dev |
 | @vitejs/plugin-react | 6.0.3 | dev |

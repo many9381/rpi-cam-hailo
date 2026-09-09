@@ -52,3 +52,12 @@ and `vendor/` for the vendored sources, and `web/package-lock.json` for the web.
    `mitigated` / `open`), and the commit that closed it.
 
 Only public package names, versions and commit ids leave the device during a scan.
+
+## Running the source-weakness gate (TTA 10.1)
+
+`tools/ci/check.sh` is the single entry point (format → clang-tidy → C++ build and
+tests → web tests and build); `--lint` stops after clang-tidy, `--format` after the
+format check. `tools/ci/install-hooks.sh` installs the pre-commit format gate and
+points `git blame` past the one-time reformat commit. Configuration lives in
+`.clang-format` and `.clang-tidy`; the record of the baseline, the fixes, and the
+remaining warnings is `static-analysis-<date>.md`.
