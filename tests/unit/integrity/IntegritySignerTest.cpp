@@ -20,13 +20,15 @@ namespace {
 
 using camera_firmware::integrity::testing::TemporaryDirectory;
 using camera_firmware::integrity::testing::WriteFile;
-using camera_firmware::integrity::testing::WriteIntegrityArtifactAtomicallyWithPrePublishHook;
+using camera_firmware::integrity::testing::
+    WriteIntegrityArtifactAtomicallyWithPrePublishHook;
 
 bool observe_pem_remainder_cleanse{false};
 std::size_t pem_remainder_cleanse_calls{0U};
 
 std::string PrivatePem(EVP_PKEY* key) {
-  camera_firmware::integrity::testing::BioPtr bio(BIO_new(BIO_s_mem()), BIO_free);
+  camera_firmware::integrity::testing::BioPtr bio(BIO_new(BIO_s_mem()),
+                                                  BIO_free);
   if (!bio || PEM_write_bio_PrivateKey(bio.get(), key, nullptr, nullptr, 0,
                                        nullptr, nullptr) != 1) {
     throw std::runtime_error("PEM_write_bio_PrivateKey");
@@ -51,8 +53,9 @@ TEST(IntegritySignerTest, RejectsDestinationChangedToSymlinkBeforePublication) {
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(std::filesystem::is_symlink(output));
   std::ifstream protected_input(protected_target, std::ios::binary);
-  const std::string protected_bytes{std::istreambuf_iterator<char>(protected_input),
-                                    std::istreambuf_iterator<char>()};
+  const std::string protected_bytes{
+      std::istreambuf_iterator<char>(protected_input),
+      std::istreambuf_iterator<char>()};
   EXPECT_EQ(protected_bytes, "protected\n");
 }
 
@@ -72,9 +75,8 @@ TEST(IntegritySignerTest, CleansesTrailingPrivatePemInspectionBuffer) {
   pem_remainder_cleanse_calls = 0U;
   observe_pem_remainder_cleanse = true;
   const auto signed_manifest =
-      camera_firmware::integrity::SignIntegrityManifest(manifest,
-                                                        private_key_path,
-                                                        provider);
+      camera_firmware::integrity::SignIntegrityManifest(
+          manifest, private_key_path, provider);
   observe_pem_remainder_cleanse = false;
 
   EXPECT_FALSE(signed_manifest.ok());

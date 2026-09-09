@@ -24,7 +24,8 @@ namespace {
 
 common::Result<void> MissingDependency(std::string_view name) {
   return common::Result<void>::Err(
-      {"E_RUNTIME_DEPENDENCY", "missing runtime dependency: " + std::string(name)});
+      {"E_RUNTIME_DEPENDENCY",
+       "missing runtime dependency: " + std::string(name)});
 }
 
 common::Result<void> RuntimeException() {
@@ -83,9 +84,9 @@ struct ProductionRuntimeGraph {
             config.camera.ai.max_fps == 0U
                 ? std::chrono::milliseconds{0}
                 : std::chrono::milliseconds{1000U / config.camera.ai.max_fps}),
-        camera_pipeline(snapshot_tap, ai_frame_tap, encoded_ring,
-                        configured.camera.sub_stream.enabled ? &sub_stream_tap
-                                                              : nullptr),
+        camera_pipeline(
+            snapshot_tap, ai_frame_tap, encoded_ring,
+            configured.camera.sub_stream.enabled ? &sub_stream_tap : nullptr),
         fragmented_mp4_hub(encoded_ring),
         ai_controller(config, ai_runtime, ai_frame_pump) {}
 
@@ -176,10 +177,10 @@ FirmwareRuntimeDependencies BuildDependenciesForGraph(
                                       graph->sub_encoded_ring, params);
     auto encoder_started = graph->sub_stream_encoder->Start();
     if (!encoder_started.ok()) {
-      Logger::instance().log(
-          Logger::Level::kError,
-          "sub_stream encoder failed to start: " +
-              encoder_started.error().message + "; disabling sub stream");
+      Logger::instance().log(Logger::Level::kError,
+                             "sub_stream encoder failed to start: " +
+                                 encoder_started.error().message +
+                                 "; disabling sub stream");
       graph->sub_stream_encoder.reset();
       return graph->rtsp_server.Start(graph->config.secure_rtsp,
                                       graph->encoded_ring);
@@ -195,9 +196,9 @@ FirmwareRuntimeDependencies BuildDependenciesForGraph(
         [tap = &graph->sub_stream_tap] { tap->SetActive(false); },
     };
 
-    auto rtsp_started = graph->rtsp_server.Start(
-        graph->config.secure_rtsp, graph->encoded_ring,
-        &graph->sub_mount_descriptor);
+    auto rtsp_started =
+        graph->rtsp_server.Start(graph->config.secure_rtsp, graph->encoded_ring,
+                                 &graph->sub_mount_descriptor);
     if (!rtsp_started.ok()) {
       graph->sub_stream_encoder.reset();
       return rtsp_started;
@@ -234,15 +235,13 @@ FirmwareRuntimeDependencies BuildDependenciesForGraph(
   dependencies.ai_runner_statuses = [graph] {
     return graph->ai_runtime.RunnerStatuses();
   };
-  dependencies.restart_ai = [graph] {
-    return graph->ai_controller.Restart();
-  };
+  dependencies.restart_ai = [graph] { return graph->ai_controller.Restart(); };
   dependencies.snapshot = [graph](std::string_view camera_id) {
     if (camera_id != graph->config.camera.id) {
       return std::optional<media::JpegBytes>{};
     }
-    return media::BuildLatestSnapshotJpeg(
-        graph->snapshot_tap, camera_id, SnapshotMaximumAgeFor(graph->config));
+    return media::BuildLatestSnapshotJpeg(graph->snapshot_tap, camera_id,
+                                          SnapshotMaximumAgeFor(graph->config));
   };
   dependencies.open_live_stream = [graph](std::string_view camera_id) {
     if (camera_id != graph->config.camera.id) {
@@ -289,8 +288,8 @@ common::Result<void> FirmwareRuntime::ValidateCandidateConfig(
     media::SnapshotTap snapshot_tap;
     ai::AiFrameTap ai_frame_tap;
     media::EncodedRing encoded_ring(64U);
-    media::CameraPipeline camera_pipeline(
-        snapshot_tap, ai_frame_tap, encoded_ring);
+    media::CameraPipeline camera_pipeline(snapshot_tap, ai_frame_tap,
+                                          encoded_ring);
     auto camera_validation = camera_pipeline.ValidateConfigOnly(config);
     if (!camera_validation.ok()) {
       return camera_validation;
@@ -370,7 +369,8 @@ FirmwareRuntimeState FirmwareRuntime::State() const noexcept {
   return state_;
 }
 
-std::vector<media::CameraPipelineStatus> FirmwareRuntime::CameraStatuses() const {
+std::vector<media::CameraPipelineStatus> FirmwareRuntime::CameraStatuses()
+    const {
   std::lock_guard lock(mutex_);
   const auto fallback_status = [this](std::string state) {
     media::CameraPipelineStatus status;
@@ -599,10 +599,9 @@ bool FirmwareRuntime::DependenciesComplete() const noexcept {
          dependencies_.stop_live && dependencies_.stop_camera &&
          dependencies_.stop_ai && dependencies_.stop_rtsp &&
          dependencies_.camera_statuses && dependencies_.live_status &&
-         dependencies_.ai_status &&
-         dependencies_.ai_runner_statuses && dependencies_.restart_ai &&
-         dependencies_.snapshot && dependencies_.open_live_stream &&
-         dependencies_.detection_snapshot &&
+         dependencies_.ai_status && dependencies_.ai_runner_statuses &&
+         dependencies_.restart_ai && dependencies_.snapshot &&
+         dependencies_.open_live_stream && dependencies_.detection_snapshot &&
          dependencies_.subscribe_detections &&
          dependencies_.per_media_key_zeroize_count;
 }

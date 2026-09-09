@@ -202,7 +202,8 @@ class FactorySequence {
   std::deque<Action> actions_;
 };
 
-FirmwareRuntimeFactory FactoryFrom(const std::shared_ptr<FactorySequence>& sequence) {
+FirmwareRuntimeFactory FactoryFrom(
+    const std::shared_ptr<FactorySequence>& sequence) {
   return [sequence](const config::AppConfig& config) {
     return sequence->Next(config);
   };
@@ -401,8 +402,7 @@ TEST(ManagedFirmwareRuntimeTest,
 
   const auto replaced = managed.Replace(candidate_config, {});
 
-  EXPECT_EQ(replaced.outcome,
-            RuntimeReplacementResult::Outcome::kCommitFailed);
+  EXPECT_EQ(replaced.outcome, RuntimeReplacementResult::Outcome::kCommitFailed);
   EXPECT_FALSE(replaced.restored);
   EXPECT_EQ(replaced.error.code, "E_RUNTIME_PROMOTION");
   EXPECT_EQ(sequence->calls.load(), 1U);
@@ -495,14 +495,14 @@ TEST(ManagedFirmwareRuntimeTest,
   EXPECT_EQ(managed.CameraStatuses().front().id, "candidate");
   EXPECT_EQ(old_runtime->State(), FirmwareRuntimeState::kStopped);
   EXPECT_EQ(candidate_runtime->State(), FirmwareRuntimeState::kRunning);
-  EXPECT_EQ(events->Snapshot(),
-            (std::vector<std::string>{
-                "old.factory", "old.rtsp.start", "old.ai.start",
-                "old.camera.start", "old.live.start", "old.live.stop",
-                "old.camera.stop", "old.ai.stop", "old.rtsp.stop",
-                "candidate.factory", "candidate.rtsp.start",
-                "candidate.ai.start", "candidate.camera.start",
-                "candidate.live.start", "durable.promote"}));
+  EXPECT_EQ(
+      events->Snapshot(),
+      (std::vector<std::string>{
+          "old.factory", "old.rtsp.start", "old.ai.start", "old.camera.start",
+          "old.live.start", "old.live.stop", "old.camera.stop", "old.ai.stop",
+          "old.rtsp.stop", "candidate.factory", "candidate.rtsp.start",
+          "candidate.ai.start", "candidate.camera.start",
+          "candidate.live.start", "durable.promote"}));
   managed.Stop();
 }
 
@@ -567,14 +567,13 @@ TEST_P(ManagedFirmwareRuntimeCandidateFailureTest,
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    FailurePoints,
-    ManagedFirmwareRuntimeCandidateFailureTest,
-    ::testing::Values(
-        CandidateFailureCase{"Construction", std::nullopt},
-        CandidateFailureCase{"Rtsp", StartFailure::kRtsp},
-        CandidateFailureCase{"Ai", StartFailure::kAi},
-        CandidateFailureCase{"Camera", StartFailure::kCamera},
-        CandidateFailureCase{"FragmentedMp4", StartFailure::kLive}),
+    FailurePoints, ManagedFirmwareRuntimeCandidateFailureTest,
+    ::testing::Values(CandidateFailureCase{"Construction", std::nullopt},
+                      CandidateFailureCase{"Rtsp", StartFailure::kRtsp},
+                      CandidateFailureCase{"Ai", StartFailure::kAi},
+                      CandidateFailureCase{"Camera", StartFailure::kCamera},
+                      CandidateFailureCase{"FragmentedMp4",
+                                           StartFailure::kLive}),
     [](const ::testing::TestParamInfo<CandidateFailureCase>& info) {
       return info.param.name;
     });
@@ -605,8 +604,7 @@ TEST(ManagedFirmwareRuntimeTest,
         {"E_PROMOTE_INJECTED", "injected durable promotion failure"});
   });
 
-  EXPECT_EQ(replaced.outcome,
-            RuntimeReplacementResult::Outcome::kCommitFailed);
+  EXPECT_EQ(replaced.outcome, RuntimeReplacementResult::Outcome::kCommitFailed);
   EXPECT_TRUE(replaced.restored);
   EXPECT_EQ(replaced.error.code, "E_PROMOTE_INJECTED");
   EXPECT_EQ(candidate_runtime->State(), FirmwareRuntimeState::kStopped);
@@ -638,13 +636,12 @@ TEST(ManagedFirmwareRuntimeTest,
   ManagedFirmwareRuntime managed(old_config, FactoryFrom(sequence));
   ASSERT_TRUE(managed.Start().ok());
 
-  const auto replaced = managed.Replace(candidate_config, []()
-                                            -> common::Result<void> {
-    throw std::runtime_error("injected promotion exception");
-  });
+  const auto replaced =
+      managed.Replace(candidate_config, []() -> common::Result<void> {
+        throw std::runtime_error("injected promotion exception");
+      });
 
-  EXPECT_EQ(replaced.outcome,
-            RuntimeReplacementResult::Outcome::kCommitFailed);
+  EXPECT_EQ(replaced.outcome, RuntimeReplacementResult::Outcome::kCommitFailed);
   EXPECT_TRUE(replaced.restored);
   EXPECT_EQ(replaced.error.code, "E_RUNTIME_PROMOTION");
   EXPECT_EQ(managed.State(), ManagedRuntimeState::kRunning);
@@ -679,8 +676,7 @@ TEST(ManagedFirmwareRuntimeTest, ReportsFailedPreviousRuntimeRestoration) {
         {"E_PROMOTE_INJECTED", "injected durable promotion failure"});
   });
 
-  EXPECT_EQ(replaced.outcome,
-            RuntimeReplacementResult::Outcome::kCommitFailed);
+  EXPECT_EQ(replaced.outcome, RuntimeReplacementResult::Outcome::kCommitFailed);
   EXPECT_FALSE(replaced.restored);
   EXPECT_EQ(replaced.error.code, "E_PROMOTE_INJECTED");
   EXPECT_EQ(managed.State(), ManagedRuntimeState::kFailed);
@@ -725,8 +721,7 @@ TEST(ManagedFirmwareRuntimeTest,
     return common::Result<void>::Err(
         {"E_PROMOTE_INJECTED", "injected durable promotion failure"});
   });
-  ASSERT_EQ(failed.outcome,
-            RuntimeReplacementResult::Outcome::kCommitFailed);
+  ASSERT_EQ(failed.outcome, RuntimeReplacementResult::Outcome::kCommitFailed);
   ASSERT_FALSE(failed.restored);
   ASSERT_EQ(managed.State(), ManagedRuntimeState::kFailed);
 
@@ -883,8 +878,7 @@ TEST(ManagedFirmwareRuntimeTest, RunningProvidersForwardToPublishedRuntime) {
   EXPECT_EQ(managed.AiStatus().state, "forwarded");
   EXPECT_EQ(managed.AiRunnerStatuses().front().model_id, "forwarded");
   EXPECT_TRUE(managed.RestartAi().ok());
-  EXPECT_EQ(static_cast<unsigned>(managed.Snapshot("forwarded")->front()),
-            9U);
+  EXPECT_EQ(static_cast<unsigned>(managed.Snapshot("forwarded")->front()), 9U);
   EXPECT_EQ(managed.LiveStatus().state, "forwarded");
   const auto opened = managed.OpenLiveStream("forwarded");
   ASSERT_FALSE(opened.ok());
@@ -946,8 +940,7 @@ TEST(ManagedFirmwareRuntimeTest,
   replacing.join();
   ASSERT_EQ(promotion_status, std::future_status::ready);
   ASSERT_TRUE(replacement.has_value());
-  EXPECT_EQ(replacement->outcome,
-            RuntimeReplacementResult::Outcome::kApplied);
+  EXPECT_EQ(replacement->outcome, RuntimeReplacementResult::Outcome::kApplied);
   EXPECT_EQ(managed.CameraStatuses().front().id, "candidate");
   managed.Stop();
 }
@@ -967,8 +960,8 @@ TEST(ManagedFirmwareRuntimeTest,
     release.wait();
     return std::vector<media::CameraPipelineStatus>{{"old", "running", true}};
   };
-  auto old_runtime =
-      std::make_shared<FirmwareRuntime>(old_config, std::move(old_dependencies));
+  auto old_runtime = std::make_shared<FirmwareRuntime>(
+      old_config, std::move(old_dependencies));
   const auto candidate_probe =
       std::make_shared<RuntimeProbe>("candidate", events);
   auto candidate_runtime = MakeRuntime(candidate_config, candidate_probe);
@@ -991,9 +984,8 @@ TEST(ManagedFirmwareRuntimeTest,
   EXPECT_EQ(provider_status, std::future_status::ready);
   std::optional<RuntimeReplacementResult> replacement;
   std::thread replacing([&] {
-    replacement = managed.Replace(candidate_config, [] {
-      return common::Result<void>::Ok();
-    });
+    replacement = managed.Replace(candidate_config,
+                                  [] { return common::Result<void>::Ok(); });
   });
   const bool applying = WaitUntil(
       [&] { return managed.State() == ManagedRuntimeState::kApplying; });
@@ -1012,8 +1004,7 @@ TEST(ManagedFirmwareRuntimeTest,
   ASSERT_EQ(reader_result.size(), 1U);
   EXPECT_EQ(reader_result.front().id, "old");
   ASSERT_TRUE(replacement.has_value());
-  EXPECT_EQ(replacement->outcome,
-            RuntimeReplacementResult::Outcome::kApplied);
+  EXPECT_EQ(replacement->outcome, RuntimeReplacementResult::Outcome::kApplied);
   EXPECT_TRUE(old_weak.expired());
   managed.Stop();
 }
@@ -1071,8 +1062,7 @@ TEST(ManagedFirmwareRuntimeTest,
 
   ASSERT_EQ(promotion_status, std::future_status::ready);
   ASSERT_TRUE(replacement.has_value());
-  EXPECT_EQ(replacement->outcome,
-            RuntimeReplacementResult::Outcome::kApplied);
+  EXPECT_EQ(replacement->outcome, RuntimeReplacementResult::Outcome::kApplied);
   ASSERT_EQ(stop_status, std::future_status::ready);
   EXPECT_EQ(managed->State(), ManagedRuntimeState::kStopped);
   EXPECT_EQ(candidate_probe->rtsp_stops.load(), 1U);

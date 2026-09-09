@@ -38,8 +38,7 @@ struct InitialAccountCredential {
 
 class BootstrapService {
  public:
-  BootstrapService(SecurityStore& store,
-                   config::AppConfig config,
+  BootstrapService(SecurityStore& store, config::AppConfig config,
                    std::vector<std::string> reserved_identities,
                    PasswordHasherDependencies hasher_dependencies = {});
 

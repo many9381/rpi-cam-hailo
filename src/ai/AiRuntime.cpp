@@ -25,8 +25,7 @@ const config::AiModelConfig* FindModelById(const config::AppConfig& config,
   return nullptr;
 }
 
-void ReplaceAll(std::string& value,
-                const std::string& needle,
+void ReplaceAll(std::string& value, const std::string& needle,
                 const std::string& replacement) {
   if (needle.empty()) {
     return;
@@ -81,7 +80,9 @@ AiRuntime::AiRuntime(DetectionBus* detection_bus,
     : detection_bus_(detection_bus),
       backend_override_(std::move(backend_override)) {}
 
-AiRuntime::~AiRuntime() { Stop(); }
+AiRuntime::~AiRuntime() {
+  Stop();
+}
 
 common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
   Stop();
@@ -163,10 +164,7 @@ common::Result<void> AiRuntime::Start(const config::AppConfig& config) {
       }
 
       auto runner = std::make_shared<AiModelRunner>(
-          config.camera.id,
-          *model,
-          backend_.get(),
-          handle_it->second,
+          config.camera.id, *model, backend_.get(), handle_it->second,
           detection_bus_);
       if (ready_callback_) {
         runner->SetReadyCallback(ready_callback_);
@@ -235,11 +233,12 @@ common::Result<void> AiRuntime::SubmitFrame(media::FrameLease frame) {
 
   common::Result<void> first_error = common::Result<void>::Ok();
 
-  const auto record_error = [&first_error](const common::Result<void>& submitted) {
-    if (!submitted.ok() && first_error.ok()) {
-      first_error = common::Result<void>::Err(submitted.error());
-    }
-  };
+  const auto record_error =
+      [&first_error](const common::Result<void>& submitted) {
+        if (!submitted.ok() && first_error.ok()) {
+          first_error = common::Result<void>::Err(submitted.error());
+        }
+      };
   // Every runner but the last gets a shared reference; the last one takes
   // ownership of the frame.
   for (std::size_t index = 0; index + 1U < runners.size(); ++index) {
@@ -291,8 +290,7 @@ std::shared_ptr<AiBackend> AiRuntime::CreateBackend(
 void AiRuntime::RecordError(const common::Error& error) {
   status_.last_error_code = error.code;
   status_.last_error_message = error.message;
-  RedactConfiguredModelPaths(status_.last_error_message,
-                             redacted_model_paths_);
+  RedactConfiguredModelPaths(status_.last_error_message, redacted_model_paths_);
 }
 
 }  // namespace camera_firmware::ai

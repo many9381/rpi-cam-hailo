@@ -7,6 +7,8 @@
 #include "camera_firmware/security/SecurityTypes.hpp"
 #include "camera_firmware/security/UserManagementService.hpp"
 
+#include <poll.h>
+#include <signal.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -14,19 +16,17 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
-#include <future>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
-#include <poll.h>
-#include <signal.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <type_traits>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -39,43 +39,38 @@
 #include <sqlite3.h>
 
 extern "C" int __real_lstat(const char* path, struct stat* status);
-extern "C" int __real_sqlite3_open_v2(const char* filename,
-                                       sqlite3** database,
-                                       int flags,
-                                       const char* vfs_name);
+extern "C" int __real_sqlite3_open_v2(const char* filename, sqlite3** database,
+                                      int flags, const char* vfs_name);
 extern "C" int __real_sqlite3_busy_timeout(sqlite3* database, int milliseconds);
 extern "C" int __real_sqlite3_close_v2(sqlite3* database);
-extern "C" int __real_sqlite3_exec(sqlite3* database,
-                                    const char* statement,
-                                    int (*callback)(void*, int, char**, char**),
-                                    void* context,
-                                    char** error_message);
-extern "C" int __real_sqlite3_prepare_v2(sqlite3* database,
-                                          const char* sql,
-                                          int byte_count,
-                                          sqlite3_stmt** statement,
-                                          const char** trailing_sql);
+extern "C" int __real_sqlite3_exec(sqlite3* database, const char* statement,
+                                   int (*callback)(void*, int, char**, char**),
+                                   void* context, char** error_message);
+extern "C" int __real_sqlite3_prepare_v2(sqlite3* database, const char* sql,
+                                         int byte_count,
+                                         sqlite3_stmt** statement,
+                                         const char** trailing_sql);
 void ConfigureFstatOwnerSpoofForSecurityStoreTest(std::optional<ino_t> inode);
 
 namespace {
 
-using camera_firmware::security::DeviceState;
-using camera_firmware::security::AuthService;
 using camera_firmware::security::AuditLogServiceTestAccess;
+using camera_firmware::security::AuthService;
 using camera_firmware::security::BootstrapRecord;
+using camera_firmware::security::DeviceState;
+using camera_firmware::security::kSecuritySchemaRevision;
+using camera_firmware::security::kSessionIdentityBytes;
 using camera_firmware::security::LoginRequest;
 using camera_firmware::security::PasswordRecord;
+using camera_firmware::security::SecurityMutationContext;
 using camera_firmware::security::SecurityStore;
 using camera_firmware::security::SecurityStoreConfig;
-using camera_firmware::security::SecurityMutationContext;
 using camera_firmware::security::SessionIdentity;
 using camera_firmware::security::StoredManagedUser;
 using camera_firmware::security::UserManagementDependencies;
 using camera_firmware::security::UserManagementService;
 using camera_firmware::security::UserMutationContext;
 using camera_firmware::security::UserRole;
-using camera_firmware::security::kSecuritySchemaRevision;
-using camera_firmware::security::kSessionIdentityBytes;
 
 static_assert(!std::is_trivially_destructible_v<SessionIdentity>);
 
@@ -85,8 +80,8 @@ concept HasPublicSetDeviceState = requires(T& transaction) {
 };
 
 TEST(SecurityTypesTest, SessionIdentityDestructorCleansesObjectStorage) {
-  alignas(SessionIdentity)
-      std::array<unsigned char, sizeof(SessionIdentity)> storage{};
+  alignas(SessionIdentity) std::array<unsigned char, sizeof(SessionIdentity)>
+      storage{};
   auto* identity =
       std::construct_at(reinterpret_cast<SessionIdentity*>(storage.data()));
   identity->bytes.fill(0xa5U);
@@ -169,8 +164,7 @@ int delegated_open_failure_close_calls{0};
 
 class SqliteTransactionBoundaryGate {
  public:
-  SqliteTransactionBoundaryGate(std::ptrdiff_t writers,
-                                int boundary_descriptor)
+  SqliteTransactionBoundaryGate(std::ptrdiff_t writers, int boundary_descriptor)
       : writers_(writers), boundary_descriptor_(boundary_descriptor) {}
 
   void ArriveAndWait() noexcept {
@@ -299,7 +293,8 @@ void MakeFile(const std::filesystem::path& path, mode_t mode) {
 
 int QueryInt(sqlite3* database, const char* sql) {
   sqlite3_stmt* statement = nullptr;
-  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+      SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 failed");
   }
   const int step = ::sqlite3_step(statement);
@@ -332,7 +327,7 @@ bool QuerySingleInt(sqlite3* database, const char* sql, int& value) {
 }
 
 camera_firmware::common::SecureBytes FilledBytes(std::size_t size,
-                                                  unsigned char value) {
+                                                 unsigned char value) {
   camera_firmware::common::SecureBytes bytes;
   bytes.resize(size);
   std::fill_n(bytes.data(), size, value);
@@ -348,17 +343,18 @@ camera_firmware::common::SecureBytes Secret(std::string_view value) {
 
 BootstrapRecord MakeBootstrapRecord() {
   PasswordRecord password;
-  password.salt = FilledBytes(camera_firmware::security::kPasswordSaltBytes,
-                              0x31U);
-  password.derived = FilledBytes(
-      camera_firmware::security::kPasswordDerivedBytes, 0xa7U);
-  return {"operator.one", "Operator.One", std::move(password),
-          "2001:db8::10", 1720000000};
+  password.salt =
+      FilledBytes(camera_firmware::security::kPasswordSaltBytes, 0x31U);
+  password.derived =
+      FilledBytes(camera_firmware::security::kPasswordDerivedBytes, 0xa7U);
+  return {"operator.one", "Operator.One", std::move(password), "2001:db8::10",
+          1720000000};
 }
 
 std::string QueryText(sqlite3* database, const char* sql) {
   sqlite3_stmt* statement = nullptr;
-  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+      SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 failed");
   }
   const int step = ::sqlite3_step(statement);
@@ -377,15 +373,15 @@ std::string QueryText(sqlite3* database, const char* sql) {
 
 std::vector<std::string> QueryTextRows(sqlite3* database, const char* sql) {
   sqlite3_stmt* statement = nullptr;
-  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+      SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 failed");
   }
   std::vector<std::string> values;
   while (::sqlite3_step(statement) == SQLITE_ROW) {
     const unsigned char* raw_value = ::sqlite3_column_text(statement, 0);
-    values.emplace_back(raw_value == nullptr
-                            ? ""
-                            : reinterpret_cast<const char*>(raw_value));
+    values.emplace_back(
+        raw_value == nullptr ? "" : reinterpret_cast<const char*>(raw_value));
   }
   if (::sqlite3_finalize(statement) != SQLITE_OK) {
     throw std::runtime_error("sqlite3_finalize failed");
@@ -447,8 +443,7 @@ int QueryDatabaseInt(const std::filesystem::path& path, const char* sql) {
 }
 
 std::vector<std::string> QueryDatabaseTextRows(
-    const std::filesystem::path& path,
-    const char* sql) {
+    const std::filesystem::path& path, const char* sql) {
   sqlite3* database = nullptr;
   if (__real_sqlite3_open_v2(path.c_str(), &database,
                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
@@ -846,15 +841,18 @@ int ClosePartiallyOpenedDelegate(sqlite3_file*) {
 }
 
 const sqlite3_io_methods kPartiallyOpenedDelegateMethods = {
-    1,       ClosePartiallyOpenedDelegate, nullptr, nullptr, nullptr,
-    nullptr, nullptr,                      nullptr, nullptr, nullptr,
-    nullptr, nullptr,                      nullptr, nullptr, nullptr,
-    nullptr, nullptr,                      nullptr, nullptr};
+    1,       ClosePartiallyOpenedDelegate,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr, nullptr,
+    nullptr};
 
-int FailDelegateOpen(sqlite3_vfs*,
-                     sqlite3_filename,
-                     sqlite3_file* file,
-                     int,
+int FailDelegateOpen(sqlite3_vfs*, sqlite3_filename, sqlite3_file* file, int,
                      int*) {
   file->pMethods = &kPartiallyOpenedDelegateMethods;
   return SQLITE_CANTOPEN;
@@ -939,11 +937,8 @@ class ScopedSyncFaultVfs {
         reinterpret_cast<unsigned char*>(file) + kWrappedFileBytes);
   }
 
-  static int Open(sqlite3_vfs* vfs,
-                  sqlite3_filename name,
-                  sqlite3_file* file,
-                  int flags,
-                  int* output_flags) {
+  static int Open(sqlite3_vfs* vfs, sqlite3_filename name, sqlite3_file* file,
+                  int flags, int* output_flags) {
     auto* wrapped = Wrapped(file);
     wrapped->base.pMethods = nullptr;
     wrapped->real = nullptr;
@@ -951,8 +946,8 @@ class ScopedSyncFaultVfs {
     auto* real = RealStorage(file);
     real->pMethods = nullptr;
     wrapped->real = real;
-    const int result = Original(vfs)->xOpen(Original(vfs), name, real, flags,
-                                            output_flags);
+    const int result =
+        Original(vfs)->xOpen(Original(vfs), name, real, flags, output_flags);
     if (result != SQLITE_OK) {
       if (real->pMethods != nullptr) {
         (void)real->pMethods->xClose(real);
@@ -967,7 +962,7 @@ class ScopedSyncFaultVfs {
         wrapped->real_methods->iVersion >= 3
             ? &kIoMethodsVersionThree
             : (wrapped->real_methods->iVersion == 2 ? &kIoMethodsVersionTwo
-                                                     : &kIoMethodsVersionOne);
+                                                    : &kIoMethodsVersionOne);
     return SQLITE_OK;
   }
 
@@ -978,17 +973,13 @@ class ScopedSyncFaultVfs {
     return result;
   }
 
-  static int Read(sqlite3_file* file,
-                  void* buffer,
-                  int amount,
+  static int Read(sqlite3_file* file, void* buffer, int amount,
                   sqlite3_int64 offset) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xRead(wrapped->real, buffer, amount, offset);
   }
 
-  static int Write(sqlite3_file* file,
-                   const void* buffer,
-                   int amount,
+  static int Write(sqlite3_file* file, const void* buffer, int amount,
                    sqlite3_int64 offset) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xWrite(wrapped->real, buffer, amount, offset);
@@ -1035,7 +1026,7 @@ class ScopedSyncFaultVfs {
   static int FileControl(sqlite3_file* file, int operation, void* argument) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xFileControl(wrapped->real, operation,
-                                                argument);
+                                               argument);
   }
 
   static int SectorSize(sqlite3_file* file) {
@@ -1048,20 +1039,14 @@ class ScopedSyncFaultVfs {
     return wrapped->real_methods->xDeviceCharacteristics(wrapped->real);
   }
 
-  static int ShmMap(sqlite3_file* file,
-                    int page,
-                    int page_size,
-                    int extend,
+  static int ShmMap(sqlite3_file* file, int page, int page_size, int extend,
                     void volatile** output) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xShmMap(wrapped->real, page, page_size,
                                           extend, output);
   }
 
-  static int ShmLock(sqlite3_file* file,
-                     int offset,
-                     int count,
-                     int flags) {
+  static int ShmLock(sqlite3_file* file, int offset, int count, int flags) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xShmLock(wrapped->real, offset, count, flags);
   }
@@ -1076,51 +1061,91 @@ class ScopedSyncFaultVfs {
     return wrapped->real_methods->xShmUnmap(wrapped->real, delete_flag);
   }
 
-  static int Fetch(sqlite3_file* file,
-                   sqlite3_int64 offset,
-                   int amount,
+  static int Fetch(sqlite3_file* file, sqlite3_int64 offset, int amount,
                    void** output) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xFetch(wrapped->real, offset, amount, output);
   }
 
-  static int Unfetch(sqlite3_file* file,
-                     sqlite3_int64 offset,
-                     void* pointer) {
+  static int Unfetch(sqlite3_file* file, sqlite3_int64 offset, void* pointer) {
     auto* wrapped = Wrapped(file);
     return wrapped->real_methods->xUnfetch(wrapped->real, offset, pointer);
   }
 
   inline static const sqlite3_io_methods kIoMethodsVersionOne = {
-      1, Close, Read, Write, Truncate, Sync, FileSize, Lock, Unlock,
-      CheckReservedLock, FileControl, SectorSize, DeviceCharacteristics,
-      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+      1,
+      Close,
+      Read,
+      Write,
+      Truncate,
+      Sync,
+      FileSize,
+      Lock,
+      Unlock,
+      CheckReservedLock,
+      FileControl,
+      SectorSize,
+      DeviceCharacteristics,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr};
   inline static const sqlite3_io_methods kIoMethodsVersionTwo = {
-      2, Close, Read, Write, Truncate, Sync, FileSize, Lock, Unlock,
-      CheckReservedLock, FileControl, SectorSize, DeviceCharacteristics,
-      ShmMap, ShmLock, ShmBarrier, ShmUnmap, nullptr, nullptr};
+      2,
+      Close,
+      Read,
+      Write,
+      Truncate,
+      Sync,
+      FileSize,
+      Lock,
+      Unlock,
+      CheckReservedLock,
+      FileControl,
+      SectorSize,
+      DeviceCharacteristics,
+      ShmMap,
+      ShmLock,
+      ShmBarrier,
+      ShmUnmap,
+      nullptr,
+      nullptr};
   inline static const sqlite3_io_methods kIoMethodsVersionThree = {
-      3, Close, Read, Write, Truncate, Sync, FileSize, Lock, Unlock,
-      CheckReservedLock, FileControl, SectorSize, DeviceCharacteristics,
-      ShmMap, ShmLock, ShmBarrier, ShmUnmap, Fetch, Unfetch};
+      3,
+      Close,
+      Read,
+      Write,
+      Truncate,
+      Sync,
+      FileSize,
+      Lock,
+      Unlock,
+      CheckReservedLock,
+      FileControl,
+      SectorSize,
+      DeviceCharacteristics,
+      ShmMap,
+      ShmLock,
+      ShmBarrier,
+      ShmUnmap,
+      Fetch,
+      Unfetch};
 
   static int Delete(sqlite3_vfs* vfs, const char* name, int sync_directory) {
     return Original(vfs)->xDelete(Original(vfs), name, sync_directory);
   }
 
-  static int Access(sqlite3_vfs* vfs,
-                    const char* name,
-                    int flags,
+  static int Access(sqlite3_vfs* vfs, const char* name, int flags,
                     int* result) {
     return Original(vfs)->xAccess(Original(vfs), name, flags, result);
   }
 
-  static int FullPathname(sqlite3_vfs* vfs,
-                          const char* name,
-                          int output_size,
+  static int FullPathname(sqlite3_vfs* vfs, const char* name, int output_size,
                           char* output) {
     return Original(vfs)->xFullPathname(Original(vfs), name, output_size,
-                                         output);
+                                        output);
   }
 
   static void* DlOpen(sqlite3_vfs* vfs, const char* name) {
@@ -1131,8 +1156,7 @@ class ScopedSyncFaultVfs {
     Original(vfs)->xDlError(Original(vfs), size, message);
   }
 
-  static void (*DlSym(sqlite3_vfs* vfs,
-                      void* handle,
+  static void (*DlSym(sqlite3_vfs* vfs, void* handle,
                       const char* symbol))(void) {
     return Original(vfs)->xDlSym(Original(vfs), handle, symbol);
   }
@@ -1161,14 +1185,12 @@ class ScopedSyncFaultVfs {
     return Original(vfs)->xCurrentTimeInt64(Original(vfs), time);
   }
 
-  static int SetSystemCall(sqlite3_vfs* vfs,
-                           const char* name,
+  static int SetSystemCall(sqlite3_vfs* vfs, const char* name,
                            sqlite3_syscall_ptr call) {
     return Original(vfs)->xSetSystemCall(Original(vfs), name, call);
   }
 
-  static sqlite3_syscall_ptr GetSystemCall(sqlite3_vfs* vfs,
-                                           const char* name) {
+  static sqlite3_syscall_ptr GetSystemCall(sqlite3_vfs* vfs, const char* name) {
     return Original(vfs)->xGetSystemCall(Original(vfs), name);
   }
 
@@ -1345,11 +1367,12 @@ void ExpectOperationalReopenRejectsDataMutation(const char* mutation) {
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   ExecuteDatabaseSql(state / "security.db", mutation);
 
@@ -1481,11 +1504,12 @@ void ExpectAuditRetentionFailureRollsBackViewerCreation(
   const auto state = root.Path("security");
   auto store = SecurityStore::Open({state, 5U, 80U});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
   ExecuteDatabaseSql(store.value()->database_path(), R"sql(
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
@@ -1499,13 +1523,13 @@ VALUES
     ExecuteDatabaseSql(store.value()->database_path(), retention_trigger);
   }
 
-  std::int64_t administrator_id = QueryDatabaseInt(
-      store.value()->database_path(),
-      "SELECT id FROM users WHERE role = 'administrator';");
+  std::int64_t administrator_id =
+      QueryDatabaseInt(store.value()->database_path(),
+                       "SELECT id FROM users WHERE role = 'administrator';");
   if (failure_point == AuditRetentionFailurePoint::kActorSnapshotLookup) {
-    administrator_id = QueryDatabaseInt(
-        store.value()->database_path(),
-        "SELECT COALESCE(MAX(id), 0) + 2 FROM users;");
+    administrator_id =
+        QueryDatabaseInt(store.value()->database_path(),
+                         "SELECT COALESCE(MAX(id), 0) + 2 FROM users;");
   }
   UserManagementDependencies dependencies;
   dependencies.now_seconds = [] { return 1720000100; };
@@ -1529,11 +1553,11 @@ VALUES
   EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
                              "SELECT COUNT(*) FROM users;"),
             1);
-  EXPECT_EQ(QueryDatabaseInt(
-                store.value()->database_path(),
-                "SELECT COUNT(*) FROM users WHERE canonical_username = "
-                "'monitor.west';"),
-            0);
+  EXPECT_EQ(
+      QueryDatabaseInt(store.value()->database_path(),
+                       "SELECT COUNT(*) FROM users WHERE canonical_username = "
+                       "'monitor.west';"),
+      0);
   EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
                              "SELECT COUNT(*) FROM audit_events;"),
             5);
@@ -1547,16 +1571,15 @@ VALUES
   EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
                              "SELECT rotated_event_count FROM audit_state;"),
             0);
-  EXPECT_EQ(QueryDatabaseInt(
-                store.value()->database_path(),
-                "SELECT last_rotation_at_seconds IS NULL AND "
-                "last_rotated_sequence IS NULL FROM audit_state;"),
+  EXPECT_EQ(QueryDatabaseInt(store.value()->database_path(),
+                             "SELECT last_rotation_at_seconds IS NULL AND "
+                             "last_rotated_sequence IS NULL FROM audit_state;"),
             1);
-  EXPECT_EQ(QueryDatabaseInt(
-                store.value()->database_path(),
-                "SELECT COUNT(*) FROM audit_events WHERE event_type = "
-                "'viewer_created';"),
-            0);
+  EXPECT_EQ(
+      QueryDatabaseInt(store.value()->database_path(),
+                       "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                       "'viewer_created';"),
+      0);
 }
 
 PasswordRecord MakePrecomputedPasswordRecord(unsigned char salt_byte,
@@ -1569,17 +1592,17 @@ PasswordRecord MakePrecomputedPasswordRecord(unsigned char salt_byte,
   return password;
 }
 
-void RunAuditRetentionConcurrentStoreWriters(
-    const std::filesystem::path& state,
-    int boundary_descriptor) {
+void RunAuditRetentionConcurrentStoreWriters(const std::filesystem::path& state,
+                                             int boundary_descriptor) {
   ResetSqliteHooks();
   auto first_store = SecurityStore::Open({state, 5U, 80U});
   ASSERT_TRUE(first_store.ok()) << first_store.error().message;
-  ASSERT_TRUE(first_store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      first_store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
   ExecuteDatabaseSql(first_store.value()->database_path(), R"sql(
 INSERT INTO audit_events
   (server_timestamp_seconds, event_type, outcome, actor_user_id,
@@ -1592,12 +1615,12 @@ VALUES
   auto second_store = SecurityStore::Open({state, 5U, 80U});
   ASSERT_TRUE(second_store.ok()) << second_store.error().message;
 
-  const std::int64_t administrator_id = QueryDatabaseInt(
-      first_store.value()->database_path(),
-      "SELECT id FROM users WHERE role = 'administrator';");
-  const SecurityMutationContext administrator{
-      administrator_id, "operator.one", UserRole::kAdministrator,
-      "2001:db8::10"};
+  const std::int64_t administrator_id =
+      QueryDatabaseInt(first_store.value()->database_path(),
+                       "SELECT id FROM users WHERE role = 'administrator';");
+  const SecurityMutationContext administrator{administrator_id, "operator.one",
+                                              UserRole::kAdministrator,
+                                              "2001:db8::10"};
   auto first_password = MakePrecomputedPasswordRecord(0x61U, 0x71U);
   auto second_password = MakePrecomputedPasswordRecord(0x62U, 0x72U);
   std::optional<camera_firmware::common::Result<StoredManagedUser>>
@@ -1631,11 +1654,10 @@ VALUES
 void ExpectDowngradeSessionsToRevisionFour(
     const std::filesystem::path& state_directory) {
   sqlite3* database = nullptr;
-  ASSERT_EQ(::sqlite3_open_v2((state_directory / "security.db").c_str(),
-                              &database,
-                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW,
-                              nullptr),
-            SQLITE_OK);
+  ASSERT_EQ(
+      ::sqlite3_open_v2((state_directory / "security.db").c_str(), &database,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW, nullptr),
+      SQLITE_OK);
   char* error_message = nullptr;
   const int executed = ::sqlite3_exec(
       database,
@@ -1702,7 +1724,7 @@ void ExpectDowngradeSessionsToRevisionFour(
 }  // namespace
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
-                                                       bool rollback) {
+                                                      bool rollback) {
   fail_commit = commit;
   fail_rollback = rollback;
 }
@@ -1716,10 +1738,8 @@ extern "C" int __wrap_lstat(const char* path, struct stat* status) {
   return result;
 }
 
-extern "C" int __wrap_sqlite3_open_v2(const char* filename,
-                                       sqlite3** database,
-                                       int flags,
-                                       const char* vfs_name) {
+extern "C" int __wrap_sqlite3_open_v2(const char* filename, sqlite3** database,
+                                      int flags, const char* vfs_name) {
   last_sqlite_open_flags = flags;
   if (before_sqlite_open) {
     before_sqlite_open(filename, flags);
@@ -1734,7 +1754,7 @@ extern "C" int __wrap_sqlite3_open_v2(const char* filename,
 }
 
 extern "C" int __wrap_sqlite3_busy_timeout(sqlite3* database,
-                                            int milliseconds) {
+                                           int milliseconds) {
   if (fail_busy_timeout) {
     return SQLITE_ERROR;
   }
@@ -1746,12 +1766,9 @@ extern "C" int __wrap_sqlite3_close_v2(sqlite3* database) {
   return __real_sqlite3_close_v2(database);
 }
 
-extern "C" int __wrap_sqlite3_exec(
-    sqlite3* database,
-    const char* statement,
-    int (*callback)(void*, int, char**, char**),
-    void* context,
-    char** error_message) {
+extern "C" int __wrap_sqlite3_exec(sqlite3* database, const char* statement,
+                                   int (*callback)(void*, int, char**, char**),
+                                   void* context, char** error_message) {
   const std::string_view sql = statement == nullptr ? "" : statement;
   if (before_sqlite_exec) {
     before_sqlite_exec(sql);
@@ -1764,12 +1781,12 @@ extern "C" int __wrap_sqlite3_exec(
   }
   if (ObserveMigrationExec(sql)) {
     if (error_message != nullptr) {
-      *error_message = ::sqlite3_mprintf("injected migration statement failure");
+      *error_message =
+          ::sqlite3_mprintf("injected migration statement failure");
     }
     return SQLITE_IOERR;
   }
-  if (fail_sqlite_exec_exact.has_value() &&
-      sql == *fail_sqlite_exec_exact) {
+  if (fail_sqlite_exec_exact.has_value() && sql == *fail_sqlite_exec_exact) {
     if (fail_sqlite_exec_exact_after_matches > 0) {
       --fail_sqlite_exec_exact_after_matches;
     } else {
@@ -1790,11 +1807,10 @@ extern "C" int __wrap_sqlite3_exec(
                              error_message);
 }
 
-extern "C" int __wrap_sqlite3_prepare_v2(sqlite3* database,
-                                          const char* sql,
-                                          int byte_count,
-                                          sqlite3_stmt** statement,
-                                          const char** trailing_sql) {
+extern "C" int __wrap_sqlite3_prepare_v2(sqlite3* database, const char* sql,
+                                         int byte_count,
+                                         sqlite3_stmt** statement,
+                                         const char** trailing_sql) {
   if (sql != nullptr && std::string_view(sql) == "PRAGMA quick_check;") {
     if (before_quick_check_prepare) {
       before_quick_check_prepare();
@@ -1803,9 +1819,9 @@ extern "C" int __wrap_sqlite3_prepare_v2(sqlite3* database,
       return SQLITE_IOERR;
     }
     if (quick_check_sql_override.has_value()) {
-      return __real_sqlite3_prepare_v2(
-          database, quick_check_sql_override->c_str(), -1, statement,
-          trailing_sql);
+      return __real_sqlite3_prepare_v2(database,
+                                       quick_check_sql_override->c_str(), -1,
+                                       statement, trailing_sql);
     }
   }
   return __real_sqlite3_prepare_v2(database, sql, byte_count, statement,
@@ -2057,8 +2073,8 @@ TEST(SecurityStoreTest, StateWaitsForBootstrapConnectionLease) {
   });
   installer_entered.get_future().wait();
 
-  auto state = std::async(std::launch::async,
-                          [&] { return store.value()->State(); });
+  auto state =
+      std::async(std::launch::async, [&] { return store.value()->State(); });
   auto contender = std::async(std::launch::async, [&] {
     return store.value()->InitializeDevice(MakeBootstrapRecord(), [] {
       return camera_firmware::common::Result<void>::Ok();
@@ -2087,10 +2103,9 @@ TEST(SecurityStoreTest, RollbackFailurePoisonsStoreAndHidesLocalState) {
   fail_commit = true;
   fail_rollback = true;
 
-  auto initialized = store.value()->InitializeDevice(
-      MakeBootstrapRecord(), [] {
-        return camera_firmware::common::Result<void>::Ok();
-      });
+  auto initialized = store.value()->InitializeDevice(MakeBootstrapRecord(), [] {
+    return camera_firmware::common::Result<void>::Ok();
+  });
 
   fail_commit = false;
   fail_rollback = false;
@@ -2219,8 +2234,8 @@ TEST(SecurityStoreTest, CommitFailureRetainsLeaseUntilRollback) {
   EXPECT_EQ(commit.error().code, "E_SECURITY_DB_TRANSACTION");
   EXPECT_TRUE(transaction.active());
 
-  auto state = std::async(std::launch::async,
-                          [&] { return store.value()->State(); });
+  auto state =
+      std::async(std::launch::async, [&] { return store.value()->State(); });
   EXPECT_EQ(state.wait_for(std::chrono::milliseconds(100)),
             std::future_status::timeout);
 
@@ -2238,14 +2253,12 @@ TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
   ASSERT_TRUE(store.ok()) << store.error().message;
   ASSERT_NE(last_opened_database, nullptr);
 
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name FROM sqlite_schema "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
-                "ORDER BY name;"),
+  EXPECT_EQ(QueryTextRows(last_opened_database,
+                          "SELECT name FROM sqlite_schema "
+                          "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+                          "ORDER BY name;"),
             std::vector<std::string>({"audit_events", "audit_state",
-                                      "device_state",
-                                      "firmware_log_outbox",
+                                      "device_state", "firmware_log_outbox",
                                       "management_ips", "password_history",
                                       "schema_version", "sessions", "users"}));
   EXPECT_EQ(QueryTextRows(
@@ -2253,102 +2266,96 @@ TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('schema_version') ORDER BY cid;"),
             std::vector<std::string>({"version:INTEGER:1:0"}));
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
-                "FROM pragma_table_info('device_state') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "state:TEXT:1:0",
-                "schema_revision:INTEGER:1:0",
-                "setup_completed_at_seconds:INTEGER:0:0"}));
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
-                "FROM pragma_table_info('users') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "canonical_username:TEXT:1:0",
-                "display_username:TEXT:1:0", "role:TEXT:1:0",
-                "enabled:INTEGER:1:0", "password_algorithm:TEXT:1:0",
-                "password_iterations:INTEGER:1:0", "password_salt:BLOB:1:0",
-                "password_derived:BLOB:1:0",
-                "password_changed_at_seconds:INTEGER:1:0",
-                "failed_login_count:INTEGER:1:0",
-                "lock_until_seconds:INTEGER:0:0",
-                "created_at_seconds:INTEGER:1:0",
-                "last_login_at_seconds:INTEGER:0:0"}));
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
-                "FROM pragma_table_info('management_ips') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "normalized_ip:TEXT:1:0",
-                "role_scope:TEXT:1:0", "enabled:INTEGER:1:0",
-                "created_at_seconds:INTEGER:1:0"}));
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
-                "FROM pragma_table_info('password_history') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "user_id:INTEGER:1:0",
-                "password_algorithm:TEXT:1:0",
-                "password_iterations:INTEGER:1:0",
-                "password_salt:BLOB:1:0", "password_derived:BLOB:1:0",
-                "replaced_at_seconds:INTEGER:1:0"}));
+  EXPECT_EQ(
+      QueryTextRows(
+          last_opened_database,
+          "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+          "FROM pragma_table_info('device_state') ORDER BY cid;"),
+      std::vector<std::string>({"id:INTEGER:0:1", "state:TEXT:1:0",
+                                "schema_revision:INTEGER:1:0",
+                                "setup_completed_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(
+      QueryTextRows(
+          last_opened_database,
+          "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+          "FROM pragma_table_info('users') ORDER BY cid;"),
+      std::vector<std::string>(
+          {"id:INTEGER:0:1", "canonical_username:TEXT:1:0",
+           "display_username:TEXT:1:0", "role:TEXT:1:0", "enabled:INTEGER:1:0",
+           "password_algorithm:TEXT:1:0", "password_iterations:INTEGER:1:0",
+           "password_salt:BLOB:1:0", "password_derived:BLOB:1:0",
+           "password_changed_at_seconds:INTEGER:1:0",
+           "failed_login_count:INTEGER:1:0", "lock_until_seconds:INTEGER:0:0",
+           "created_at_seconds:INTEGER:1:0",
+           "last_login_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(
+      QueryTextRows(
+          last_opened_database,
+          "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+          "FROM pragma_table_info('management_ips') ORDER BY cid;"),
+      std::vector<std::string>({"id:INTEGER:0:1", "normalized_ip:TEXT:1:0",
+                                "role_scope:TEXT:1:0", "enabled:INTEGER:1:0",
+                                "created_at_seconds:INTEGER:1:0"}));
+  EXPECT_EQ(
+      QueryTextRows(
+          last_opened_database,
+          "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
+          "FROM pragma_table_info('password_history') ORDER BY cid;"),
+      std::vector<std::string>(
+          {"id:INTEGER:0:1", "user_id:INTEGER:1:0",
+           "password_algorithm:TEXT:1:0", "password_iterations:INTEGER:1:0",
+           "password_salt:BLOB:1:0", "password_derived:BLOB:1:0",
+           "replaced_at_seconds:INTEGER:1:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('sessions') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "token_hash:BLOB:1:0",
-                "user_id:INTEGER:1:0", "role:TEXT:1:0",
-                "created_at_seconds:INTEGER:1:0",
-                "last_activity_at_seconds:INTEGER:1:0",
-                "expires_at_seconds:INTEGER:1:0", "peer_ip:TEXT:1:0",
-                "management_expires_at_seconds:INTEGER:1:0"}));
+            std::vector<std::string>(
+                {"id:INTEGER:0:1", "token_hash:BLOB:1:0", "user_id:INTEGER:1:0",
+                 "role:TEXT:1:0", "created_at_seconds:INTEGER:1:0",
+                 "last_activity_at_seconds:INTEGER:1:0",
+                 "expires_at_seconds:INTEGER:1:0", "peer_ip:TEXT:1:0",
+                 "management_expires_at_seconds:INTEGER:1:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('audit_events') ORDER BY cid;"),
-            std::vector<std::string>({
-                "sequence:INTEGER:0:1", "server_timestamp_seconds:INTEGER:1:0",
-                "event_type:TEXT:1:0", "outcome:TEXT:1:0",
-                "actor_user_id:INTEGER:0:0", "actor_identity:TEXT:1:0",
-                "peer_ip:TEXT:1:0",
-                "detail_code:TEXT:1:0", "subject_type:TEXT:1:0",
-                "subject_identity:TEXT:1:0"}));
+            std::vector<std::string>(
+                {"sequence:INTEGER:0:1", "server_timestamp_seconds:INTEGER:1:0",
+                 "event_type:TEXT:1:0", "outcome:TEXT:1:0",
+                 "actor_user_id:INTEGER:0:0", "actor_identity:TEXT:1:0",
+                 "peer_ip:TEXT:1:0", "detail_code:TEXT:1:0",
+                 "subject_type:TEXT:1:0", "subject_identity:TEXT:1:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('audit_state') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "rotated_event_count:INTEGER:1:0",
-                "last_rotation_at_seconds:INTEGER:0:0",
-                "last_rotated_sequence:INTEGER:0:0"}));
+            std::vector<std::string>({"id:INTEGER:0:1",
+                                      "rotated_event_count:INTEGER:1:0",
+                                      "last_rotation_at_seconds:INTEGER:0:0",
+                                      "last_rotated_sequence:INTEGER:0:0"}));
   EXPECT_EQ(QueryTextRows(
                 last_opened_database,
                 "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
                 "FROM pragma_table_info('firmware_log_outbox') ORDER BY cid;"),
-            std::vector<std::string>({
-                "id:INTEGER:0:1", "category:TEXT:1:0", "peer_ip:TEXT:1:0",
-                "created_at_seconds:INTEGER:1:0", "dirty:INTEGER:1:0",
-                "lease_owner:BLOB:0:0", "lease_token:BLOB:0:0",
-                "lease_expires_at_seconds:INTEGER:0:0"}));
-  EXPECT_EQ(QueryTextRows(
-                last_opened_database,
-                "SELECT name FROM sqlite_schema WHERE type = 'index' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name;"),
-            std::vector<std::string>({
-                "audit_events_timestamp_index",
-                "firmware_log_outbox_category_peer_unique",
-                "firmware_log_outbox_lease_expiry_index",
-                "management_ips_role_ip_unique",
-                "password_history_user_id_unique",
-                "sessions_expiry_index",
-                "sessions_single_administrator_unique",
-                "sessions_token_hash_unique",
-                "sessions_user_id_unique",
-                "users_canonical_username_unique",
-                "users_single_administrator_unique"}));
+            std::vector<std::string>(
+                {"id:INTEGER:0:1", "category:TEXT:1:0", "peer_ip:TEXT:1:0",
+                 "created_at_seconds:INTEGER:1:0", "dirty:INTEGER:1:0",
+                 "lease_owner:BLOB:0:0", "lease_token:BLOB:0:0",
+                 "lease_expires_at_seconds:INTEGER:0:0"}));
+  EXPECT_EQ(
+      QueryTextRows(last_opened_database,
+                    "SELECT name FROM sqlite_schema WHERE type = 'index' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name;"),
+      std::vector<std::string>(
+          {"audit_events_timestamp_index",
+           "firmware_log_outbox_category_peer_unique",
+           "firmware_log_outbox_lease_expiry_index",
+           "management_ips_role_ip_unique", "password_history_user_id_unique",
+           "sessions_expiry_index", "sessions_single_administrator_unique",
+           "sessions_token_hash_unique", "sessions_user_id_unique",
+           "users_canonical_username_unique",
+           "users_single_administrator_unique"}));
   EXPECT_NE(QueryText(last_opened_database,
                       "SELECT sql FROM sqlite_schema "
                       "WHERE type = 'table' AND name = 'device_state';")
@@ -2359,10 +2366,11 @@ TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
                       "WHERE type = 'table' AND name = 'device_state';")
                 .find("CHECK (state IN ('default', 'operational'))"),
             std::string::npos);
-  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
-            1);
-  EXPECT_EQ(QueryInt(last_opened_database, "SELECT version FROM schema_version;"),
-            5);
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
+      1);
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT version FROM schema_version;"), 5);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
             5);
@@ -2393,11 +2401,10 @@ TEST(SecurityStoreTest, BootstrapTransactionCommitsAllSecurityRows) {
   EXPECT_EQ(installer_calls, 1);
   EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 1);
-  EXPECT_EQ(QueryInt(last_opened_database,
-                     "SELECT COUNT(*) FROM management_ips;"),
-            1);
-  EXPECT_EQ(QueryInt(last_opened_database,
-                     "SELECT COUNT(*) FROM sessions;"),
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT COUNT(*) FROM management_ips;"),
+      1);
+  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM sessions;"),
             0);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT COUNT(*) FROM audit_events "
@@ -2437,23 +2444,21 @@ TEST(SecurityStoreTest, InstallerFailureRollsBackBootstrapRowsAndState) {
   auto store = SecurityStore::Open({root.Path("security")});
   ASSERT_TRUE(store.ok()) << store.error().message;
 
-  auto initialized = store.value()->InitializeDevice(
-      MakeBootstrapRecord(), [] {
-        return camera_firmware::common::Result<void>::Err(
-            {"E_TEST", "installer failed with secret material"});
-      });
+  auto initialized = store.value()->InitializeDevice(MakeBootstrapRecord(), [] {
+    return camera_firmware::common::Result<void>::Err(
+        {"E_TEST", "installer failed with secret material"});
+  });
 
   ASSERT_FALSE(initialized.ok());
   EXPECT_EQ(initialized.error().code, "E_BOOTSTRAP_CREDENTIAL");
   EXPECT_EQ(initialized.error().message.find("secret"), std::string::npos);
   EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
   EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM users;"), 0);
-  EXPECT_EQ(QueryInt(last_opened_database,
-                     "SELECT COUNT(*) FROM management_ips;"),
-            0);
-  EXPECT_EQ(QueryInt(last_opened_database,
-                     "SELECT COUNT(*) FROM audit_events;"),
-            0);
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT COUNT(*) FROM management_ips;"),
+      0);
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT COUNT(*) FROM audit_events;"), 0);
 }
 
 TEST(SecurityStoreTest, InstallerExceptionRollsBackBootstrapRowsAndState) {
@@ -2479,11 +2484,12 @@ TEST(SecurityStoreTest, OperationalStateRejectsBootstrapBeforeInstaller) {
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
   int installer_calls = 0;
 
   auto repeated = store.value()->InitializeDevice(
@@ -2505,19 +2511,21 @@ TEST(SecurityStoreTest, ReopensInitializedSchemaWithoutChangingState) {
   {
     auto first = SecurityStore::Open({state});
     ASSERT_TRUE(first.ok()) << first.error().message;
-    ASSERT_TRUE(first.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        first.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
 
   auto reopened = SecurityStore::Open({state});
 
   ASSERT_TRUE(reopened.ok()) << reopened.error().message;
   EXPECT_EQ(reopened.value()->State().value(), DeviceState::kOperational);
-  EXPECT_EQ(QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
-            1);
+  EXPECT_EQ(
+      QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
+      1);
 }
 
 TEST(SecurityStoreTest,
@@ -2528,20 +2536,21 @@ TEST(SecurityStoreTest,
   {
     auto store = SecurityStore::Open({state, 1U, 80U});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
     AuthService auth(*store.value());
 
     auto login = auth.Login(
         LoginRequest{"missing.user", Secret("BadSecret!9"), "192.0.2.20"});
 
     ASSERT_FALSE(login.ok());
-    EXPECT_EQ(QueryInt(last_opened_database,
-                       "SELECT COUNT(*) FROM audit_events;"),
-              1);
+    EXPECT_EQ(
+        QueryInt(last_opened_database, "SELECT COUNT(*) FROM audit_events;"),
+        1);
     EXPECT_EQ(QueryInt(last_opened_database,
                        "SELECT COUNT(*) FROM audit_events WHERE event_type = "
                        "'bootstrap_completed' AND outcome = 'success';"),
@@ -2591,11 +2600,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFive) {
                 "'management_ips_role_ip_unique', "
                 "'sessions_user_id_unique');"),
             3);
-  EXPECT_EQ(QueryDatabaseInt(
-                fixture.database_path(),
-                "SELECT COUNT(*) FROM audit_events "
-                "WHERE subject_type = '' AND subject_identity = '';"),
-            2);
+  EXPECT_EQ(
+      QueryDatabaseInt(fixture.database_path(),
+                       "SELECT COUNT(*) FROM audit_events "
+                       "WHERE subject_type = '' AND subject_identity = '';"),
+      2);
   EXPECT_EQ(QueryDatabaseTextRows(
                 fixture.database_path(),
                 "SELECT actor_identity FROM audit_events ORDER BY sequence;"),
@@ -2618,30 +2627,30 @@ TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFive) {
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
             5);
-  EXPECT_EQ(QueryDatabaseTextRows(
-                fixture.database_path(),
-                "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
-                "event_type || '|' || outcome || '|' || "
-                "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
-                "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
-                "subject_identity FROM audit_events ORDER BY sequence;"),
-            std::vector<std::string>({
-                "41|1720000000|bootstrap_completed|success|11|cameraowner|"
-                "2001:db8::10|initial_administrator||",
-                "42|1720000010|login_completed|success|12|viewer.one|"
-                "198.51.100.10|session_created||",
-                "73|1720000025|viewer_disabled|failure|-1|unknown|"
-                "198.51.100.11|legacy_deleted_actor|user|viewer.one"}));
+  EXPECT_EQ(
+      QueryDatabaseTextRows(
+          fixture.database_path(),
+          "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+          "event_type || '|' || outcome || '|' || "
+          "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
+          "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
+          "subject_identity FROM audit_events ORDER BY sequence;"),
+      std::vector<std::string>(
+          {"41|1720000000|bootstrap_completed|success|11|cameraowner|"
+           "2001:db8::10|initial_administrator||",
+           "42|1720000010|login_completed|success|12|viewer.one|"
+           "198.51.100.10|session_created||",
+           "73|1720000025|viewer_disabled|failure|-1|unknown|"
+           "198.51.100.11|legacy_deleted_actor|user|viewer.one"}));
   EXPECT_EQ(QueryDatabaseTextRows(
                 fixture.database_path(),
                 "SELECT id || '|' || rotated_event_count || '|' || "
                 "COALESCE(last_rotation_at_seconds, -1) || '|' || "
                 "COALESCE(last_rotated_sequence, -1) FROM audit_state;"),
             std::vector<std::string>({"1|0|-1|-1"}));
-  EXPECT_EQ(QueryDatabaseInt(
-                fixture.database_path(),
-                "SELECT COUNT(*) FROM sessions "
-                "WHERE management_expires_at_seconds = 0;"),
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT COUNT(*) FROM sessions "
+                             "WHERE management_expires_at_seconds = 0;"),
             QueryDatabaseInt(fixture.database_path(),
                              "SELECT COUNT(*) FROM sessions;"));
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
@@ -2656,11 +2665,12 @@ TEST(SecurityStoreTest, FreshSessionsTableCarriesManagementDeadline) {
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
 
   sqlite3* database = nullptr;
   ASSERT_EQ(::sqlite3_open_v2(store.value()->database_path().c_str(), &database,
@@ -2688,11 +2698,12 @@ TEST(SecurityStoreTest, MigrationToRevisionFiveBackfillsZeroAndKeepsSessions) {
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   // Rewrite the database back to revision 4 shape: drop the new column by
   // rebuilding `sessions` without it, and set the recorded revision to 4.
@@ -2710,8 +2721,8 @@ TEST(SecurityStoreTest, MigrationToRevisionFiveBackfillsZeroAndKeepsSessions) {
       QuerySingleInt(database, "SELECT version FROM schema_version;", version));
   EXPECT_EQ(version, 5);
   int sessions = 0;
-  EXPECT_TRUE(QuerySingleInt(database, "SELECT COUNT(*) FROM sessions;",
-                             sessions));
+  EXPECT_TRUE(
+      QuerySingleInt(database, "SELECT COUNT(*) FROM sessions;", sessions));
   EXPECT_EQ(sessions, 1);
   int lapsed = 0;
   EXPECT_TRUE(QuerySingleInt(
@@ -2736,26 +2747,25 @@ TEST(SecurityStoreTest,
 
   ASSERT_TRUE(opened.ok()) << opened.error().message;
   opened.value().reset();
-  EXPECT_EQ(QueryDatabaseTextRows(
-                fixture.database_path(),
-                "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
-                "event_type || '|' || outcome || '|' || "
-                "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
-                "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
-                "subject_identity FROM audit_events WHERE sequence = 74;"),
-            std::vector<std::string>({
-                "74|1720000030|viewer_deleted|failure|-1|unknown|"
-                "203.0.113.7|legacy_orphan_actor|user|retired.viewer"}));
-  EXPECT_EQ(QueryDatabaseTextRows(
-                fixture.database_path(),
-                "SELECT sequence || '|' || actor_user_id || '|' || "
-                "actor_identity FROM audit_events "
-                "WHERE sequence IN (41, 42) ORDER BY sequence;"),
-            (std::vector<std::string>{"41|11|cameraowner",
-                                      "42|12|viewer.one"}));
-  EXPECT_EQ(QueryDatabaseInt(
-                fixture.database_path(),
-                "SELECT COUNT(*) FROM pragma_foreign_key_check;"),
+  EXPECT_EQ(
+      QueryDatabaseTextRows(
+          fixture.database_path(),
+          "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
+          "event_type || '|' || outcome || '|' || "
+          "COALESCE(actor_user_id, -1) || '|' || actor_identity || '|' || "
+          "peer_ip || '|' || detail_code || '|' || subject_type || '|' || "
+          "subject_identity FROM audit_events WHERE sequence = 74;"),
+      std::vector<std::string>(
+          {"74|1720000030|viewer_deleted|failure|-1|unknown|"
+           "203.0.113.7|legacy_orphan_actor|user|retired.viewer"}));
+  EXPECT_EQ(
+      QueryDatabaseTextRows(fixture.database_path(),
+                            "SELECT sequence || '|' || actor_user_id || '|' || "
+                            "actor_identity FROM audit_events "
+                            "WHERE sequence IN (41, 42) ORDER BY sequence;"),
+      (std::vector<std::string>{"41|11|cameraowner", "42|12|viewer.one"}));
+  EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
+                             "SELECT COUNT(*) FROM pragma_foreign_key_check;"),
             0);
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
 }
@@ -2785,11 +2795,12 @@ TEST(SecurityStoreTest, RevisionThreeSchemaEnforcesUserManagementConstraints) {
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   const auto database = state / "security.db";
   ExecuteDatabaseSql(database, R"sql(
@@ -2853,12 +2864,12 @@ INSERT INTO audit_events
 VALUES (4, 'viewer_created', 'success', 'system', '2001:db8::10', 'created',
         'user', printf('%065d', 0));
 )sql"));
-  EXPECT_EQ(QueryDatabaseInt(
-                database,
-                "SELECT COUNT(*) FROM audit_events WHERE event_type = "
-                "'viewer_created' AND subject_type = '' AND "
-                "subject_identity = '';"),
-            1);
+  EXPECT_EQ(
+      QueryDatabaseInt(database,
+                       "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                       "'viewer_created' AND subject_type = '' AND "
+                       "subject_identity = '';"),
+      1);
   EXPECT_TRUE(SecurityStore::Open({state}).ok());
 }
 
@@ -2870,11 +2881,12 @@ TEST(SecurityStoreTest,
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   const auto database = state / "security.db";
 
@@ -2905,11 +2917,12 @@ TEST(SecurityStoreTest,
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   ExecuteDatabaseSql(state / "security.db", R"sql(
 WITH RECURSIVE numbers(value) AS (
@@ -2933,11 +2946,12 @@ TEST(SecurityStoreTest, RevisionThreeValidatorRejectsMoreThanThirtyTwoViewers) {
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   ExecuteDatabaseSql(state / "security.db", R"sql(
 WITH RECURSIVE numbers(value) AS (
@@ -2966,11 +2980,12 @@ TEST(SecurityStoreTest,
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   ExecuteDatabaseSql(state / "security.db", R"sql(
 WITH RECURSIVE numbers(value) AS (
@@ -3182,8 +3197,7 @@ CREATE UNIQUE INDEX management_ips_role_ip_unique
 DROP INDEX password_history_user_id_unique;
 CREATE INDEX password_history_user_id_unique ON password_history(user_id);
 )sql");
-  ExpectReopenRejectsSchemaMutation(
-      "DROP INDEX sessions_user_id_unique;");
+  ExpectReopenRejectsSchemaMutation("DROP INDEX sessions_user_id_unique;");
 }
 
 TEST(SecurityStoreTest, FreshAndMigratedRevisionFiveUseExactSameSchema) {
@@ -3196,18 +3210,17 @@ TEST(SecurityStoreTest, FreshAndMigratedRevisionFiveUseExactSameSchema) {
   }
   RevisionTwoOperationalFixture migrated_fixture;
   {
-    auto migrated =
-        SecurityStore::Open({migrated_fixture.state_directory()});
+    auto migrated = SecurityStore::Open({migrated_fixture.state_directory()});
     ASSERT_TRUE(migrated.ok()) << migrated.error().message;
   }
   constexpr const char* kSchemaInventorySql =
       "SELECT type || '|' || name || '|' || tbl_name || '|' || sql "
       "FROM sqlite_schema ORDER BY type, name;";
 
-  EXPECT_EQ(QueryDatabaseTextRows(fresh_state / "security.db",
-                                  kSchemaInventorySql),
-            QueryDatabaseTextRows(migrated_fixture.database_path(),
-                                  kSchemaInventorySql));
+  EXPECT_EQ(
+      QueryDatabaseTextRows(fresh_state / "security.db", kSchemaInventorySql),
+      QueryDatabaseTextRows(migrated_fixture.database_path(),
+                            kSchemaInventorySql));
 }
 
 TEST(SecurityStoreTest,
@@ -3322,11 +3335,12 @@ TEST(SecurityStoreTest, ProductionAuditWritesSnapshotActorIdentities) {
   const auto state = root.Path("security");
   auto store = SecurityStore::Open({state});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
   const auto administrator_id = QueryInt(
       last_opened_database,
       "SELECT id FROM users WHERE canonical_username = 'operator.one';");
@@ -3341,13 +3355,12 @@ TEST(SecurityStoreTest, ProductionAuditWritesSnapshotActorIdentities) {
   dependencies.verify_password =
       [&verification_calls](const camera_firmware::common::SecureBytes&,
                             const PasswordRecord&) {
-        return camera_firmware::common::Result<bool>::Ok(
-            ++verification_calls == 1);
+        return camera_firmware::common::Result<bool>::Ok(++verification_calls ==
+                                                         1);
       };
   UserManagementService service(*store.value(), {}, std::move(dependencies));
   UserMutationContext administrator{
-      {administrator_id, "spoofed.administrator", UserRole::kAdministrator,
-       {}},
+      {administrator_id, "spoofed.administrator", UserRole::kAdministrator, {}},
       "2001:db8::10"};
 
   auto created = service.CreateViewer("Monitor.East", Secret("SouthMoon!8"),
@@ -3361,8 +3374,8 @@ TEST(SecurityStoreTest, ProductionAuditWritesSnapshotActorIdentities) {
 
   UserMutationContext viewer{
       {viewer_id, "spoofed.viewer", UserRole::kViewer, {}}, "192.0.2.22"};
-  auto changed = service.ChangeOwnPassword(
-      Secret("SouthMoon!8"), Secret("Crimson!7"), viewer);
+  auto changed = service.ChangeOwnPassword(Secret("SouthMoon!8"),
+                                           Secret("Crimson!7"), viewer);
   ASSERT_TRUE(changed.ok()) << changed.error().message;
   EXPECT_EQ(QueryText(last_opened_database,
                       "SELECT actor_user_id || '|' || actor_identity FROM "
@@ -3388,11 +3401,12 @@ TEST(SecurityStoreTest, ProductionNullActorWriteSnapshotsSystemIdentity) {
   const auto state = root.Path("security");
   auto store = SecurityStore::Open({state});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
   AuthService auth(*store.value());
 
   auto login = auth.Login(
@@ -3474,8 +3488,7 @@ TEST(SecurityStoreTest,
       "", AuditRetentionFailurePoint::kCallerCommit);
 }
 
-TEST(SecurityStoreTest,
-     BoundedSubprocessKillsAndReapsChildHungAfterBoundary) {
+TEST(SecurityStoreTest, BoundedSubprocessKillsAndReapsChildHungAfterBoundary) {
   const auto result = RunBoundedSubprocessAtBoundary(
       [](int boundary_descriptor) {
         constexpr char kBoundaryReached = 'B';
@@ -3486,8 +3499,7 @@ TEST(SecurityStoreTest,
       },
       std::chrono::seconds(1), std::chrono::milliseconds(50));
 
-  EXPECT_EQ(result.outcome,
-            BoundedSubprocessOutcome::kTimedOutAfterBoundary);
+  EXPECT_EQ(result.outcome, BoundedSubprocessOutcome::kTimedOutAfterBoundary);
   ASSERT_TRUE(WIFSIGNALED(result.status));
   EXPECT_EQ(WTERMSIG(result.status), SIGKILL);
   errno = 0;
@@ -3495,8 +3507,7 @@ TEST(SecurityStoreTest,
   EXPECT_EQ(errno, ECHILD);
 }
 
-TEST(SecurityStoreTest,
-     TransactionBoundaryGateBlocksUntilEveryWriterArrives) {
+TEST(SecurityStoreTest, TransactionBoundaryGateBlocksUntilEveryWriterArrives) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   const auto state = root.Path("security");
@@ -3515,8 +3526,7 @@ TEST(SecurityStoreTest,
       },
       std::chrono::seconds(1), std::chrono::milliseconds(50));
 
-  EXPECT_EQ(result.outcome,
-            BoundedSubprocessOutcome::kTimedOutAfterBoundary);
+  EXPECT_EQ(result.outcome, BoundedSubprocessOutcome::kTimedOutAfterBoundary);
   EXPECT_TRUE(result.boundary_observed);
   ASSERT_TRUE(WIFSIGNALED(result.status));
   EXPECT_EQ(WTERMSIG(result.status), SIGKILL);
@@ -3538,20 +3548,19 @@ TEST(SecurityStoreTest,
   ASSERT_TRUE(WIFEXITED(result.status));
   ASSERT_EQ(WEXITSTATUS(result.status), 0);
   const auto database_path = state / "security.db";
-  EXPECT_EQ(QueryDatabaseTextRows(
-                database_path,
-                "SELECT canonical_username FROM users "
-                "ORDER BY canonical_username;"),
+  EXPECT_EQ(QueryDatabaseTextRows(database_path,
+                                  "SELECT canonical_username FROM users "
+                                  "ORDER BY canonical_username;"),
             (std::vector<std::string>{"monitor.east", "monitor.west",
                                       "operator.one"}));
-  const int final_count = QueryDatabaseInt(
-      database_path, "SELECT COUNT(*) FROM audit_events;");
+  const int final_count =
+      QueryDatabaseInt(database_path, "SELECT COUNT(*) FROM audit_events;");
   EXPECT_EQ(final_count, 5);
   EXPECT_LE(final_count, 5);
-  EXPECT_EQ(QueryDatabaseInt(
-                database_path,
-                "SELECT COUNT(DISTINCT sequence) FROM audit_events;"),
-            5);
+  EXPECT_EQ(
+      QueryDatabaseInt(database_path,
+                       "SELECT COUNT(DISTINCT sequence) FROM audit_events;"),
+      5);
   const auto retained = QueryDatabaseTextRows(
       database_path,
       "SELECT sequence || '|' || server_timestamp_seconds || '|' || "
@@ -3582,17 +3591,16 @@ TEST(SecurityStoreTest,
                                   "SELECT sequence FROM audit_events "
                                   "ORDER BY sequence;"),
             (std::vector<std::string>{"3", "4", "5", "6", "7"}));
-  EXPECT_EQ(QueryDatabaseTextRows(
-                database_path,
-                "SELECT rotated_event_count || '|' || "
-                "last_rotated_sequence FROM audit_state;"),
+  EXPECT_EQ(QueryDatabaseTextRows(database_path,
+                                  "SELECT rotated_event_count || '|' || "
+                                  "last_rotated_sequence FROM audit_state;"),
             (std::vector<std::string>{"2|2"}));
-  EXPECT_EQ(QueryDatabaseInt(
-                database_path,
-                "SELECT last_rotation_at_seconds FROM audit_state;"),
-            QueryDatabaseInt(database_path,
-                             "SELECT server_timestamp_seconds FROM "
-                             "audit_events WHERE sequence = 7;"));
+  EXPECT_EQ(
+      QueryDatabaseInt(database_path,
+                       "SELECT last_rotation_at_seconds FROM audit_state;"),
+      QueryDatabaseInt(database_path,
+                       "SELECT server_timestamp_seconds FROM "
+                       "audit_events WHERE sequence = 7;"));
 }
 
 TEST(SecurityStoreTest,
@@ -3631,16 +3639,15 @@ TEST(SecurityStoreTest, SyncFaultVfsCleansPartiallyOpenedDelegateOnFailure) {
   delegate.xOpen = FailDelegateOpen;
   ScopedSyncFaultVfs sync_fault_vfs(&delegate);
   sqlite3_vfs* wrapper = sync_fault_vfs.vfs_for_test();
-  const auto storage_slots =
-      (static_cast<std::size_t>(wrapper->szOsFile) +
-       sizeof(std::max_align_t) - 1U) /
-      sizeof(std::max_align_t);
+  const auto storage_slots = (static_cast<std::size_t>(wrapper->szOsFile) +
+                              sizeof(std::max_align_t) - 1U) /
+                             sizeof(std::max_align_t);
   std::vector<std::max_align_t> storage(storage_slots);
   auto* outer = reinterpret_cast<sqlite3_file*>(storage.data());
   outer->pMethods = &kPartiallyOpenedDelegateMethods;
-  auto* real = reinterpret_cast<sqlite3_file*>(
-      reinterpret_cast<unsigned char*>(outer) + wrapper->szOsFile -
-      delegate.szOsFile);
+  auto* real =
+      reinterpret_cast<sqlite3_file*>(reinterpret_cast<unsigned char*>(outer) +
+                                      wrapper->szOsFile - delegate.szOsFile);
   int output_flags = 0;
 
   const int result = wrapper->xOpen(wrapper, "unused", outer,
@@ -3656,9 +3663,8 @@ TEST(SecurityStoreTest, MigrationStatementFailuresRollBackToRevisionTwo) {
   const auto statements = CaptureActualMigrationStatements();
   ASSERT_FALSE(statements.empty());
   for (std::size_t ordinal = 0; ordinal < statements.size(); ++ordinal) {
-    SCOPED_TRACE(::testing::Message()
-                 << "migration statement " << ordinal << ": "
-                 << statements[ordinal]);
+    SCOPED_TRACE(::testing::Message() << "migration statement " << ordinal
+                                      << ": " << statements[ordinal]);
     ResetSqliteHooks();
     RevisionTwoOperationalFixture fixture;
     const auto before = fixture.evidence();
@@ -3877,7 +3883,8 @@ VALUES (33, randomblob(32), 12, 'viewer', 1720000020, 1720000021,
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT COUNT(*) FROM sessions;"),
             3);
-  ExecuteDatabaseSql(fixture.database_path(), "DELETE FROM sessions WHERE id = 33;");
+  ExecuteDatabaseSql(fixture.database_path(),
+                     "DELETE FROM sessions WHERE id = 33;");
   EXPECT_EQ(fixture.evidence(), before);
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
 }
@@ -4107,11 +4114,12 @@ TEST(SecurityStoreTest, OperationalStateAllowsLaterNonBootstrapRows) {
   {
     auto store = SecurityStore::Open({state});
     ASSERT_TRUE(store.ok()) << store.error().message;
-    ASSERT_TRUE(store.value()
-                    ->InitializeDevice(MakeBootstrapRecord(), [] {
-                      return camera_firmware::common::Result<void>::Ok();
-                    })
-                    .ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
   }
   ExecuteDatabaseSql(state / "security.db", R"sql(
 INSERT INTO management_ips
@@ -4325,11 +4333,12 @@ TEST(SecurityStoreTest, ManagementDeadlineSentinelStatesBehaveAsSpecified) {
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
   ASSERT_TRUE(store.ok()) << store.error().message;
-  ASSERT_TRUE(store.value()
-                  ->InitializeDevice(MakeBootstrapRecord(), [] {
-                    return camera_firmware::common::Result<void>::Ok();
-                  })
-                  .ok());
+  ASSERT_TRUE(
+      store.value()
+          ->InitializeDevice(
+              MakeBootstrapRecord(),
+              [] { return camera_firmware::common::Result<void>::Ok(); })
+          .ok());
 
   auto started = store.value()->BeginTransaction();
   ASSERT_TRUE(started.ok()) << started.error().message;
@@ -4388,11 +4397,11 @@ TEST(SecurityStoreTest, ManagementDeadlineSentinelStatesBehaveAsSpecified) {
                               SQLITE_OPEN_READONLY, nullptr),
             SQLITE_OK);
   int audits = 0;
-  EXPECT_TRUE(QuerySingleInt(
-      database,
-      "SELECT COUNT(*) FROM audit_events WHERE event_type = "
-      "'management_authority_expired';",
-      audits));
+  EXPECT_TRUE(
+      QuerySingleInt(database,
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'management_authority_expired';",
+                     audits));
   EXPECT_EQ(audits, 1);
   (void)::sqlite3_close_v2(database);
 }

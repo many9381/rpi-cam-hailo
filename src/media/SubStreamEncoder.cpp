@@ -127,8 +127,8 @@ std::optional<MappedPlane> MapPlaneReadOnly(const FramePlane& plane) {
     return std::nullopt;
   }
 
-  void* mapping = ::mmap(nullptr, mapping_size, PROT_READ, MAP_SHARED,
-                         plane.dmabuf_fd, 0);
+  void* mapping =
+      ::mmap(nullptr, mapping_size, PROT_READ, MAP_SHARED, plane.dmabuf_fd, 0);
   if (mapping == MAP_FAILED) {
     return std::nullopt;
   }
@@ -379,9 +379,13 @@ SubStreamEncoder::~SubStreamEncoder() {
   }
 }
 
-common::Result<void> SubStreamEncoder::Start() { return impl_->Start(); }
+common::Result<void> SubStreamEncoder::Start() {
+  return impl_->Start();
+}
 
-void SubStreamEncoder::Stop() { impl_->Stop(); }
+void SubStreamEncoder::Stop() {
+  impl_->Stop();
+}
 
 std::uint64_t SubStreamEncoder::encoded_frames() const noexcept {
   return impl_->encoded_frames.load();

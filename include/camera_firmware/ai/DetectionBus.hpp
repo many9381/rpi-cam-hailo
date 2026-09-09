@@ -2,8 +2,8 @@
 
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 #include "camera_firmware/ai/AiTypes.hpp"

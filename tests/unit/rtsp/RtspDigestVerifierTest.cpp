@@ -124,8 +124,7 @@ std::string HexForTest(const SecureBytes& bytes, bool uppercase = false) {
 std::string CredentialRecord(std::string_view username,
                              std::string_view password,
                              RtspDigestAlgorithm algorithm) {
-  auto ha1 = ComputeRtspDigestHa1(algorithm, username, kRealm,
-                                  Bytes(password));
+  auto ha1 = ComputeRtspDigestHa1(algorithm, username, kRealm, Bytes(password));
   if (!ha1.ok()) {
     throw std::runtime_error("failed to calculate test HA1");
   }
@@ -137,11 +136,10 @@ std::string CredentialRecord(std::string_view username,
 std::string CredentialFile(std::string_view password,
                            bool include_md5 = false) {
   std::string content = "CFDIGEST1\n";
-  content += CredentialRecord(kUsername, password,
-                              RtspDigestAlgorithm::kSha256);
+  content +=
+      CredentialRecord(kUsername, password, RtspDigestAlgorithm::kSha256);
   if (include_md5) {
-    content += CredentialRecord(kUsername, password,
-                                RtspDigestAlgorithm::kMd5);
+    content += CredentialRecord(kUsername, password, RtspDigestAlgorithm::kMd5);
   }
   return content;
 }
@@ -157,38 +155,34 @@ struct DeterministicNonceInputs {
     dependencies.nonce.now_seconds = [clock = now]() {
       return clock->load(std::memory_order_relaxed);
     };
-    dependencies.nonce.random_bytes =
-        [calls = random_calls](std::size_t size) {
-          const std::size_t call =
-              calls->fetch_add(1U, std::memory_order_relaxed);
-          if (size != 32U && size != 16U) {
-            return Result<SecureBytes>::Err(
-                {"E_TEST", "unexpected random byte count"});
-          }
-          SecureBytes bytes;
-          bytes.resize(size);
-          const unsigned char seed = static_cast<unsigned char>(
-              size == 32U ? 0x10U : 0x80U + (call & 0x3fU));
-          for (std::size_t index = 0U; index < size; ++index) {
-            bytes.data()[index] = static_cast<unsigned char>(
-                seed + static_cast<unsigned char>(index));
-          }
-          return Result<SecureBytes>::Ok(std::move(bytes));
-        };
+    dependencies.nonce.random_bytes = [calls = random_calls](std::size_t size) {
+      const std::size_t call = calls->fetch_add(1U, std::memory_order_relaxed);
+      if (size != 32U && size != 16U) {
+        return Result<SecureBytes>::Err(
+            {"E_TEST", "unexpected random byte count"});
+      }
+      SecureBytes bytes;
+      bytes.resize(size);
+      const unsigned char seed = static_cast<unsigned char>(
+          size == 32U ? 0x10U : 0x80U + (call & 0x3fU));
+      for (std::size_t index = 0U; index < size; ++index) {
+        bytes.data()[index] = static_cast<unsigned char>(
+            seed + static_cast<unsigned char>(index));
+      }
+      return Result<SecureBytes>::Ok(std::move(bytes));
+    };
     return dependencies;
   }
 };
 
 config::RtspClientAuthConfig AuthConfig(
-    const std::filesystem::path& credential_file,
-    bool include_md5 = false) {
+    const std::filesystem::path& credential_file, bool include_md5 = false) {
   config::RtspClientAuthConfig config;
   config.enabled = true;
   config.realm = kRealm;
   config.credential_file = credential_file.string();
-  config.algorithms = include_md5
-                          ? std::vector<std::string>{"sha-256", "md5"}
-                          : std::vector<std::string>{"sha-256"};
+  config.algorithms = include_md5 ? std::vector<std::string>{"sha-256", "md5"}
+                                  : std::vector<std::string>{"sha-256"};
   config.nonce_ttl_seconds = 30U;
   return config;
 }
@@ -202,19 +196,19 @@ std::unique_ptr<RtspDigestVerifier> CreateVerifier(
   return created.ok() ? std::move(created).value() : nullptr;
 }
 
-std::string MakeAuthorization(
-    std::string_view username, std::string_view realm, std::string_view nonce,
-    std::string_view uri, std::string_view response,
-    std::string_view algorithm = "SHA-256", std::string_view qop = "auth",
-    std::string_view nonce_count = kNonceCount,
-    std::string_view cnonce = kCnonce) {
+std::string MakeAuthorization(std::string_view username, std::string_view realm,
+                              std::string_view nonce, std::string_view uri,
+                              std::string_view response,
+                              std::string_view algorithm = "SHA-256",
+                              std::string_view qop = "auth",
+                              std::string_view nonce_count = kNonceCount,
+                              std::string_view cnonce = kCnonce) {
   return "Digest username=\"" + std::string(username) + "\", realm=\"" +
          std::string(realm) + "\", nonce=\"" + std::string(nonce) +
          "\", uri=\"" + std::string(uri) + "\", response=\"" +
-         std::string(response) + "\", algorithm=" +
-         std::string(algorithm) + ", qop=" + std::string(qop) + ", nc=" +
-         std::string(nonce_count) + ", cnonce=\"" +
-         std::string(cnonce) + "\"";
+         std::string(response) + "\", algorithm=" + std::string(algorithm) +
+         ", qop=" + std::string(qop) + ", nc=" + std::string(nonce_count) +
+         ", cnonce=\"" + std::string(cnonce) + "\"";
 }
 
 std::string ParserHeader() {
@@ -261,8 +255,7 @@ std::string BuildValidAuthorization(
     std::string_view method = kMethod, std::string_view uri = kUri,
     std::string_view nonce_count = kNonceCount,
     std::string_view cnonce = kCnonce, bool uppercase_response = false) {
-  auto ha1 = ComputeRtspDigestHa1(algorithm, username, kRealm,
-                                  Bytes(password));
+  auto ha1 = ComputeRtspDigestHa1(algorithm, username, kRealm, Bytes(password));
   if (!ha1.ok()) {
     throw std::runtime_error("failed to calculate test HA1");
   }
@@ -285,8 +278,7 @@ RtspDigestVerifyStatus VerifyStatus(RtspDigestVerifier* verifier,
   auto verified = verifier->Verify({method, uri, authorization});
   EXPECT_TRUE(verified.ok())
       << (verified.ok() ? std::string{} : verified.error().message);
-  return verified.ok() ? verified.value()
-                       : RtspDigestVerifyStatus::kRejected;
+  return verified.ok() ? verified.value() : RtspDigestVerifyStatus::kRejected;
 }
 
 std::string IssueChallengeNonce(RtspDigestVerifier* verifier) {
@@ -364,8 +356,8 @@ TEST(RtspDigestVerifierTest, RejectsBasicAndHeadersOver8KiB) {
 
 TEST(RtspDigestVerifierTest, RejectsMissingDuplicateAndUnknownDirectives) {
   const std::string complete = ParserHeader();
-  const std::string missing = ReplaceOnce(
-      complete, ", cnonce=\"client-random-value\"", "");
+  const std::string missing =
+      ReplaceOnce(complete, ", cnonce=\"client-random-value\"", "");
   const std::string duplicate = complete + ", USERNAME=\"other\"";
   const std::string unknown = complete + ", opaque=\"value\"";
 
@@ -412,29 +404,26 @@ TEST(RtspDigestVerifierTest, RejectsWrongRealmMethodUriAndResponseLength) {
       kUsername, kPassword, nonce, RtspDigestAlgorithm::kSha256);
   const std::string wrong_realm =
       ReplaceOnce(valid, "realm=\"rpi-camera\"", "realm=\"other\"");
-  const std::string short_response = ReplaceOnce(
-      valid, "response=\"", "response=\"0");
+  const std::string short_response =
+      ReplaceOnce(valid, "response=\"", "response=\"0");
 
   EXPECT_EQ(VerifyStatus(verifier.get(), wrong_realm),
             RtspDigestVerifyStatus::kRejected);
   EXPECT_EQ(VerifyStatus(verifier.get(), valid, "SETUP"),
             RtspDigestVerifyStatus::kRejected);
-  EXPECT_EQ(VerifyStatus(verifier.get(), valid, kMethod,
-                         "rtsp://camera.local/other"),
-            RtspDigestVerifyStatus::kRejected);
+  EXPECT_EQ(
+      VerifyStatus(verifier.get(), valid, kMethod, "rtsp://camera.local/other"),
+      RtspDigestVerifyStatus::kRejected);
   EXPECT_EQ(VerifyStatus(verifier.get(), short_response),
             RtspDigestVerifyStatus::kRejected);
 }
 
 TEST(RtspDigestVerifierTest, RejectsZeroOrMalformedNonceCount) {
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001",
-                                "nc=00000000"));
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001",
-                                "nc=0000001"));
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001",
-                                "nc=0000000g"));
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001",
-                                "nc=\"00000001\""));
+  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001", "nc=00000000"));
+  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001", "nc=0000001"));
+  ExpectHeaderError(ReplaceOnce(ParserHeader(), "nc=00000001", "nc=0000000g"));
+  ExpectHeaderError(
+      ReplaceOnce(ParserHeader(), "nc=00000001", "nc=\"00000001\""));
 }
 
 TEST(RtspDigestVerifierTest, RejectsControlCharactersAndBadQuoting) {
@@ -453,8 +442,8 @@ TEST(RtspDigestVerifierTest, RejectsControlCharactersAndBadQuoting) {
                                 "username=\"trailing\\\""));
   // Malformed quoted algorithm is still rejected: an unterminated quote or an
   // empty value must not authenticate.
-  ExpectHeaderError(ReplaceOnce(ParserHeader(), "algorithm=SHA-256",
-                                "algorithm=\"SHA-256"));
+  ExpectHeaderError(
+      ReplaceOnce(ParserHeader(), "algorithm=SHA-256", "algorithm=\"SHA-256"));
   ExpectHeaderError(
       ReplaceOnce(ParserHeader(), "algorithm=SHA-256", "algorithm=\"\""));
 }
@@ -466,9 +455,8 @@ TEST(RtspDigestVerifierTest, RejectsQuotedPairsInResponseDigest) {
     escaped_response += "\\a";
   }
 
-  ExpectHeaderError(MakeAuthorization(kUsername, kRealm,
-                                      std::string(76U, 'N'), kUri,
-                                      escaped_response));
+  ExpectHeaderError(MakeAuthorization(kUsername, kRealm, std::string(76U, 'N'),
+                                      kUri, escaped_response));
 }
 
 TEST(RtspDigestVerifierTest, RejectedPartialResponseIsZeroizedAndAudited) {
@@ -492,26 +480,24 @@ TEST(RtspDigestVerifierTest, RejectedPartialResponseIsZeroizedAndAudited) {
 TEST(RtspDigestVerifierTest, EnforcesDecodedFieldBounds) {
   const std::string response(64U, 'a');
   auto exact = ParseRtspDigestAuthorization(MakeAuthorization(
-      std::string(64U, 'u'), std::string(128U, 'r'),
-      std::string(76U, 'n'), std::string(4096U, 'p'), response, "SHA-256",
-      "auth", kNonceCount, std::string(256U, 'c')));
+      std::string(64U, 'u'), std::string(128U, 'r'), std::string(76U, 'n'),
+      std::string(4096U, 'p'), response, "SHA-256", "auth", kNonceCount,
+      std::string(256U, 'c')));
   ASSERT_TRUE(exact.ok()) << exact.error().message;
 
-  ExpectHeaderError(MakeAuthorization(
-      std::string(65U, 'u'), kRealm, std::string(76U, 'n'), kUri, response));
-  ExpectHeaderError(MakeAuthorization(
-      kUsername, std::string(129U, 'r'), std::string(76U, 'n'), kUri,
-      response));
-  ExpectHeaderError(MakeAuthorization(kUsername, kRealm,
-                                      std::string(75U, 'n'), kUri, response));
-  ExpectHeaderError(MakeAuthorization(kUsername, kRealm,
-                                      std::string(77U, 'n'), kUri, response));
-  ExpectHeaderError(MakeAuthorization(
-      kUsername, kRealm, std::string(76U, 'n'), std::string(4097U, 'p'),
-      response));
-  ExpectHeaderError(MakeAuthorization(
-      kUsername, kRealm, std::string(76U, 'n'), kUri, response, "SHA-256",
-      "auth", kNonceCount, std::string(257U, 'c')));
+  ExpectHeaderError(MakeAuthorization(std::string(65U, 'u'), kRealm,
+                                      std::string(76U, 'n'), kUri, response));
+  ExpectHeaderError(MakeAuthorization(kUsername, std::string(129U, 'r'),
+                                      std::string(76U, 'n'), kUri, response));
+  ExpectHeaderError(MakeAuthorization(kUsername, kRealm, std::string(75U, 'n'),
+                                      kUri, response));
+  ExpectHeaderError(MakeAuthorization(kUsername, kRealm, std::string(77U, 'n'),
+                                      kUri, response));
+  ExpectHeaderError(MakeAuthorization(kUsername, kRealm, std::string(76U, 'n'),
+                                      std::string(4097U, 'p'), response));
+  ExpectHeaderError(MakeAuthorization(kUsername, kRealm, std::string(76U, 'n'),
+                                      kUri, response, "SHA-256", "auth",
+                                      kNonceCount, std::string(257U, 'c')));
 }
 
 TEST(RtspDigestVerifierTest, BuildsSha256ChallengeWithOneFreshNonce) {
@@ -549,8 +535,7 @@ TEST(RtspDigestVerifierTest, BuildsSha256ThenMd5ChallengesWhenEnabled) {
   const std::string sha_nonce = ChallengeNonce(challenges.value()[0]);
   const std::string md5_nonce = ChallengeNonce(challenges.value()[1]);
   EXPECT_EQ(sha_nonce, md5_nonce);
-  EXPECT_NE(challenges.value()[0].find("algorithm=SHA-256"),
-            std::string::npos);
+  EXPECT_NE(challenges.value()[0].find("algorithm=SHA-256"), std::string::npos);
   EXPECT_NE(challenges.value()[1].find("algorithm=MD5"), std::string::npos);
   EXPECT_NE(challenges.value()[0].find(", stale=true"), std::string::npos);
   EXPECT_NE(challenges.value()[1].find(", stale=true"), std::string::npos);
@@ -582,8 +567,7 @@ TEST(RtspDigestVerifierTest, UnknownUserExecutesDigestPathThenRejects) {
   ASSERT_NE(verifier, nullptr);
   const std::string nonce = IssueChallengeNonce(verifier.get());
   const std::string unknown = BuildValidAuthorization(
-      "missing-user", "guessed-secret", nonce,
-      RtspDigestAlgorithm::kSha256);
+      "missing-user", "guessed-secret", nonce, RtspDigestAlgorithm::kSha256);
   const std::string known = BuildValidAuthorization(
       kUsername, kPassword, nonce, RtspDigestAlgorithm::kSha256);
   const common::ZeroizeAudit before_unknown = verifier->zeroize_audit();
@@ -645,8 +629,7 @@ TEST(RtspDigestVerifierTest, IncorrectExpiredDigestDoesNotRevealStale) {
   const std::string wrong = BuildValidAuthorization(
       kUsername, "wrong-secret", nonce, RtspDigestAlgorithm::kSha256);
   const std::string unknown = BuildValidAuthorization(
-      "missing-user", "guessed-secret", nonce,
-      RtspDigestAlgorithm::kSha256);
+      "missing-user", "guessed-secret", nonce, RtspDigestAlgorithm::kSha256);
   inputs.now->store(131U, std::memory_order_relaxed);
 
   EXPECT_EQ(VerifyStatus(verifier.get(), wrong),
@@ -813,8 +796,8 @@ TEST(RtspDigestVerifierTest, CreateRejectsUnsafeRealmAtPublicBoundary) {
   const auto path = directory.File("credentials");
   WriteFile(path, CredentialFile(kPassword));
   const std::array<std::string, 6> unsafe_realms{
-      "bad realm", "bad:realm", "bad\"realm", "bad\\realm", "bad\rrealm",
-      std::string(129U, 'r')};
+      "bad realm",  "bad:realm",  "bad\"realm",
+      "bad\\realm", "bad\rrealm", std::string(129U, 'r')};
 
   for (const auto& unsafe_realm : unsafe_realms) {
     SCOPED_TRACE(unsafe_realm.size());
@@ -822,8 +805,7 @@ TEST(RtspDigestVerifierTest, CreateRejectsUnsafeRealmAtPublicBoundary) {
     auto config = AuthConfig(path);
     config.realm = unsafe_realm;
 
-    auto created =
-        RtspDigestVerifier::Create(config, inputs.Dependencies());
+    auto created = RtspDigestVerifier::Create(config, inputs.Dependencies());
 
     ASSERT_FALSE(created.ok());
     EXPECT_EQ(inputs.random_calls->load(std::memory_order_relaxed), 0U);

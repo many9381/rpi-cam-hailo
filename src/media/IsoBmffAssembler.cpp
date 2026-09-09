@@ -33,7 +33,8 @@ std::uint64_t ReadBigEndian64(std::span<const std::uint8_t> bytes) {
 bool AppendWithinLimit(std::vector<std::uint8_t>& destination,
                        std::span<const std::uint8_t> source,
                        std::size_t limit) {
-  if (destination.size() > limit || source.size() > limit - destination.size()) {
+  if (destination.size() > limit ||
+      source.size() > limit - destination.size()) {
     return false;
   }
   destination.insert(destination.end(), source.begin(), source.end());
@@ -81,10 +82,8 @@ bool IsFragmentRandomAccess(std::span<const std::uint8_t> fragment) noexcept {
   // flags (0x400) rather than first-sample-flags (0x004).
   if (const auto trun = FindChildBox(*traf, "trun");
       trun.has_value() && trun->size() >= 8U) {
-    const std::uint32_t flags =
-        ReadBigEndian32(trun->first(4U)) & 0x00FFFFFFU;
-    const std::uint32_t sample_count =
-        ReadBigEndian32(trun->subspan(4U, 4U));
+    const std::uint32_t flags = ReadBigEndian32(trun->first(4U)) & 0x00FFFFFFU;
+    const std::uint32_t sample_count = ReadBigEndian32(trun->subspan(4U, 4U));
     std::size_t offset = 8U;  // version/flags + sample_count
     if ((flags & 0x000001U) != 0U) {
       offset += 4U;  // data_offset
@@ -118,8 +117,7 @@ bool IsFragmentRandomAccess(std::span<const std::uint8_t> fragment) noexcept {
   // [+ default_sample_size(4)] [+ default_sample_flags(4)]
   if (const auto tfhd = FindChildBox(*traf, "tfhd");
       tfhd.has_value() && tfhd->size() >= 8U) {
-    const std::uint32_t flags =
-        ReadBigEndian32(tfhd->first(4U)) & 0x00FFFFFFU;
+    const std::uint32_t flags = ReadBigEndian32(tfhd->first(4U)) & 0x00FFFFFFU;
     if ((flags & 0x000020U) != 0U) {
       std::size_t offset = 8U;  // version/flags + track_ID
       if ((flags & 0x000001U) != 0U) {
@@ -206,16 +204,15 @@ common::Result<std::vector<IsoBmffSegment>> IsoBmffAssembler::Push(
       break;
     }
 
-    const std::string type(
-        reinterpret_cast<const char*>(remaining.data() + 4U), 4U);
+    const std::string type(reinterpret_cast<const char*>(remaining.data() + 4U),
+                           4U);
     const auto box = remaining.first(checked_box_size);
     if (!init_complete_) {
       if (!seen_ftyp_ && type != "ftyp") {
         return fail("E_FMP4_SEQUENCE",
                     "fragmented MP4 initialization must begin with ftyp");
       }
-      if (type == "moof" || type == "mdat" ||
-          (seen_ftyp_ && type == "ftyp")) {
+      if (type == "moof" || type == "mdat" || (seen_ftyp_ && type == "ftyp")) {
         return fail("E_FMP4_SEQUENCE",
                     "invalid box order in fragmented MP4 initialization");
       }
@@ -264,9 +261,9 @@ common::Result<std::vector<IsoBmffSegment>> IsoBmffAssembler::Push(
 
   if (staged) {
     if (consumed != 0U) {
-      pending_bytes_.erase(pending_bytes_.begin(),
-                           pending_bytes_.begin() +
-                               static_cast<std::ptrdiff_t>(consumed));
+      pending_bytes_.erase(
+          pending_bytes_.begin(),
+          pending_bytes_.begin() + static_cast<std::ptrdiff_t>(consumed));
     }
   } else {
     const auto tail = parse_view.subspan(consumed);

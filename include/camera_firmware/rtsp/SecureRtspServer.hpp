@@ -61,8 +61,7 @@ class SecureRtspServer {
   SecureRtspServer& operator=(SecureRtspServer&&) = delete;
 
   [[nodiscard]] common::Result<void> Start(
-      const config::SecureRtspConfig& config,
-      media::EncodedRing& main_ring,
+      const config::SecureRtspConfig& config, media::EncodedRing& main_ring,
       const media::SubMountDescriptor* sub = nullptr);
   [[nodiscard]] common::Result<void> ReloadClientCredentials();
   void Stop();

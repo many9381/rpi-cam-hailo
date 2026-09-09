@@ -26,7 +26,8 @@ constexpr std::array<std::uint8_t, 256> MakeDarkenLut(int target) {
   std::array<std::uint8_t, 256> lut{};
   for (int v = 0; v < 256; ++v) {
     lut[static_cast<std::size_t>(v)] = static_cast<std::uint8_t>(
-        (v * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent + 50) / 100);
+        (v * (100 - kBoxOpacityPercent) + target * kBoxOpacityPercent + 50) /
+        100);
   }
   return lut;
 }
@@ -36,7 +37,8 @@ constexpr auto kDarkenChromaLut = MakeDarkenLut(kNeutralChroma);
 
 std::uint8_t Toward(std::uint8_t sample, int target, int coverage) {
   const int delta = (target - sample) * coverage;
-  return static_cast<std::uint8_t>(sample + (delta >= 0 ? (delta + 127) / 255 : -((-delta + 127) / 255)));
+  return static_cast<std::uint8_t>(
+      sample + (delta >= 0 ? (delta + 127) / 255 : -((-delta + 127) / 255)));
 }
 
 }  // namespace
@@ -45,7 +47,8 @@ std::string FormatOsdTimestamp(std::time_t now) {
   std::tm local{};
   localtime_r(&now, &local);
   char buffer[32];
-  const auto written = std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &local);
+  const auto written =
+      std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &local);
   return std::string(buffer, written);
 }
 
@@ -72,15 +75,20 @@ common::Result<OsdCompositor> OsdCompositor::Create(
   if (!semantics.ok()) {
     return common::Result<OsdCompositor>::Err(semantics.error());
   }
-  OsdCompositor compositor(config, std::move(camera_id), width, height, rasterizer);
+  OsdCompositor compositor(config, std::move(camera_id), width, height,
+                           rasterizer);
   compositor.BuildSprites(std::time(nullptr));
   return common::Result<OsdCompositor>::Ok(std::move(compositor));
 }
 
-OsdCompositor::OsdCompositor(config::CameraOsdConfig config, std::string camera_id,
-                             int width, int height, TextRasterizer& rasterizer)
-    : config_(std::move(config)), camera_id_(std::move(camera_id)),
-      width_(width), height_(height), rasterizer_(&rasterizer),
+OsdCompositor::OsdCompositor(config::CameraOsdConfig config,
+                             std::string camera_id, int width, int height,
+                             TextRasterizer& rasterizer)
+    : config_(std::move(config)),
+      camera_id_(std::move(camera_id)),
+      width_(width),
+      height_(height),
+      rasterizer_(&rasterizer),
       metrics_(OsdLayoutMetrics::For(width, height)) {
   // A luma row segment is at most `width` bytes; a chroma row segment is at
   // most 2 * ((width + 1) / 2) bytes. Both fit with room to spare.
@@ -103,8 +111,10 @@ void OsdCompositor::RasterizeText(Sprite& sprite, const std::string& text) {
   sprite.width = std::clamp(2 * metrics_.pad_x + run.width, 2 * metrics_.pad_x,
                             std::max(metrics_.column_px, 2 * metrics_.pad_x));
   sprite.height = metrics_.box_height();
-  sprite.coverage.assign(static_cast<std::size_t>(sprite.width) * sprite.height, 0U);
-  const int baseline = metrics_.pad_y +
+  sprite.coverage.assign(static_cast<std::size_t>(sprite.width) * sprite.height,
+                         0U);
+  const int baseline =
+      metrics_.pad_y +
       Round((metrics_.line_px - (run.ascent + run.descent)) / 2.0) + run.ascent;
   for (const auto& placed : run.glyphs) {
     const GlyphBitmap& glyph = *placed.glyph;
@@ -120,8 +130,10 @@ void OsdCompositor::RasterizeText(Sprite& sprite, const std::string& text) {
         if (x < 0 || x >= sprite.width) {
           continue;
         }
-        auto& cell = sprite.coverage[static_cast<std::size_t>(y) * sprite.width + x];
-        cell = std::max(cell, glyph.alpha[static_cast<std::size_t>(gy) * glyph.width + gx]);
+        auto& cell =
+            sprite.coverage[static_cast<std::size_t>(y) * sprite.width + x];
+        cell = std::max(
+            cell, glyph.alpha[static_cast<std::size_t>(gy) * glyph.width + gx]);
       }
     }
   }
@@ -130,7 +142,8 @@ void OsdCompositor::RasterizeText(Sprite& sprite, const std::string& text) {
 void OsdCompositor::PlaceHorizontally(Sprite& sprite) const {
   const bool right = sprite.item.position == "top_right" ||
                      sprite.item.position == "bottom_right";
-  sprite.x = right ? width_ - metrics_.inset_px - sprite.width : metrics_.inset_px;
+  sprite.x =
+      right ? width_ - metrics_.inset_px - sprite.width : metrics_.inset_px;
 }
 
 void OsdCompositor::BuildSprites(std::time_t now) {
@@ -149,7 +162,8 @@ void OsdCompositor::BuildSprites(std::time_t now) {
   }
   // Vertical stacking per corner: top corners grow downward from the inset,
   // bottom corners are a block whose last item touches the bottom inset.
-  for (const char* position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
+  for (const char* position :
+       {"top_left", "top_right", "bottom_left", "bottom_right"}) {
     std::vector<Sprite*> group;
     for (auto& sprite : sprites_) {
       if (sprite.item.position == position) {
@@ -197,9 +211,11 @@ void OsdCompositor::Stamp(const Nv12MutableView& frame, std::time_t now) {
   }
 }
 
-void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& sprite) const {
-  if (frame.y == nullptr || frame.uv == nullptr || frame.width <= 0 || frame.height <= 0 ||
-      frame.y_stride < frame.width || frame.uv_stride < 2 * ((frame.width + 1) / 2)) {
+void OsdCompositor::BlendSprite(const Nv12MutableView& frame,
+                                const Sprite& sprite) const {
+  if (frame.y == nullptr || frame.uv == nullptr || frame.width <= 0 ||
+      frame.height <= 0 || frame.y_stride < frame.width ||
+      frame.uv_stride < 2 * ((frame.width + 1) / 2)) {
     return;  // a view whose strides cannot hold a full row is never written
   }
   const int x0 = std::max(0, sprite.x);
@@ -214,10 +230,12 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
   std::uint8_t* const scratch = row_scratch_.data();
   // Luma: darken the box, then lift text pixels toward white.
   for (int y = y0; y < y1; ++y) {
-    std::uint8_t* row = frame.y + static_cast<std::ptrdiff_t>(y) * frame.y_stride + x0;
+    std::uint8_t* row =
+        frame.y + static_cast<std::ptrdiff_t>(y) * frame.y_stride + x0;
     const int n = x1 - x0;
     std::memcpy(scratch, row, static_cast<std::size_t>(n));
-    const std::uint8_t* cover = sprite.coverage.data() +
+    const std::uint8_t* cover =
+        sprite.coverage.data() +
         static_cast<std::size_t>(y - sprite.y) * sprite.width + (x0 - sprite.x);
     for (int i = 0; i < n; ++i) {
       std::uint8_t sample = kDarkenLumaLut[scratch[i]];
@@ -243,7 +261,8 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
     return;
   }
   for (int cy = cy0; cy < cy1; ++cy) {
-    std::uint8_t* row = frame.uv + static_cast<std::ptrdiff_t>(cy) * frame.uv_stride +
+    std::uint8_t* row = frame.uv +
+                        static_cast<std::ptrdiff_t>(cy) * frame.uv_stride +
                         static_cast<std::ptrdiff_t>(cx0) * 2;
     const int n = (cx1 - cx0) * 2;
     std::memcpy(scratch, row, static_cast<std::size_t>(n));
@@ -257,7 +276,8 @@ void OsdCompositor::BlendSprite(const Nv12MutableView& frame, const Sprite& spri
           if (lx < x0 || lx >= x1 || ly < y0 || ly >= y1) {
             continue;
           }
-          sum += sprite.coverage[static_cast<std::size_t>(ly - sprite.y) * sprite.width +
+          sum += sprite.coverage[static_cast<std::size_t>(ly - sprite.y) *
+                                     sprite.width +
                                  (lx - sprite.x)];
           ++count;
         }

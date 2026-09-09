@@ -2,8 +2,8 @@
 
 #include "camera_firmware/config/OsdRules.hpp"
 
-#include <cstddef>
 #include <cmath>
+#include <cstddef>
 #include <unordered_set>
 #include <utility>
 
@@ -24,8 +24,9 @@ bool IsAllowedSubStreamResolution(unsigned int width, unsigned int height) {
 common::Result<void> ValidateSubStreamSettings(
     const RuntimeSettings& settings) {
   const auto& sub = settings.sub_stream;
-  // Non-zero geometry is enforced regardless of `enabled`: the web client rejects
-  // zero geometry unconditionally, so a persisted zero would brick the settings UI.
+  // Non-zero geometry is enforced regardless of `enabled`: the web client
+  // rejects zero geometry unconditionally, so a persisted zero would brick the
+  // settings UI.
   if (sub.width == 0U || sub.height == 0U || sub.fps == 0U ||
       sub.bitrate_kbps == 0U) {
     return common::Result<void>::Err(
@@ -45,7 +46,8 @@ common::Result<void> ValidateSubStreamSettings(
         {"E_RUNTIME_SETTINGS_SUB_FPS",
          "sub-stream fps must be between 5 and 30"});
   }
-  if (sub.bitrate_kbps < kMinBitrateKbps || sub.bitrate_kbps > kMaxBitrateKbps) {
+  if (sub.bitrate_kbps < kMinBitrateKbps ||
+      sub.bitrate_kbps > kMaxBitrateKbps) {
     return common::Result<void>::Err(
         {"E_RUNTIME_SETTINGS_SUB_BITRATE",
          "sub-stream bitrate must be between 500 and 20000 kbps"});
@@ -56,21 +58,19 @@ common::Result<void> ValidateSubStreamSettings(
 common::Result<void> ValidateOsdSettings(const RuntimeSettings& settings) {
   const auto& osd = settings.osd;
   if (osd.items.size() > config::kMaxOsdItems) {
-    return common::Result<void>::Err(
-        {"E_SETTINGS_OSD", "too many OSD items"});
+    return common::Result<void>::Err({"E_SETTINGS_OSD", "too many OSD items"});
   }
-  for (const auto& item : osd.items) {  // unconditional: validate even if disabled
+  for (const auto& item :
+       osd.items) {  // unconditional: validate even if disabled
     if (!config::IsValidOsdItem(item.type, item.text, item.position)) {
-      return common::Result<void>::Err(
-          {"E_SETTINGS_OSD", "invalid OSD item"});
+      return common::Result<void>::Err({"E_SETTINGS_OSD", "invalid OSD item"});
     }
   }
   return common::Result<void>::Ok();
 }
 
-common::Result<void> ValidateModelSettings(
-    const RuntimeSettings& settings,
-    const config::AppConfig& base) {
+common::Result<void> ValidateModelSettings(const RuntimeSettings& settings,
+                                           const config::AppConfig& base) {
   std::unordered_set<std::string> base_ids;
   base_ids.reserve(base.ai.models.size());
   for (const auto& model : base.ai.models) {
@@ -150,11 +150,10 @@ const CameraProfile* CameraProfileCatalog::Find(
 }
 
 const CameraProfile* CameraProfileCatalog::Match(
-    unsigned int width,
-    unsigned int height,
-    unsigned int fps) const noexcept {
+    unsigned int width, unsigned int height, unsigned int fps) const noexcept {
   for (const auto& profile : profiles_) {
-    if (profile.width == width && profile.height == height && profile.fps == fps) {
+    if (profile.width == width && profile.height == height &&
+        profile.fps == fps) {
       return &profile;
     }
   }
@@ -162,11 +161,9 @@ const CameraProfile* CameraProfileCatalog::Match(
 }
 
 common::Result<RuntimeSettings> DeriveRuntimeSettings(
-    const config::AppConfig& base,
-    const CameraProfileCatalog& profiles) {
-  const auto* profile = profiles.Match(base.camera.video.width,
-                                       base.camera.video.height,
-                                       base.camera.video.fps);
+    const config::AppConfig& base, const CameraProfileCatalog& profiles) {
+  const auto* profile = profiles.Match(
+      base.camera.video.width, base.camera.video.height, base.camera.video.fps);
   if (profile == nullptr) {
     return common::Result<RuntimeSettings>::Err(
         {"E_RUNTIME_SETTINGS_CAPTURE_MODE", "camera profile is unsupported"});
@@ -183,8 +180,7 @@ common::Result<RuntimeSettings> DeriveRuntimeSettings(
                  base.camera.encoder.gop},
       .sub_stream = {base.camera.sub_stream.enabled,
                      base.camera.sub_stream.width,
-                     base.camera.sub_stream.height,
-                     base.camera.sub_stream.fps,
+                     base.camera.sub_stream.height, base.camera.sub_stream.fps,
                      base.camera.sub_stream.bitrate_kbps},
   };
   settings.models.reserve(base.ai.models.size());
@@ -196,8 +192,7 @@ common::Result<RuntimeSettings> DeriveRuntimeSettings(
 }
 
 common::Result<void> ValidateRuntimeSettings(
-    const RuntimeSettings& settings,
-    const config::AppConfig& base,
+    const RuntimeSettings& settings, const config::AppConfig& base,
     const CameraProfileCatalog& profiles) {
   if (profiles.Find(settings.camera.profile_id) == nullptr) {
     return CaptureModeError();
@@ -224,8 +219,7 @@ common::Result<void> ValidateRuntimeSettings(
 }
 
 common::Result<config::AppConfig> BuildEffectiveConfig(
-    const config::AppConfig& base,
-    const RuntimeSettings& settings,
+    const config::AppConfig& base, const RuntimeSettings& settings,
     const CameraProfileCatalog& profiles) {
   const auto validated = ValidateRuntimeSettings(settings, base, profiles);
   if (!validated.ok()) {

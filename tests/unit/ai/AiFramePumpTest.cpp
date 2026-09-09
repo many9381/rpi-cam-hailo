@@ -77,7 +77,8 @@ class SucceedingAiBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig&) override {
     return camera_firmware::common::Result<
         camera_firmware::ai::ModelHandle>::Ok(1);
@@ -86,12 +87,12 @@ class SucceedingAiBackend final : public camera_firmware::ai::AiBackend {
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView,
       camera_firmware::ai::InferCallback callback) override {
     if (callback) {
-      callback(camera_firmware::common::Result<
-               camera_firmware::ai::OutputView>::Ok({}));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              {}));
     }
     return camera_firmware::common::Result<void>::Ok();
   }
@@ -250,10 +251,8 @@ TEST(AiFramePumpTest, ForwardedFrameLeaseIsReleasedNotRetained) {
     handle.width = 640;
     handle.height = 480;
     handle.sequence = 48;
-    tap.PublishLatest(
-        camera_firmware::media::FrameLease(handle, [&releases] {
-          ++releases;
-        }));
+    tap.PublishLatest(camera_firmware::media::FrameLease(
+        handle, [&releases] { ++releases; }));
     ASSERT_TRUE(WaitForRunnerSubmitCount(runtime, 1));
 
     pump.Stop();
@@ -273,7 +272,7 @@ TEST(AiFramePumpTest, ReArmsTapDemandEvenWhenFrameIsDropped) {
   camera_firmware::ai::AiFramePump pump(tap, runtime);
   ASSERT_TRUE(pump.Start().ok());
 
-  EXPECT_TRUE(tap.ConsumeDemand());   // drain initial arm
+  EXPECT_TRUE(tap.ConsumeDemand());  // drain initial arm
   EXPECT_FALSE(tap.ConsumeDemand());
 
   camera_firmware::media::FrameHandle handle;
@@ -286,7 +285,10 @@ TEST(AiFramePumpTest, ReArmsTapDemandEvenWhenFrameIsDropped) {
 
   bool re_armed = false;
   for (int attempt = 0; attempt < 200; ++attempt) {
-    if (tap.ConsumeDemand()) { re_armed = true; break; }
+    if (tap.ConsumeDemand()) {
+      re_armed = true;
+      break;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   EXPECT_TRUE(re_armed);

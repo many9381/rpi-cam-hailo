@@ -14,9 +14,9 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <condition_variable>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -128,14 +128,14 @@ std::string Hex(const SecureBytes& bytes) {
 
 std::string CredentialRecord(std::string_view password,
                              RtspDigestAlgorithm algorithm) {
-  auto ha1 = ComputeRtspDigestHa1(algorithm, kUsername, kRealm,
-                                  Bytes(password));
+  auto ha1 =
+      ComputeRtspDigestHa1(algorithm, kUsername, kRealm, Bytes(password));
   if (!ha1.ok()) {
     throw std::runtime_error("failed to calculate test credential");
   }
   return std::string(kUsername) + ":" + std::string(kRealm) + ":" +
-         std::string(RtspDigestConfigName(algorithm)) + ":" +
-         Hex(ha1.value()) + "\n";
+         std::string(RtspDigestConfigName(algorithm)) + ":" + Hex(ha1.value()) +
+         "\n";
 }
 
 std::string CredentialFile(std::string_view password,
@@ -209,9 +209,8 @@ config::RtspClientAuthConfig AuthConfig(
   config.enabled = true;
   config.realm = kRealm;
   config.credential_file = credentials.string();
-  config.algorithms = include_md5
-                          ? std::vector<std::string>{"sha-256", "md5"}
-                          : std::vector<std::string>{"sha-256"};
+  config.algorithms = include_md5 ? std::vector<std::string>{"sha-256", "md5"}
+                                  : std::vector<std::string>{"sha-256"};
   config.nonce_ttl_seconds = 30U;
   return config;
 }
@@ -286,29 +285,27 @@ std::string BuildAuthorization(std::string_view password,
     throw std::runtime_error("failed to calculate test HA1");
   }
   auto response = ComputeRtspDigestResponse(
-      RtspDigestAlgorithm::kSha256,
-      {ha1.value().data(), ha1.value().size()}, kMethod, kUri, nonce,
-      kNonceCount, kCnonce);
+      RtspDigestAlgorithm::kSha256, {ha1.value().data(), ha1.value().size()},
+      kMethod, kUri, nonce, kNonceCount, kCnonce);
   if (!response.ok()) {
     throw std::runtime_error("failed to calculate test response");
   }
-  return "Digest username=\"" + std::string(kUsername) +
-         "\", realm=\"" + std::string(kRealm) + "\", nonce=\"" +
-         std::string(nonce) + "\", uri=\"" + std::string(kUri) +
-         "\", response=\"" + Hex(response.value()) +
-         "\", algorithm=SHA-256, qop=auth, nc=" +
-         std::string(kNonceCount) + ", cnonce=\"" +
-         std::string(kCnonce) + "\"";
+  return "Digest username=\"" + std::string(kUsername) + "\", realm=\"" +
+         std::string(kRealm) + "\", nonce=\"" + std::string(nonce) +
+         "\", uri=\"" + std::string(kUri) + "\", response=\"" +
+         Hex(response.value()) +
+         "\", algorithm=SHA-256, qop=auth, nc=" + std::string(kNonceCount) +
+         ", cnonce=\"" + std::string(kCnonce) + "\"";
 }
 
 std::string IssueChallenge(GstRTSPAuth* auth) {
   GstRTSPMessage request{};
   GstRTSPMessage response{};
   EXPECT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
-  EXPECT_EQ(gst_rtsp_message_init_response(
-                &response, GST_RTSP_STS_UNAUTHORIZED, nullptr, &request),
+  EXPECT_EQ(gst_rtsp_message_init_response(&response, GST_RTSP_STS_UNAUTHORIZED,
+                                           nullptr, &request),
             GST_RTSP_OK);
   GstRTSPContext context{};
   context.request = &request;
@@ -338,13 +335,12 @@ struct SentMessageCapture {
   std::vector<std::string> challenges;
 };
 
-gboolean CaptureSentMessage(GstRTSPClient*, GstRTSPMessage* message,
-                            gboolean, gpointer user_data) {
+gboolean CaptureSentMessage(GstRTSPClient*, GstRTSPMessage* message, gboolean,
+                            gpointer user_data) {
   auto* capture = static_cast<SentMessageCapture*>(user_data);
   ++capture->count;
-  capture->response_parse_result =
-      gst_rtsp_message_parse_response(message, &capture->status, nullptr,
-                                      nullptr);
+  capture->response_parse_result = gst_rtsp_message_parse_response(
+      message, &capture->status, nullptr, nullptr);
   for (int index = 0;; ++index) {
     const std::string challenge =
         Header(message, GST_RTSP_HDR_WWW_AUTHENTICATE, index);
@@ -383,7 +379,7 @@ TEST(GstRtspDigestAuthTest, OptionsUrlCheckDoesNotRequireAuthorization) {
 
   GstRTSPMessage request{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_OPTIONS,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
   GstRTSPContext context{};
   context.request = &request;
@@ -411,10 +407,10 @@ TEST(GstRtspDigestAuthTest, ProtectedUrlCheckCreatesViewerToken) {
 
   GstRTSPMessage request{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
-  ASSERT_EQ(gst_rtsp_message_add_header(
-                &request, GST_RTSP_HDR_AUTHORIZATION, authorization.c_str()),
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                                        authorization.c_str()),
             GST_RTSP_OK);
   GstRTSPContext context{};
   context.request = &request;
@@ -422,8 +418,8 @@ TEST(GstRtspDigestAuthTest, ProtectedUrlCheckCreatesViewerToken) {
 
   EXPECT_TRUE(CheckUrl(auth.get(), &context));
   ASSERT_NE(context.token, nullptr);
-  EXPECT_STREQ(gst_rtsp_token_get_string(
-                   context.token, GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE),
+  EXPECT_STREQ(gst_rtsp_token_get_string(context.token,
+                                         GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE),
                "viewer");
   const gint viewer_refcount = GST_MINI_OBJECT_REFCOUNT_VALUE(context.token);
   EXPECT_EQ(viewer_refcount, 1);
@@ -435,7 +431,7 @@ TEST(GstRtspDigestAuthTest, ProtectedUrlCheckCreatesViewerToken) {
   const std::string next_authorization =
       BuildAuthorization(kOldPassword, next_nonce);
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
   ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
                                         next_authorization.c_str()),
@@ -461,13 +457,13 @@ TEST(GstRtspDigestAuthTest, UnauthorizedCheckAddsOnlyDigestChallenges) {
   GstRTSPMessage request{};
   GstRTSPMessage response{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
-  ASSERT_EQ(gst_rtsp_message_add_header(
-                &request, GST_RTSP_HDR_AUTHORIZATION, "Digest malformed"),
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                                        "Digest malformed"),
             GST_RTSP_OK);
-  ASSERT_EQ(gst_rtsp_message_add_header(
-                &request, GST_RTSP_HDR_AUTHORIZATION, "Basic Zm9vOmJhcg=="),
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                                        "Basic Zm9vOmJhcg=="),
             GST_RTSP_OK);
   GstRTSPClient* client = gst_rtsp_client_new();
   ASSERT_NE(client, nullptr);
@@ -514,7 +510,7 @@ TEST(GstRtspDigestAuthTest,
   GstRTSPMessage request{};
   GstRTSPMessage response{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
   GstRTSPClient* client = gst_rtsp_client_new();
   ASSERT_NE(client, nullptr);
@@ -547,10 +543,10 @@ TEST(GstRtspDigestAuthTest, ShutdownWaitsForActiveVerificationAndIsTerminal) {
 
   GstRTSPMessage request{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
-  ASSERT_EQ(gst_rtsp_message_add_header(
-                &request, GST_RTSP_HDR_AUTHORIZATION, authorization.c_str()),
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                                        authorization.c_str()),
             GST_RTSP_OK);
   GstRTSPContext context{};
   context.request = &request;
@@ -624,10 +620,10 @@ TEST(GstRtspDigestAuthTest, ReloadRejectsBaseAuthAndReloadsCustomAuth) {
   const std::string authorization = BuildAuthorization(kNewPassword, nonce);
   GstRTSPMessage request{};
   ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_DESCRIBE,
-                                           std::string(kUri).c_str()),
+                                          std::string(kUri).c_str()),
             GST_RTSP_OK);
-  ASSERT_EQ(gst_rtsp_message_add_header(
-                &request, GST_RTSP_HDR_AUTHORIZATION, authorization.c_str()),
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                                        authorization.c_str()),
             GST_RTSP_OK);
   GstRTSPContext context{};
   context.request = &request;

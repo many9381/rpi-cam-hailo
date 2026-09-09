@@ -27,11 +27,16 @@ TEST(SecuritySelfTestProductionLinkTest, RunsThroughProductionSecurityArchive) {
   ASSERT_TRUE(result.ok()) << result.error().message;
   ASSERT_EQ(result.value().items.size(), 10U);
   constexpr std::array<std::string_view, 10> kExpectedIds{
-      "crypto.sha256",          "crypto.hmac_sha256",
-      "security.database",      "security.tls_identity",
-      "security.audit_append",  "pbkdf2_hmac_sha256",
-      "random_bytes",           "random_bytes_private",
-      "ed25519",                "aes_256_gcm"};
+      "crypto.sha256",
+      "crypto.hmac_sha256",
+      "security.database",
+      "security.tls_identity",
+      "security.audit_append",
+      "pbkdf2_hmac_sha256",
+      "random_bytes",
+      "random_bytes_private",
+      "ed25519",
+      "aes_256_gcm"};
   for (std::size_t index = 0; index < kExpectedIds.size(); ++index) {
     EXPECT_EQ(result.value().items[index].id, kExpectedIds[index]);
     EXPECT_TRUE(result.value().items[index].passed);

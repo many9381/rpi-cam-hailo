@@ -90,8 +90,7 @@ TEST(IsoBmffAssemblerTest, HandlesSplitAndExtendedBoxHeaders) {
   ASSERT_TRUE(partial.ok()) << partial.error().message;
   EXPECT_TRUE(partial.value().empty());
 
-  const auto completed = assembler.Push(
-      std::span(moov).subspan(11U));
+  const auto completed = assembler.Push(std::span(moov).subspan(11U));
 
   ASSERT_TRUE(completed.ok()) << completed.error().message;
   ASSERT_EQ(completed.value().size(), 1U);
@@ -265,13 +264,13 @@ std::vector<std::uint8_t> MoofWithPerSampleFlags(
   const auto tfhd = FullBox("tfhd", 0U, {0U, 0U, 0U, 1U});
 
   std::vector<std::uint8_t> trun_payload;
-  AppendBigEndian32(trun_payload, 2U);   // sample_count
-  AppendBigEndian32(trun_payload, 0U);   // data_offset
-  AppendBigEndian32(trun_payload, 20U);  // entry0 duration
-  AppendBigEndian32(trun_payload, 999U); // entry0 size
+  AppendBigEndian32(trun_payload, 2U);    // sample_count
+  AppendBigEndian32(trun_payload, 0U);    // data_offset
+  AppendBigEndian32(trun_payload, 20U);   // entry0 duration
+  AppendBigEndian32(trun_payload, 999U);  // entry0 size
   AppendBigEndian32(trun_payload, first_entry_flags);
-  AppendBigEndian32(trun_payload, 20U);  // entry1 duration
-  AppendBigEndian32(trun_payload, 888U); // entry1 size
+  AppendBigEndian32(trun_payload, 20U);   // entry1 duration
+  AppendBigEndian32(trun_payload, 888U);  // entry1 size
   AppendBigEndian32(trun_payload, kNonSyncBit | 0xC0U);
   const auto trun = FullBox("trun", 0x000701U, trun_payload);
 

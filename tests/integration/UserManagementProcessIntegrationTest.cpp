@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <barrier>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
-#include <cctype>
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
@@ -96,7 +96,8 @@ class SqliteDatabase final {
       ::sqlite3_free(error_message);
     }
     if (result != SQLITE_OK) {
-      throw std::runtime_error("unable to prepare process integration database");
+      throw std::runtime_error(
+          "unable to prepare process integration database");
     }
   }
 
@@ -290,9 +291,9 @@ void CreateRevisionTwoFixture(const std::filesystem::path& state_directory) {
     throw std::system_error(errno, std::generic_category(), "mkdir");
   }
   const auto database_path = state_directory / "security.db";
-  SqliteDatabase database(
-      database_path,
-      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOFOLLOW);
+  SqliteDatabase database(database_path, SQLITE_OPEN_READWRITE |
+                                             SQLITE_OPEN_CREATE |
+                                             SQLITE_OPEN_NOFOLLOW);
   database.Execute("PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON;");
   database.Execute("BEGIN IMMEDIATE;");
   try {
@@ -316,8 +317,7 @@ int QueryInt(const std::filesystem::path& path, std::string_view sql) {
   sqlite3_stmt* statement = nullptr;
   if (::sqlite3_prepare_v2(database.get(), sql.data(),
                            static_cast<int>(sql.size()), &statement,
-                           nullptr) !=
-      SQLITE_OK) {
+                           nullptr) != SQLITE_OK) {
     throw std::runtime_error("unable to prepare process integration query");
   }
   const int step = ::sqlite3_step(statement);
@@ -584,8 +584,7 @@ std::string BuildHttpsRequest(std::string_view method, std::string_view path,
 }
 
 HttpsResponse ExchangePreparedRequest(
-    const std::shared_ptr<HttpsConnection>& connection,
-    std::string request) {
+    const std::shared_ptr<HttpsConnection>& connection, std::string request) {
   auto response = connection->Exchange(request);
   ::OPENSSL_cleanse(request.data(), request.size());
   return response;
@@ -597,8 +596,8 @@ HttpsResponse HttpsRequest(std::uint16_t port, std::string_view method,
                            std::string_view cookie = {},
                            bool management_request = false) {
   auto connection = std::make_shared<HttpsConnection>(port);
-  auto request = BuildHttpsRequest(method, path, body, origin, cookie,
-                                   management_request);
+  auto request =
+      BuildHttpsRequest(method, path, body, origin, cookie, management_request);
   return ExchangePreparedRequest(connection, std::move(request));
 }
 
@@ -708,8 +707,7 @@ class FirmwareProcess final {
 
 void WriteFirmwareConfig(const std::filesystem::path& config_path,
                          const std::filesystem::path& state_directory,
-                         std::uint16_t https_port,
-                         std::uint16_t rtsp_port) {
+                         std::uint16_t https_port, std::uint16_t rtsp_port) {
   std::ofstream config(config_path);
   if (!config.is_open()) {
     throw std::runtime_error("unable to write firmware process config");
@@ -724,7 +722,8 @@ void WriteFirmwareConfig(const std::filesystem::path& config_path,
             "  port: "
          << https_port
          << "\n"
-            "  web_root: " CF_SOURCE_DIR "/web/dist\n"
+            "  web_root: " CF_SOURCE_DIR
+            "/web/dist\n"
             "  public_base_url: https://127.0.0.1:"
          << https_port
          << "\n"
@@ -779,13 +778,11 @@ bool WaitForFirmware(std::uint16_t port) {
 std::optional<std::string> LoginAs(std::uint16_t port,
                                    std::string_view username,
                                    std::string_view password) {
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
   std::string body = "{\"username\":\"" + std::string(username) +
-                     "\",\"password\":\"" + std::string(password) +
-                     "\"}";
-  auto response = HttpsRequest(port, "POST", "/api/v1/auth/login", body,
-                               origin, {}, true);
+                     "\",\"password\":\"" + std::string(password) + "\"}";
+  auto response =
+      HttpsRequest(port, "POST", "/api/v1/auth/login", body, origin, {}, true);
   ::OPENSSL_cleanse(body.data(), body.size());
   if (response.status != 200) {
     return std::nullopt;
@@ -813,10 +810,9 @@ std::optional<std::string> Login(std::uint16_t port) {
 }
 
 int Logout(std::uint16_t port, std::string_view cookie) {
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(port);
-  return HttpsRequest(port, "POST", "/api/v1/auth/logout", {}, origin,
-                      cookie, true)
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  return HttpsRequest(port, "POST", "/api/v1/auth/logout", {}, origin, cookie,
+                      true)
       .status;
 }
 
@@ -828,10 +824,10 @@ struct ProvisionedViewer {
 std::optional<ProvisionedViewer> ProvisionViewer(
     std::uint16_t port, std::string_view origin,
     std::string_view administrator_cookie) {
-  const auto created = HttpsRequest(
-      port, "POST", "/api/v1/security/users",
-      R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
-      administrator_cookie, true);
+  const auto created =
+      HttpsRequest(port, "POST", "/api/v1/security/users",
+                   R"({"username":"viewer1","password":"ViewerPass9!"})",
+                   origin, administrator_cookie, true);
   const auto created_body = DecodeJsonBody(created);
   if (created.status != 201 || !created_body.has_value() ||
       !(*created_body)["user"]["id"].isInt64()) {
@@ -873,10 +869,10 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
     ASSERT_TRUE(WaitForFirmware(https_port));
     const auto cookie = Login(https_port);
     ASSERT_TRUE(cookie.has_value());
-    EXPECT_EQ(HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {},
-                           *cookie)
-                  .status,
-              200);
+    EXPECT_EQ(
+        HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {}, *cookie)
+            .status,
+        200);
     EXPECT_EQ(Logout(https_port, *cookie), 200);
     EXPECT_TRUE(process.StopCleanly());
   }
@@ -899,10 +895,10 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
     ASSERT_TRUE(WaitForFirmware(https_port));
     const auto cookie = Login(https_port);
     ASSERT_TRUE(cookie.has_value());
-    EXPECT_EQ(HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {},
-                           *cookie)
-                  .status,
-              200);
+    EXPECT_EQ(
+        HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {}, *cookie)
+            .status,
+        200);
     EXPECT_TRUE(process.StopCleanly());
   }
 }
@@ -919,8 +915,7 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
   const std::uint16_t rtsp_port = ReserveDistinctLoopbackPort(https_port);
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(https_port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(https_port);
   CreateRevisionTwoFixture(state_directory);
   WriteFirmwareConfig(config_path, state_directory, https_port, rtsp_port);
 
@@ -932,10 +927,10 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
     const auto administrator_cookie = Login(https_port);
     ASSERT_TRUE(administrator_cookie.has_value());
 
-    const auto created = HttpsRequest(
-        https_port, "POST", "/api/v1/security/users",
-        R"({"username":"viewer1","password":"ViewerPass9!"})", origin,
-        *administrator_cookie, true);
+    const auto created =
+        HttpsRequest(https_port, "POST", "/api/v1/security/users",
+                     R"({"username":"viewer1","password":"ViewerPass9!"})",
+                     origin, *administrator_cookie, true);
     ASSERT_EQ(created.status, 201);
     const auto created_body = DecodeJsonBody(created);
     ASSERT_TRUE(created_body.has_value());
@@ -965,13 +960,13 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
                            revoked_viewer_cookie)
                   .status,
               401);
-    EXPECT_EQ(HttpsRequest(https_port, "PUT",
-                           "/api/v1/security/users/" +
-                               std::to_string(viewer_id) + "/enabled",
-                           R"({"enabled":false})", origin,
-                           *administrator_cookie, true)
-                  .status,
-              200);
+    EXPECT_EQ(
+        HttpsRequest(
+            https_port, "PUT",
+            "/api/v1/security/users/" + std::to_string(viewer_id) + "/enabled",
+            R"({"enabled":false})", origin, *administrator_cookie, true)
+            .status,
+        200);
     EXPECT_EQ(Logout(https_port, *administrator_cookie), 200);
     EXPECT_TRUE(process.StopCleanly());
   }
@@ -997,9 +992,8 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
     const auto administrator_cookie = Login(https_port);
     ASSERT_TRUE(administrator_cookie.has_value());
 
-    const auto users = HttpsRequest(https_port, "GET",
-                                    "/api/v1/security/users", {}, {},
-                                    *administrator_cookie);
+    const auto users = HttpsRequest(https_port, "GET", "/api/v1/security/users",
+                                    {}, {}, *administrator_cookie);
     ASSERT_EQ(users.status, 200);
     const auto users_body = DecodeJsonBody(users);
     ASSERT_TRUE(users_body.has_value());
@@ -1015,32 +1009,30 @@ TEST(FirmwareProcessUserManagementIntegrationTest,
                            revoked_viewer_cookie)
                   .status,
               401);
-    EXPECT_FALSE(LoginAs(https_port, kViewerUsername, kInitialPassword)
-                     .has_value());
-    EXPECT_FALSE(LoginAs(https_port, kViewerUsername, kReplacementPassword)
-                     .has_value());
+    EXPECT_FALSE(
+        LoginAs(https_port, kViewerUsername, kInitialPassword).has_value());
+    EXPECT_FALSE(
+        LoginAs(https_port, kViewerUsername, kReplacementPassword).has_value());
 
-    EXPECT_EQ(HttpsRequest(https_port, "PUT",
-                           "/api/v1/security/users/" +
-                               std::to_string(viewer_id) + "/enabled",
-                           R"({"enabled":true})", origin,
-                           *administrator_cookie, true)
-                  .status,
-              200);
+    EXPECT_EQ(
+        HttpsRequest(
+            https_port, "PUT",
+            "/api/v1/security/users/" + std::to_string(viewer_id) + "/enabled",
+            R"({"enabled":true})", origin, *administrator_cookie, true)
+            .status,
+        200);
     const auto current_reuse = HttpsRequest(
         https_port, "PUT",
         "/api/v1/security/users/" + std::to_string(viewer_id) + "/password",
-        R"({"password":"ChangedPass9!"})", origin, *administrator_cookie,
-        true);
+        R"({"password":"ChangedPass9!"})", origin, *administrator_cookie, true);
     EXPECT_TRUE(HasJsonError(current_reuse, 409, "E_PASSWORD_REUSE"));
     const auto previous_reuse = HttpsRequest(
         https_port, "PUT",
         "/api/v1/security/users/" + std::to_string(viewer_id) + "/password",
-        R"({"password":"ViewerPass9!"})", origin, *administrator_cookie,
-        true);
+        R"({"password":"ViewerPass9!"})", origin, *administrator_cookie, true);
     EXPECT_TRUE(HasJsonError(previous_reuse, 409, "E_PASSWORD_REUSE"));
-    EXPECT_FALSE(LoginAs(https_port, kViewerUsername, kInitialPassword)
-                     .has_value());
+    EXPECT_FALSE(
+        LoginAs(https_port, kViewerUsername, kInitialPassword).has_value());
     const auto replacement_cookie =
         LoginAs(https_port, kViewerUsername, kReplacementPassword);
     ASSERT_TRUE(replacement_cookie.has_value());
@@ -1056,8 +1048,7 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(https_port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(https_port);
   CreateRevisionTwoFixture(state_directory);
   WriteFirmwareConfig(config_path, state_directory, https_port,
                       ReserveDistinctLoopbackPort(https_port));
@@ -1076,12 +1067,10 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   ASSERT_TRUE(disable_connection->connected());
   auto login_request = BuildHttpsRequest(
       "POST", "/api/v1/auth/login",
-      R"({"username":"viewer1","password":"ViewerPass9!"})", origin, {},
-      true);
+      R"({"username":"viewer1","password":"ViewerPass9!"})", origin, {}, true);
   auto disable_request = BuildHttpsRequest(
       "PUT",
-      "/api/v1/security/users/" + std::to_string(viewer->user_id) +
-          "/enabled",
+      "/api/v1/security/users/" + std::to_string(viewer->user_id) + "/enabled",
       R"({"enabled":false})", origin, *administrator_cookie, true);
   std::barrier release(3);
   auto login = std::async(
@@ -1094,8 +1083,7 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
       std::launch::async,
       [&, disable_connection, request = std::move(disable_request)]() mutable {
         release.arrive_and_wait();
-        return ExchangePreparedRequest(disable_connection,
-                                       std::move(request));
+        return ExchangePreparedRequest(disable_connection, std::move(request));
       });
   release.arrive_and_wait();
 
@@ -1134,8 +1122,7 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(https_port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(https_port);
   CreateRevisionTwoFixture(state_directory);
   WriteFirmwareConfig(config_path, state_directory, https_port,
                       ReserveDistinctLoopbackPort(https_port));
@@ -1155,14 +1142,11 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   ASSERT_TRUE(live_connection->connected());
   ASSERT_TRUE(reset_connection->connected());
   auto live_request = BuildHttpsRequest(
-      "GET", "/api/v1/cameras/imx708-main/live.mp4", {}, {},
-      *viewer_cookie);
+      "GET", "/api/v1/cameras/imx708-main/live.mp4", {}, {}, *viewer_cookie);
   auto reset_request = BuildHttpsRequest(
       "PUT",
-      "/api/v1/security/users/" + std::to_string(viewer->user_id) +
-          "/password",
-      R"({"password":"ChangedPass9!"})", origin, *administrator_cookie,
-      true);
+      "/api/v1/security/users/" + std::to_string(viewer->user_id) + "/password",
+      R"({"password":"ChangedPass9!"})", origin, *administrator_cookie, true);
   std::barrier release(3);
   auto live_open = std::async(
       std::launch::async,
@@ -1188,9 +1172,9 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
            "/api/v1/cameras/imx708-main/snapshot.jpg",
            "/api/v1/cameras/imx708-main/live.mp4",
        }) {
-    EXPECT_EQ(HttpsRequest(https_port, "GET", path, {}, {}, *viewer_cookie)
-                  .status,
-              401);
+    EXPECT_EQ(
+        HttpsRequest(https_port, "GET", path, {}, {}, *viewer_cookie).status,
+        401);
   }
   EXPECT_FALSE(LoginAs(https_port, "viewer1", "ViewerPass9!").has_value());
   const auto replacement_cookie =
@@ -1207,8 +1191,7 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(https_port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(https_port);
   CreateRevisionTwoFixture(state_directory);
   WriteFirmwareConfig(config_path, state_directory, https_port,
                       ReserveDistinctLoopbackPort(https_port));
@@ -1227,8 +1210,8 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
   auto update_connection = std::make_shared<HttpsConnection>(https_port);
   ASSERT_TRUE(sse_connection->connected());
   ASSERT_TRUE(update_connection->connected());
-  auto sse_request = BuildHttpsRequest(
-      "GET", "/api/v1/ai/detections/stream", {}, {}, *viewer_cookie);
+  auto sse_request = BuildHttpsRequest("GET", "/api/v1/ai/detections/stream",
+                                       {}, {}, *viewer_cookie);
   auto update_request = BuildHttpsRequest(
       "PUT",
       "/api/v1/security/management-ips/viewer/" +
@@ -1258,9 +1241,9 @@ TEST(FirmwareProcessUserManagementConcurrencyTest,
            "/api/v1/cameras",
            "/api/v1/ai/detections/stream",
        }) {
-    EXPECT_EQ(HttpsRequest(https_port, "GET", path, {}, {}, *viewer_cookie)
-                  .status,
-              401);
+    EXPECT_EQ(
+        HttpsRequest(https_port, "GET", path, {}, {}, *viewer_cookie).status,
+        401);
   }
   EXPECT_FALSE(LoginAs(https_port, "viewer1", "ViewerPass9!").has_value());
   EXPECT_EQ(Logout(https_port, *administrator_cookie), 200);
@@ -1273,8 +1256,7 @@ TEST(FirmwareProcessUserManagementShutdownTest,
   const auto state_directory = directory.path() / "security";
   const auto config_path = directory.path() / "firmware.yaml";
   const std::uint16_t https_port = ReserveLoopbackPort();
-  const std::string origin =
-      "https://127.0.0.1:" + std::to_string(https_port);
+  const std::string origin = "https://127.0.0.1:" + std::to_string(https_port);
   CreateRevisionTwoFixture(state_directory);
   WriteFirmwareConfig(config_path, state_directory, https_port,
                       ReserveDistinctLoopbackPort(https_port));
@@ -1283,14 +1265,14 @@ TEST(FirmwareProcessUserManagementShutdownTest,
   ASSERT_TRUE(WaitForFirmware(https_port));
   const auto administrator_cookie = Login(https_port);
   ASSERT_TRUE(administrator_cookie.has_value());
-  ASSERT_TRUE(ProvisionViewer(https_port, origin, *administrator_cookie)
-                  .has_value());
+  ASSERT_TRUE(
+      ProvisionViewer(https_port, origin, *administrator_cookie).has_value());
   const auto viewer_cookie = LoginAs(https_port, "viewer1", "ViewerPass9!");
   ASSERT_TRUE(viewer_cookie.has_value());
-  ASSERT_EQ(HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {},
-                         *viewer_cookie)
-                .status,
-            200);
+  ASSERT_EQ(
+      HttpsRequest(https_port, "GET", "/api/v1/auth/me", {}, {}, *viewer_cookie)
+          .status,
+      200);
   ASSERT_TRUE(process.RequestTerminate());
   EXPECT_TRUE(process.WaitForCleanExit(5s));
 }

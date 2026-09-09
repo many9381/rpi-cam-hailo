@@ -231,8 +231,8 @@ TEST(AsyncStreamTeardownTest, PeerResetRacingAsyncCloseDoesNotAbortTheProcess) {
   // kNoneEvent and aborts. The scenario runs in the death-test child so the
   // abort, when the defect is present, kills the child, not the suite. Exit
   // 0 means all trials survived; a signal exit means the assert fired.
-  ASSERT_EXIT(RunAsyncStreamTeardownRaceChild(),
-              ::testing::ExitedWithCode(0), "");
+  ASSERT_EXIT(RunAsyncStreamTeardownRaceChild(), ::testing::ExitedWithCode(0),
+              "");
 }
 
 TEST(AsyncStreamBackpressureTest, RejectsProducerBeforeSlowPeerQueues16MiB) {
@@ -325,10 +325,10 @@ bool WriteSelfSignedCert(const std::string& cert_path,
   X509_gmtime_adj(X509_getm_notAfter(cert), 60L * 60L * 24L * 365L);
   ok = ok && X509_set_pubkey(cert, pkey) == 1;
   X509_NAME* name = X509_get_subject_name(cert);
-  ok = ok && X509_NAME_add_entry_by_txt(
-                 name, "CN", MBSTRING_ASC,
-                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1,
-                 0) == 1;
+  ok = ok &&
+       X509_NAME_add_entry_by_txt(
+           name, "CN", MBSTRING_ASC,
+           reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) == 1;
   ok = ok && X509_set_issuer_name(cert, name) == 1;
   ok = ok && X509_sign(cert, pkey, EVP_sha256()) > 0;
   if (ok) {
@@ -431,8 +431,8 @@ bool RunOneTlsTeardownTrial(const std::string& cert_path,
   auto* loop = loop_thread.getLoop();
   auto server = std::make_unique<trantor::TcpServer>(
       loop, trantor::InetAddress("127.0.0.1", port), "tls-teardown");
-  server->enableSSL(trantor::TLSPolicy::defaultServerPolicy(cert_path,
-                                                            key_path));
+  server->enableSSL(
+      trantor::TLSPolicy::defaultServerPolicy(cert_path, key_path));
   server->setAfterAcceptSockOptCallback([](int descriptor) {
     const int buffer_size = 4096;
     (void)::setsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &buffer_size,

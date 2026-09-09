@@ -6,7 +6,8 @@
 namespace camera_firmware::ai {
 
 DetectionBus::Subscription::Subscription(
-    std::weak_ptr<SharedState> shared_state, std::uint64_t subscriber_id) noexcept
+    std::weak_ptr<SharedState> shared_state,
+    std::uint64_t subscriber_id) noexcept
     : shared_state_(std::move(shared_state)), subscriber_id_(subscriber_id) {}
 
 DetectionBus::Subscription::Subscription(Subscription&& other) noexcept
@@ -25,7 +26,9 @@ DetectionBus::Subscription& DetectionBus::Subscription::operator=(
   return *this;
 }
 
-DetectionBus::Subscription::~Subscription() { Reset(); }
+DetectionBus::Subscription::~Subscription() {
+  Reset();
+}
 
 bool DetectionBus::Subscription::valid() const noexcept {
   return !shared_state_.expired();

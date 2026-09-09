@@ -48,8 +48,8 @@ constexpr unsigned char AsciiLower(unsigned char byte) {
 }
 
 bool IsUsernameCharacter(unsigned char byte) {
-  return IsAsciiLetter(byte) || IsAsciiDigit(byte) ||
-         byte == '.' || byte == '_' || byte == '-';
+  return IsAsciiLetter(byte) || IsAsciiDigit(byte) || byte == '.' ||
+         byte == '_' || byte == '-';
 }
 
 bool IsIdentityDelimiter(char byte) {
@@ -59,11 +59,11 @@ bool IsIdentityDelimiter(char byte) {
 std::string LowerUsername(std::string_view username) {
   std::string lowered;
   lowered.reserve(username.size());
-  std::transform(username.begin(), username.end(), std::back_inserter(lowered),
-                 [](char byte) {
-                   return static_cast<char>(
-                       AsciiLower(static_cast<unsigned char>(byte)));
-                 });
+  std::transform(
+      username.begin(), username.end(), std::back_inserter(lowered),
+      [](char byte) {
+        return static_cast<char>(AsciiLower(static_cast<unsigned char>(byte)));
+      });
   return lowered;
 }
 
@@ -115,11 +115,10 @@ bool HasRepeatedLetterOrDigit(const common::SecureBytes& password) {
 }
 
 bool MatchesKeyboardSequenceAt(const common::SecureBytes& password,
-                               std::size_t offset,
-                               std::string_view row,
+                               std::size_t offset, std::string_view row,
                                bool reverse) {
-  for (std::size_t start = 0;
-       start + kProhibitedSequenceBytes <= row.size(); ++start) {
+  for (std::size_t start = 0; start + kProhibitedSequenceBytes <= row.size();
+       ++start) {
     bool matches = true;
     for (std::size_t index = 0; index < kProhibitedSequenceBytes; ++index) {
       const std::size_t row_index =
@@ -159,18 +158,16 @@ common::Result<void> ValidateInitialUsername(
     std::string_view username,
     std::span<const std::string_view> reserved_identities) {
   const std::string lowered = LowerUsername(username);
-  const bool built_in_identity =
-      std::any_of(kBuiltInReservedIdentities.begin(),
-                  kBuiltInReservedIdentities.end(),
-                  [&lowered](std::string_view identity) {
-                    return ContainsReservedToken(lowered, identity);
-                  });
-  const bool supplied_identity =
-      std::any_of(reserved_identities.begin(), reserved_identities.end(),
-                  [&lowered](std::string_view identity) {
-                    return ContainsReservedToken(lowered,
-                                                 LowerUsername(identity));
-                  });
+  const bool built_in_identity = std::any_of(
+      kBuiltInReservedIdentities.begin(), kBuiltInReservedIdentities.end(),
+      [&lowered](std::string_view identity) {
+        return ContainsReservedToken(lowered, identity);
+      });
+  const bool supplied_identity = std::any_of(
+      reserved_identities.begin(), reserved_identities.end(),
+      [&lowered](std::string_view identity) {
+        return ContainsReservedToken(lowered, LowerUsername(identity));
+      });
   if (built_in_identity || supplied_identity) {
     return PolicyError("E_USERNAME_RESERVED",
                        "credential identity is reserved or guessable");
@@ -192,9 +189,8 @@ common::Result<void> ValidateInitialUsername(
   return common::Result<void>::Ok();
 }
 
-common::Result<void> ValidatePassword(
-    std::string_view username,
-    const common::SecureBytes& password) {
+common::Result<void> ValidatePassword(std::string_view username,
+                                      const common::SecureBytes& password) {
   if (password.size() < kMinPasswordBytes ||
       password.size() > kMaxPasswordBytes) {
     return PolicyError("E_PASSWORD_LENGTH", "password length is invalid");
@@ -213,9 +209,8 @@ common::Result<void> ValidatePassword(
     has_upper = has_upper || IsAsciiUpper(byte);
     has_lower = has_lower || IsAsciiLower(byte);
     has_digit = has_digit || IsAsciiDigit(byte);
-    has_special = has_special ||
-                  (!IsAsciiUpper(byte) && !IsAsciiLower(byte) &&
-                   !IsAsciiDigit(byte));
+    has_special = has_special || (!IsAsciiUpper(byte) && !IsAsciiLower(byte) &&
+                                  !IsAsciiDigit(byte));
   }
 
   if (EqualsUsername(password, LowerUsername(username))) {

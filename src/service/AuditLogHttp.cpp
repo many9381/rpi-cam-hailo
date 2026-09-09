@@ -23,8 +23,7 @@ constexpr std::array<std::pair<std::string_view, QueryMember>, 12>
         {"actor_identity", &security::AuditQueryParameters::actor_identity},
         {"peer_ip", &security::AuditQueryParameters::peer_ip},
         {"subject_type", &security::AuditQueryParameters::subject_type},
-        {"subject_identity",
-         &security::AuditQueryParameters::subject_identity},
+        {"subject_identity", &security::AuditQueryParameters::subject_identity},
         {"sort_by", &security::AuditQueryParameters::sort_by},
         {"sort_direction", &security::AuditQueryParameters::sort_direction},
         {"limit", &security::AuditQueryParameters::limit},
@@ -88,8 +87,7 @@ PublicAuditError MapAuditError(std::string_view code) noexcept {
     return {drogon::k400BadRequest, "E_AUDIT_QUERY_INVALID",
             "Audit query is invalid."};
   }
-  if (code == "E_AUDIT_FORBIDDEN" ||
-      code == "E_AUTHORIZATION_REQUIRED") {
+  if (code == "E_AUDIT_FORBIDDEN" || code == "E_AUTHORIZATION_REQUIRED") {
     return {drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED",
             "Authorization is required."};
   }
@@ -130,9 +128,9 @@ common::Result<security::AuditQueryParameters> ParseAuditEventQuery(
       return InvalidAuditQuery<security::AuditQueryParameters>();
     }
 
-    const auto member = std::find_if(
-        kAuditQueryMembers.begin(), kAuditQueryMembers.end(),
-        [&key](const auto& entry) { return entry.first == *key; });
+    const auto member =
+        std::find_if(kAuditQueryMembers.begin(), kAuditQueryMembers.end(),
+                     [&key](const auto& entry) { return entry.first == *key; });
     if (member == kAuditQueryMembers.end() ||
         (parameters.*(member->second)).has_value()) {
       return InvalidAuditQuery<security::AuditQueryParameters>();
@@ -151,10 +149,8 @@ common::Result<security::AuditQueryParameters> ParseAuditEventQuery(
       std::move(parameters));
 }
 
-common::Result<void> ValidateEmptyAuditStatusQuery(
-    std::string_view raw_query) {
-  if (!raw_query.empty() ||
-      raw_query.size() > kMaximumAuditRawQueryBytes) {
+common::Result<void> ValidateEmptyAuditStatusQuery(std::string_view raw_query) {
+  if (!raw_query.empty() || raw_query.size() > kMaximumAuditRawQueryBytes) {
     return InvalidAuditQuery<void>();
   }
   return common::Result<void>::Ok();
@@ -202,8 +198,7 @@ Json::Value BuildAuditEventPageJson(const security::AuditEventPage& page) {
   return json;
 }
 
-drogon::HttpResponsePtr BuildAuditLogErrorResponse(
-    const common::Error& error) {
+drogon::HttpResponsePtr BuildAuditLogErrorResponse(const common::Error& error) {
   const auto mapped = MapAuditError(error.code);
   Json::Value json(Json::objectValue);
   json["code"] = std::string(mapped.code);

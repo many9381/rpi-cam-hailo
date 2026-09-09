@@ -30,8 +30,7 @@ class AiFramePump {
 
   static void QueueFrame(const std::shared_ptr<SharedState>& state,
                          media::FrameLease frame);
-  static void Run(const std::shared_ptr<SharedState>& state,
-                  AiRuntime& runtime,
+  static void Run(const std::shared_ptr<SharedState>& state, AiRuntime& runtime,
                   std::chrono::milliseconds minimum_interval);
 
   AiFrameTap& frame_tap_;

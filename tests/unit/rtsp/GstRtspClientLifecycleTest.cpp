@@ -5,6 +5,8 @@
 #include "camera_firmware/rtsp/GstRtspDigestAuth.hpp"
 
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -12,10 +14,8 @@
 #include <future>
 #include <memory>
 #include <mutex>
-#include <netinet/in.h>
 #include <string>
 #include <thread>
-#include <unistd.h>
 
 #include <gst/rtsp-server/rtsp-client.h>
 #include <gst/rtsp-server/rtsp-media-factory.h>
@@ -141,18 +141,17 @@ TEST(GstRtspClientLifecycleTest, CloseAndWaitIsTerminalForLateClients) {
 TEST(GstRtspClientLifecycleTest,
      CloseAndWaitCoversActiveManagedRequestDispatch) {
   gst_init(nullptr, nullptr);
-  const auto credentials = std::filesystem::temp_directory_path() /
-                           ("cf-client-lifecycle-" +
-                            std::to_string(getpid()) + ".credentials");
+  const auto credentials =
+      std::filesystem::temp_directory_path() /
+      ("cf-client-lifecycle-" + std::to_string(getpid()) + ".credentials");
   {
     std::ofstream out(credentials, std::ios::binary | std::ios::trunc);
-    out << "CFDIGEST1\noperator:rpi-camera:sha-256:"
-        << std::string(64U, '0') << "\n";
+    out << "CFDIGEST1\noperator:rpi-camera:sha-256:" << std::string(64U, '0')
+        << "\n";
   }
   std::filesystem::permissions(
       credentials,
-      std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_write,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
       std::filesystem::perm_options::replace);
 
   auto gate = std::make_shared<RequestGate>();
@@ -211,19 +210,17 @@ TEST(GstRtspClientLifecycleTest,
 
   const int client_fd = ConnectLoopback(port);
   EXPECT_GE(client_fd, 0);
-  const std::string request =
-      "DESCRIBE rtsp://127.0.0.1:" + service +
-      "/blocked RTSP/1.0\r\nCSeq: 1\r\n\r\n";
-  const ssize_t sent =
-      client_fd >= 0
-          ? send(client_fd, request.data(), request.size(), MSG_NOSIGNAL)
-          : -1;
+  const std::string request = "DESCRIBE rtsp://127.0.0.1:" + service +
+                              "/blocked RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+  const ssize_t sent = client_fd >= 0 ? send(client_fd, request.data(),
+                                             request.size(), MSG_NOSIGNAL)
+                                      : -1;
   EXPECT_EQ(sent, static_cast<ssize_t>(request.size()));
   bool request_entered = false;
   {
     std::unique_lock lock(gate->mutex);
-    request_entered = gate->changed.wait_for(
-        lock, 1s, [&gate] { return gate->entered; });
+    request_entered =
+        gate->changed.wait_for(lock, 1s, [&gate] { return gate->entered; });
   }
   EXPECT_TRUE(request_entered);
 

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -33,7 +33,6 @@ PreprocessToBuffer(camera_firmware::ai::AiModelProcessor& processor,
   return camera_firmware::common::Result<
       camera_firmware::ai::ModelInputBuffer>::Ok(std::move(canvas));
 }
-
 
 camera_firmware::config::AiModelConfig ProcessorModel(std::string id,
                                                       std::string kind) {
@@ -68,10 +67,9 @@ int CreateAnonymousFile(const std::vector<std::uint8_t>& bytes) {
 
 camera_firmware::media::FrameLease Nv12Lease(
     std::uint64_t sequence = 1,
-    std::vector<std::uint8_t> y_plane =
-        std::vector<std::uint8_t>(8U * 4U, 16U),
-    std::vector<std::uint8_t> uv_plane =
-        std::vector<std::uint8_t>(8U * 2U, 128U)) {
+    std::vector<std::uint8_t> y_plane = std::vector<std::uint8_t>(8U * 4U, 16U),
+    std::vector<std::uint8_t> uv_plane = std::vector<std::uint8_t>(8U * 2U,
+                                                                   128U)) {
   camera_firmware::media::FrameHandle handle;
   handle.camera_id = "imx708-main";
   handle.format = "NV12";
@@ -114,10 +112,10 @@ camera_firmware::media::FrameHandle SourceFrame(std::uint64_t sequence,
 }
 
 std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence,
-                                            float y_min = 0.25F,
-                                            float x_min = 0.10F,
-                                            float y_max = 0.75F,
-                                            float x_max = 0.60F) {
+                                             float y_min = 0.25F,
+                                             float x_min = 0.10F,
+                                             float y_max = 0.75F,
+                                             float x_max = 0.60F) {
   constexpr int kClassCount = 80;
   constexpr int kMaxBoxesPerClass = 100;
   constexpr int kValuesPerClass = 1 + (kMaxBoxesPerClass * 5);
@@ -144,12 +142,8 @@ std::vector<std::uint8_t> YoloNmsOutputBytes(float confidence,
 }
 
 std::vector<std::uint8_t> YoloPoseOutputBytes(
-    float confidence = 0.92F,
-    float x_min = 0.10F,
-    float y_min = 0.25F,
-    float x_max = 0.60F,
-    float y_max = 0.75F,
-    float nose_y = 0.25F) {
+    float confidence = 0.92F, float x_min = 0.10F, float y_min = 0.25F,
+    float x_max = 0.60F, float y_max = 0.75F, float nose_y = 0.25F) {
   constexpr std::size_t kPoseRowFloats = 5U + (17U * 3U);
   std::vector<float> tensor(kPoseRowFloats, 0.0F);
   tensor[0] = x_min;
@@ -207,20 +201,18 @@ TEST(AiModelProcessorTest, PreprocessMapsNv12PlanesWithBilinearRgbResize) {
   ASSERT_TRUE(processor.ok()) << processor.error().message;
 
   std::vector<std::uint8_t> y_plane = {
-      16, 16, 16, 16, 235, 235, 235, 235,
-      16, 16, 16, 16, 235, 235, 235, 235,
-      16, 16, 16, 16, 235, 235, 235, 235,
-      16, 16, 16, 16, 235, 235, 235, 235,
+      16, 16, 16, 16, 235, 235, 235, 235, 16, 16, 16, 16, 235, 235, 235, 235,
+      16, 16, 16, 16, 235, 235, 235, 235, 16, 16, 16, 16, 235, 235, 235, 235,
   };
   std::vector<std::uint8_t> uv_plane(8U * 2U, 128U);
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      Nv12Lease(4, std::move(y_plane), std::move(uv_plane)));
+  auto input =
+      PreprocessToBuffer(*processor.value(),
+                         Nv12Lease(4, std::move(y_plane), std::move(uv_plane)));
 
   ASSERT_TRUE(input.ok()) << input.error().message;
   const std::vector<std::uint8_t> expected = {
-      34, 34, 34, 228, 228, 228,
-      114, 114, 114, 114, 114, 114,
+      34, 34, 34, 228, 228, 228, 114, 114, 114, 114, 114, 114,
   };
   EXPECT_EQ(input.value().bytes, expected);
 }
@@ -237,8 +229,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsNonNv12Frame) {
   handle.height = 4;
   handle.sequence = 2;
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [] {}));
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
   EXPECT_EQ(input.error().code, "E_AI_PREPROCESS");
@@ -254,8 +246,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsInvalidPlaneFd) {
   handle.planes[0].dmabuf_fd = -1;
   handle.planes[1].dmabuf_fd = -1;
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [] {}));
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
   EXPECT_EQ(input.error().code, "E_AI_PREPROCESS");
@@ -289,8 +281,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsOddNv12Dimensions) {
   handle.planes[1].length = 10;
   handle.planes[1].offset = handle.planes[0].length;
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [fd] {
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [fd] {
         if (fd >= 0) {
           (void)::close(fd);
         }
@@ -309,8 +301,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsPlaneOffsetLengthOverflow) {
   camera_firmware::media::FrameHandle handle = lease.handle();
   handle.planes[0].offset = std::numeric_limits<std::size_t>::max();
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [] {}));
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
   EXPECT_EQ(input.error().code, "E_AI_PREPROCESS");
@@ -340,8 +332,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsPlaneRangeBeyondBackingFile) {
   handle.planes[1].length = 16;
   handle.planes[1].offset = handle.planes[0].length;
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [fd] {
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [fd] {
         if (fd >= 0) {
           (void)::close(fd);
         }
@@ -381,8 +373,8 @@ TEST(AiModelProcessorTest, PreprocessRejectsShortNv12Planes) {
   handle.planes[1].stride = 8;
   handle.planes[1].length = 16;
 
-  auto input = PreprocessToBuffer(*processor.value(), 
-      camera_firmware::media::FrameLease(handle, [] {}));
+  auto input = PreprocessToBuffer(
+      *processor.value(), camera_firmware::media::FrameLease(handle, [] {}));
 
   ASSERT_FALSE(input.ok());
   EXPECT_EQ(input.error().code, "E_AI_PREPROCESS");
@@ -406,8 +398,7 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedYoloDetections) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(22),
-      bus.PublisherHandle());
+      SourceFrame(22), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   EXPECT_EQ(events[0].camera_id, "imx708-main");
@@ -448,8 +439,7 @@ TEST(AiModelProcessorTest, PostprocessDecodesFloatMisalignedYoloOutput) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(7),
-      bus.PublisherHandle());
+      SourceFrame(7), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -478,8 +468,7 @@ TEST(AiModelProcessorTest, PostprocessMapsLetterboxYoloBoxesToSourceFrame) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(24),
-      bus.PublisherHandle());
+      SourceFrame(24), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -512,8 +501,7 @@ TEST(AiModelProcessorTest,
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(26, 10, 6),
-      bus.PublisherHandle());
+      SourceFrame(26, 10, 6), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -545,8 +533,7 @@ TEST(AiModelProcessorTest, PostprocessClampsLetterboxYoloBoxesToSourceFrame) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(27, 8, 4),
-      bus.PublisherHandle());
+      SourceFrame(27, 8, 4), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -578,8 +565,7 @@ TEST(AiModelProcessorTest, PostprocessPreservesDirectResizeYoloBoxes) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(25),
-      bus.PublisherHandle());
+      SourceFrame(25), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -610,8 +596,7 @@ TEST(AiModelProcessorTest, PostprocessPublishesDecodedPoseKeypoints) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      source_frame,
-      bus.PublisherHandle());
+      source_frame, bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   EXPECT_EQ(events[0].camera_id, "imx708-main");
@@ -658,8 +643,7 @@ TEST(AiModelProcessorTest, PostprocessMapsLetterboxPoseKeypointsToSourceFrame) {
   processor.value()->Postprocess(
       camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
           output),
-      SourceFrame(43, 8, 4),
-      bus.PublisherHandle());
+      SourceFrame(43, 8, 4), bus.PublisherHandle());
 
   ASSERT_EQ(events.size(), 1U);
   ASSERT_EQ(events[0].detections.size(), 1U);
@@ -688,8 +672,7 @@ TEST(AiModelProcessorTest, PostprocessRejectsUnalignedPoseOutputBytes) {
     processor.value()->Postprocess(
         camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
             output),
-        SourceFrame(44),
-        bus.PublisherHandle());
+        SourceFrame(44), bus.PublisherHandle());
     FAIL() << "Expected pose postprocess to reject unaligned bytes";
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
@@ -711,8 +694,7 @@ TEST(AiModelProcessorTest, PostprocessRejectsMalformedPoseOutputShape) {
     processor.value()->Postprocess(
         camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
             output),
-        SourceFrame(45),
-        bus.PublisherHandle());
+        SourceFrame(45), bus.PublisherHandle());
     FAIL() << "Expected pose postprocess to reject malformed row shape";
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
@@ -734,8 +716,7 @@ TEST(AiModelProcessorTest, PostprocessRejectsUnalignedYoloOutputBytes) {
       processor.value()->Postprocess(
           camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
               output),
-          SourceFrame(23),
-          bus.PublisherHandle()),
+          SourceFrame(23), bus.PublisherHandle()),
       std::runtime_error);
 }
 
@@ -753,8 +734,7 @@ TEST(AiModelProcessorTest, PostprocessRejectsMalformedYoloOutputShape) {
       processor.value()->Postprocess(
           camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
               truncated_output),
-          SourceFrame(24),
-          bus.PublisherHandle()),
+          SourceFrame(24), bus.PublisherHandle()),
       std::runtime_error);
 
   auto oversized = YoloNmsOutputBytes(0.91F);
@@ -766,8 +746,7 @@ TEST(AiModelProcessorTest, PostprocessRejectsMalformedYoloOutputShape) {
       processor.value()->Postprocess(
           camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
               oversized_output),
-          SourceFrame(25),
-          bus.PublisherHandle()),
+          SourceFrame(25), bus.PublisherHandle()),
       std::runtime_error);
 }
 

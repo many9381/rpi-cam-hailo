@@ -26,11 +26,9 @@ constexpr unsigned char kColon = ':';
 constexpr unsigned char kEmptyHmacKey = 0U;
 constexpr std::string_view kAuthSeparator = ":auth:";
 
-using EvpMdContext =
-    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
+using EvpMdContext = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using EvpMac = std::unique_ptr<EVP_MAC, decltype(&EVP_MAC_free)>;
-using EvpMacContext =
-    std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)>;
+using EvpMacContext = std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)>;
 
 common::Error CryptoError() {
   return {"E_RTSP_AUTH_CRYPTO", "RTSP digest cryptographic operation failed"};
@@ -58,8 +56,7 @@ bool CheckedAdd(std::size_t value, std::size_t* total) noexcept {
   return true;
 }
 
-bool ValidateCombinedSize(
-    std::initializer_list<std::size_t> sizes) noexcept {
+bool ValidateCombinedSize(std::initializer_list<std::size_t> sizes) noexcept {
   std::size_t total = 0U;
   for (const std::size_t size : sizes) {
     if (!CheckedAdd(size, &total)) {
@@ -132,8 +129,7 @@ std::size_t RtspDigestSize(RtspDigestAlgorithm algorithm) {
 }
 
 common::Result<common::SecureBytes> RtspDigestHash(
-    RtspDigestAlgorithm algorithm,
-    std::span<const unsigned char> data) {
+    RtspDigestAlgorithm algorithm, std::span<const unsigned char> data) {
   const EVP_MD* digest = DigestForAlgorithm(algorithm);
   const std::size_t expected_size = RtspDigestSize(algorithm);
   if (digest == nullptr || expected_size == 0U) {
@@ -172,16 +168,14 @@ common::Result<common::SecureBytes> RtspDigestRandomBytes(std::size_t size) {
   } catch (...) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
   }
-  if (size != 0U &&
-      RAND_bytes(output.data(), static_cast<int>(size)) != 1) {
+  if (size != 0U && RAND_bytes(output.data(), static_cast<int>(size)) != 1) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
   }
   return common::Result<common::SecureBytes>::Ok(std::move(output));
 }
 
 common::Result<common::SecureBytes> RtspDigestHmacSha256(
-    std::span<const unsigned char> key,
-    std::span<const unsigned char> data) {
+    std::span<const unsigned char> key, std::span<const unsigned char> data) {
   EvpMac mac(EVP_MAC_fetch(nullptr, "HMAC", nullptr), EVP_MAC_free);
   if (!mac) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
@@ -236,8 +230,7 @@ common::Result<common::SecureBytes> DecodeRtspDigestHex(
     if (high < 0 || low < 0) {
       return common::Result<common::SecureBytes>::Err(FormatError());
     }
-    output.data()[index] =
-        static_cast<unsigned char>((high << 4U) | low);
+    output.data()[index] = static_cast<unsigned char>((high << 4U) | low);
   }
   return common::Result<common::SecureBytes>::Ok(std::move(output));
 }
@@ -258,17 +251,14 @@ common::Result<common::SecureBytes> EncodeRtspDigestLowerHex(
   }
   for (std::size_t index = 0; index < bytes.size(); ++index) {
     output.data()[index * kHexCharsPerByte] = kHex[bytes[index] >> 4U];
-    output.data()[index * kHexCharsPerByte + 1U] =
-        kHex[bytes[index] & 0x0fU];
+    output.data()[index * kHexCharsPerByte + 1U] = kHex[bytes[index] & 0x0fU];
   }
   return common::Result<common::SecureBytes>::Ok(std::move(output));
 }
 
 common::Result<common::SecureBytes> ComputeRtspDigestHa1(
-    RtspDigestAlgorithm algorithm,
-    std::string_view username,
-    std::string_view realm,
-    std::span<const unsigned char> password) {
+    RtspDigestAlgorithm algorithm, std::string_view username,
+    std::string_view realm, std::span<const unsigned char> password) {
   if (DigestForAlgorithm(algorithm) == nullptr) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
   }
@@ -291,14 +281,9 @@ common::Result<common::SecureBytes> ComputeRtspDigestHa1(
 }
 
 common::Result<common::SecureBytes> ComputeRtspDigestResponse(
-    RtspDigestAlgorithm algorithm,
-    std::span<const unsigned char> ha1,
-    std::string_view method,
-    std::string_view uri,
-    std::string_view nonce,
-    std::string_view nonce_count,
-    std::string_view cnonce,
-    bool with_qop) {
+    RtspDigestAlgorithm algorithm, std::span<const unsigned char> ha1,
+    std::string_view method, std::string_view uri, std::string_view nonce,
+    std::string_view nonce_count, std::string_view cnonce, bool with_qop) {
   const std::size_t digest_size = RtspDigestSize(algorithm);
   if (DigestForAlgorithm(algorithm) == nullptr || digest_size == 0U) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
@@ -325,20 +310,20 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
   if (!encoded_ha1.ok()) {
     return common::Result<common::SecureBytes>::Err(encoded_ha1.error());
   }
-  auto encoded_ha2 = EncodeRtspDigestLowerHex(
-      {ha2.value().data(), ha2.value().size()});
+  auto encoded_ha2 =
+      EncodeRtspDigestLowerHex({ha2.value().data(), ha2.value().size()});
   if (!encoded_ha2.ok()) {
     return common::Result<common::SecureBytes>::Err(encoded_ha2.error());
   }
 
   const bool size_ok =
       with_qop
-          ? ValidateCombinedSize(
-                {encoded_ha1.value().size(), 1U, nonce.size(), 1U,
-                 nonce_count.size(), 1U, cnonce.size(), kAuthSeparator.size(),
-                 encoded_ha2.value().size()})
+          ? ValidateCombinedSize({encoded_ha1.value().size(), 1U, nonce.size(),
+                                  1U, nonce_count.size(), 1U, cnonce.size(),
+                                  kAuthSeparator.size(),
+                                  encoded_ha2.value().size()})
           : ValidateCombinedSize({encoded_ha1.value().size(), 1U, nonce.size(),
-                                   1U, encoded_ha2.value().size()});
+                                  1U, encoded_ha2.value().size()});
   if (!size_ok) {
     return common::Result<common::SecureBytes>::Err(FormatError());
   }
@@ -365,8 +350,8 @@ common::Result<common::SecureBytes> ComputeRtspDigestResponse(
   } catch (...) {
     return common::Result<common::SecureBytes>::Err(CryptoError());
   }
-  return RtspDigestHash(
-      algorithm, {response_input.data(), response_input.size()});
+  return RtspDigestHash(algorithm,
+                        {response_input.data(), response_input.size()});
 }
 
 bool RtspDigestConstantTimeEqual(std::span<const unsigned char> left,

@@ -12,10 +12,9 @@
 
 class LiveMp4ByteStream {
  public:
-  LiveMp4ByteStream(
-      camera_firmware::media::FragmentRing::Reader reader,
-      std::chrono::milliseconds stale_timeout,
-      std::chrono::milliseconds maximum_idle)
+  LiveMp4ByteStream(camera_firmware::media::FragmentRing::Reader reader,
+                    std::chrono::milliseconds stale_timeout,
+                    std::chrono::milliseconds maximum_idle)
       : reader_(std::move(reader)),
         stale_timeout_(stale_timeout),
         maximum_idle_(maximum_idle) {}
@@ -37,8 +36,7 @@ class LiveMp4ByteStream {
       if (!fragment.has_value()) {
         // Plain timeout tick -- not EOF. Keep waiting until a fragment
         // arrives or the stream has been silent for maximum_idle_.
-        if (std::chrono::steady_clock::now() - idle_started >=
-            maximum_idle_) {
+        if (std::chrono::steady_clock::now() - idle_started >= maximum_idle_) {
           return 0U;
         }
         continue;
@@ -56,9 +54,7 @@ class LiveMp4ByteStream {
     return count;
   }
 
-  void Cancel() noexcept {
-    reader_.Cancel();
-  }
+  void Cancel() noexcept { reader_.Cancel(); }
 
  private:
   camera_firmware::media::FragmentRing::Reader reader_;

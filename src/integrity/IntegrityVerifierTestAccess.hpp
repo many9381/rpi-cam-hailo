@@ -12,8 +12,7 @@
 namespace camera_firmware::integrity::testing {
 
 using ArtifactReadHook = std::function<void()>;
-using ArtifactReadFunction =
-    std::function<ssize_t(int, void*, std::size_t)>;
+using ArtifactReadFunction = std::function<ssize_t(int, void*, std::size_t)>;
 
 enum class VerifierFaultPoint {
   kReportReserve,
@@ -34,8 +33,7 @@ VerifyIntegrityManifestWithArtifactReadHook(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    ArtifactReadHook hook);
+    crypto::CryptoProvider& provider, ArtifactReadHook hook);
 
 [[nodiscard]] common::Result<IntegrityVerificationReport>
 VerifyIntegrityManifestWithTestHooks(
@@ -44,7 +42,6 @@ VerifyIntegrityManifestWithTestHooks(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    IntegrityVerifierTestHooks hooks);
+    crypto::CryptoProvider& provider, IntegrityVerifierTestHooks hooks);
 
 }  // namespace camera_firmware::integrity::testing

@@ -39,10 +39,8 @@ struct CameraPipelineStatus {
 
 class CameraPipeline {
  public:
-  CameraPipeline(SnapshotTap& snapshot_tap,
-                 ai::AiFrameTap& ai_frame_tap,
-                 EncodedRing& encoded_ring,
-                 SubStreamTap* sub_tap = nullptr);
+  CameraPipeline(SnapshotTap& snapshot_tap, ai::AiFrameTap& ai_frame_tap,
+                 EncodedRing& encoded_ring, SubStreamTap* sub_tap = nullptr);
   ~CameraPipeline();
 
   CameraPipeline(const CameraPipeline&) = delete;

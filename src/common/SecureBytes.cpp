@@ -26,7 +26,9 @@ void CleanseReplacement(std::vector<unsigned char>& replacement) noexcept {
 
 }  // namespace
 
-SecureBytes::~SecureBytes() { clear(); }
+SecureBytes::~SecureBytes() {
+  clear();
+}
 
 SecureBytes::SecureBytes(SecureBytes&& other) noexcept
     : bytes_(std::move(other.bytes_)),
@@ -132,7 +134,9 @@ const unsigned char* SecureBytes::data() const noexcept {
   return bytes_.data();
 }
 
-std::size_t SecureBytes::size() const noexcept { return bytes_.size(); }
+std::size_t SecureBytes::size() const noexcept {
+  return bytes_.size();
+}
 
 ZeroizeAudit SecureBytes::zeroize_audit() const noexcept {
   return {zeroize_count_, last_zeroize_verified_};

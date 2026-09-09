@@ -54,8 +54,8 @@ DeferredCompletion CopyDeferredCompletion(
 
     const auto output_view = output.value();
     if (output_view.size > 0U && output_view.data == nullptr) {
-      deferred.error = {
-          "E_AI_POSTPROCESS", "AI backend callback provided null output data"};
+      deferred.error = {"E_AI_POSTPROCESS",
+                        "AI backend callback provided null output data"};
       return deferred;
     }
     if (output_view.size > 0U) {
@@ -65,8 +65,9 @@ DeferredCompletion CopyDeferredCompletion(
   } catch (const std::exception& ex) {
     deferred.error = {"E_AI_POSTPROCESS", ex.what()};
   } catch (...) {
-    deferred.error = {"E_AI_POSTPROCESS",
-                      "AI callback output copy failed with an unknown exception"};
+    deferred.error = {
+        "E_AI_POSTPROCESS",
+        "AI callback output copy failed with an unknown exception"};
   }
   return deferred;
 }
@@ -81,9 +82,13 @@ double MillisecondsSince(std::chrono::steady_clock::time_point start,
 
 }  // namespace
 
-std::string_view UnavailableAiBackend::name() const noexcept { return "hailo"; }
+std::string_view UnavailableAiBackend::name() const noexcept {
+  return "hailo";
+}
 
-bool UnavailableAiBackend::available() const noexcept { return false; }
+bool UnavailableAiBackend::available() const noexcept {
+  return false;
+}
 
 common::Result<void> UnavailableAiBackend::Init() {
   next_handle_ = 1;
@@ -99,21 +104,17 @@ common::Result<ModelHandle> UnavailableAiBackend::LoadModel(
 
 void UnavailableAiBackend::Unload(ModelHandle) {}
 
-common::Result<void> UnavailableAiBackend::Submit(
-    ModelHandle,
-    InputView,
-    InferCallback) {
+common::Result<void> UnavailableAiBackend::Submit(ModelHandle, InputView,
+                                                  InferCallback) {
   return common::Result<void>::Err(
       {"E_AI_BACKEND_UNAVAILABLE",
        "Hailo backend is not implemented in this build"});
 }
 
-AiModelRunner::AiModelRunner(std::string camera_id,
-                             config::AiModelConfig model,
-                             AiBackend* backend,
-                             ModelHandle model_handle,
-                             DetectionBus* detection_bus,
-                             SubmissionResolvedObserver submission_resolved_observer)
+AiModelRunner::AiModelRunner(
+    std::string camera_id, config::AiModelConfig model, AiBackend* backend,
+    ModelHandle model_handle, DetectionBus* detection_bus,
+    SubmissionResolvedObserver submission_resolved_observer)
     : camera_id_(std::move(camera_id)),
       model_(std::move(model)),
       backend_(backend),
@@ -143,7 +144,9 @@ AiModelRunner::AiModelRunner(std::string camera_id,
   });
 }
 
-AiModelRunner::~AiModelRunner() { Stop(); }
+AiModelRunner::~AiModelRunner() {
+  Stop();
+}
 
 common::Result<void> AiModelRunner::Submit(media::FrameLease frame) {
   {
@@ -178,9 +181,8 @@ void AiModelRunner::Stop() {
     worker_.join();
   }
   std::unique_lock lock(state_->mutex);
-  state_->changed.wait(lock, [this] {
-    return state_->in_flight_callbacks == 0U;
-  });
+  state_->changed.wait(lock,
+                       [this] { return state_->in_flight_callbacks == 0U; });
 }
 
 AiModelRunnerStatus AiModelRunner::Status() const {
@@ -194,13 +196,11 @@ void AiModelRunner::Run() {
     {
       std::unique_lock lock(state_->mutex);
       state_->changed.wait(lock, [this] {
-        return state_->stopping ||
-               (state_->pending_frame.has_value() &&
-                state_->in_flight_callbacks == 0U);
+        return state_->stopping || (state_->pending_frame.has_value() &&
+                                    state_->in_flight_callbacks == 0U);
       });
-      if (state_->stopping ||
-          (state_->pending_frame.has_value() &&
-           state_->in_flight_callbacks > 0U)) {
+      if (state_->stopping || (state_->pending_frame.has_value() &&
+                               state_->in_flight_callbacks > 0U)) {
         return;
       }
       frame = std::move(state_->pending_frame);
@@ -236,9 +236,8 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
     return;
   }
   if (processor_ == nullptr) {
-    RecordDrop(state_,
-               {"E_AI_PROCESSOR_UNAVAILABLE",
-                "AI model processor is unavailable"});
+    RecordDrop(state_, {"E_AI_PROCESSOR_UNAVAILABLE",
+                        "AI model processor is unavailable"});
     return;
   }
   if (!frame.valid()) {
@@ -258,7 +257,8 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
     return;
   }
   const double preprocess_ms = std::chrono::duration<double, std::milli>(
-      preprocess_finished - preprocess_started).count();
+                                   preprocess_finished - preprocess_started)
+                                   .count();
 
   auto processor = processor_;
   auto submission = std::make_shared<SubmissionState>();
@@ -291,64 +291,57 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
           on_idle();
         }
       };
-  auto complete_output =
-      [weak_state,
-       processor,
-       source_frame,
-       preprocess_ms,
-       detection_publisher = detection_publisher_,
-       submission,
-       finish_submission](common::Result<OutputView> output,
-                          double inference_ms) mutable {
-        auto state = weak_state.lock();
-        if (state == nullptr) {
-          return;
-        }
+  auto complete_output = [weak_state, processor, source_frame, preprocess_ms,
+                          detection_publisher = detection_publisher_,
+                          submission,
+                          finish_submission](common::Result<OutputView> output,
+                                             double inference_ms) mutable {
+    auto state = weak_state.lock();
+    if (state == nullptr) {
+      return;
+    }
 
-        if (!output.ok()) {
-          RecordDrop(state, output.error());
-          finish_submission(state, submission);
-          return;
-        }
+    if (!output.ok()) {
+      RecordDrop(state, output.error());
+      finish_submission(state, submission);
+      return;
+    }
 
-        try {
-          processor->Postprocess(std::move(output), source_frame,
-                                 detection_publisher);
-          RecordProcessed(state, preprocess_ms, inference_ms,
-                          source_frame.sequence);
-        } catch (const std::exception& ex) {
-          RecordDrop(state, {"E_AI_POSTPROCESS", ex.what()});
-        } catch (...) {
-          RecordDrop(state,
-                     {"E_AI_POSTPROCESS",
-                      "AI postprocess failed with an unknown exception"});
-        }
-        finish_submission(state, submission);
-      };
-  auto complete_deferred =
-      [complete_output](DeferredCompletion completion, double inference_ms) mutable {
-        if (completion.error.has_value()) {
-          complete_output(
-              common::Result<OutputView>::Err(std::move(*completion.error)),
-              inference_ms);
-          return;
-        }
-        const OutputView output{
-            completion.output_bytes.empty() ? nullptr
-                                            : completion.output_bytes.data(),
-            completion.output_bytes.size()};
-        complete_output(common::Result<OutputView>::Ok(output), inference_ms);
-      };
+    try {
+      processor->Postprocess(std::move(output), source_frame,
+                             detection_publisher);
+      RecordProcessed(state, preprocess_ms, inference_ms,
+                      source_frame.sequence);
+    } catch (const std::exception& ex) {
+      RecordDrop(state, {"E_AI_POSTPROCESS", ex.what()});
+    } catch (...) {
+      RecordDrop(state, {"E_AI_POSTPROCESS",
+                         "AI postprocess failed with an unknown exception"});
+    }
+    finish_submission(state, submission);
+  };
+  auto complete_deferred = [complete_output](DeferredCompletion completion,
+                                             double inference_ms) mutable {
+    if (completion.error.has_value()) {
+      complete_output(
+          common::Result<OutputView>::Err(std::move(*completion.error)),
+          inference_ms);
+      return;
+    }
+    const OutputView output{completion.output_bytes.empty()
+                                ? nullptr
+                                : completion.output_bytes.data(),
+                            completion.output_bytes.size()};
+    complete_output(common::Result<OutputView>::Ok(output), inference_ms);
+  };
   {
     std::lock_guard lock(state_->mutex);
     ++state_->in_flight_callbacks;
   }
   auto submitted = backend_->Submit(
       model_handle_, input_buffer->view(),
-      [input_buffer,
-       submission,
-       complete_output](
-          common::Result<OutputView> output) mutable {
+      [input_buffer, submission,
+       complete_output](common::Result<OutputView> output) mutable {
         (void)input_buffer;
         const auto arrived_at = std::chrono::steady_clock::now();
         std::optional<double> inference_ms;
@@ -416,8 +409,7 @@ void AiModelRunner::RecordDrop(const std::shared_ptr<SharedState>& state,
 }
 
 void AiModelRunner::RecordProcessed(const std::shared_ptr<SharedState>& state,
-                                    double preprocess_ms,
-                                    double inference_ms,
+                                    double preprocess_ms, double inference_ms,
                                     std::uint64_t sequence) {
   std::lock_guard lock(state->mutex);
   ++state->status.processed_frames;

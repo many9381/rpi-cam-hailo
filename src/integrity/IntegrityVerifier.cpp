@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -82,28 +82,34 @@ common::Error ArtifactPathError() {
   return {"E_INTEGRITY_ARTIFACT_PATH", "Integrity artifact path is invalid"};
 }
 common::Error ArtifactTypeError() {
-  return {"E_INTEGRITY_ARTIFACT_TYPE", "Integrity artifact is not a regular file"};
+  return {"E_INTEGRITY_ARTIFACT_TYPE",
+          "Integrity artifact is not a regular file"};
 }
 common::Error ArtifactReadError() {
   return {"E_INTEGRITY_ARTIFACT_READ", "Unable to read integrity artifact"};
 }
 common::Error ArtifactChangedError() {
-  return {"E_INTEGRITY_ARTIFACT_CHANGED", "Integrity artifact changed while reading"};
+  return {"E_INTEGRITY_ARTIFACT_CHANGED",
+          "Integrity artifact changed while reading"};
 }
 common::Error ArtifactSizeError() {
-  return {"E_INTEGRITY_ARTIFACT_SIZE", "Integrity artifact exceeds its size limit"};
+  return {"E_INTEGRITY_ARTIFACT_SIZE",
+          "Integrity artifact exceeds its size limit"};
 }
 common::Error SignatureFormatError() {
-  return {"E_INTEGRITY_SIGNATURE_FORMAT", "Integrity signature has invalid format"};
+  return {"E_INTEGRITY_SIGNATURE_FORMAT",
+          "Integrity signature has invalid format"};
 }
 common::Error SignatureInvalidError() {
-  return {"E_INTEGRITY_SIGNATURE_INVALID", "Integrity signature verification failed"};
+  return {"E_INTEGRITY_SIGNATURE_INVALID",
+          "Integrity signature verification failed"};
 }
 common::Error PublicKeyError() {
   return {"E_INTEGRITY_PUBLIC_KEY", "Integrity public key is invalid"};
 }
 common::Error ManifestContractError() {
-  return {"E_INTEGRITY_MANIFEST_CONTRACT", "Integrity manifest does not match active process"};
+  return {"E_INTEGRITY_MANIFEST_CONTRACT",
+          "Integrity manifest does not match active process"};
 }
 const common::Error kResourceError{"E_INTEGRITY_RESOURCE",
                                    "Integrity verification resource failure"};
@@ -119,7 +125,8 @@ int OpenNoFollow(const std::filesystem::path& path, int flags) noexcept {
   unsigned int retries = 0U;
   while (true) {
     const int descriptor = ::open(path.c_str(), flags);
-    if (descriptor >= 0 || errno != EINTR || retries++ == kMaximumEintrRetries) {
+    if (descriptor >= 0 || errno != EINTR ||
+        retries++ == kMaximumEintrRetries) {
       return descriptor;
     }
   }
@@ -137,7 +144,8 @@ bool FstatNoIntr(int descriptor, struct stat* status) noexcept {
   }
 }
 
-bool SameSnapshot(const struct stat& before, const struct stat& after) noexcept {
+bool SameSnapshot(const struct stat& before,
+                  const struct stat& after) noexcept {
   return before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
          before.st_size == after.st_size &&
          before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
@@ -178,13 +186,14 @@ common::Result<std::vector<unsigned char>> ReadRegularFile(
     while (true) {
       const std::size_t remaining = maximum_size + 1U - bytes.size();
       const std::size_t requested = std::min(buffer.size(), remaining);
-      const ssize_t count = hooks.read
-                                ? hooks.read(descriptor.get(), buffer.data(), requested)
-                                : ::read(descriptor.get(), buffer.data(), requested);
+      const ssize_t count =
+          hooks.read ? hooks.read(descriptor.get(), buffer.data(), requested)
+                     : ::read(descriptor.get(), buffer.data(), requested);
       if (count > 0) {
         bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + count);
         if (bytes.size() > maximum_size) {
-          return common::Result<std::vector<unsigned char>>::Err(ArtifactSizeError());
+          return common::Result<std::vector<unsigned char>>::Err(
+              ArtifactSizeError());
         }
         eintr_retries = 0U;
         continue;
@@ -195,22 +204,29 @@ common::Result<std::vector<unsigned char>> ReadRegularFile(
       if (errno == EINTR && eintr_retries++ < kMaximumEintrRetries) {
         continue;
       }
-      return common::Result<std::vector<unsigned char>>::Err(ArtifactReadError());
+      return common::Result<std::vector<unsigned char>>::Err(
+          ArtifactReadError());
     }
 
     struct stat final_status {};
     if (!FstatNoIntr(descriptor.get(), &final_status)) {
-      return common::Result<std::vector<unsigned char>>::Err(ArtifactReadError());
+      return common::Result<std::vector<unsigned char>>::Err(
+          ArtifactReadError());
     }
     if (!SameSnapshot(initial_status, final_status)) {
-      return common::Result<std::vector<unsigned char>>::Err(ArtifactChangedError());
+      return common::Result<std::vector<unsigned char>>::Err(
+          ArtifactChangedError());
     }
-    UniqueFd path_descriptor(OpenNoFollow(path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
+    UniqueFd path_descriptor(
+        OpenNoFollow(path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
     struct stat path_status {};
-    if (path_descriptor.get() < 0 || !FstatNoIntr(path_descriptor.get(), &path_status) ||
-        !S_ISREG(path_status.st_mode) || path_status.st_dev != initial_status.st_dev ||
+    if (path_descriptor.get() < 0 ||
+        !FstatNoIntr(path_descriptor.get(), &path_status) ||
+        !S_ISREG(path_status.st_mode) ||
+        path_status.st_dev != initial_status.st_dev ||
         path_status.st_ino != initial_status.st_ino) {
-      return common::Result<std::vector<unsigned char>>::Err(ArtifactChangedError());
+      return common::Result<std::vector<unsigned char>>::Err(
+          ArtifactChangedError());
     }
     return common::Result<std::vector<unsigned char>>::Ok(std::move(bytes));
   } catch (const std::exception&) {
@@ -231,31 +247,33 @@ bool MeetsActiveProcessContract(const IntegrityManifest& manifest,
   bool executable_matches = false;
   bool config_matches = false;
   for (const IntegrityEntry& entry : manifest.files) {
-    has_firmware = has_firmware || entry.category == IntegrityCategory::kFirmware;
+    has_firmware =
+        has_firmware || entry.category == IntegrityCategory::kFirmware;
     has_configuration = has_configuration ||
                         entry.category == IntegrityCategory::kConfiguration;
     has_kernel = has_kernel || entry.category == IntegrityCategory::kKernel;
-    executable_matches = executable_matches ||
-                         (entry.category == IntegrityCategory::kFirmware &&
-                          entry.path == active_executable);
+    executable_matches =
+        executable_matches || (entry.category == IntegrityCategory::kFirmware &&
+                               entry.path == active_executable);
     config_matches = config_matches ||
                      (entry.category == IntegrityCategory::kConfiguration &&
                       entry.path == active_config);
   }
-  return has_firmware && has_configuration && has_kernel && executable_matches &&
-         config_matches;
+  return has_firmware && has_configuration && has_kernel &&
+         executable_matches && config_matches;
 }
 
 bool HasOnlyPemWhitespace(BIO* bio) {
   std::array<char, 256U> buffer{};
   while (BIO_ctrl_pending(bio) > 0L) {
-    const int count = BIO_read(bio, buffer.data(), static_cast<int>(buffer.size()));
+    const int count =
+        BIO_read(bio, buffer.data(), static_cast<int>(buffer.size()));
     if (count <= 0) {
       return false;
     }
     for (int index = 0; index < count; ++index) {
-      if (std::isspace(static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)])) ==
-          0) {
+      if (std::isspace(static_cast<unsigned char>(
+              buffer[static_cast<std::size_t>(index)])) == 0) {
         return false;
       }
     }
@@ -267,20 +285,22 @@ bool HasOnlyPemWhitespace(BIO* bio) {
 
 common::Result<void> VerifyEd25519Signature(
     std::span<const unsigned char> manifest,
-    std::span<const unsigned char> signature,
-    std::string_view public_key_pem,
+    std::span<const unsigned char> signature, std::string_view public_key_pem,
     crypto::CryptoProvider& provider) {
   if (signature.size() != kExpectedSignatureBytes) {
     return common::Result<void>::Err(SignatureFormatError());
   }
   if (public_key_pem.empty() ||
-      public_key_pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+      public_key_pem.size() >
+          static_cast<std::size_t>(std::numeric_limits<int>::max())) {
     return common::Result<void>::Err(PublicKeyError());
   }
-  Bio bio(BIO_new_mem_buf(public_key_pem.data(), static_cast<int>(public_key_pem.size())),
+  Bio bio(BIO_new_mem_buf(public_key_pem.data(),
+                          static_cast<int>(public_key_pem.size())),
           BIO_free);
-  EvpPkey key(bio ? PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr) : nullptr,
-              EVP_PKEY_free);
+  EvpPkey key(
+      bio ? PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr) : nullptr,
+      EVP_PKEY_free);
   if (!key || !HasOnlyPemWhitespace(bio.get()) ||
       !EVP_PKEY_is_a(key.get(), "ED25519")) {
     return common::Result<void>::Err(PublicKeyError());
@@ -296,7 +316,8 @@ common::Result<void> VerifyEd25519Signature(
       raw_public_key_size != raw_public_key.size()) {
     return common::Result<void>::Err(PublicKeyError());
   }
-  const auto verified = provider.VerifyEd25519(manifest, signature, raw_public_key);
+  const auto verified =
+      provider.VerifyEd25519(manifest, signature, raw_public_key);
   // Do not propagate E_CRYPTO_UNAVAILABLE (or any other provider error): fold
   // it into the same signature-invalid error a genuine mismatch returns, so
   // callers see exactly the error set they saw before this migration.
@@ -314,29 +335,32 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestImpl(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    const VerificationHooks& hooks) {
+    crypto::CryptoProvider& provider, const VerificationHooks& hooks) {
   if (!IsAbsoluteNormalizedPath(manifest_path) ||
       !IsAbsoluteNormalizedPath(signature_path)) {
-    return common::Result<IntegrityVerificationReport>::Err(ArtifactPathError());
+    return common::Result<IntegrityVerificationReport>::Err(
+        ArtifactPathError());
   }
   if (!IsAbsoluteNormalizedPath(active_executable) ||
       !IsAbsoluteNormalizedPath(active_config)) {
-    return common::Result<IntegrityVerificationReport>::Err(ManifestContractError());
+    return common::Result<IntegrityVerificationReport>::Err(
+        ManifestContractError());
   }
-  const auto manifest_bytes = ReadRegularFile(manifest_path, kMaximumManifestBytes,
-                                              hooks);
+  const auto manifest_bytes =
+      ReadRegularFile(manifest_path, kMaximumManifestBytes, hooks);
   if (!manifest_bytes.ok()) {
-    return common::Result<IntegrityVerificationReport>::Err(manifest_bytes.error());
+    return common::Result<IntegrityVerificationReport>::Err(
+        manifest_bytes.error());
   }
-  const auto signature_bytes = ReadRegularFile(signature_path,
-                                               kExpectedSignatureBytes + 1U,
-                                               hooks);
+  const auto signature_bytes =
+      ReadRegularFile(signature_path, kExpectedSignatureBytes + 1U, hooks);
   if (!signature_bytes.ok()) {
-    return common::Result<IntegrityVerificationReport>::Err(signature_bytes.error());
+    return common::Result<IntegrityVerificationReport>::Err(
+        signature_bytes.error());
   }
-  const auto signature = VerifyEd25519Signature(
-      manifest_bytes.value(), signature_bytes.value(), public_key_pem, provider);
+  const auto signature =
+      VerifyEd25519Signature(manifest_bytes.value(), signature_bytes.value(),
+                             public_key_pem, provider);
   if (!signature.ok()) {
     return common::Result<IntegrityVerificationReport>::Err(signature.error());
   }
@@ -346,8 +370,10 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestImpl(
   if (!manifest.ok()) {
     return common::Result<IntegrityVerificationReport>::Err(manifest.error());
   }
-  if (!MeetsActiveProcessContract(manifest.value(), active_executable, active_config)) {
-    return common::Result<IntegrityVerificationReport>::Err(ManifestContractError());
+  if (!MeetsActiveProcessContract(manifest.value(), active_executable,
+                                  active_config)) {
+    return common::Result<IntegrityVerificationReport>::Err(
+        ManifestContractError());
   }
 
   IntegrityVerificationReport report;
@@ -365,7 +391,8 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestImpl(
     if (!actual.ok()) {
       item.code = actual.error().code;
       report.passed = false;
-    } else if (CRYPTO_memcmp(actual.value().data(), entry.expected_sha256.data(),
+    } else if (CRYPTO_memcmp(actual.value().data(),
+                             entry.expected_sha256.data(),
                              entry.expected_sha256.size()) != 0) {
       item.code = "E_INTEGRITY_DIGEST_MISMATCH";
       report.passed = false;
@@ -387,12 +414,11 @@ common::Result<IntegrityVerificationReport> VerifyIntegrityManifestBoundary(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    const VerificationHooks& hooks) {
+    crypto::CryptoProvider& provider, const VerificationHooks& hooks) {
   try {
-    return VerifyIntegrityManifestImpl(
-        manifest_path, signature_path, public_key_pem, active_executable,
-        active_config, provider, hooks);
+    return VerifyIntegrityManifestImpl(manifest_path, signature_path,
+                                       public_key_pem, active_executable,
+                                       active_config, provider, hooks);
   } catch (const std::exception&) {
     return common::Result<IntegrityVerificationReport>::ErrFromStaticLifetime(
         kResourceError);
@@ -424,13 +450,12 @@ VerifyIntegrityManifestWithArtifactReadHook(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    ArtifactReadHook hook) {
+    crypto::CryptoProvider& provider, ArtifactReadHook hook) {
   VerificationHooks hooks;
   hooks.before_artifact_read = std::move(hook);
-  return VerifyIntegrityManifestBoundary(
-      manifest_path, signature_path, public_key_pem, active_executable,
-      active_config, provider, hooks);
+  return VerifyIntegrityManifestBoundary(manifest_path, signature_path,
+                                         public_key_pem, active_executable,
+                                         active_config, provider, hooks);
 }
 
 common::Result<IntegrityVerificationReport>
@@ -440,31 +465,29 @@ VerifyIntegrityManifestWithTestHooks(
     std::string_view public_key_pem,
     const std::filesystem::path& active_executable,
     const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider,
-    IntegrityVerifierTestHooks test_hooks) {
+    crypto::CryptoProvider& provider, IntegrityVerifierTestHooks test_hooks) {
   VerificationHooks hooks;
   hooks.before_artifact_read = std::move(test_hooks.before_artifact_read);
   hooks.read = std::move(test_hooks.read);
   if (test_hooks.inject_fault) {
-    hooks.inject_fault =
-        [inject_fault = std::move(test_hooks.inject_fault)](
-            VerificationFaultPoint point) {
-          switch (point) {
-            case VerificationFaultPoint::kReportReserve:
-              inject_fault(VerifierFaultPoint::kReportReserve);
-              return;
-            case VerificationFaultPoint::kReportItemCopy:
-              inject_fault(VerifierFaultPoint::kReportItemCopy);
-              return;
-            case VerificationFaultPoint::kReportItemAppend:
-              inject_fault(VerifierFaultPoint::kReportItemAppend);
-              return;
-          }
-        };
+    hooks.inject_fault = [inject_fault = std::move(test_hooks.inject_fault)](
+                             VerificationFaultPoint point) {
+      switch (point) {
+        case VerificationFaultPoint::kReportReserve:
+          inject_fault(VerifierFaultPoint::kReportReserve);
+          return;
+        case VerificationFaultPoint::kReportItemCopy:
+          inject_fault(VerifierFaultPoint::kReportItemCopy);
+          return;
+        case VerificationFaultPoint::kReportItemAppend:
+          inject_fault(VerifierFaultPoint::kReportItemAppend);
+          return;
+      }
+    };
   }
-  return VerifyIntegrityManifestBoundary(
-      manifest_path, signature_path, public_key_pem, active_executable,
-      active_config, provider, hooks);
+  return VerifyIntegrityManifestBoundary(manifest_path, signature_path,
+                                         public_key_pem, active_executable,
+                                         active_config, provider, hooks);
 }
 
 }  // namespace testing

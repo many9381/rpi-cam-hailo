@@ -56,8 +56,7 @@ common::Result<T> NonceFailure(std::string_view message) {
 
 void AccumulateAudit(common::ZeroizeAudit addition,
                      common::ZeroizeAudit* total) noexcept {
-  if (addition.count >
-      std::numeric_limits<std::size_t>::max() - total->count) {
+  if (addition.count > std::numeric_limits<std::size_t>::max() - total->count) {
     total->count = std::numeric_limits<std::size_t>::max();
   } else {
     total->count += addition.count;
@@ -65,8 +64,7 @@ void AccumulateAudit(common::ZeroizeAudit addition,
   total->last_verified = total->last_verified && addition.last_verified;
 }
 
-common::ZeroizeAudit CleanseSecureBytes(
-    common::SecureBytes* bytes) noexcept {
+common::ZeroizeAudit CleanseSecureBytes(common::SecureBytes* bytes) noexcept {
   const common::ZeroizeAudit before = bytes->zeroize_audit();
   bytes->clear();
   const common::ZeroizeAudit after = bytes->zeroize_audit();
@@ -89,13 +87,11 @@ int DecodeBase64UrlByte(unsigned char byte) noexcept {
   }
   if (byte >= static_cast<unsigned char>('a') &&
       byte <= static_cast<unsigned char>('z')) {
-    return 26 +
-           static_cast<int>(byte - static_cast<unsigned char>('a'));
+    return 26 + static_cast<int>(byte - static_cast<unsigned char>('a'));
   }
   if (byte >= static_cast<unsigned char>('0') &&
       byte <= static_cast<unsigned char>('9')) {
-    return 52 +
-           static_cast<int>(byte - static_cast<unsigned char>('0'));
+    return 52 + static_cast<int>(byte - static_cast<unsigned char>('0'));
   }
   if (byte == static_cast<unsigned char>('-')) {
     return 62;
@@ -126,21 +122,20 @@ bool DecodeNonce(std::string_view encoded,
       return false;
     }
 
-    (*decoded)[output++] = static_cast<unsigned char>(
-        (static_cast<unsigned int>(first) << 2U) |
-        (static_cast<unsigned int>(second) >> 4U));
-    (*decoded)[output++] = static_cast<unsigned char>(
-        (static_cast<unsigned int>(second) << 4U) |
-        (static_cast<unsigned int>(third) >> 2U));
-    (*decoded)[output++] = static_cast<unsigned char>(
-        (static_cast<unsigned int>(third) << 6U) |
-        static_cast<unsigned int>(fourth));
+    (*decoded)[output++] =
+        static_cast<unsigned char>((static_cast<unsigned int>(first) << 2U) |
+                                   (static_cast<unsigned int>(second) >> 4U));
+    (*decoded)[output++] =
+        static_cast<unsigned char>((static_cast<unsigned int>(second) << 4U) |
+                                   (static_cast<unsigned int>(third) >> 2U));
+    (*decoded)[output++] =
+        static_cast<unsigned char>((static_cast<unsigned int>(third) << 6U) |
+                                   static_cast<unsigned int>(fourth));
   }
   return output == decoded->size();
 }
 
-std::string EncodeNonce(
-    const std::array<unsigned char, kNonceRawBytes>& raw) {
+std::string EncodeNonce(const std::array<unsigned char, kNonceRawBytes>& raw) {
   std::string encoded;
   encoded.resize(kNonceEncodedBytes);
   std::size_t output = 0U;
@@ -157,13 +152,10 @@ std::string EncodeNonce(
   return encoded;
 }
 
-void WriteBigEndian64(std::uint64_t value,
-                      unsigned char* output) noexcept {
+void WriteBigEndian64(std::uint64_t value, unsigned char* output) noexcept {
   for (std::size_t index = 0U; index < kNonceTimestampBytes; ++index) {
-    const std::size_t shift =
-        (kNonceTimestampBytes - 1U - index) * 8U;
-    output[index] =
-        static_cast<unsigned char>((value >> shift) & 0xffU);
+    const std::size_t shift = (kNonceTimestampBytes - 1U - index) * 8U;
+    output[index] = static_cast<unsigned char>((value >> shift) & 0xffU);
   }
 }
 
@@ -247,9 +239,7 @@ class ActiveNonceOperation {
   ActiveNonceOperation(const ActiveNonceOperation&) = delete;
   ActiveNonceOperation& operator=(const ActiveNonceOperation&) = delete;
 
-  [[nodiscard]] bool active() const noexcept {
-    return lifecycle_ != nullptr;
-  }
+  [[nodiscard]] bool active() const noexcept { return lifecycle_ != nullptr; }
 
  private:
   NonceLifecycle* lifecycle_;
@@ -265,9 +255,7 @@ class PendingReplayRegistration {
   PendingReplayRegistration(NonceLifecycle* lifecycle,
                             PendingReplayIdentifiers* registrations,
                             common::ZeroizeAudit* audit)
-      : lifecycle_(lifecycle),
-        registrations_(registrations),
-        audit_(audit) {}
+      : lifecycle_(lifecycle), registrations_(registrations), audit_(audit) {}
 
   ~PendingReplayRegistration() { Retire(); }
 
@@ -296,16 +284,15 @@ class PendingReplayRegistration {
           pending_->bytes.size() != kReplayIdentifierBytes) {
         return NonceFailure<common::SecureBytes>(kOperationFailed);
       }
-      const auto registration = std::find(registrations_->begin(),
-                                          registrations_->end(), pending_);
+      const auto registration =
+          std::find(registrations_->begin(), registrations_->end(), pending_);
       if (registration == registrations_->end()) {
         return NonceFailure<common::SecureBytes>(kOperationFailed);
       }
       common::SecureBytes identifier = std::move(pending_->bytes);
       registrations_->erase(registration);
       registered_ = false;
-      return common::Result<common::SecureBytes>::Ok(
-          std::move(identifier));
+      return common::Result<common::SecureBytes>::Ok(std::move(identifier));
     } catch (...) {
       return NonceFailure<common::SecureBytes>(kOperationFailed);
     }
@@ -319,8 +306,8 @@ class PendingReplayRegistration {
     try {
       std::lock_guard lock(lifecycle_->mutex);
       if (registered_) {
-        const auto registration = std::find(
-            registrations_->begin(), registrations_->end(), pending_);
+        const auto registration =
+            std::find(registrations_->begin(), registrations_->end(), pending_);
         if (registration != registrations_->end()) {
           registrations_->erase(registration);
         }
@@ -405,13 +392,12 @@ common::Result<common::SecureBytes> BuildReplayIdentifier(
     return NonceFailure<common::SecureBytes>(kOperationFailed);
   }
 
-  auto identifier = RtspDigestHash(
-      RtspDigestAlgorithm::kSha256, {input.data(), input.size()});
+  auto identifier = RtspDigestHash(RtspDigestAlgorithm::kSha256,
+                                   {input.data(), input.size()});
   if (!identifier.ok() || identifier.value().size() != kReplayIdentifierBytes) {
     return NonceFailure<common::SecureBytes>(kOperationFailed);
   }
-  return common::Result<common::SecureBytes>::Ok(
-      std::move(identifier).value());
+  return common::Result<common::SecureBytes>::Ok(std::move(identifier).value());
 }
 
 }  // namespace
@@ -420,7 +406,9 @@ RtspDigestNonceManager::RtspDigestNonceManager(
     std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
-RtspDigestNonceManager::~RtspDigestNonceManager() { Clear(); }
+RtspDigestNonceManager::~RtspDigestNonceManager() {
+  Clear();
+}
 
 common::Result<std::unique_ptr<RtspDigestNonceManager>>
 RtspDigestNonceManager::Create(std::chrono::seconds ttl,
@@ -472,8 +460,7 @@ common::Result<std::string> RtspDigestNonceManager::Issue() {
       return NonceFailure<std::string>(kOperationFailed);
     }
     const std::uint64_t now = impl_->dependencies.now_seconds();
-    if (now > std::numeric_limits<std::uint64_t>::max() -
-                  impl_->ttl_seconds) {
+    if (now > std::numeric_limits<std::uint64_t>::max() - impl_->ttl_seconds) {
       return NonceFailure<std::string>(kOperationFailed);
     }
 
@@ -492,9 +479,8 @@ common::Result<std::string> RtspDigestNonceManager::Issue() {
     std::copy_n(random.value().data(), kNonceRandomBytes,
                 raw.data() + kNonceRandomOffset);
 
-    auto tag = RtspDigestHmacSha256(
-        {key.value().data(), key.value().size()},
-        {raw.data(), kNoncePrefixBytes});
+    auto tag = RtspDigestHmacSha256({key.value().data(), key.value().size()},
+                                    {raw.data(), kNoncePrefixBytes});
     if (!tag.ok() || tag.value().size() != kNonceTagBytes) {
       return NonceFailure<std::string>(kOperationFailed);
     }
@@ -526,11 +512,10 @@ common::Result<RtspDigestNonceValidation> RtspDigestNonceManager::Validate(
       if (!key.ok()) {
         return NonceFailure<RtspDigestNonceValidation>(key.error().message);
       }
-      auto expected_tag = RtspDigestHmacSha256(
-          {key.value().data(), key.value().size()},
-          {raw.data(), kNoncePrefixBytes});
-      if (!expected_tag.ok() ||
-          expected_tag.value().size() != kNonceTagBytes) {
+      auto expected_tag =
+          RtspDigestHmacSha256({key.value().data(), key.value().size()},
+                               {raw.data(), kNoncePrefixBytes});
+      if (!expected_tag.ok() || expected_tag.value().size() != kNonceTagBytes) {
         return NonceFailure<RtspDigestNonceValidation>(kOperationFailed);
       }
       if (!RtspDigestConstantTimeEqual(
@@ -552,8 +537,8 @@ common::Result<RtspDigestNonceValidation> RtspDigestNonceManager::Validate(
       return NonceFailure<RtspDigestNonceValidation>(kOperationFailed);
     }
     if (issued_at > now ||
-        issued_at > std::numeric_limits<std::uint64_t>::max() -
-                        impl_->ttl_seconds) {
+        issued_at >
+            std::numeric_limits<std::uint64_t>::max() - impl_->ttl_seconds) {
       return common::Result<RtspDigestNonceValidation>::Ok({});
     }
 
@@ -571,18 +556,15 @@ common::Result<RtspDigestNonceValidation> RtspDigestNonceManager::Validate(
                             : RtspDigestNonceStatus::kValid;
     std::copy_n(nonce_id.value().data(), validation.nonce_id.size(),
                 validation.nonce_id.begin());
-    return common::Result<RtspDigestNonceValidation>::Ok(
-        std::move(validation));
+    return common::Result<RtspDigestNonceValidation>::Ok(std::move(validation));
   } catch (...) {
     return NonceFailure<RtspDigestNonceValidation>(kOperationFailed);
   }
 }
 
 common::Result<bool> RtspDigestNonceManager::Commit(
-    std::string_view username,
-    const RtspDigestNonceValidation& validation,
-    std::uint32_t nonce_count,
-    bool with_qop) {
+    std::string_view username, const RtspDigestNonceValidation& validation,
+    std::uint32_t nonce_count, bool with_qop) {
   try {
     if (!LifecycleAccepting(&impl_->lifecycle)) {
       return NonceFailure<bool>(kOperationFailed);
@@ -597,21 +579,18 @@ common::Result<bool> RtspDigestNonceManager::Commit(
     }
 
     std::lock_guard sequence_lock(impl_->commit_sequence);
-    PendingReplayRegistration pending(&impl_->lifecycle,
-                                      &impl_->pending_identifiers,
-                                      &impl_->audit);
+    PendingReplayRegistration pending(
+        &impl_->lifecycle, &impl_->pending_identifiers, &impl_->audit);
     {
       ActiveNonceOperation build_operation(&impl_->lifecycle);
       if (!build_operation.active()) {
         return NonceFailure<bool>(kOperationFailed);
       }
-      auto identifier =
-          BuildReplayIdentifier(username, validation.nonce_id);
+      auto identifier = BuildReplayIdentifier(username, validation.nonce_id);
       if (!identifier.ok()) {
         return NonceFailure<bool>(identifier.error().message);
       }
-      auto registered =
-          pending.Register(std::move(identifier).value());
+      auto registered = pending.Register(std::move(identifier).value());
       if (!registered.ok()) {
         return NonceFailure<bool>(registered.error().message);
       }
@@ -633,8 +612,7 @@ common::Result<bool> RtspDigestNonceManager::Commit(
     if (!taken_identifier.ok()) {
       return NonceFailure<bool>(taken_identifier.error().message);
     }
-    common::SecureBytes identifier =
-        std::move(taken_identifier).value();
+    common::SecureBytes identifier = std::move(taken_identifier).value();
 
     std::unique_lock state_lock(impl_->lifecycle.mutex);
 
@@ -687,9 +665,8 @@ void RtspDigestNonceManager::Clear() noexcept {
       return;
     }
     impl_->lifecycle.closing = true;
-    impl_->lifecycle.drained.wait(lock, [this] {
-      return impl_->lifecycle.active_operations == 0U;
-    });
+    impl_->lifecycle.drained.wait(
+        lock, [this] { return impl_->lifecycle.active_operations == 0U; });
     if (impl_->lifecycle.terminal) {
       return;
     }

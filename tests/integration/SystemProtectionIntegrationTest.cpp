@@ -177,10 +177,8 @@ struct HttpsResponse {
   }
 };
 
-HttpsResponse Request(std::uint16_t port,
-                      std::string_view method,
-                      std::string_view path,
-                      std::string_view body = {},
+HttpsResponse Request(std::uint16_t port, std::string_view method,
+                      std::string_view path, std::string_view body = {},
                       std::string_view origin = {},
                       std::string_view cookie = {},
                       bool management_header = false) {
@@ -252,8 +250,7 @@ HttpsResponse Request(std::uint16_t port,
   (void)::SSL_shutdown(ssl.get());
 
   const std::size_t first_space = response.bytes.find(' ');
-  if (response.bytes.starts_with("HTTP/") &&
-      first_space != std::string::npos &&
+  if (response.bytes.starts_with("HTTP/") && first_space != std::string::npos &&
       first_space + 4U <= response.bytes.size()) {
     response.status = std::stoi(response.bytes.substr(first_space + 1U, 3U));
   }
@@ -284,10 +281,10 @@ class FirmwareProcess {
         const int descriptor_flags = ::fcntl(probe_pipe[1], F_GETFD);
         const std::string descriptor = std::to_string(probe_pipe[1]);
         if (descriptor_flags < 0 ||
-            ::fcntl(probe_pipe[1], F_SETFD,
-                    descriptor_flags & ~FD_CLOEXEC) != 0 ||
-            ::setenv("CF_TEST_PROTECTION_RUNTIME_START_FD",
-                     descriptor.c_str(), 1) != 0) {
+            ::fcntl(probe_pipe[1], F_SETFD, descriptor_flags & ~FD_CLOEXEC) !=
+                0 ||
+            ::setenv("CF_TEST_PROTECTION_RUNTIME_START_FD", descriptor.c_str(),
+                     1) != 0) {
           _exit(126);
         }
       } else if (::unsetenv("CF_TEST_PROTECTION_RUNTIME_START_FD") != 0) {
@@ -318,9 +315,8 @@ class FirmwareProcess {
     if (runtime_start_probe_.get() < 0) {
       throw std::logic_error("runtime start probe is not enabled");
     }
-    pollfd descriptor{.fd = runtime_start_probe_.get(),
-                      .events = POLLIN,
-                      .revents = 0};
+    pollfd descriptor{
+        .fd = runtime_start_probe_.get(), .events = POLLIN, .revents = 0};
     int ready = 0;
     do {
       ready = ::poll(&descriptor, 1, static_cast<int>(timeout.count()));
@@ -404,12 +400,12 @@ ProcessFixture WriteProcessFixture(const std::filesystem::path& root) {
   fixture.origin = "https://127.0.0.1:" + std::to_string(fixture.port);
   const auto integrity_directory = fixture.kernel_path.parent_path();
   std::filesystem::create_directories(integrity_directory);
-  std::filesystem::permissions(
-      fixture.state_directory, std::filesystem::perms::owner_all,
-      std::filesystem::perm_options::replace);
-  std::filesystem::permissions(
-      integrity_directory, std::filesystem::perms::owner_all,
-      std::filesystem::perm_options::replace);
+  std::filesystem::permissions(fixture.state_directory,
+                               std::filesystem::perms::owner_all,
+                               std::filesystem::perm_options::replace);
+  std::filesystem::permissions(integrity_directory,
+                               std::filesystem::perms::owner_all,
+                               std::filesystem::perm_options::replace);
 
   std::ofstream config(fixture.config_path);
   config << "camera:\n"
@@ -422,7 +418,8 @@ ProcessFixture WriteProcessFixture(const std::filesystem::path& root) {
             "  port: "
          << fixture.port
          << "\n"
-            "  web_root: " CF_SOURCE_DIR "/web/dist\n"
+            "  web_root: " CF_SOURCE_DIR
+            "/web/dist\n"
             "  public_base_url: "
          << fixture.origin
          << "\n"
@@ -475,8 +472,7 @@ ProcessFixture WriteProcessFixture(const std::filesystem::path& root) {
     return std::move(result).value();
   };
   const auto kernel_digest = digest(fixture.kernel_path);
-  fixture.kernel_digest =
-      camera_firmware::integrity::HexSha256(kernel_digest);
+  fixture.kernel_digest = camera_firmware::integrity::HexSha256(kernel_digest);
   camera_firmware::integrity::IntegrityManifest manifest{
       1U,
       "camera-firmware",
@@ -526,11 +522,11 @@ std::optional<std::string> Login(const ProcessFixture& fixture,
                                  std::string_view username,
                                  std::string_view password,
                                  HttpsResponse* observed = nullptr) {
-  const auto response = Request(
-      fixture.port, "POST", "/api/v1/auth/login",
-      "{\"username\":\"" + std::string(username) +
-          "\",\"password\":\"" + std::string(password) + "\"}",
-      fixture.origin, {}, true);
+  const auto response =
+      Request(fixture.port, "POST", "/api/v1/auth/login",
+              "{\"username\":\"" + std::string(username) +
+                  "\",\"password\":\"" + std::string(password) + "\"}",
+              fixture.origin, {}, true);
   if (observed != nullptr) {
     *observed = response;
   }
@@ -549,8 +545,7 @@ std::optional<std::string> Login(const ProcessFixture& fixture,
 // has to obtain one first. The generated password is drawn from the printable
 // ASCII range and can contain a quote or a backslash, so the request body is
 // escaped rather than concatenated the way Login() above can afford to be.
-std::optional<std::string> InitialAccountCookie(
-    const ProcessFixture& fixture) {
+std::optional<std::string> InitialAccountCookie(const ProcessFixture& fixture) {
   const auto status = Request(fixture.port, "GET", "/api/v1/setup/status");
   if (status.status != 200) {
     return std::nullopt;
@@ -635,9 +630,9 @@ TEST(SystemProtectionIntegrationTest,
     ASSERT_TRUE(WaitForService(fixture));
     const auto administrator = Login(fixture, "owner1", "StrongPass9!");
     ASSERT_TRUE(administrator.has_value());
-    const auto startup = Request(fixture.port, "GET",
-                                 "/api/v1/system/protection", {}, {},
-                                 *administrator);
+    const auto startup =
+        Request(fixture.port, "GET", "/api/v1/system/protection", {}, {},
+                *administrator);
     ASSERT_EQ(startup.status, 200) << startup.bytes;
     const auto json = startup.JsonBody();
     ASSERT_TRUE(json.has_value());
@@ -655,13 +650,12 @@ TEST(SystemProtectionIntegrationTest,
     ASSERT_TRUE(baseline_events.has_value());
     ASSERT_TRUE((*baseline_events)["next_cursor"].isNull());
     for (const auto& event : (*baseline_events)["events"]) {
-      ASSERT_TRUE(event["sequence"].isInt64() ||
-                  event["sequence"].isUInt64());
-      restricted_startup_boundary = std::max(
-          restricted_startup_boundary, event["sequence"].asInt64());
+      ASSERT_TRUE(event["sequence"].isInt64() || event["sequence"].isUInt64());
+      restricted_startup_boundary =
+          std::max(restricted_startup_boundary, event["sequence"].asInt64());
     }
-    const auto logout = Request(fixture.port, "POST", "/api/v1/auth/logout",
-                                {}, fixture.origin, *administrator, true);
+    const auto logout = Request(fixture.port, "POST", "/api/v1/auth/logout", {},
+                                fixture.origin, *administrator, true);
     ASSERT_EQ(logout.status, 200) << logout.bytes;
   }
 
@@ -677,10 +671,10 @@ TEST(SystemProtectionIntegrationTest,
 
   EXPECT_EQ(Request(fixture.port, "GET", "/api/v1/system/protection").status,
             401);
-  const auto created_viewer = Request(
-      fixture.port, "POST", "/api/v1/security/users",
-      R"({"username":"viewer1","password":"ViewerPass9!"})",
-      fixture.origin, *administrator, true);
+  const auto created_viewer =
+      Request(fixture.port, "POST", "/api/v1/security/users",
+              R"({"username":"viewer1","password":"ViewerPass9!"})",
+              fixture.origin, *administrator, true);
   ASSERT_EQ(created_viewer.status, 201) << created_viewer.bytes;
   const auto viewer_ip = Request(
       fixture.port, "POST", "/api/v1/security/management-ips/viewer",
@@ -688,14 +682,13 @@ TEST(SystemProtectionIntegrationTest,
   ASSERT_EQ(viewer_ip.status, 201) << viewer_ip.bytes;
   const auto viewer = Login(fixture, "viewer1", "ViewerPass9!");
   ASSERT_TRUE(viewer.has_value());
-  EXPECT_EQ(Request(fixture.port, "GET", "/api/v1/system/protection", {},
-                    {}, *viewer)
-                .status,
-            403);
+  EXPECT_EQ(
+      Request(fixture.port, "GET", "/api/v1/system/protection", {}, {}, *viewer)
+          .status,
+      403);
 
-  const auto restricted = Request(fixture.port, "GET",
-                                  "/api/v1/system/protection", {}, {},
-                                  *administrator);
+  const auto restricted = Request(
+      fixture.port, "GET", "/api/v1/system/protection", {}, {}, *administrator);
   ASSERT_EQ(restricted.status, 200) << restricted.bytes;
   const auto restricted_json = restricted.JsonBody();
   ASSERT_TRUE(restricted_json.has_value());
@@ -715,8 +708,7 @@ TEST(SystemProtectionIntegrationTest,
   EXPECT_EQ(restricted_body.find(fixture.kernel_path.string()),
             std::string::npos);
   EXPECT_EQ(restricted_body.find(fixture.kernel_digest), std::string::npos);
-  EXPECT_EQ(restricted_body.find("tampered kernel fixture"),
-            std::string::npos);
+  EXPECT_EQ(restricted_body.find("tampered kernel fixture"), std::string::npos);
 
   for (const auto& [path, body] :
        std::array<std::pair<std::string_view, std::string_view>, 3U>{
@@ -734,8 +726,8 @@ TEST(SystemProtectionIntegrationTest,
 
   const auto startup_audit = Request(
       fixture.port, "GET",
-      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100",
-      {}, {}, *administrator);
+      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100", {},
+      {}, *administrator);
   ASSERT_EQ(startup_audit.status, 200) << startup_audit.bytes;
   const auto startup_events = startup_audit.JsonBody();
   ASSERT_TRUE(startup_events.has_value());
@@ -752,21 +744,18 @@ TEST(SystemProtectionIntegrationTest,
   }
   ASSERT_EQ(startup_protection_events.size(), 5U) << startup_audit.bytes;
   const std::array<std::string_view, 5U> expected_startup_events{
-      "self_test.started", "self_test.succeeded",
-      "integrity_check.started", "integrity_check.failed",
-      "protection.restricted"};
+      "self_test.started", "self_test.succeeded", "integrity_check.started",
+      "integrity_check.failed", "protection.restricted"};
   for (std::size_t index = 0; index < expected_startup_events.size(); ++index) {
     const auto& event = *startup_protection_events[index];
     ASSERT_EQ(event["event_type"].asString(), expected_startup_events[index]);
     ASSERT_EQ(event["actor_identity"].asString(), "system");
     EXPECT_EQ(event["subject_type"].asString(), "startup");
-    const std::string subject_identity =
-        event["subject_identity"].asString();
+    const std::string subject_identity = event["subject_identity"].asString();
     EXPECT_TRUE(subject_identity.starts_with("d_ms="));
     if (event["event_type"].asString() == "integrity_check.failed" ||
         event["event_type"].asString() == "protection.restricted") {
-      EXPECT_NE(subject_identity.find(";n=1;ids=kernel"),
-                std::string::npos);
+      EXPECT_NE(subject_identity.find(";n=1;ids=kernel"), std::string::npos);
     } else {
       EXPECT_NE(subject_identity.find(";n=0;ids=-"), std::string::npos);
     }
@@ -779,10 +768,9 @@ TEST(SystemProtectionIntegrationTest,
   WriteFile(fixture.kernel_path, kTrustedKernel);
   const auto manual_boundary_audit = Request(
       fixture.port, "GET",
-      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100",
-      {}, {}, *administrator);
-  ASSERT_EQ(manual_boundary_audit.status, 200)
-      << manual_boundary_audit.bytes;
+      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100", {},
+      {}, *administrator);
+  ASSERT_EQ(manual_boundary_audit.status, 200) << manual_boundary_audit.bytes;
   const auto manual_boundary_events = manual_boundary_audit.JsonBody();
   ASSERT_TRUE(manual_boundary_events.has_value());
   ASSERT_TRUE((*manual_boundary_events)["next_cursor"].isNull());
@@ -793,24 +781,22 @@ TEST(SystemProtectionIntegrationTest,
         std::max(manual_boundary_sequence, event["sequence"].asInt64());
   }
 
-  const auto accepted = Request(fixture.port, "POST",
-                                "/api/v1/system/integrity-checks", "{}",
-                                fixture.origin, *administrator, true);
+  const auto accepted =
+      Request(fixture.port, "POST", "/api/v1/system/integrity-checks", "{}",
+              fixture.origin, *administrator, true);
   ASSERT_EQ(accepted.status, 202) << accepted.bytes;
   const auto accepted_json = accepted.JsonBody();
   ASSERT_TRUE(accepted_json.has_value());
   EXPECT_EQ((*accepted_json)["state"].asString(), "checking");
   EXPECT_TRUE((*accepted_json)["check_running"].asBool());
-  ASSERT_TRUE(
-      process.WaitForRuntimeStartProbe(std::chrono::seconds(10)));
+  ASSERT_TRUE(process.WaitForRuntimeStartProbe(std::chrono::seconds(10)));
 
   std::optional<HttpsResponse> recovered;
   const auto recovery_deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < recovery_deadline) {
-    auto status = Request(fixture.port, "GET",
-                          "/api/v1/system/protection", {}, {},
-                          *administrator);
+    auto status = Request(fixture.port, "GET", "/api/v1/system/protection", {},
+                          {}, *administrator);
     const auto json = status.JsonBody();
     if (status.status == 200 && json.has_value() &&
         !(*json)["check_running"].asBool()) {
@@ -828,8 +814,8 @@ TEST(SystemProtectionIntegrationTest,
 
   const auto recovery_audit = Request(
       fixture.port, "GET",
-      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100",
-      {}, {}, *administrator);
+      "/api/v1/audit/events?sort_by=timestamp&sort_direction=asc&limit=100", {},
+      {}, *administrator);
   ASSERT_EQ(recovery_audit.status, 200) << recovery_audit.bytes;
   const auto recovery_events = recovery_audit.JsonBody();
   ASSERT_TRUE(recovery_events.has_value());
@@ -853,8 +839,7 @@ TEST(SystemProtectionIntegrationTest,
     ASSERT_EQ(event["event_type"].asString(), expected_manual_events[index]);
     ASSERT_EQ(event["actor_identity"].asString(), "owner1");
     EXPECT_EQ(event["subject_type"].asString(), "manual");
-    const std::string subject_identity =
-        event["subject_identity"].asString();
+    const std::string subject_identity = event["subject_identity"].asString();
     EXPECT_TRUE(subject_identity.starts_with("d_ms="));
     EXPECT_NE(subject_identity.find(";n=0;ids=-"), std::string::npos);
     if (index == 0U) {

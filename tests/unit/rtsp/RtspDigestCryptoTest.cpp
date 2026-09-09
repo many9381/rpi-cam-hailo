@@ -38,18 +38,15 @@ std::string HexForTest(const SecureBytes& bytes) {
 
 TEST(RtspDigestCryptoTest, MatchesRfc7616Sha256Response) {
   const std::array<unsigned char, 14> password{
-      'C', 'i', 'r', 'c', 'l', 'e', ' ', 'o', 'f', ' ',
-      'L', 'i', 'f', 'e'};
-  auto ha1 = ComputeRtspDigestHa1(
-      RtspDigestAlgorithm::kSha256, "Mufasa", "http-auth@example.org",
-      password);
+      'C', 'i', 'r', 'c', 'l', 'e', ' ', 'o', 'f', ' ', 'L', 'i', 'f', 'e'};
+  auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, "Mufasa",
+                                  "http-auth@example.org", password);
   ASSERT_TRUE(ha1.ok()) << ha1.error().message;
 
   auto response = ComputeRtspDigestResponse(
-      RtspDigestAlgorithm::kSha256,
-      {ha1.value().data(), ha1.value().size()}, "GET", "/dir/index.html",
-      "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", "00000001",
-      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ");
+      RtspDigestAlgorithm::kSha256, {ha1.value().data(), ha1.value().size()},
+      "GET", "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v",
+      "00000001", "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ");
 
   ASSERT_TRUE(response.ok()) << response.error().message;
   EXPECT_EQ(HexForTest(response.value()),
@@ -58,22 +55,18 @@ TEST(RtspDigestCryptoTest, MatchesRfc7616Sha256Response) {
 
 TEST(RtspDigestCryptoTest, MatchesRfc7616Md5CompatibilityResponse) {
   const std::array<unsigned char, 14> password{
-      'C', 'i', 'r', 'c', 'l', 'e', ' ', 'o', 'f', ' ',
-      'L', 'i', 'f', 'e'};
-  auto ha1 = ComputeRtspDigestHa1(
-      RtspDigestAlgorithm::kMd5, "Mufasa", "http-auth@example.org",
-      password);
+      'C', 'i', 'r', 'c', 'l', 'e', ' ', 'o', 'f', ' ', 'L', 'i', 'f', 'e'};
+  auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kMd5, "Mufasa",
+                                  "http-auth@example.org", password);
   ASSERT_TRUE(ha1.ok()) << ha1.error().message;
 
   auto response = ComputeRtspDigestResponse(
-      RtspDigestAlgorithm::kMd5,
-      {ha1.value().data(), ha1.value().size()}, "GET", "/dir/index.html",
-      "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v", "00000001",
-      "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ");
+      RtspDigestAlgorithm::kMd5, {ha1.value().data(), ha1.value().size()},
+      "GET", "/dir/index.html", "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v",
+      "00000001", "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ");
 
   ASSERT_TRUE(response.ok()) << response.error().message;
-  EXPECT_EQ(HexForTest(response.value()),
-            "8ca523f5e9506fed4657c9700eebdbec");
+  EXPECT_EQ(HexForTest(response.value()), "8ca523f5e9506fed4657c9700eebdbec");
 }
 
 TEST(RtspDigestCryptoTest, MatchesRfc4231HmacSha256Vector) {
@@ -81,7 +74,7 @@ TEST(RtspDigestCryptoTest, MatchesRfc4231HmacSha256Vector) {
       0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
       0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b};
   const std::array<unsigned char, 8> data{'H', 'i', ' ', 'T',
-                                           'h', 'e', 'r', 'e'};
+                                          'h', 'e', 'r', 'e'};
 
   auto mac = RtspDigestHmacSha256(key, data);
 
@@ -110,8 +103,7 @@ TEST(RtspDigestCryptoTest, HashesEmptyInputWithSupportedAlgorithms) {
   ASSERT_TRUE(md5.ok()) << md5.error().message;
   EXPECT_EQ(HexForTest(sha256.value()),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-  EXPECT_EQ(HexForTest(md5.value()),
-            "d41d8cd98f00b204e9800998ecf8427e");
+  EXPECT_EQ(HexForTest(md5.value()), "d41d8cd98f00b204e9800998ecf8427e");
 }
 
 TEST(RtspDigestCryptoTest, ParsesAndNamesSupportedAlgorithms) {
@@ -164,8 +156,7 @@ TEST(RtspDigestCryptoTest, RejectsInvalidEnumForHa1WithoutFallback) {
   const auto invalid = static_cast<RtspDigestAlgorithm>(99);
   const std::span<const unsigned char> empty_password;
 
-  auto ha1 = ComputeRtspDigestHa1(
-      invalid, "username", "realm", empty_password);
+  auto ha1 = ComputeRtspDigestHa1(invalid, "username", "realm", empty_password);
 
   ASSERT_FALSE(ha1.ok());
   EXPECT_EQ(ha1.error().code, "E_RTSP_AUTH_CRYPTO");
@@ -175,8 +166,8 @@ TEST(RtspDigestCryptoTest, RejectsInvalidEnumForResponseWithoutFallback) {
   const auto invalid = static_cast<RtspDigestAlgorithm>(99);
   const std::span<const unsigned char> empty_ha1;
 
-  auto response = ComputeRtspDigestResponse(
-      invalid, empty_ha1, "GET", "/", "nonce", "00000001", "cnonce");
+  auto response = ComputeRtspDigestResponse(invalid, empty_ha1, "GET", "/",
+                                            "nonce", "00000001", "cnonce");
 
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code, "E_RTSP_AUTH_CRYPTO");
@@ -206,8 +197,8 @@ TEST(RtspDigestCryptoTest, RejectsMalformedOddAndWrongLengthHex) {
 }
 
 TEST(RtspDigestCryptoTest, RejectsHexExpectedLengthOverflow) {
-  auto decoded = DecodeRtspDigestHex(
-      "", std::numeric_limits<std::size_t>::max());
+  auto decoded =
+      DecodeRtspDigestHex("", std::numeric_limits<std::size_t>::max());
 
   ASSERT_FALSE(decoded.ok());
   EXPECT_EQ(decoded.error().code, "E_RTSP_AUTH_FORMAT");
@@ -285,9 +276,9 @@ TEST(RtspDigestCryptoTest, RejectsRandomLengthAboveOpenSslLimit) {
 TEST(RtspDigestCryptoTest, RejectsWrongSizedHa1ForResponse) {
   const std::array<unsigned char, 31> wrong_size_ha1{};
 
-  auto response = ComputeRtspDigestResponse(
-      RtspDigestAlgorithm::kSha256, wrong_size_ha1, "GET", "/", "nonce",
-      "00000001", "cnonce");
+  auto response =
+      ComputeRtspDigestResponse(RtspDigestAlgorithm::kSha256, wrong_size_ha1,
+                                "GET", "/", "nonce", "00000001", "cnonce");
 
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code, "E_RTSP_AUTH_FORMAT");

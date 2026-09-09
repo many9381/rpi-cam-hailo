@@ -32,9 +32,9 @@ camera_firmware::config::AiConfig MakeValidAiConfig() {
 camera_firmware::common::Result<camera_firmware::config::AppConfig>
 LoadInlineConfig(std::string_view yaml) {
   static std::atomic<unsigned int> next_file{0U};
-  const auto path = std::filesystem::temp_directory_path() /
-                    ("cf-app-config-" +
-                     std::to_string(next_file.fetch_add(1U)) + ".yaml");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("cf-app-config-" + std::to_string(next_file.fetch_add(1U)) + ".yaml");
   {
     std::ofstream out(path);
     out << yaml;
@@ -80,8 +80,9 @@ std::string SecurityConfigWithRtspAuth(bool auth_enabled) {
   const auto marker = std::string("    enabled: true\n    realm: rpi-camera");
   const auto position = yaml.rfind(marker);
   EXPECT_NE(position, std::string::npos);
-  yaml.replace(position, marker.size(),
-               auth_enabled ? marker : "    enabled: false\n    realm: rpi-camera");
+  yaml.replace(
+      position, marker.size(),
+      auth_enabled ? marker : "    enabled: false\n    realm: rpi-camera");
   return yaml;
 }
 
@@ -549,7 +550,8 @@ TEST(AppConfigTest, RejectsAuditRetentionOutsideApprovedBounds) {
 }
 
 TEST(AppConfigTest, LoadsSecureRtspSessionKeyConfig) {
-  auto cfg = camera_firmware::config::LoadConfigFile("config/app-rpi5-dev.yaml");
+  auto cfg =
+      camera_firmware::config::LoadConfigFile("config/app-rpi5-dev.yaml");
   ASSERT_TRUE(cfg.ok()) << cfg.error().message;
   EXPECT_TRUE(cfg.value().secure_rtsp.enabled);
   EXPECT_TRUE(cfg.value().secure_rtsp.media_srtp);
@@ -989,18 +991,15 @@ TEST(AppConfigTest, LoadsMultiModelAiConfig) {
   ASSERT_EQ(cfg.value().ai.models.size(), 2u);
   EXPECT_EQ(cfg.value().ai.models[0].id, "objects");
   EXPECT_EQ(cfg.value().ai.models[0].kind, "object_detection");
-  EXPECT_EQ(cfg.value().ai.models[0].hef_path,
-            "/opt/cf/models/yolov8n.hef");
-  EXPECT_EQ(cfg.value().ai.models[0].output_name,
-            "yolov8_nms_postprocess");
+  EXPECT_EQ(cfg.value().ai.models[0].hef_path, "/opt/cf/models/yolov8n.hef");
+  EXPECT_EQ(cfg.value().ai.models[0].output_name, "yolov8_nms_postprocess");
   EXPECT_EQ(cfg.value().ai.models[0].input.width, 640u);
   EXPECT_EQ(cfg.value().ai.models[0].input.height, 640u);
   EXPECT_EQ(cfg.value().ai.models[0].input.format, "rgb8");
   EXPECT_TRUE(cfg.value().ai.models[0].input.letterbox);
   EXPECT_FLOAT_EQ(cfg.value().ai.models[0].confidence_threshold, 0.40F);
   EXPECT_EQ(cfg.value().ai.models[0].labels, "coco80");
-  EXPECT_EQ(cfg.value().ai.models[1].output_name,
-            "yolov8_pose_postprocess");
+  EXPECT_EQ(cfg.value().ai.models[1].output_name, "yolov8_pose_postprocess");
   EXPECT_TRUE(cfg.value().camera.ai.enabled);
   ASSERT_EQ(cfg.value().camera.ai.model_ids.size(), 2u);
   EXPECT_EQ(cfg.value().camera.ai.model_ids[0], "objects");
@@ -1453,16 +1452,19 @@ secure_rtsp:
 
 TEST(AppConfigTest, RejectsSubStreamBitrateBelowFloor) {
   const auto config = LoadInlineConfig(
-      "camera:\n  sub_stream:\n    enabled: true\n    bitrate_kbps: 100\nsecurity:\n  enabled: false\nsecure_rtsp:\n  enabled: false\n");
+      "camera:\n  sub_stream:\n    enabled: true\n    bitrate_kbps: "
+      "100\nsecurity:\n  enabled: false\nsecure_rtsp:\n  enabled: false\n");
   EXPECT_FALSE(config.ok());
 }
 
 TEST(AppConfigTest, RejectsDisabledSubStreamWithZeroGeometry) {
-  // A DISABLED sub_stream with a zero geometry field must be rejected regardless
-  // of `enabled`: the web client rejects zero geometry unconditionally, so a
-  // zeroed YAML field (or a zero derived from it) would brick the settings UI.
+  // A DISABLED sub_stream with a zero geometry field must be rejected
+  // regardless of `enabled`: the web client rejects zero geometry
+  // unconditionally, so a zeroed YAML field (or a zero derived from it) would
+  // brick the settings UI.
   const auto config = LoadInlineConfig(
-      "camera:\n  sub_stream:\n    enabled: false\n    width: 0\n    height: 0\n"
+      "camera:\n  sub_stream:\n    enabled: false\n    width: 0\n    height: "
+      "0\n"
       "    fps: 0\n    bitrate_kbps: 0\nsecurity:\n  enabled: false\n"
       "secure_rtsp:\n  enabled: false\n");
   ASSERT_FALSE(config.ok());
@@ -1473,7 +1475,8 @@ TEST(AppConfigTest, AcceptsDisabledSubStreamWithNonZeroGeometry) {
   // Disabled + non-zero geometry still passes: the bitrate RANGE check remains
   // enabled-only, only the non-zero invariant applies regardless of `enabled`.
   const auto config = LoadInlineConfig(
-      "camera:\n  sub_stream:\n    enabled: false\n    width: 800\n    height: 600\n"
+      "camera:\n  sub_stream:\n    enabled: false\n    width: 800\n    height: "
+      "600\n"
       "    fps: 20\n    bitrate_kbps: 100\nsecurity:\n  enabled: false\n"
       "secure_rtsp:\n  enabled: false\n");
   ASSERT_TRUE(config.ok()) << config.error().message;

@@ -141,8 +141,7 @@ TEST(FragmentRingTest, InvalidateWakesBlockedReader) {
     wait_next_starting.set_value();
     return reader.WaitNext(std::chrono::seconds(5));
   });
-  ASSERT_EQ(wait_next_starting_future.wait_for(1s),
-            std::future_status::ready);
+  ASSERT_EQ(wait_next_starting_future.wait_for(1s), std::future_status::ready);
 
   ring.Invalidate();
 

@@ -65,10 +65,8 @@ FrameLease MakeSolidNv12LeaseWithGeometry(std::uint64_t sequence,
   handle.plane_count = 2;
   handle.planes[0] = {
       .dmabuf_fd = fd, .offset = 0, .length = y_size, .stride = stride};
-  handle.planes[1] = {.dmabuf_fd = fd,
-                      .offset = y_size,
-                      .length = uv_size,
-                      .stride = stride};
+  handle.planes[1] = {
+      .dmabuf_fd = fd, .offset = y_size, .length = uv_size, .stride = stride};
 
   return FrameLease(std::move(handle), [fd] {
     if (fd >= 0) {
@@ -97,7 +95,8 @@ FrameLease MakeUndersizedYPlaneLease() {
   const std::size_t short_y_rows = kHeight / 2U;
   const std::size_t short_y_size =
       static_cast<std::size_t>(kStride) * short_y_rows;
-  const std::size_t uv_size = static_cast<std::size_t>(kStride) * (kHeight / 2U);
+  const std::size_t uv_size =
+      static_cast<std::size_t>(kStride) * (kHeight / 2U);
 
   std::vector<std::uint8_t> y_bytes(short_y_size, 128U);
   std::vector<std::uint8_t> uv_bytes(uv_size, 128U);

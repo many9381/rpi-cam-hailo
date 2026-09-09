@@ -26,15 +26,14 @@ struct IntegrityVerificationReport {
 
 [[nodiscard]] common::Result<void> VerifyEd25519Signature(
     std::span<const unsigned char> manifest,
-    std::span<const unsigned char> signature,
-    std::string_view public_key_pem,
+    std::span<const unsigned char> signature, std::string_view public_key_pem,
     crypto::CryptoProvider& provider);
-[[nodiscard]] common::Result<IntegrityVerificationReport> VerifyIntegrityManifest(
-    const std::filesystem::path& manifest_path,
-    const std::filesystem::path& signature_path,
-    std::string_view public_key_pem,
-    const std::filesystem::path& active_executable,
-    const std::filesystem::path& active_config,
-    crypto::CryptoProvider& provider);
+[[nodiscard]] common::Result<IntegrityVerificationReport>
+VerifyIntegrityManifest(const std::filesystem::path& manifest_path,
+                        const std::filesystem::path& signature_path,
+                        std::string_view public_key_pem,
+                        const std::filesystem::path& active_executable,
+                        const std::filesystem::path& active_config,
+                        crypto::CryptoProvider& provider);
 
 }  // namespace camera_firmware::integrity

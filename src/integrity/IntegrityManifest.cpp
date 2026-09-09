@@ -73,8 +73,7 @@ class RestrictedYamlEventHandler final : public YAML::EventHandler {
   }
 
   void OnMapStart(const YAML::Mark& mark, const std::string& tag,
-                  YAML::anchor_t anchor,
-                  YAML::EmitterStyle::value) override {
+                  YAML::anchor_t anchor, YAML::EmitterStyle::value) override {
     CountEvent();
     RejectTagOrAnchor(mark, tag, anchor);
     EnterContainer();
@@ -121,10 +120,9 @@ class RestrictedYamlEventHandler final : public YAML::EventHandler {
     if (!tag.empty() && tag != "?" && tag != "!") {
       throw RestrictedYamlRejected{};
     }
-    if (tag == "!" &&
-        (mark.is_null() || mark.pos < 0 ||
-         static_cast<std::size_t>(mark.pos) >= source_.size() ||
-         MarkPointsToBang(mark))) {
+    if (tag == "!" && (mark.is_null() || mark.pos < 0 ||
+                       static_cast<std::size_t>(mark.pos) >= source_.size() ||
+                       MarkPointsToBang(mark))) {
       throw RestrictedYamlRejected{};
     }
   }
@@ -142,7 +140,8 @@ class RestrictedYamlEventHandler final : public YAML::EventHandler {
 };
 
 common::Error ManifestFormatError() {
-  return {"E_INTEGRITY_MANIFEST_FORMAT", "Integrity manifest has invalid format"};
+  return {"E_INTEGRITY_MANIFEST_FORMAT",
+          "Integrity manifest has invalid format"};
 }
 
 bool IsAllowedIdCharacter(unsigned char value) {
@@ -183,7 +182,8 @@ unsigned int ParseDigits(std::string_view value, std::size_t offset,
                          std::size_t count) {
   unsigned int parsed = 0U;
   for (std::size_t index = 0U; index < count; ++index) {
-    parsed = parsed * 10U + static_cast<unsigned int>(value[offset + index] - '0');
+    parsed =
+        parsed * 10U + static_cast<unsigned int>(value[offset + index] - '0');
   }
   return parsed;
 }
@@ -193,8 +193,8 @@ bool IsRfc3339Utc(std::string_view value) {
       value[10] != 'T' || value[13] != ':' || value[16] != ':') {
     return false;
   }
-  for (const std::size_t index : {0U, 1U, 2U, 3U, 5U, 6U, 8U, 9U, 11U,
-                                  12U, 14U, 15U, 17U, 18U}) {
+  for (const std::size_t index :
+       {0U, 1U, 2U, 3U, 5U, 6U, 8U, 9U, 11U, 12U, 14U, 15U, 17U, 18U}) {
     if (!IsDigitAt(value, index)) {
       return false;
     }
@@ -203,7 +203,8 @@ bool IsRfc3339Utc(std::string_view value) {
   if (value[suffix] == '.') {
     ++suffix;
     const std::size_t fraction_start = suffix;
-    while (suffix < value.size() && value[suffix] >= '0' && value[suffix] <= '9') {
+    while (suffix < value.size() && value[suffix] >= '0' &&
+           value[suffix] <= '9') {
       ++suffix;
     }
     if (suffix == fraction_start) {
@@ -268,7 +269,7 @@ bool HasExactKeys(const YAML::Node& node,
 }
 
 common::Result<std::string> RequiredScalar(const YAML::Node& node,
-                                            std::string_view key) {
+                                           std::string_view key) {
   const YAML::Node value = node[std::string(key)];
   if (!value || !value.IsScalar()) {
     return common::Result<std::string>::Err(ManifestFormatError());
@@ -296,7 +297,8 @@ std::string_view IntegrityCategoryName(IntegrityCategory category) noexcept {
   return "unknown";
 }
 
-common::Result<IntegrityCategory> ParseIntegrityCategory(std::string_view value) {
+common::Result<IntegrityCategory> ParseIntegrityCategory(
+    std::string_view value) {
   if (value == "firmware") {
     return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kFirmware);
   }
@@ -304,7 +306,8 @@ common::Result<IntegrityCategory> ParseIntegrityCategory(std::string_view value)
     return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kLibrary);
   }
   if (value == "configuration") {
-    return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kConfiguration);
+    return common::Result<IntegrityCategory>::Ok(
+        IntegrityCategory::kConfiguration);
   }
   if (value == "web_asset") {
     return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kWebAsset);
@@ -313,12 +316,14 @@ common::Result<IntegrityCategory> ParseIntegrityCategory(std::string_view value)
     return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kKernel);
   }
   if (value == "kernel_module") {
-    return common::Result<IntegrityCategory>::Ok(IntegrityCategory::kKernelModule);
+    return common::Result<IntegrityCategory>::Ok(
+        IntegrityCategory::kKernelModule);
   }
   return common::Result<IntegrityCategory>::Err(ManifestFormatError());
 }
 
-common::Result<IntegrityManifest> ParseIntegrityManifest(std::string_view yaml) {
+common::Result<IntegrityManifest> ParseIntegrityManifest(
+    std::string_view yaml) {
   if (yaml.size() > kMaximumManifestBytes) {
     return common::Result<IntegrityManifest>::Err(ManifestFormatError());
   }
@@ -327,7 +332,8 @@ common::Result<IntegrityManifest> ParseIntegrityManifest(std::string_view yaml) 
       return common::Result<IntegrityManifest>::Err(ManifestFormatError());
     }
     const YAML::Node root = YAML::Load(std::string(yaml));
-    if (!HasExactKeys(root, {"schema_version", "product", "created_at", "files"})) {
+    if (!HasExactKeys(root,
+                      {"schema_version", "product", "created_at", "files"})) {
       return common::Result<IntegrityManifest>::Err(ManifestFormatError());
     }
 
@@ -335,8 +341,8 @@ common::Result<IntegrityManifest> ParseIntegrityManifest(std::string_view yaml) 
     const auto product = RequiredScalar(root, "product");
     const auto created_at = RequiredScalar(root, "created_at");
     const YAML::Node files = root["files"];
-    if (!schema.ok() || !product.ok() || !created_at.ok() || !files.IsSequence() ||
-        files.size() == 0U ||
+    if (!schema.ok() || !product.ok() || !created_at.ok() ||
+        !files.IsSequence() || files.size() == 0U ||
         files.size() > kMaximumIntegrityManifestEntries) {
       return common::Result<IntegrityManifest>::Err(ManifestFormatError());
     }
@@ -367,7 +373,8 @@ common::Result<IntegrityManifest> ParseIntegrityManifest(std::string_view yaml) 
       const auto parsed_hash = ParseSha256(hash.value());
       const std::filesystem::path path(path_text.value());
       if (!parsed_category.ok() || !parsed_hash.ok() ||
-          !IsAbsoluteNormalizedPath(path) || path_text.value().find('\0') != std::string::npos ||
+          !IsAbsoluteNormalizedPath(path) ||
+          path_text.value().find('\0') != std::string::npos ||
           !ids.insert(id.value()).second || !paths.insert(path).second) {
         return common::Result<IntegrityManifest>::Err(ManifestFormatError());
       }

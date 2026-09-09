@@ -50,8 +50,7 @@ int CreateAnonymousFrameFile(const std::vector<std::uint8_t>& bytes) {
   return fd;
 }
 
-camera_firmware::media::FrameLease SyntheticNv12Frame(
-    std::uint64_t sequence) {
+camera_firmware::media::FrameLease SyntheticNv12Frame(std::uint64_t sequence) {
   constexpr std::uint32_t kWidth = 8;
   constexpr std::uint32_t kHeight = 4;
   constexpr std::size_t kYSize = kWidth * kHeight;
@@ -84,9 +83,8 @@ camera_firmware::media::FrameLease SyntheticNv12Frame(
   handle.planes[1].length = kUvSize;
   handle.planes[1].stride = kWidth;
 
-  return camera_firmware::media::FrameLease(std::move(handle), [fd] {
-    (void)::close(fd);
-  });
+  return camera_firmware::media::FrameLease(std::move(handle),
+                                            [fd] { (void)::close(fd); });
 }
 
 bool AllRunnersProcessedOrDropped(
@@ -150,8 +148,8 @@ TEST(AiHardwareSmokeHelperTest, RequiresEveryExpectedRunnerToFinish) {
   camera_firmware::ai::AiModelRunnerStatus pose;
   pose.dropped_frames = 1;
 
-  const std::vector<camera_firmware::ai::AiModelRunnerStatus> complete{
-      objects, pose};
+  const std::vector<camera_firmware::ai::AiModelRunnerStatus> complete{objects,
+                                                                       pose};
   EXPECT_TRUE(AllRunnersProcessedOrDropped(complete, 2U));
   EXPECT_FALSE(AllRunnersProcessedOrDropped(complete, 1U));
 
@@ -242,8 +240,7 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
       camera_firmware::config::LoadConfigFile("config/app-rpi5-ai-dev.yaml");
   ASSERT_TRUE(config.ok()) << config.error().message;
   ASSERT_EQ(config.value().ai.models.size(), 1u);
-  ASSERT_TRUE(
-      std::filesystem::exists(config.value().ai.models[0].hef_path))
+  ASSERT_TRUE(std::filesystem::exists(config.value().ai.models[0].hef_path))
       << "missing Hailo model: " << config.value().ai.models[0].hef_path;
 
   auto callback_state = std::make_shared<DetectionCallbackState>();
@@ -279,19 +276,16 @@ TEST(AiHardwareSmokeTest, SubmitsSyntheticNv12FrameWhenEnabled) {
   ASSERT_EQ(runners.size(), 1u);
   EXPECT_EQ(runners[0].submitted_frames, 1u);
   EXPECT_EQ(runners[0].processed_frames, 1u)
-      << runners[0].last_error_code << ": "
-      << runners[0].last_error_message;
+      << runners[0].last_error_code << ": " << runners[0].last_error_message;
   EXPECT_EQ(runners[0].dropped_frames, 0u)
-      << runners[0].last_error_code << ": "
-      << runners[0].last_error_message;
+      << runners[0].last_error_code << ": " << runners[0].last_error_message;
 
   camera_firmware::ai::DetectionEvent decoded_event;
   {
     std::unique_lock lock(callback_state->mutex);
     const bool event_received = callback_state->changed.wait_for(
-        lock, std::chrono::seconds(5), [&] {
-          return callback_state->decoded.has_value();
-        });
+        lock, std::chrono::seconds(5),
+        [&] { return callback_state->decoded.has_value(); });
     if (!event_received) {
       lock.unlock();
       ADD_FAILURE() << "timed out waiting for decoded DetectionBus event; "
@@ -335,12 +329,10 @@ TEST(AiHardwareSmokeTest,
   ASSERT_EQ(config.value().ai.models[0].id, "objects");
   ASSERT_EQ(config.value().ai.models[1].id, "pose");
 
-  const std::filesystem::path object_hef{
-      config.value().ai.models[0].hef_path};
+  const std::filesystem::path object_hef{config.value().ai.models[0].hef_path};
   ASSERT_TRUE(std::filesystem::exists(object_hef))
       << "missing Hailo model: " << object_hef;
-  const std::filesystem::path pose_hef{
-      config.value().ai.models[1].hef_path};
+  const std::filesystem::path pose_hef{config.value().ai.models[1].hef_path};
   if (!std::filesystem::exists(pose_hef)) {
     GTEST_SKIP() << "missing deferred Hailo pose model: " << pose_hef;
   }
@@ -389,12 +381,10 @@ TEST(AiHardwareSmokeTest,
   ASSERT_TRUE(config.ok()) << config.error().message;
   ASSERT_EQ(config.value().ai.models.size(), 2U);
 
-  const std::filesystem::path object_hef{
-      config.value().ai.models[0].hef_path};
+  const std::filesystem::path object_hef{config.value().ai.models[0].hef_path};
   ASSERT_TRUE(std::filesystem::exists(object_hef))
       << "missing Hailo model: " << object_hef;
-  const std::filesystem::path pose_hef{
-      config.value().ai.models[1].hef_path};
+  const std::filesystem::path pose_hef{config.value().ai.models[1].hef_path};
   if (!std::filesystem::exists(pose_hef)) {
     GTEST_SKIP() << "missing deferred Hailo pose model: " << pose_hef;
   }

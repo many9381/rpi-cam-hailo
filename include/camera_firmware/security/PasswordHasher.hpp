@@ -19,13 +19,11 @@ inline constexpr std::uint32_t kPasswordMaxAcceptedIterations = 2000000U;
 inline constexpr std::size_t kPasswordSaltBytes = 16U;
 inline constexpr std::size_t kPasswordDerivedBytes = 32U;
 
-using PasswordRandomCallback = std::function<common::Result<common::SecureBytes>(
-    std::size_t output_size)>;
+using PasswordRandomCallback =
+    std::function<common::Result<common::SecureBytes>(std::size_t output_size)>;
 using PasswordKdfCallback = std::function<common::Result<common::SecureBytes>(
-    const common::SecureBytes& password,
-    std::span<const unsigned char> salt,
-    std::uint32_t iterations,
-    std::size_t output_size)>;
+    const common::SecureBytes& password, std::span<const unsigned char> salt,
+    std::uint32_t iterations, std::size_t output_size)>;
 using PasswordScratchAuditCallback =
     std::function<void(common::ZeroizeAudit audit)>;
 
@@ -52,7 +50,6 @@ struct PasswordRecord {
     PasswordHasherDependencies dependencies = {});
 
 [[nodiscard]] common::Result<bool> VerifyPassword(
-    const common::SecureBytes& password,
-    const PasswordRecord& record);
+    const common::SecureBytes& password, const PasswordRecord& record);
 
 }  // namespace camera_firmware::security

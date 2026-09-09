@@ -29,10 +29,8 @@ class HailoBackend final : public AiBackend {
   [[nodiscard]] common::Result<ModelHandle> LoadModel(
       const config::AiModelConfig& model) override;
   void Unload(ModelHandle handle) override;
-  [[nodiscard]] common::Result<void> Submit(
-      ModelHandle handle,
-      InputView input,
-      InferCallback callback) override;
+  [[nodiscard]] common::Result<void> Submit(ModelHandle handle, InputView input,
+                                            InferCallback callback) override;
 
  private:
   struct LoadedModel;

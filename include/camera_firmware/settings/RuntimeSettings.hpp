@@ -29,8 +29,7 @@ class CameraProfileCatalog final {
 
   std::span<const CameraProfile> Profiles() const noexcept;
   const CameraProfile* Find(std::string_view id) const noexcept;
-  const CameraProfile* Match(unsigned int width,
-                             unsigned int height,
+  const CameraProfile* Match(unsigned int width, unsigned int height,
                              unsigned int fps) const noexcept;
 
  private:
@@ -46,11 +45,12 @@ struct CameraRuntimeSettings {
 };
 
 struct SubStreamRuntimeSettings {
-  // Default member initializers mirror the AppConfig sub_stream default and keep
-  // the NON-ZERO GEOMETRY INVARIANT true even for a value-initialized/omitted
-  // sub_stream: a designated-init RuntimeSettings that omits `.sub_stream` yields
-  // a valid disabled sub with real geometry, never all-zero (which the settings
-  // validator now rejects and the web client refuses to render).
+  // Default member initializers mirror the AppConfig sub_stream default and
+  // keep the NON-ZERO GEOMETRY INVARIANT true even for a
+  // value-initialized/omitted sub_stream: a designated-init RuntimeSettings
+  // that omits `.sub_stream` yields a valid disabled sub with real geometry,
+  // never all-zero (which the settings validator now rejects and the web client
+  // refuses to render).
   bool enabled{false};
   unsigned int width{640};
   unsigned int height{360};
@@ -65,9 +65,10 @@ struct ModelRuntimeSettings {
 };
 
 struct OsdItemRuntimeSettings {
-  std::string type;      // "timestamp" | "camera_name" | "custom_text"
-  std::string text;      // custom_text content, or timestamp format ("" = default)
-  std::string position;  // "top_left" | "top_right" | "bottom_left" | "bottom_right"
+  std::string type;  // "timestamp" | "camera_name" | "custom_text"
+  std::string text;  // custom_text content, or timestamp format ("" = default)
+  std::string
+      position;  // "top_left" | "top_right" | "bottom_left" | "bottom_right"
 };
 
 struct OsdRuntimeSettings {
@@ -83,15 +84,12 @@ struct RuntimeSettings {
 };
 
 common::Result<RuntimeSettings> DeriveRuntimeSettings(
-    const config::AppConfig& base,
-    const CameraProfileCatalog& profiles);
+    const config::AppConfig& base, const CameraProfileCatalog& profiles);
 common::Result<void> ValidateRuntimeSettings(
-    const RuntimeSettings& settings,
-    const config::AppConfig& base,
+    const RuntimeSettings& settings, const config::AppConfig& base,
     const CameraProfileCatalog& profiles);
 common::Result<config::AppConfig> BuildEffectiveConfig(
-    const config::AppConfig& base,
-    const RuntimeSettings& settings,
+    const config::AppConfig& base, const RuntimeSettings& settings,
     const CameraProfileCatalog& profiles);
 
 }  // namespace camera_firmware::settings

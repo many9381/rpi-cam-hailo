@@ -37,8 +37,7 @@ struct GstRtspClientLifecycle::Impl {
     }
   }
 
-  static void OnClientConnected(GstRTSPServer*,
-                                GstRTSPClient* client,
+  static void OnClientConnected(GstRTSPServer*, GstRTSPClient* client,
                                 gpointer user_data) {
     auto* self = static_cast<Impl*>(user_data);
     if (self == nullptr || client == nullptr) {
@@ -52,13 +51,9 @@ struct GstRtspClientLifecycle::Impl {
         close_client = true;
       } else {
         self->clients.insert(client);
-        const gulong handler = g_signal_connect_data(
-            client,
-            "closed",
-            G_CALLBACK(OnClientClosed),
-            self,
-            nullptr,
-            G_CONNECT_AFTER);
+        const gulong handler =
+            g_signal_connect_data(client, "closed", G_CALLBACK(OnClientClosed),
+                                  self, nullptr, G_CONNECT_AFTER);
         if (handler == 0U) {
           self->clients.erase(client);
           if (self->clients.empty()) {
@@ -141,18 +136,13 @@ GstRtspClientLifecycle::Attach(GstRTSPServer* server) {
   }
   impl->server = static_cast<GstRTSPServer*>(g_object_ref(server));
   impl->client_connected_handler = g_signal_connect_data(
-      impl->server,
-      "client-connected",
-      G_CALLBACK(Impl::OnClientConnected),
-      impl.get(),
-      nullptr,
-      G_CONNECT_DEFAULT);
+      impl->server, "client-connected", G_CALLBACK(Impl::OnClientConnected),
+      impl.get(), nullptr, G_CONNECT_DEFAULT);
   if (impl->client_connected_handler == 0U) {
     g_object_unref(impl->server);
     impl->server = nullptr;
     return common::Result<std::unique_ptr<GstRtspClientLifecycle>>::Err(
-        {"E_RTSP_CLIENT_LIFECYCLE",
-         "failed to observe RTSP client lifecycle"});
+        {"E_RTSP_CLIENT_LIFECYCLE", "failed to observe RTSP client lifecycle"});
   }
 
   lifecycle->impl_ = std::move(impl);

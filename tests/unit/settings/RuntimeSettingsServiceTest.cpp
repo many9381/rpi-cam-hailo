@@ -25,14 +25,14 @@
 
 #include <gtest/gtest.h>
 
-extern "C" int __real_camera_firmware_settings_renameat(
-    int old_directory, const char* old_name, int new_directory,
-    const char* new_name);
+extern "C" int __real_camera_firmware_settings_renameat(int old_directory,
+                                                        const char* old_name,
+                                                        int new_directory,
+                                                        const char* new_name);
 extern "C" int __real_camera_firmware_settings_fsync(int descriptor);
 extern "C" camera_firmware::runtime::ManagedRuntimeState
-__real_camera_firmware_managed_runtime_state(
-    const camera_firmware::runtime::ManagedFirmwareRuntime* runtime)
-    asm("__real__ZNK15camera_firmware7runtime22ManagedFirmwareRuntime5StateEv");
+__real_camera_firmware_managed_runtime_state(const camera_firmware::runtime::ManagedFirmwareRuntime* runtime) asm(
+    "__real__ZNK15camera_firmware7runtime22ManagedFirmwareRuntime5StateEv");
 
 namespace {
 
@@ -152,9 +152,9 @@ class TemporaryDirectory {
   std::filesystem::path path_;
 };
 
-AiModelConfig MakeModel(std::string id, std::string labels,
-                        unsigned int width, unsigned int height,
-                        std::string format, bool letterbox, float threshold) {
+AiModelConfig MakeModel(std::string id, std::string labels, unsigned int width,
+                        unsigned int height, std::string format, bool letterbox,
+                        float threshold) {
   AiModelConfig model;
   model.id = std::move(id);
   model.kind = "object_detection";
@@ -188,8 +188,8 @@ RuntimeSettings MakeBaseActive() {
   return {
       .camera = {"imx708-1080p50", 6000U, 25U},
       // Non-zero geometry even while disabled: value-initializing an omitted
-      // .sub_stream would zero it, which validation now rejects (the settings-UI
-      // DoS invariant). Use the shipped default geometry.
+      // .sub_stream would zero it, which validation now rejects (the
+      // settings-UI DoS invariant). Use the shipped default geometry.
       .sub_stream = {false, 640U, 360U, 15U, 1000U},
       .models = {{"objects", true, 0.40F}, {"pose", true, 0.35F}},
   };
@@ -266,8 +266,8 @@ FirmwareRuntimeDependencies DependenciesFor(
 
 class RuntimeFactorySequence {
  public:
-  using Action = std::function<Result<std::shared_ptr<FirmwareRuntime>>(
-      const AppConfig&)>;
+  using Action =
+      std::function<Result<std::shared_ptr<FirmwareRuntime>>(const AppConfig&)>;
 
   void Push(Action action) {
     std::lock_guard lock(mutex_);
@@ -302,11 +302,11 @@ CandidateValidator AcceptCandidate() {
 
 class ServiceContext {
  public:
-  explicit ServiceContext(CandidateValidator validator = AcceptCandidate(),
-                          AppConfig base = MakeBaseConfig(),
-                          bool invalid_document = false,
-                          std::optional<AppConfig> initial_config = std::nullopt,
-                          camera_firmware::settings::RuntimeReplacer replacer = {})
+  explicit ServiceContext(
+      CandidateValidator validator = AcceptCandidate(),
+      AppConfig base = MakeBaseConfig(), bool invalid_document = false,
+      std::optional<AppConfig> initial_config = std::nullopt,
+      camera_firmware::settings::RuntimeReplacer replacer = {})
       : base_(std::move(base)),
         profiles_(CameraProfileCatalog::Rpi5Imx708()),
         factory_(std::make_shared<RuntimeFactorySequence>()),
@@ -335,17 +335,16 @@ class ServiceContext {
       throw std::runtime_error(effective.error().code + ": " +
                                effective.error().message);
     }
-    const AppConfig runtime_config = initial_config.has_value()
-                                         ? std::move(*initial_config)
-                                         : (effective.ok() ? effective.value()
-                                                           : base_);
+    const AppConfig runtime_config =
+        initial_config.has_value()
+            ? std::move(*initial_config)
+            : (effective.ok() ? effective.value() : base_);
     factory_->Push([probe = old_probe_](const AppConfig& config) {
       return Result<std::shared_ptr<FirmwareRuntime>>::Ok(
           std::make_shared<FirmwareRuntime>(config, DependenciesFor(probe)));
     });
     runtime_ = std::make_unique<ManagedFirmwareRuntime>(
-        runtime_config,
-        [factory = factory_](const AppConfig& config) {
+        runtime_config, [factory = factory_](const AppConfig& config) {
           return factory->Next(config);
         });
     const auto started = runtime_->Start();
@@ -361,8 +360,8 @@ class ServiceContext {
   std::shared_ptr<RuntimeProbe> QueueCandidate(
       std::function<void(const AppConfig&)> inspect = {}) {
     auto probe = std::make_shared<RuntimeProbe>();
-    factory_->Push([probe, inspect = std::move(inspect)](
-                       const AppConfig& config) {
+    factory_->Push([probe,
+                    inspect = std::move(inspect)](const AppConfig& config) {
       if (inspect) {
         inspect(config);
       }
@@ -473,8 +472,7 @@ TEST(RuntimeSettingsServiceTest,
 
   const auto no_pending_discard = context.service().Discard(2U);
   ASSERT_FALSE(no_pending_discard.ok());
-  EXPECT_EQ(no_pending_discard.error().code,
-            "E_RUNTIME_SETTINGS_NO_PENDING");
+  EXPECT_EQ(no_pending_discard.error().code, "E_RUNTIME_SETTINGS_NO_PENDING");
 }
 
 TEST(RuntimeSettingsServiceTest, ApplyRejectsStaleRevisionAndMissingPending) {
@@ -547,9 +545,9 @@ TEST(RuntimeSettingsServiceTest,
      RuntimeReplacementExceptionClearsApplyingState) {
   camera_firmware::settings::RuntimeReplacer throwing_replacer =
       [](const AppConfig&, std::function<Result<void>()>)
-          -> camera_firmware::runtime::RuntimeReplacementResult {
-        throw std::runtime_error("injected replacement exception");
-      };
+      -> camera_firmware::runtime::RuntimeReplacementResult {
+    throw std::runtime_error("injected replacement exception");
+  };
   ServiceContext context(AcceptCandidate(), MakeBaseConfig(), false,
                          std::nullopt, std::move(throwing_replacer));
   ASSERT_TRUE(context.service().Save(0U, MakePending()).ok());
@@ -558,8 +556,7 @@ TEST(RuntimeSettingsServiceTest,
 
   EXPECT_FALSE(applied.applied);
   EXPECT_EQ(applied.error.code, "E_RUNTIME_SETTINGS_APPLY");
-  EXPECT_EQ(context.service().Snapshot().state,
-            RuntimeSettingsState::kPending);
+  EXPECT_EQ(context.service().Snapshot().state, RuntimeSettingsState::kPending);
 }
 
 TEST(RuntimeSettingsServiceTest,
@@ -579,8 +576,7 @@ TEST(RuntimeSettingsServiceTest,
 
   EXPECT_FALSE(applied.applied);
   EXPECT_EQ(applied.error.code, "E_RUNTIME_SETTINGS_APPLY");
-  EXPECT_EQ(context.service().Snapshot().state,
-            RuntimeSettingsState::kPending);
+  EXPECT_EQ(context.service().Snapshot().state, RuntimeSettingsState::kPending);
 }
 
 TEST(RuntimeSettingsServiceConcurrencyTest,
@@ -597,8 +593,7 @@ TEST(RuntimeSettingsServiceConcurrencyTest,
   context.QueueCandidate();
 
   std::optional<SettingsApplyResult> apply_result;
-  std::thread applying(
-      [&] { apply_result = context.service().Apply(1U); });
+  std::thread applying([&] { apply_result = context.service().Apply(1U); });
   const auto entered_status = validator_entered.get_future().wait_for(2s);
   std::optional<RuntimeSettingsSnapshot> during_validation;
   if (entered_status == std::future_status::ready) {
@@ -622,8 +617,9 @@ TEST(RuntimeSettingsServiceTest,
   ServiceContext context;
   ASSERT_TRUE(context.service().Save(0U, MakePending()).ok());
   std::optional<AppConfig> candidate_config;
-  context.QueueCandidate(
-      [&candidate_config](const AppConfig& config) { candidate_config = config; });
+  context.QueueCandidate([&candidate_config](const AppConfig& config) {
+    candidate_config = config;
+  });
 
   const SettingsApplyResult applied = context.service().Apply(1U);
 
@@ -805,7 +801,8 @@ TEST(RuntimeSettingsServiceTest,
   EXPECT_FALSE(applied.applied);
   EXPECT_EQ(applied.error.code, "E_RUNTIME_SETTINGS_APPLY");
   EXPECT_EQ(applied.snapshot.last_apply.code, "E_RUNTIME_SETTINGS_APPLY");
-  EXPECT_EQ(applied.snapshot.last_apply.code.find("private"), std::string::npos);
+  EXPECT_EQ(applied.snapshot.last_apply.code.find("private"),
+            std::string::npos);
 }
 
 TEST(RuntimeSettingsServiceTest,
@@ -822,8 +819,7 @@ TEST(RuntimeSettingsServiceTest,
   EXPECT_TRUE(applied.restored);
   EXPECT_EQ(applied.error.code, "E_RUNTIME_SETTINGS_STORE");
   EXPECT_EQ(applied.snapshot.revision, 1U);
-  EXPECT_EQ(applied.snapshot.state,
-            RuntimeSettingsState::kRecoveryRequired);
+  EXPECT_EQ(applied.snapshot.state, RuntimeSettingsState::kRecoveryRequired);
   EXPECT_EQ(applied.snapshot.last_apply.status, ApplyStatus::kNever);
   EXPECT_TRUE(applied.snapshot.pending.has_value());
   EXPECT_EQ(context.runtime().ActiveConfig().camera.video.fps, 50U);
@@ -890,8 +886,7 @@ TEST(RuntimeSettingsServiceTest,
   EXPECT_EQ(recovery.state, RuntimeSettingsState::kRecoveryRequired);
   const auto discarded = context.service().Discard(0U);
   ASSERT_FALSE(discarded.ok());
-  EXPECT_EQ(discarded.error().code,
-            "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
+  EXPECT_EQ(discarded.error().code, "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
   const auto applied = context.service().Apply(0U);
   EXPECT_FALSE(applied.applied);
 
@@ -913,8 +908,9 @@ TEST(RuntimeSettingsServiceTest,
   }
   ASSERT_TRUE(context.service().Save(0U, pending).ok());
   std::optional<AppConfig> candidate_config;
-  context.QueueCandidate(
-      [&candidate_config](const AppConfig& config) { candidate_config = config; });
+  context.QueueCandidate([&candidate_config](const AppConfig& config) {
+    candidate_config = config;
+  });
 
   const auto applied = context.service().Apply(1U);
 
@@ -941,8 +937,7 @@ TEST(RuntimeSettingsServiceConcurrencyTest,
   };
 
   std::optional<SettingsApplyResult> primary_apply;
-  std::thread applying(
-      [&] { primary_apply = context.service().Apply(1U); });
+  std::thread applying([&] { primary_apply = context.service().Apply(1U); });
   const auto candidate_status = candidate_entered.get_future().wait_for(2s);
   std::optional<RuntimeSettingsSnapshot> applying_snapshot;
   if (candidate_status == std::future_status::ready) {
@@ -956,8 +951,7 @@ TEST(RuntimeSettingsServiceConcurrencyTest,
       const auto snapshot = context.service().Snapshot();
       if (snapshot.camera_profiles.size() != 3U ||
           snapshot.model_capabilities.size() != 2U ||
-          snapshot.active.models.size() != 2U ||
-          snapshot.revision > 2U) {
+          snapshot.active.models.size() != 2U || snapshot.revision > 2U) {
         invalid_snapshot.store(true);
       }
     }
@@ -968,8 +962,8 @@ TEST(RuntimeSettingsServiceConcurrencyTest,
   });
   auto discard = std::async(std::launch::async,
                             [&] { return context.service().Discard(1U); });
-  auto second_apply = std::async(
-      std::launch::async, [&] { return context.service().Apply(1U); });
+  auto second_apply = std::async(std::launch::async,
+                                 [&] { return context.service().Apply(1U); });
 
   const auto save_status = save.wait_for(250ms);
   const auto discard_status = discard.wait_for(250ms);
@@ -1004,17 +998,17 @@ TEST(RuntimeSettingsServiceConcurrencyTest,
 
 }  // namespace
 
-extern "C" int __wrap_camera_firmware_settings_renameat(
-    int old_directory, const char* old_name, int new_directory,
-    const char* new_name) {
+extern "C" int __wrap_camera_firmware_settings_renameat(int old_directory,
+                                                        const char* old_name,
+                                                        int new_directory,
+                                                        const char* new_name) {
   const int call = store_rename_calls.fetch_add(1) + 1;
-  if (fail_store_rename.load() ||
-      call == fail_store_rename_on_call.load()) {
+  if (fail_store_rename.load() || call == fail_store_rename_on_call.load()) {
     errno = EIO;
     return -1;
   }
-  return __real_camera_firmware_settings_renameat(
-      old_directory, old_name, new_directory, new_name);
+  return __real_camera_firmware_settings_renameat(old_directory, old_name,
+                                                  new_directory, new_name);
 }
 
 extern "C" int __wrap_camera_firmware_settings_fsync(int descriptor) {
@@ -1027,9 +1021,8 @@ extern "C" int __wrap_camera_firmware_settings_fsync(int descriptor) {
 }
 
 extern "C" camera_firmware::runtime::ManagedRuntimeState
-__wrap_camera_firmware_managed_runtime_state(
-    const camera_firmware::runtime::ManagedFirmwareRuntime* runtime)
-    asm("__wrap__ZNK15camera_firmware7runtime22ManagedFirmwareRuntime5StateEv");
+__wrap_camera_firmware_managed_runtime_state(const camera_firmware::runtime::ManagedFirmwareRuntime* runtime) asm(
+    "__wrap__ZNK15camera_firmware7runtime22ManagedFirmwareRuntime5StateEv");
 
 extern "C" camera_firmware::runtime::ManagedRuntimeState
 __wrap_camera_firmware_managed_runtime_state(

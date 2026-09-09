@@ -21,8 +21,8 @@ class DetectionEventStore {
   ~DetectionEventStore() = default;
 
   [[nodiscard]] std::vector<DetectionEvent> Snapshot() const;
-  [[nodiscard]] std::function<std::vector<DetectionEvent>()>
-  SnapshotProvider() const;
+  [[nodiscard]] std::function<std::vector<DetectionEvent>()> SnapshotProvider()
+      const;
 
  private:
   struct SharedState;

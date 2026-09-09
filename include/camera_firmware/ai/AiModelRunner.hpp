@@ -35,10 +35,8 @@ class AiModelRunner {
   // Invoked after a submission result is committed to the runner state.
   using SubmissionResolvedObserver = std::function<void(bool accepted)>;
 
-  AiModelRunner(std::string camera_id,
-                config::AiModelConfig model,
-                AiBackend* backend,
-                ModelHandle model_handle,
+  AiModelRunner(std::string camera_id, config::AiModelConfig model,
+                AiBackend* backend, ModelHandle model_handle,
                 DetectionBus* detection_bus = nullptr,
                 SubmissionResolvedObserver submission_resolved_observer = {});
   ~AiModelRunner();
@@ -64,8 +62,7 @@ class AiModelRunner {
   static void RecordDrop(const std::shared_ptr<SharedState>& state,
                          const common::Error& error);
   static void RecordProcessed(const std::shared_ptr<SharedState>& state,
-                              double preprocess_ms,
-                              double inference_ms,
+                              double preprocess_ms, double inference_ms,
                               std::uint64_t sequence);
 
   std::string camera_id_;

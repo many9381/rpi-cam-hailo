@@ -32,7 +32,9 @@ SessionIdentity& SessionIdentity::operator=(SessionIdentity&& other) noexcept {
   return *this;
 }
 
-SessionIdentity::~SessionIdentity() noexcept { Clear(); }
+SessionIdentity::~SessionIdentity() noexcept {
+  Clear();
+}
 
 void SessionIdentity::Clear() noexcept {
   ::OPENSSL_cleanse(bytes.data(), bytes.size());

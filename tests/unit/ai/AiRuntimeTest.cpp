@@ -1,6 +1,6 @@
-#include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/AiFramePump.hpp"
 #include "camera_firmware/ai/AiFrameTap.hpp"
+#include "camera_firmware/ai/AiRuntime.hpp"
 #include "camera_firmware/ai/AiRuntimeController.hpp"
 
 #include <array>
@@ -24,8 +24,7 @@
 
 namespace {
 
-camera_firmware::config::AiModelConfig Model(std::string id,
-                                             std::string kind) {
+camera_firmware::config::AiModelConfig Model(std::string id, std::string kind) {
   camera_firmware::config::AiModelConfig model;
   model.id = std::move(id);
   model.kind = std::move(kind);
@@ -65,17 +64,17 @@ class GateBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig&) override {
-    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
-        1);
+    return camera_firmware::common::Result<
+        camera_firmware::ai::ModelHandle>::Ok(1);
   }
 
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView,
       camera_firmware::ai::InferCallback callback) override {
     {
       std::unique_lock lock(mutex_);
@@ -86,8 +85,9 @@ class GateBackend final : public camera_firmware::ai::AiBackend {
     }
 
     if (callback) {
-      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
-                   Ok(camera_firmware::ai::OutputView{}));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              camera_firmware::ai::OutputView{}));
     }
     return camera_firmware::common::Result<void>::Ok();
   }
@@ -123,8 +123,7 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
  public:
   explicit AsyncCallbackBackend(std::vector<std::uint8_t> output = {},
                                 bool return_submit_error = false)
-      : output_(std::move(output)),
-        return_submit_error_(return_submit_error) {}
+      : output_(std::move(output)), return_submit_error_(return_submit_error) {}
 
   [[nodiscard]] std::string_view name() const noexcept override {
     return "async";
@@ -138,17 +137,17 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig&) override {
-    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
-        1);
+    return camera_firmware::common::Result<
+        camera_firmware::ai::ModelHandle>::Ok(1);
   }
 
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView,
       camera_firmware::ai::InferCallback callback) override {
     {
       std::lock_guard lock(mutex_);
@@ -163,9 +162,7 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
     return camera_firmware::common::Result<void>::Ok();
   }
 
-  bool WaitForSubmit() {
-    return WaitForSubmitCount(1);
-  }
+  bool WaitForSubmit() { return WaitForSubmitCount(1); }
 
   bool WaitForSubmitCount(int expected) {
     std::unique_lock lock(mutex_);
@@ -214,8 +211,9 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
         output.data = output_.data();
         output.size = output_.size();
       }
-      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
-                   Ok(output));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              output));
     }
   }
 
@@ -231,8 +229,9 @@ class AsyncCallbackBackend final : public camera_firmware::ai::AiBackend {
         output.data = output_.data();
         output.size = output_.size();
       }
-      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
-                   Ok(output));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              output));
     }
   }
 
@@ -274,17 +273,17 @@ class CapturingSuccessBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig&) override {
-    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
-        1);
+    return camera_firmware::common::Result<
+        camera_firmware::ai::ModelHandle>::Ok(1);
   }
 
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView input,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView input,
       camera_firmware::ai::InferCallback callback) override {
     {
       std::lock_guard lock(mutex_);
@@ -302,8 +301,9 @@ class CapturingSuccessBackend final : public camera_firmware::ai::AiBackend {
         output.data = output_.data();
         output.size = output_.size();
       }
-      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
-                   Ok(output));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              output));
     }
     if (release_output_after_callback_) {
       std::vector<std::uint8_t>().swap(output_);
@@ -322,9 +322,8 @@ class CapturingSuccessBackend final : public camera_firmware::ai::AiBackend {
 
   bool WaitForSubmit() {
     std::unique_lock lock(mutex_);
-    return changed_.wait_for(lock, std::chrono::seconds(1), [this] {
-      return submit_count_ >= 1;
-    });
+    return changed_.wait_for(lock, std::chrono::seconds(1),
+                             [this] { return submit_count_ >= 1; });
   }
 
   [[nodiscard]] std::size_t last_input_size() const {
@@ -374,30 +373,30 @@ class BlockingInitBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig&) override {
-    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Ok(
-        1);
+    return camera_firmware::common::Result<
+        camera_firmware::ai::ModelHandle>::Ok(1);
   }
 
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView,
       camera_firmware::ai::InferCallback callback) override {
     if (callback) {
-      callback(camera_firmware::common::Result<camera_firmware::ai::OutputView>::
-                   Ok(camera_firmware::ai::OutputView{}));
+      callback(
+          camera_firmware::common::Result<camera_firmware::ai::OutputView>::Ok(
+              camera_firmware::ai::OutputView{}));
     }
     return camera_firmware::common::Result<void>::Ok();
   }
 
   bool WaitForInit() {
     std::unique_lock lock(mutex_);
-    return changed_.wait_for(lock, std::chrono::seconds(1), [this] {
-      return init_started_;
-    });
+    return changed_.wait_for(lock, std::chrono::seconds(1),
+                             [this] { return init_started_; });
   }
 
   void ReleaseInit() {
@@ -429,18 +428,18 @@ class ModelPathErrorBackend final : public camera_firmware::ai::AiBackend {
 
   void Shutdown() override {}
 
-  [[nodiscard]] camera_firmware::common::Result<camera_firmware::ai::ModelHandle>
+  [[nodiscard]] camera_firmware::common::Result<
+      camera_firmware::ai::ModelHandle>
   LoadModel(const camera_firmware::config::AiModelConfig& model) override {
-    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::Err(
-        {"E_HAILO_HEF",
-         "failed to load model " + model.id + " from " + model.hef_path});
+    return camera_firmware::common::Result<camera_firmware::ai::ModelHandle>::
+        Err({"E_HAILO_HEF",
+             "failed to load model " + model.id + " from " + model.hef_path});
   }
 
   void Unload(camera_firmware::ai::ModelHandle) override {}
 
   [[nodiscard]] camera_firmware::common::Result<void> Submit(
-      camera_firmware::ai::ModelHandle,
-      camera_firmware::ai::InputView,
+      camera_firmware::ai::ModelHandle, camera_firmware::ai::InputView,
       camera_firmware::ai::InferCallback) override {
     return camera_firmware::common::Result<void>::Ok();
   }
@@ -483,9 +482,8 @@ int CreateRuntimeAnonymousFile(const std::vector<std::uint8_t>& bytes) {
   return fd;
 }
 
-camera_firmware::media::FrameHandle Nv12RuntimeHandle(
-    std::uint64_t sequence,
-    int fd) {
+camera_firmware::media::FrameHandle Nv12RuntimeHandle(std::uint64_t sequence,
+                                                      int fd) {
   camera_firmware::media::FrameHandle handle;
   handle.camera_id = "imx708-main";
   handle.format = "NV12";
@@ -506,23 +504,21 @@ camera_firmware::media::FrameHandle Nv12RuntimeHandle(
 
 camera_firmware::media::FrameLease Nv12RuntimeLease(
     std::uint64_t sequence,
-    camera_firmware::media::FrameLease::ReleaseCallback release_callback =
-        [] {}) {
+    camera_firmware::media::FrameLease::ReleaseCallback release_callback = [] {
+    }) {
   std::vector<std::uint8_t> bytes;
   bytes.reserve(8U * 4U + 8U * 2U);
   bytes.insert(bytes.end(), 8U * 4U, 16U);
   bytes.insert(bytes.end(), 8U * 2U, 128U);
   const int fd = CreateRuntimeAnonymousFile(bytes);
   auto handle = Nv12RuntimeHandle(sequence, fd);
-  return camera_firmware::media::FrameLease(std::move(handle),
-                                            [fd,
-                                             release_callback =
-                                                 std::move(release_callback)] {
-                                              if (fd >= 0) {
-                                                (void)::close(fd);
-                                              }
-                                              release_callback();
-                                            });
+  return camera_firmware::media::FrameLease(
+      std::move(handle), [fd, release_callback = std::move(release_callback)] {
+        if (fd >= 0) {
+          (void)::close(fd);
+        }
+        release_callback();
+      });
 }
 
 std::vector<std::uint8_t> RuntimeYoloNmsOutputBytes(float confidence) {
@@ -679,14 +675,12 @@ TEST(AiRuntimeTest, ControllerShutdownWaitsForActiveRestart) {
   const auto config = RuntimeConfig();
   camera_firmware::ai::AiRuntimeController controller(config, runtime, pump);
 
-  auto restart = std::async(std::launch::async, [&controller] {
-    return controller.Restart();
-  });
+  auto restart = std::async(std::launch::async,
+                            [&controller] { return controller.Restart(); });
   ASSERT_TRUE(backend->WaitForInit());
 
-  auto shutdown = std::async(std::launch::async, [&controller] {
-    controller.BeginShutdown();
-  });
+  auto shutdown = std::async(std::launch::async,
+                             [&controller] { controller.BeginShutdown(); });
   EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(50)),
             std::future_status::timeout);
 
@@ -748,8 +742,7 @@ TEST(AiRuntimeTest, RedactsConfiguredModelPathsFromLoadErrors) {
 
   camera_firmware::ai::DetectionBus bus;
   camera_firmware::ai::AiRuntime runtime(
-      &bus,
-      std::make_shared<ModelPathErrorBackend>());
+      &bus, std::make_shared<ModelPathErrorBackend>());
 
   auto started = runtime.Start(config);
 
@@ -791,8 +784,10 @@ TEST(AiRuntimeTest, RedactsConfiguredModelPathsAtStatusWriteBoundary) {
 TEST(AiRuntimeTest, BackendUnavailableSubmitDropsWithoutPublishing) {
   camera_firmware::ai::DetectionBus bus;
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
   camera_firmware::ai::AiRuntime runtime(&bus, UnavailableBackend());
   ASSERT_TRUE(runtime.Start(RuntimeConfig()).ok());
 
@@ -829,19 +824,17 @@ TEST(AiRuntimeTest, MultiRunnerSubmitReleasesFrameLeaseOnce) {
 TEST(AiRuntimeTest, ModelRunnerSubmitUsesLatestWinsQueue) {
   GateBackend backend;
   auto model = Model("objects", "object_detection");
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1);
 
   int releases = 0;
   auto make_lease = [&releases](std::uint64_t sequence) {
     return Nv12RuntimeLease(sequence, [&releases] { ++releases; });
   };
 
-  auto first_submit = std::async(
-      std::launch::async,
-      [&runner, lease = make_lease(1)]() mutable {
-        return runner.Submit(std::move(lease));
-      });
+  auto first_submit = std::async(std::launch::async,
+                                 [&runner, lease = make_lease(1)]() mutable {
+                                   return runner.Submit(std::move(lease));
+                                 });
 
   if (first_submit.wait_for(std::chrono::milliseconds(100)) !=
       std::future_status::ready) {
@@ -871,8 +864,7 @@ TEST(AiRuntimeTest, ModelRunnerSubmitUsesLatestWinsQueue) {
 TEST(AiRuntimeTest, ModelRunnerStopWaitsForAsyncBackendCallback) {
   AsyncCallbackBackend backend;
   auto model = Model("objects", "object_detection");
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(4)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -882,8 +874,7 @@ TEST(AiRuntimeTest, ModelRunnerStopWaitsForAsyncBackendCallback) {
   ASSERT_EQ(stop.wait_for(std::chrono::milliseconds(100)),
             std::future_status::timeout);
   backend.Complete();
-  ASSERT_EQ(stop.wait_for(std::chrono::seconds(1)),
-            std::future_status::ready);
+  ASSERT_EQ(stop.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 
   auto status = runner.Status();
   EXPECT_EQ(status.submitted_frames, 1u);
@@ -893,8 +884,7 @@ TEST(AiRuntimeTest, ModelRunnerStopWaitsForAsyncBackendCallback) {
 TEST(AiRuntimeTest, ModelRunnerKeepsOneAsyncInferenceInFlight) {
   AsyncCallbackBackend backend;
   auto model = Model("objects", "object_detection");
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1);
 
   auto make_lease = [](std::uint64_t sequence) {
     return Nv12RuntimeLease(sequence);
@@ -928,8 +918,7 @@ TEST(AiRuntimeTest,
      ModelRunnerExcludesSynchronousSubmitTimeFromInferenceTiming) {
   CapturingSuccessBackend backend({}, std::chrono::milliseconds(25));
   auto model = Model("objects", "object_detection");
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(5)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -943,17 +932,19 @@ TEST(AiRuntimeTest,
 TEST(AiRuntimeTest,
      ModelRunnerDropsSynchronousSuccessCallbackWhenSubmitReturnsError) {
   CapturingSuccessBackend backend(RuntimeYoloNmsOutputBytes(0.88F),
-                                 std::chrono::milliseconds{}, true);
+                                  std::chrono::milliseconds{}, true);
   camera_firmware::ai::DetectionBus bus;
   auto model = Model("objects", "object_detection");
   model.input.width = 4;
   model.input.height = 2;
 
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(6)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -970,7 +961,7 @@ TEST(AiRuntimeTest,
 TEST(AiRuntimeTest,
      ModelRunnerCopiesSynchronousOutputAfterAcceptedSubmitHandoff) {
   CapturingSuccessBackend backend(RuntimeYoloNmsOutputBytes(0.88F),
-                                 std::chrono::milliseconds{}, false, true);
+                                  std::chrono::milliseconds{}, false, true);
   camera_firmware::ai::DetectionBus bus;
   auto model = Model("objects", "object_detection");
   model.input.width = 4;
@@ -979,13 +970,13 @@ TEST(AiRuntimeTest,
 
   int published = 0;
   bool published_after_submit_return = false;
-  auto subscription = bus.Subscribe(
-      [&](const camera_firmware::ai::DetectionEvent&) {
+  auto subscription =
+      bus.Subscribe([&](const camera_firmware::ai::DetectionEvent&) {
         ++published;
         published_after_submit_return = backend.submit_returned();
       });
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(7)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -1007,10 +998,12 @@ TEST(AiRuntimeTest, ModelRunnerProcessesDuplicateCallbackOnlyOnce) {
   model.input.height = 2;
 
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(8)).ok());
   ASSERT_TRUE(backend.WaitForSubmitCount(1));
@@ -1067,8 +1060,10 @@ TEST(AiRuntimeTest, ModelRunnerIgnoresCallbackDeliveredAfterSubmitError) {
   model.confidence_threshold = 0.50F;
 
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
   camera_firmware::ai::AiModelRunner runner(
       "imx708-main", model, &backend, 1, &bus,
       [&backend](bool accepted) { backend.MarkSubmissionResolved(accepted); });
@@ -1094,12 +1089,11 @@ TEST(AiRuntimeTest, ModelRunnerIgnoresCallbackDeliveredAfterSubmitError) {
 
 TEST(AiRuntimeTest, ModelRunnerDropsDeferredNullOutputViewExactlyOnce) {
   CapturingSuccessBackend backend({}, std::chrono::milliseconds{}, false, false,
-                                 1U);
+                                  1U);
   auto model = Model("objects", "object_detection");
   model.input.width = 4;
   model.input.height = 2;
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(12)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -1121,8 +1115,8 @@ TEST(AiRuntimeTest, ModelRunnerPreprocessesAndPublishesDetectionEvent) {
   std::mutex event_mutex;
   std::condition_variable event_changed;
   std::vector<camera_firmware::ai::DetectionEvent> events;
-  auto subscription = bus.Subscribe(
-      [&](const camera_firmware::ai::DetectionEvent& event) {
+  auto subscription =
+      bus.Subscribe([&](const camera_firmware::ai::DetectionEvent& event) {
         {
           std::lock_guard lock(event_mutex);
           events.push_back(event);
@@ -1130,17 +1124,16 @@ TEST(AiRuntimeTest, ModelRunnerPreprocessesAndPublishesDetectionEvent) {
         event_changed.notify_all();
       });
 
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(99)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
 
   {
     std::unique_lock lock(event_mutex);
-    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
-      return !events.empty();
-    }));
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1),
+                                       [&] { return !events.empty(); }));
     ASSERT_EQ(events.size(), 1U);
     EXPECT_EQ(events[0].camera_id, "imx708-main");
     EXPECT_EQ(events[0].model_id, "objects");
@@ -1167,8 +1160,8 @@ TEST(AiRuntimeTest, ModelRunnerPublishesDecodedYoloDetectionEvent) {
   std::mutex event_mutex;
   std::condition_variable event_changed;
   std::vector<camera_firmware::ai::DetectionEvent> events;
-  auto subscription = bus.Subscribe(
-      [&](const camera_firmware::ai::DetectionEvent& event) {
+  auto subscription =
+      bus.Subscribe([&](const camera_firmware::ai::DetectionEvent& event) {
         {
           std::lock_guard lock(event_mutex);
           events.push_back(event);
@@ -1176,17 +1169,16 @@ TEST(AiRuntimeTest, ModelRunnerPublishesDecodedYoloDetectionEvent) {
         event_changed.notify_all();
       });
 
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(101)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
 
   {
     std::unique_lock lock(event_mutex);
-    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
-      return !events.empty();
-    }));
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1),
+                                       [&] { return !events.empty(); }));
     ASSERT_EQ(events.size(), 1U);
     EXPECT_EQ(events[0].camera_id, "imx708-main");
     EXPECT_EQ(events[0].model_id, "objects");
@@ -1217,8 +1209,8 @@ TEST(AiRuntimeTest, ModelRunnerPublishesDecodedPoseKeypointEvent) {
   std::mutex event_mutex;
   std::condition_variable event_changed;
   std::vector<camera_firmware::ai::DetectionEvent> events;
-  auto subscription = bus.Subscribe(
-      [&](const camera_firmware::ai::DetectionEvent& event) {
+  auto subscription =
+      bus.Subscribe([&](const camera_firmware::ai::DetectionEvent& event) {
         {
           std::lock_guard lock(event_mutex);
           events.push_back(event);
@@ -1226,17 +1218,16 @@ TEST(AiRuntimeTest, ModelRunnerPublishesDecodedPoseKeypointEvent) {
         event_changed.notify_all();
       });
 
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(103)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
 
   {
     std::unique_lock lock(event_mutex);
-    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1), [&] {
-      return !events.empty();
-    }));
+    ASSERT_TRUE(event_changed.wait_for(lock, std::chrono::seconds(1),
+                                       [&] { return !events.empty(); }));
     ASSERT_EQ(events.size(), 1U);
     EXPECT_EQ(events[0].camera_id, "imx708-main");
     EXPECT_EQ(events[0].model_id, "pose");
@@ -1266,11 +1257,13 @@ TEST(AiRuntimeTest, ModelRunnerDropsMalformedYoloOutputShape) {
   model.input.height = 2;
 
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
 
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(102)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -1293,11 +1286,13 @@ TEST(AiRuntimeTest, ModelRunnerDropsMalformedPoseOutputShape) {
   model.input.height = 2;
 
   int published = 0;
-  auto subscription = bus.Subscribe(
-      [&published](const camera_firmware::ai::DetectionEvent&) { ++published; });
+  auto subscription =
+      bus.Subscribe([&published](const camera_firmware::ai::DetectionEvent&) {
+        ++published;
+      });
 
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
 
   ASSERT_TRUE(runner.Submit(Nv12RuntimeLease(104)).ok());
   ASSERT_TRUE(backend.WaitForSubmit());
@@ -1319,10 +1314,10 @@ TEST(AiRuntimeTest, ModelRunnerStopCompletesWhenDetectionSubscriberThrows) {
   AsyncCallbackBackend backend;
   camera_firmware::ai::DetectionBus bus;
   auto model = Model("objects", "object_detection");
-  camera_firmware::ai::AiModelRunner runner(
-      "imx708-main", model, &backend, 1, &bus);
-  auto subscription = bus.Subscribe(
-      [](const camera_firmware::ai::DetectionEvent&) {
+  camera_firmware::ai::AiModelRunner runner("imx708-main", model, &backend, 1,
+                                            &bus);
+  auto subscription =
+      bus.Subscribe([](const camera_firmware::ai::DetectionEvent&) {
         throw std::runtime_error("subscriber failed");
       });
 
@@ -1332,8 +1327,7 @@ TEST(AiRuntimeTest, ModelRunnerStopCompletesWhenDetectionSubscriberThrows) {
   EXPECT_NO_THROW(backend.Complete());
 
   auto stop = std::async(std::launch::async, [&runner] { runner.Stop(); });
-  ASSERT_EQ(stop.wait_for(std::chrono::seconds(1)),
-            std::future_status::ready);
+  ASSERT_EQ(stop.wait_for(std::chrono::seconds(1)), std::future_status::ready);
   auto status = runner.Status();
   EXPECT_EQ(status.dropped_frames, 1u);
   EXPECT_EQ(status.last_error_code, "E_AI_POSTPROCESS");

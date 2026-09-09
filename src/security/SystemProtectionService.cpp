@@ -39,12 +39,12 @@ class SystemProtectionService::Impl {
         std::chrono::steady_clock::duration::zero()) {
       dependencies_.automatic_interval = kDefaultAutomaticInterval;
     }
-    const auto interval_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                                      dependencies_.automatic_interval)
-                                      .count();
+    const auto interval_seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            dependencies_.automatic_interval)
+            .count();
     snapshot_.next_periodic_at_seconds = WallNowSeconds() + interval_seconds;
-    next_periodic_deadline_ =
-        SteadyNow() + dependencies_.automatic_interval;
+    next_periodic_deadline_ = SteadyNow() + dependencies_.automatic_interval;
     worker_ = std::thread([this] { WorkerLoop(); });
     worker_thread_id_ = worker_.get_id();
     try {
@@ -203,8 +203,7 @@ class SystemProtectionService::Impl {
       {
         std::lock_guard lock(mutex_);
         const auto caller = std::this_thread::get_id();
-        called_from_startup = startup_active_ &&
-                              startup_thread_id_ == caller;
+        called_from_startup = startup_active_ && startup_thread_id_ == caller;
         called_from_owned_thread =
             (!worker_exited_ && worker_thread_id_ == caller) ||
             (!scheduler_exited_ && scheduler_thread_id_ == caller);
@@ -262,33 +261,31 @@ class SystemProtectionService::Impl {
   }
 
   static std::string_view SuiteFailureCode(ProtectionSuite suite) noexcept {
-    return suite == ProtectionSuite::kSelfTest
-               ? "E_PROTECTION_SELF_TEST"
-               : "E_PROTECTION_INTEGRITY";
+    return suite == ProtectionSuite::kSelfTest ? "E_PROTECTION_SELF_TEST"
+                                               : "E_PROTECTION_INTEGRITY";
   }
 
-  bool AppendAudit(const ProtectionActor& actor,
-                   ProtectionTrigger trigger,
-                   std::string_view event_type,
-                   std::string_view outcome,
+  bool AppendAudit(const ProtectionActor& actor, ProtectionTrigger trigger,
+                   std::string_view event_type, std::string_view outcome,
                    std::string_view detail_code,
                    std::int64_t duration_milliseconds = 0,
                    const std::vector<std::string>& failed_check_ids = {},
-                   std::size_t failed_check_count = 0U)
-      noexcept {
+                   std::size_t failed_check_count = 0U) noexcept {
     try {
       const ProtectionAuditRecord record{
-          std::string{event_type}, std::string{outcome},
-          std::string{detail_code}, trigger, duration_milliseconds,
-          failed_check_ids, failed_check_count};
+          std::string{event_type},  std::string{outcome},
+          std::string{detail_code}, trigger,
+          duration_milliseconds,    failed_check_ids,
+          failed_check_count};
       if (trigger == ProtectionTrigger::kManual) {
         if (dependencies_.append_administrator_audit_record) {
           return dependencies_.append_administrator_audit_record(actor, record)
               .ok();
         }
         return dependencies_.append_administrator_audit &&
-               dependencies_.append_administrator_audit(
-                   actor, event_type, outcome, detail_code)
+               dependencies_
+                   .append_administrator_audit(actor, event_type, outcome,
+                                               detail_code)
                    .ok();
       }
       if (dependencies_.append_system_audit_record) {
@@ -303,7 +300,7 @@ class SystemProtectionService::Impl {
   }
 
   ProtectionSuiteSnapshot ExecuteSuite(ProtectionSuite suite,
-                                        ProtectionTrigger trigger) noexcept {
+                                       ProtectionTrigger trigger) noexcept {
     const auto started_steady = SteadyNow();
     ProtectionSuiteSnapshot result{
         .suite = suite,
@@ -311,8 +308,7 @@ class SystemProtectionService::Impl {
         .started_at_seconds = WallNowSeconds(),
     };
     try {
-      if (suite == ProtectionSuite::kSelfTest &&
-          dependencies_.run_self_tests) {
+      if (suite == ProtectionSuite::kSelfTest && dependencies_.run_self_tests) {
         auto report = dependencies_.run_self_tests();
         if (report.ok()) {
           result.passed = report.value().passed;
@@ -374,8 +370,7 @@ class SystemProtectionService::Impl {
     return failed_count;
   }
 
-  void RunSuite(ProtectionSuite suite,
-                ProtectionTrigger trigger,
+  void RunSuite(ProtectionSuite suite, ProtectionTrigger trigger,
                 const ProtectionActor& actor) noexcept {
     bool audit_ok = AppendAudit(actor, trigger, StartedEvent(suite),
                                 kAuditSuccess, kAuditOk);
@@ -491,9 +486,9 @@ class SystemProtectionService::Impl {
     if (!runtime_stop_ok || !restricted_audit_ok) {
       std::lock_guard lock(mutex_);
       if (!stopping_) {
-        restriction_error_code_ =
-            !restricted_audit_ok ? std::string{kAuditError}
-                                 : std::string{kRuntimeStopError};
+        restriction_error_code_ = !restricted_audit_ok
+                                      ? std::string{kAuditError}
+                                      : std::string{kRuntimeStopError};
         snapshot_.transition_code = restriction_error_code_;
       }
     }
@@ -537,9 +532,8 @@ class SystemProtectionService::Impl {
         if (dependencies_.read_device_state) {
           const auto device_state = dependencies_.read_device_state();
           device_read_ok = device_state.ok();
-          device_operational =
-              device_read_ok &&
-              device_state.value() == DeviceState::kOperational;
+          device_operational = device_read_ok && device_state.value() ==
+                                                     DeviceState::kOperational;
         }
       } catch (...) {
         device_read_ok = false;
@@ -634,8 +628,7 @@ class SystemProtectionService::Impl {
         if (now >= next_periodic_deadline_) {
           const auto elapsed = now - next_periodic_deadline_;
           const auto skipped = elapsed / dependencies_.automatic_interval + 1;
-          next_periodic_deadline_ +=
-              dependencies_.automatic_interval * skipped;
+          next_periodic_deadline_ += dependencies_.automatic_interval * skipped;
           periodic_due = true;
         }
         wait_duration = next_periodic_deadline_ - now;
@@ -648,8 +641,8 @@ class SystemProtectionService::Impl {
         if (!stopping_ && !snapshot_.check_running &&
             !pending_work_.has_value() && !worker_active_) {
           pending_work_ =
-              WorkItem{ProtectionSuite::kSelfTest,
-                       ProtectionTrigger::kPeriodic, ProtectionActor{}, true};
+              WorkItem{ProtectionSuite::kSelfTest, ProtectionTrigger::kPeriodic,
+                       ProtectionActor{}, true};
           snapshot_.state = ProtectionState::kChecking;
           snapshot_.check_running = true;
           snapshot_.transition_code.reset();
@@ -664,8 +657,8 @@ class SystemProtectionService::Impl {
       }
 
       std::unique_lock lock(mutex_);
-      scheduler_condition_.wait_for(
-          lock, wait_duration, [this] { return stopping_; });
+      scheduler_condition_.wait_for(lock, wait_duration,
+                                    [this] { return stopping_; });
       if (stopping_) {
         scheduler_exited_ = true;
         return;
@@ -744,8 +737,7 @@ SystemProtectionService::SystemProtectionService(
     SystemProtectionDependencies dependencies)
     : impl_(std::make_unique<Impl>(std::move(dependencies))) {}
 
-std::string ProtectionAuditSubjectType(
-    const ProtectionAuditRecord& record) {
+std::string ProtectionAuditSubjectType(const ProtectionAuditRecord& record) {
   switch (record.trigger) {
     case ProtectionTrigger::kStartup:
       return "startup";
@@ -759,14 +751,11 @@ std::string ProtectionAuditSubjectType(
 
 std::string ProtectionAuditSubjectIdentity(
     const ProtectionAuditRecord& record) {
-  const auto duration = std::max<std::int64_t>(
-      0, record.duration_milliseconds);
+  const auto duration = std::max<std::int64_t>(0, record.duration_milliseconds);
   const auto failed_count =
       std::max(record.failed_check_count, record.failed_check_ids.size());
   std::string subject = "d_ms=" + std::to_string(duration) +
-                        ";n=" +
-                        std::to_string(failed_count) +
-                        ";ids=";
+                        ";n=" + std::to_string(failed_count) + ";ids=";
   if (failed_count == 0U) {
     subject.push_back('-');
     return subject;
@@ -783,8 +772,7 @@ std::string ProtectionAuditSubjectIdentity(
     if (subject.size() + separator.size() +
             record.failed_check_ids[index].size() + suffix.size() >
         kMaximumAuditSubjectBytes) {
-      subject += ";more=" +
-                 std::to_string(failed_count - included);
+      subject += ";more=" + std::to_string(failed_count - included);
       omitted_suffix_written = true;
       break;
     }

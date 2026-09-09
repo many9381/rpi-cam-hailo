@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <csignal>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -17,9 +17,9 @@
 #include <vector>
 
 #if defined(CAMERA_FIRMWARE_TEST_PROTECTION_RUNTIME_PROBE)
+#include <unistd.h>
 #include <cerrno>
 #include <climits>
-#include <unistd.h>
 #endif
 
 #include <drogon/HttpAppFramework.h>
@@ -33,14 +33,14 @@
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
+#include "camera_firmware/integrity/IntegrityTrustAnchor.hpp"
+#include "camera_firmware/integrity/IntegrityVerifier.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
 #include "camera_firmware/media/EncodedRing.hpp"
 #include "camera_firmware/media/SnapshotTap.hpp"
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
 #include "camera_firmware/runtime/ManagedFirmwareRuntime.hpp"
-#include "camera_firmware/integrity/IntegrityTrustAnchor.hpp"
-#include "camera_firmware/integrity/IntegrityVerifier.hpp"
 #include "camera_firmware/security/AuditLogService.hpp"
 #include "camera_firmware/security/DeviceTlsManager.hpp"
 #include "camera_firmware/security/SecuritySelfTest.hpp"
@@ -62,7 +62,9 @@ void RequestShutdown() {
   g_stop_requested.store(true);
 }
 
-void HandleSignal(int) { RequestShutdown(); }
+void HandleSignal(int) {
+  RequestShutdown();
+}
 
 int PrintError(const Error& error) {
   std::cerr << error.code << ": " << error.message << '\n';
@@ -98,8 +100,8 @@ void SignalProtectionRuntimeStartForTesting() noexcept {
   errno = 0;
   char* end = nullptr;
   const long descriptor = std::strtol(descriptor_text, &end, 10);
-  if (errno != 0 || end == descriptor_text || *end != '\0' ||
-      descriptor < 0 || descriptor > INT_MAX) {
+  if (errno != 0 || end == descriptor_text || *end != '\0' || descriptor < 0 ||
+      descriptor > INT_MAX) {
     return;
   }
 
@@ -146,8 +148,8 @@ int ValidateConfig(const std::string& config_path) {
   camera_firmware::crypto::OpenSslCryptoProvider crypto_provider;
   auto crypto_self_test = crypto_provider.SelfTest();
   if (!crypto_self_test.ok() || !crypto_self_test.value().passed) {
-    return PrintError({"E_CRYPTO_UNAVAILABLE",
-                       "cryptographic provider self-test failed"});
+    return PrintError(
+        {"E_CRYPTO_UNAVAILABLE", "cryptographic provider self-test failed"});
   }
 
   auto plugin = camera_firmware::rtsp::RegisterBuildTreeSecureSrtpPluginPath(
@@ -193,25 +195,22 @@ int ValidateConfig(const std::string& config_path) {
   const auto ai_status = ai_runtime.Status();
   ai_runtime.Stop();
 
+  Logger::instance().log(Logger::Level::kInfo, "config loaded: " + config_path);
   Logger::instance().log(Logger::Level::kInfo,
-                         "config loaded: " + config_path);
-  Logger::instance().log(
-      Logger::Level::kInfo,
-      "RTSP ready: " +
-          camera_firmware::rtsp::BuildRtspUrl(cfg.value().secure_rtsp));
+                         "RTSP ready: " + camera_firmware::rtsp::BuildRtspUrl(
+                                              cfg.value().secure_rtsp));
   const std::string http_scheme =
       cfg.value().http.tls.enabled ? "https" : "http";
+  Logger::instance().log(Logger::Level::kInfo,
+                         "Drogon service config ready on " + http_scheme +
+                             "://" + cfg.value().http.bind_ip + ":" +
+                             std::to_string(cfg.value().http.port));
   Logger::instance().log(
       Logger::Level::kInfo,
-      "Drogon service config ready on " + http_scheme + "://" +
-          cfg.value().http.bind_ip + ":" +
-          std::to_string(cfg.value().http.port));
-  Logger::instance().log(
-      Logger::Level::kInfo,
-      ai_status.enabled ? "AI backend " + ai_status.backend +
-                              " configured; runtime skeleton state=" +
-                              ai_status.state
-                        : "AI disabled by config");
+      ai_status.enabled
+          ? "AI backend " + ai_status.backend +
+                " configured; runtime skeleton state=" + ai_status.state
+          : "AI disabled by config");
   return EXIT_SUCCESS;
 }
 
@@ -293,13 +292,15 @@ camera_firmware::common::Result<
     std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>
 CreateProductionRuntime(const camera_firmware::config::AppConfig& config) {
   try {
-    return camera_firmware::common::Result<
-        std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Ok(
-        std::make_shared<camera_firmware::runtime::FirmwareRuntime>(config));
+    return camera_firmware::common::
+        Result<std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Ok(
+            std::make_shared<camera_firmware::runtime::FirmwareRuntime>(
+                config));
   } catch (...) {
-    return camera_firmware::common::Result<
-        std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Err(
-        {"E_RUNTIME_FACTORY", "firmware runtime graph construction failed"});
+    return camera_firmware::common::
+        Result<std::shared_ptr<camera_firmware::runtime::FirmwareRuntime>>::Err(
+            {"E_RUNTIME_FACTORY",
+             "firmware runtime graph construction failed"});
   }
 }
 
@@ -330,8 +331,8 @@ int RunFirmware(const std::string& config_path) {
   }
 #endif
   if (crypto_self_test_failed) {
-    return PrintError({"E_CRYPTO_UNAVAILABLE",
-                       "cryptographic provider self-test failed"});
+    return PrintError(
+        {"E_CRYPTO_UNAVAILABLE", "cryptographic provider self-test failed"});
   }
 
   auto plugin = camera_firmware::rtsp::RegisterBuildTreeSecureSrtpPluginPath(
@@ -344,8 +345,7 @@ int RunFirmware(const std::string& config_path) {
   camera_firmware::config::AppConfig initial_config = base_config;
 
   std::shared_ptr<camera_firmware::security::SecurityStore> security_store;
-  std::unique_ptr<camera_firmware::security::AuditLogService>
-      audit_log_service;
+  std::unique_ptr<camera_firmware::security::AuditLogService> audit_log_service;
   std::optional<camera_firmware::security::ResolvedTlsMaterial> tls_material;
   std::unique_ptr<camera_firmware::security::SystemProtectionService>
       system_protection;
@@ -361,9 +361,8 @@ int RunFirmware(const std::string& config_path) {
     if (!opened.ok()) {
       return PrintError(opened.error());
     }
-    security_store =
-        std::shared_ptr<camera_firmware::security::SecurityStore>(
-            std::move(opened).value());
+    security_store = std::shared_ptr<camera_firmware::security::SecurityStore>(
+        std::move(opened).value());
 
     audit_log_service =
         std::make_unique<camera_firmware::security::AuditLogService>(
@@ -391,11 +390,11 @@ int RunFirmware(const std::string& config_path) {
       return camera_firmware::security::CheckTlsMaterialHealth(
           *tls_material, std::chrono::system_clock::now());
     };
-    self_test.audit_append_check =
-        [audit_log_service = audit_log_service.get()] {
-          return audit_log_service->AppendSystemEvent(
-              "self_test.audit_append", "success", "PROTECTION_STARTUP");
-        };
+    self_test.audit_append_check = [audit_log_service =
+                                        audit_log_service.get()] {
+      return audit_log_service->AppendSystemEvent(
+          "self_test.audit_append", "success", "PROTECTION_STARTUP");
+    };
     std::error_code path_error;
     const auto active_executable =
         std::filesystem::canonical("/proc/self/exe", path_error);
@@ -419,10 +418,10 @@ int RunFirmware(const std::string& config_path) {
          signature_path = base_config.self_protection.signature_path,
          active_executable, active_config,
          public_key_pem = IntegrityPublicKeyPem(), &crypto_provider] {
-      return camera_firmware::integrity::VerifyIntegrityManifest(
-          manifest_path, signature_path, public_key_pem,
-          active_executable, active_config, crypto_provider);
-    };
+          return camera_firmware::integrity::VerifyIntegrityManifest(
+              manifest_path, signature_path, public_key_pem, active_executable,
+              active_config, crypto_provider);
+        };
     protection_dependencies.append_system_audit_record =
         [audit_log_service = audit_log_service.get()](
             const camera_firmware::security::ProtectionAuditRecord& record) {
@@ -439,8 +438,7 @@ int RunFirmware(const std::string& config_path) {
           camera_firmware::security::Principal principal;
           principal.user_id = actor.user_id.value_or(0);
           principal.username = actor.username;
-          principal.role =
-              camera_firmware::security::UserRole::kAdministrator;
+          principal.role = camera_firmware::security::UserRole::kAdministrator;
           return audit_log_service->AppendAdministratorEvent(
               principal, actor.peer_ip, record.event_type, record.outcome,
               record.detail_code,
@@ -490,8 +488,8 @@ int RunFirmware(const std::string& config_path) {
   if (runtime_settings_store && runtime_profiles.has_value()) {
     runtime_settings =
         std::make_unique<camera_firmware::settings::RuntimeSettingsService>(
-            base_config, std::move(*runtime_profiles),
-            *runtime_settings_store, *runtime, ValidateRuntimeCandidate);
+            base_config, std::move(*runtime_profiles), *runtime_settings_store,
+            *runtime, ValidateRuntimeCandidate);
   }
 
   camera_firmware::service::ServiceApp service;
@@ -533,36 +531,33 @@ int RunFirmware(const std::string& config_path) {
       [&runtime](camera_firmware::ai::DetectionBus::Handler handler) {
         return runtime->SubscribeDetections(std::move(handler));
       };
-  service_args.snapshot_callback =
-      [&runtime](const std::string& camera_id) {
-        return runtime->Snapshot(camera_id);
-      };
+  service_args.snapshot_callback = [&runtime](const std::string& camera_id) {
+    return runtime->Snapshot(camera_id);
+  };
   service_args.cancellable_live_stream_callback =
-      [&runtime](
-          const std::string& camera_id)
-          -> camera_firmware::common::Result<
-              camera_firmware::service::LiveMp4StreamHandle> {
-        auto opened = runtime->OpenLiveStream(camera_id);
-        if (!opened.ok()) {
-          return camera_firmware::common::Result<
-              camera_firmware::service::LiveMp4StreamHandle>::Err(
-              opened.error());
-        }
-        const auto stale_timeout = std::chrono::milliseconds(
-            runtime->ActiveConfig().http.live.stale_timeout_ms);
-        constexpr auto maximum_idle = std::chrono::milliseconds{30000};
-        auto state = std::make_shared<LiveMp4ByteStream>(
-            std::move(opened).value(), stale_timeout, maximum_idle);
-        camera_firmware::service::LiveMp4StreamHandle stream{
-            .read = [state](char* output, std::size_t capacity) {
+      [&runtime](const std::string& camera_id)
+      -> camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamHandle> {
+    auto opened = runtime->OpenLiveStream(camera_id);
+    if (!opened.ok()) {
+      return camera_firmware::common::Result<
+          camera_firmware::service::LiveMp4StreamHandle>::Err(opened.error());
+    }
+    const auto stale_timeout = std::chrono::milliseconds(
+        runtime->ActiveConfig().http.live.stale_timeout_ms);
+    constexpr auto maximum_idle = std::chrono::milliseconds{30000};
+    auto state = std::make_shared<LiveMp4ByteStream>(
+        std::move(opened).value(), stale_timeout, maximum_idle);
+    camera_firmware::service::LiveMp4StreamHandle stream{
+        .read =
+            [state](char* output, std::size_t capacity) {
               return state->Read(output, capacity);
             },
-            .cancel = [state] { state->Cancel(); },
-        };
-        return camera_firmware::common::Result<
-            camera_firmware::service::LiveMp4StreamHandle>::Ok(
-            std::move(stream));
-      };
+        .cancel = [state] { state->Cancel(); },
+    };
+    return camera_firmware::common::Result<
+        camera_firmware::service::LiveMp4StreamHandle>::Ok(std::move(stream));
+  };
 
   if (security_store) {
     service_args.security_store = security_store;
@@ -588,8 +583,8 @@ int RunFirmware(const std::string& config_path) {
           return system_protection_ptr->RuntimeAllowed();
         };
     service_args.protection_runtime_control_gate =
-        [system_protection_ptr = system_protection.get()](
-            const std::function<void()>& command) {
+        [system_protection_ptr =
+             system_protection.get()](const std::function<void()>& command) {
           return system_protection_ptr->RunRuntimeControlIfAllowed(command);
         };
   }
@@ -601,8 +596,7 @@ int RunFirmware(const std::string& config_path) {
         [&runtime_settings](
             std::uint64_t expected_revision,
             camera_firmware::settings::RuntimeSettings settings) {
-          return runtime_settings->Save(expected_revision,
-                                        std::move(settings));
+          return runtime_settings->Save(expected_revision, std::move(settings));
         };
     service_args.runtime_settings_apply_callback =
         [&runtime_settings](std::uint64_t expected_revision) {
@@ -636,9 +630,7 @@ int RunFirmware(const std::string& config_path) {
         service_args.runtime_start_callback = std::move(start_runtime);
         return service.Init(service_args);
       };
-  boot_dependencies.quiesce_service = [&service] {
-    service.BeginShutdown();
-  };
+  boot_dependencies.quiesce_service = [&service] { service.BeginShutdown(); };
   boot_dependencies.stop_service = [&service] { service.Stop(); };
 
   camera_firmware::boot::FirmwareBootCoordinator boot_coordinator(
@@ -646,15 +638,17 @@ int RunFirmware(const std::string& config_path) {
       std::move(boot_dependencies));
   if (system_protection) {
     system_protection->SetRuntimeCallbacks(
-        {.start = [&boot_coordinator] {
+        {.start =
+             [&boot_coordinator] {
 #if defined(CAMERA_FIRMWARE_TEST_PROTECTION_RUNTIME_PROBE)
-           SignalProtectionRuntimeStartForTesting();
+               SignalProtectionRuntimeStartForTesting();
 #endif
-           return boot_coordinator.StartRuntimeAfterBootstrap();
-         },
-         .stop = [&boot_coordinator] {
-           boot_coordinator.StopRuntimeForProtection();
-         }});
+               return boot_coordinator.StartRuntimeAfterBootstrap();
+             },
+         .stop =
+             [&boot_coordinator] {
+               boot_coordinator.StopRuntimeForProtection();
+             }});
   }
   auto boot_started = boot_coordinator.Start();
   if (!boot_started.ok()) {

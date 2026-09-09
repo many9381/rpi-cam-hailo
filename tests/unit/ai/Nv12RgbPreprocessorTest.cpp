@@ -36,12 +36,9 @@ int CreateAnonymousFile(const std::vector<std::uint8_t>& bytes) {
   return fd;
 }
 
-FrameLease MakeNv12Lease(std::uint32_t width,
-                         std::uint32_t height,
-                         std::uint32_t y_stride,
-                         std::uint32_t uv_stride,
-                         std::size_t y_offset,
-                         std::size_t uv_offset,
+FrameLease MakeNv12Lease(std::uint32_t width, std::uint32_t height,
+                         std::uint32_t y_stride, std::uint32_t uv_stride,
+                         std::size_t y_offset, std::size_t uv_offset,
                          std::vector<std::uint8_t> bytes) {
   FrameHandle handle;
   handle.camera_id = "imx708-main";
@@ -51,10 +48,9 @@ FrameLease MakeNv12Lease(std::uint32_t width,
   handle.plane_count = 2;
   handle.planes[0] = {0, y_offset, static_cast<std::size_t>(y_stride) * height,
                       y_stride};
-  handle.planes[1] = {0,
-                      uv_offset,
-                      static_cast<std::size_t>(uv_stride) * ((height + 1U) / 2U),
-                      uv_stride};
+  handle.planes[1] = {
+      0, uv_offset, static_cast<std::size_t>(uv_stride) * ((height + 1U) / 2U),
+      uv_stride};
   const int fd = CreateAnonymousFile(bytes);
   handle.planes[0].dmabuf_fd = fd;
   handle.planes[1].dmabuf_fd = fd;
@@ -65,8 +61,7 @@ FrameLease MakeNv12Lease(std::uint32_t width,
   });
 }
 
-FrameLease GrayNv12Lease(std::uint32_t width,
-                         std::uint32_t height,
+FrameLease GrayNv12Lease(std::uint32_t width, std::uint32_t height,
                          std::uint8_t luma = 128U) {
   constexpr std::size_t kYOffset = 41U;
   constexpr std::size_t kUvOffset = 109U;
@@ -76,12 +71,14 @@ FrameLease GrayNv12Lease(std::uint32_t width,
   const std::size_t total_size =
       std::max(kYOffset + y_plane_size, kUvOffset + uv_plane_size);
   std::vector<std::uint8_t> bytes(total_size, 0U);
-  std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(kYOffset),
-            bytes.begin() + static_cast<std::ptrdiff_t>(kYOffset + y_plane_size),
-            luma);
-  std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(kUvOffset),
-            bytes.begin() + static_cast<std::ptrdiff_t>(kUvOffset + uv_plane_size),
-            128U);
+  std::fill(
+      bytes.begin() + static_cast<std::ptrdiff_t>(kYOffset),
+      bytes.begin() + static_cast<std::ptrdiff_t>(kYOffset + y_plane_size),
+      luma);
+  std::fill(
+      bytes.begin() + static_cast<std::ptrdiff_t>(kUvOffset),
+      bytes.begin() + static_cast<std::ptrdiff_t>(kUvOffset + uv_plane_size),
+      128U);
   return MakeNv12Lease(width, height, width, width, kYOffset, kUvOffset,
                        std::move(bytes));
 }
@@ -107,8 +104,7 @@ FrameLease StridedBlackWhiteNv12Lease() {
   bytes[kYOffset + 5U] = 235U;
   bytes[kUvOffset] = 128U;
   bytes[kUvOffset + 1U] = 128U;
-  return MakeNv12Lease(2U, 2U, 4U, 4U, kYOffset, kUvOffset,
-                       std::move(bytes));
+  return MakeNv12Lease(2U, 2U, 4U, 4U, kYOffset, kUvOffset, std::move(bytes));
 }
 
 FrameLease InvalidFdNv12Lease() {
@@ -122,9 +118,7 @@ FrameLease InvalidFdNv12Lease() {
   return FrameLease(handle, [] {});
 }
 
-bool RowEquals(const std::vector<std::uint8_t>& rgb,
-               int row,
-               int width,
+bool RowEquals(const std::vector<std::uint8_t>& rgb, int row, int width,
                std::uint8_t value) {
   const std::size_t first = static_cast<std::size_t>(row) * width * 3U;
   const std::size_t last = first + static_cast<std::size_t>(width) * 3U;
@@ -134,19 +128,15 @@ bool RowEquals(const std::vector<std::uint8_t>& rgb,
 }
 
 // Overload for byte-offset based checking
-bool RowEquals(const std::vector<std::uint8_t>& rgb,
-               std::size_t first_byte,
-               std::size_t last_byte,
-               std::uint8_t value) {
+bool RowEquals(const std::vector<std::uint8_t>& rgb, std::size_t first_byte,
+               std::size_t last_byte, std::uint8_t value) {
   return std::all_of(rgb.begin() + static_cast<std::ptrdiff_t>(first_byte),
                      rgb.begin() + static_cast<std::ptrdiff_t>(last_byte),
                      [value](std::uint8_t pixel) { return pixel == value; });
 }
 
-FrameLease MakeBgr888Lease(std::uint32_t width,
-                           std::uint32_t height,
-                           std::uint32_t stride_bytes,
-                           std::size_t offset,
+FrameLease MakeBgr888Lease(std::uint32_t width, std::uint32_t height,
+                           std::uint32_t stride_bytes, std::size_t offset,
                            std::vector<std::uint8_t> bytes) {
   FrameHandle handle;
   handle.camera_id = "imx708-main";
@@ -154,9 +144,8 @@ FrameLease MakeBgr888Lease(std::uint32_t width,
   handle.width = width;
   handle.height = height;
   handle.plane_count = 1;
-  handle.planes[0] = {0, offset,
-                      static_cast<std::size_t>(stride_bytes) * height,
-                      stride_bytes};
+  handle.planes[0] = {
+      0, offset, static_cast<std::size_t>(stride_bytes) * height, stride_bytes};
   const int fd = CreateAnonymousFile(bytes);
   handle.planes[0].dmabuf_fd = fd;
   return FrameLease(handle, [fd] {
@@ -207,7 +196,8 @@ TEST(Nv12RgbPreprocessorTest, CopiesBgr888LetterboxRowsVerbatim) {
   for (std::uint32_t row = 0; row < kHeight; ++row) {
     const auto* source_row =
         bytes.data() + kOffset + static_cast<std::size_t>(row) * kWidth * 3U;
-    const auto* target_row = converted.value().data() +
+    const auto* target_row =
+        converted.value().data() +
         (static_cast<std::size_t>(row) + 2U) * kTarget * 3U;
     EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
         << "row " << row;
@@ -230,7 +220,7 @@ TEST(Nv12RgbPreprocessorTest, HonorsBgr888RowStridePadding) {
     const auto* source_row =
         bytes.data() + kOffset + static_cast<std::size_t>(row) * kStride;
     const auto* target_row = converted.value().data() +
-        (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
+                             (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
     EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
         << "row " << row;
   }
@@ -270,14 +260,18 @@ TEST(Nv12RgbPreprocessorTest, ConvertIntoReusesCanvasAcrossFrames) {
 
   Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
   camera_firmware::ai::ModelInputBuffer canvas;
-  ASSERT_TRUE(preprocessor.ConvertInto(
-      MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U, first_bytes),
-      canvas).ok());
+  ASSERT_TRUE(preprocessor
+                  .ConvertInto(MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U,
+                                               first_bytes),
+                               canvas)
+                  .ok());
   const std::uint8_t* storage = canvas.bytes.data();
 
-  ASSERT_TRUE(preprocessor.ConvertInto(
-      MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U, second_bytes),
-      canvas).ok());
+  ASSERT_TRUE(preprocessor
+                  .ConvertInto(MakeBgr888Lease(kWidth, kHeight, kWidth * 3U, 0U,
+                                               second_bytes),
+                               canvas)
+                  .ok());
 
   EXPECT_EQ(canvas.bytes.data(), storage);  // storage reused, not reallocated
   EXPECT_TRUE(RowEquals(canvas.bytes, 0, 8, 114U));
@@ -285,8 +279,8 @@ TEST(Nv12RgbPreprocessorTest, ConvertIntoReusesCanvasAcrossFrames) {
   for (std::uint32_t row = 0; row < kHeight; ++row) {
     const auto* source_row =
         second_bytes.data() + static_cast<std::size_t>(row) * kWidth * 3U;
-    const auto* target_row = canvas.bytes.data() +
-        (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
+    const auto* target_row =
+        canvas.bytes.data() + (static_cast<std::size_t>(row) + 2U) * 8U * 3U;
     EXPECT_EQ(std::memcmp(source_row, target_row, kWidth * 3U), 0)
         << "row " << row;
   }
@@ -301,18 +295,22 @@ TEST(Nv12RgbPreprocessorTest, ConvertIntoRepadsWhenGeometryChanges) {
 
   Nv12RgbPreprocessor preprocessor(8U, 8U, true, 114U);
   camera_firmware::ai::ModelInputBuffer canvas;
-  ASSERT_TRUE(preprocessor.ConvertInto(
-      MakeBgr888Lease(8U, 4U, 24U, 0U, landscape), canvas).ok());
-  ASSERT_TRUE(preprocessor.ConvertInto(
-      MakeBgr888Lease(4U, 8U, 12U, 0U, portrait), canvas).ok());
+  ASSERT_TRUE(
+      preprocessor
+          .ConvertInto(MakeBgr888Lease(8U, 4U, 24U, 0U, landscape), canvas)
+          .ok());
+  ASSERT_TRUE(
+      preprocessor
+          .ConvertInto(MakeBgr888Lease(4U, 8U, 12U, 0U, portrait), canvas)
+          .ok());
 
   // Portrait letterbox: columns 0-1 and 6-7 are padding in every row.
   for (std::uint32_t row = 0; row < 8U; ++row) {
     const std::size_t row_start = static_cast<std::size_t>(row) * 8U * 3U;
     EXPECT_TRUE(RowEquals(canvas.bytes, row_start, row_start + 2U * 3U, 114U))
         << "left pad, row " << row;
-    EXPECT_TRUE(RowEquals(canvas.bytes, row_start + 6U * 3U,
-                          row_start + 8U * 3U, 114U))
+    EXPECT_TRUE(
+        RowEquals(canvas.bytes, row_start + 6U * 3U, row_start + 8U * 3U, 114U))
         << "right pad, row " << row;
   }
 }
@@ -386,7 +384,8 @@ TEST(Nv12RgbPreprocessorTest, GeometryChangeRepadsPreviouslyContentColumns) {
   const std::uint8_t dark_pixel = UniformConvertedPixel(4U, kDarkLuma);
   ASSERT_GT(static_cast<int>(bright_pixel) - static_cast<int>(dark_pixel), 40)
       << "test fixture setup: dark/bright luma values did not map to "
-         "distinguishable RGB pixels (bright=" << static_cast<int>(bright_pixel)
+         "distinguishable RGB pixels (bright="
+      << static_cast<int>(bright_pixel)
       << " dark=" << static_cast<int>(dark_pixel) << ")";
 
   Nv12RgbPreprocessor preprocessor(4, 4, true, 114U);
@@ -407,8 +406,8 @@ TEST(Nv12RgbPreprocessorTest, GeometryChangeRepadsPreviouslyContentColumns) {
     // Column 0 (left pad) and column 3 (right pad) must be 114 in every row,
     // including rows 1 and 2 which were letterbox *content* rows for the
     // previous (landscape) geometry.
-    EXPECT_TRUE(RowEquals(portrait.value(), row_start, row_start + kBytesPerPixel,
-                          114U))
+    EXPECT_TRUE(RowEquals(portrait.value(), row_start,
+                          row_start + kBytesPerPixel, 114U))
         << "row " << row << " left pad";
     EXPECT_TRUE(RowEquals(portrait.value(), row_start + 3U * kBytesPerPixel,
                           row_start + kRowBytes, 114U))
@@ -475,17 +474,20 @@ TEST(Nv12RgbPreprocessorTest, LoresSourceHasSameLetterboxGeometryAsFullSource) {
   const auto pad_bottom_begin = 500U * kBytesPerRow;
   const auto output_bytes = 640U * 640U * 3U;
 
-  for (const auto& source : {std::pair<std::uint32_t, std::uint32_t>{1920U, 1080U},
-                             std::pair<std::uint32_t, std::uint32_t>{640U, 360U}}) {
+  for (const auto& source :
+       {std::pair<std::uint32_t, std::uint32_t>{1920U, 1080U},
+        std::pair<std::uint32_t, std::uint32_t>{640U, 360U}}) {
     Nv12RgbPreprocessor preprocessor(640, 640, true, 114U);
-    auto converted = preprocessor.Convert(GrayNv12Lease(source.first, source.second));
-    ASSERT_TRUE(converted.ok()) << converted.error().message
-                                << " for " << source.first << "x" << source.second;
+    auto converted =
+        preprocessor.Convert(GrayNv12Lease(source.first, source.second));
+    ASSERT_TRUE(converted.ok()) << converted.error().message << " for "
+                                << source.first << "x" << source.second;
     ASSERT_EQ(converted.value().size(), output_bytes);
     // Top and bottom padding bands are exactly 114.
     EXPECT_TRUE(RowEquals(converted.value(), 0U, pad_top_end, 114U))
         << source.first << "x" << source.second;
-    EXPECT_TRUE(RowEquals(converted.value(), pad_bottom_begin, output_bytes, 114U))
+    EXPECT_TRUE(
+        RowEquals(converted.value(), pad_bottom_begin, output_bytes, 114U))
         << source.first << "x" << source.second;
     // The first content row (140) is not padding — content is present there.
     EXPECT_FALSE(RowEquals(converted.value(), pad_top_end,

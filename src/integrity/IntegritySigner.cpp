@@ -6,8 +6,8 @@
 
 #include <array>
 #include <atomic>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -71,7 +71,8 @@ class UniqueFd {
 
 class CleanseGuard {
  public:
-  CleanseGuard(void* data, std::size_t size) noexcept : data_(data), size_(size) {}
+  CleanseGuard(void* data, std::size_t size) noexcept
+      : data_(data), size_(size) {}
   ~CleanseGuard() { OPENSSL_cleanse(data_, size_); }
   CleanseGuard(const CleanseGuard&) = delete;
   CleanseGuard& operator=(const CleanseGuard&) = delete;
@@ -121,7 +122,8 @@ int OpenNoIntr(const std::filesystem::path& path, int flags, mode_t mode = 0U) {
   while (true) {
     const int descriptor = mode == 0U ? ::open(path.c_str(), flags)
                                       : ::open(path.c_str(), flags, mode);
-    if (descriptor >= 0 || errno != EINTR || retries++ == kMaximumEintrRetries) {
+    if (descriptor >= 0 || errno != EINTR ||
+        retries++ == kMaximumEintrRetries) {
       return descriptor;
     }
   }
@@ -152,14 +154,14 @@ bool FstatAtNoIntr(int directory, const char* name, struct stat* status,
   }
 }
 
-int RenameAt2NoIntr(int old_directory, const char* old_name,
-                    int new_directory, const char* new_name,
-                    unsigned int flags) noexcept {
+int RenameAt2NoIntr(int old_directory, const char* old_name, int new_directory,
+                    const char* new_name, unsigned int flags) noexcept {
   unsigned int retries = 0U;
   while (true) {
 #if defined(SYS_renameat2)
-    const int result = static_cast<int>(::syscall(
-        SYS_renameat2, old_directory, old_name, new_directory, new_name, flags));
+    const int result =
+        static_cast<int>(::syscall(SYS_renameat2, old_directory, old_name,
+                                   new_directory, new_name, flags));
 #else
     errno = ENOSYS;
     const int result = -1;
@@ -194,7 +196,8 @@ bool FsyncNoIntr(int descriptor) noexcept {
   }
 }
 
-bool SameSnapshot(const struct stat& before, const struct stat& after) noexcept {
+bool SameSnapshot(const struct stat& before,
+                  const struct stat& after) noexcept {
   return before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
          before.st_size == after.st_size &&
          before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
@@ -203,16 +206,18 @@ bool SameSnapshot(const struct stat& before, const struct stat& after) noexcept 
          before.st_ctim.tv_nsec == after.st_ctim.tv_nsec;
 }
 
-bool SameIdentity(const struct stat& before, const struct stat& after) noexcept {
+bool SameIdentity(const struct stat& before,
+                  const struct stat& after) noexcept {
   return before.st_dev == after.st_dev && before.st_ino == after.st_ino;
 }
 
-bool WriteAllBounded(int descriptor, std::span<const unsigned char> bytes) noexcept {
+bool WriteAllBounded(int descriptor,
+                     std::span<const unsigned char> bytes) noexcept {
   std::size_t offset = 0U;
   unsigned int retries = 0U;
   while (offset < bytes.size()) {
-    const ssize_t written = ::write(descriptor, bytes.data() + offset,
-                                    bytes.size() - offset);
+    const ssize_t written =
+        ::write(descriptor, bytes.data() + offset, bytes.size() - offset);
     if (written > 0) {
       offset += static_cast<std::size_t>(written);
       retries = 0U;
@@ -230,13 +235,14 @@ bool HasOnlyPemWhitespace(BIO* bio) {
   std::array<char, 256U> buffer{};
   const CleanseGuard cleanse(buffer.data(), buffer.size());
   while (BIO_ctrl_pending(bio) > 0L) {
-    const int count = BIO_read(bio, buffer.data(), static_cast<int>(buffer.size()));
+    const int count =
+        BIO_read(bio, buffer.data(), static_cast<int>(buffer.size()));
     if (count <= 0) {
       return false;
     }
     for (int index = 0; index < count; ++index) {
-      if (std::isspace(static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)])) ==
-          0) {
+      if (std::isspace(static_cast<unsigned char>(
+              buffer[static_cast<std::size_t>(index)])) == 0) {
         return false;
       }
     }
@@ -248,17 +254,21 @@ common::Result<std::vector<unsigned char>> ReadRegularFile(
     const std::filesystem::path& path, std::size_t maximum_size,
     const common::Error& error) {
   if (!IsAbsoluteNormalizedPath(path)) {
-    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+        error);
   }
   UniqueFd descriptor(
       OpenNoIntr(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (descriptor.get() < 0) {
-    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+        error);
   }
   struct stat initial {};
   if (!FstatNoIntr(descriptor.get(), &initial) || !S_ISREG(initial.st_mode) ||
-      initial.st_size < 0 || static_cast<std::uintmax_t>(initial.st_size) > maximum_size) {
-    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+      initial.st_size < 0 ||
+      static_cast<std::uintmax_t>(initial.st_size) > maximum_size) {
+    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+        error);
   }
 
   try {
@@ -267,8 +277,8 @@ common::Result<std::vector<unsigned char>> ReadRegularFile(
     std::size_t size = 0U;
     unsigned int retries = 0U;
     while (size < bytes.size()) {
-      const ssize_t count = ::read(descriptor.get(), bytes.data() + size,
-                                   bytes.size() - size);
+      const ssize_t count =
+          ::read(descriptor.get(), bytes.data() + size, bytes.size() - size);
       if (count > 0) {
         size += static_cast<std::size_t>(count);
         retries = 0U;
@@ -280,27 +290,33 @@ common::Result<std::vector<unsigned char>> ReadRegularFile(
       if (errno == EINTR && retries++ < kMaximumEintrRetries) {
         continue;
       }
-      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+          error);
     }
     if (size > maximum_size) {
-      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+          error);
     }
     struct stat final_status {};
     if (!FstatNoIntr(descriptor.get(), &final_status) ||
         !SameSnapshot(initial, final_status)) {
-      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+          error);
     }
     UniqueFd path_descriptor(OpenNoIntr(path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
     struct stat path_status {};
-    if (path_descriptor.get() < 0 || !FstatNoIntr(path_descriptor.get(), &path_status) ||
+    if (path_descriptor.get() < 0 ||
+        !FstatNoIntr(path_descriptor.get(), &path_status) ||
         !S_ISREG(path_status.st_mode) || path_status.st_dev != initial.st_dev ||
         path_status.st_ino != initial.st_ino) {
-      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(error);
+      return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+          error);
     }
     std::vector<unsigned char> result(bytes.begin(), bytes.begin() + size);
     return common::Result<std::vector<unsigned char>>::Ok(std::move(result));
   } catch (...) {
-    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(kResourceError);
+    return common::Result<std::vector<unsigned char>>::ErrFromStaticLifetime(
+        kResourceError);
   }
 }
 
@@ -309,8 +325,8 @@ common::Result<EvpPkey> ReadEd25519PrivateKey(
   if (!IsAbsoluteNormalizedPath(private_key_path)) {
     return common::Result<EvpPkey>::ErrFromStaticLifetime(kPrivateKeyError);
   }
-  UniqueFd descriptor(OpenNoIntr(private_key_path,
-                                 O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+  UniqueFd descriptor(OpenNoIntr(
+      private_key_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (descriptor.get() < 0) {
     return common::Result<EvpPkey>::ErrFromStaticLifetime(kPrivateKeyError);
   }
@@ -321,14 +337,15 @@ common::Result<EvpPkey> ReadEd25519PrivateKey(
     return common::Result<EvpPkey>::ErrFromStaticLifetime(kPrivateKeyError);
   }
   try {
-    // Keep every possible PEM byte in one bounded buffer and cleanse it on every exit.
+    // Keep every possible PEM byte in one bounded buffer and cleanse it on
+    // every exit.
     std::vector<unsigned char> bytes(kMaximumArtifactBytes + 1U, 0U);
     const CleanseGuard cleanse(bytes.data(), bytes.size());
     std::size_t size = 0U;
     unsigned int retries = 0U;
     while (size < bytes.size()) {
-      const ssize_t count = ::read(descriptor.get(), bytes.data() + size,
-                                   bytes.size() - size);
+      const ssize_t count =
+          ::read(descriptor.get(), bytes.data() + size, bytes.size() - size);
       if (count > 0) {
         size += static_cast<std::size_t>(count);
         retries = 0U;
@@ -354,14 +371,16 @@ common::Result<EvpPkey> ReadEd25519PrivateKey(
     UniqueFd path_descriptor(
         OpenNoIntr(private_key_path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
     struct stat path_status {};
-    if (path_descriptor.get() < 0 || !FstatNoIntr(path_descriptor.get(), &path_status) ||
+    if (path_descriptor.get() < 0 ||
+        !FstatNoIntr(path_descriptor.get(), &path_status) ||
         !S_ISREG(path_status.st_mode) || path_status.st_dev != initial.st_dev ||
         path_status.st_ino != initial.st_ino) {
       return common::Result<EvpPkey>::ErrFromStaticLifetime(kPrivateKeyError);
     }
     Bio bio(BIO_new_mem_buf(bytes.data(), static_cast<int>(size)), BIO_free);
     EvpPkey key(
-        bio ? PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr) : nullptr,
+        bio ? PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr)
+            : nullptr,
         EVP_PKEY_free);
     if (!key || !HasOnlyPemWhitespace(bio.get()) ||
         !EVP_PKEY_is_a(key.get(), "ED25519")) {
@@ -422,7 +441,8 @@ common::Result<std::array<unsigned char, 64U>> SignIntegrityManifest(
     crypto::CryptoProvider& provider) {
   const auto private_key = ReadEd25519PrivateKey(private_key_path);
   if (!private_key.ok()) {
-    return common::Result<std::array<unsigned char, 64U>>::Err(private_key.error());
+    return common::Result<std::array<unsigned char, 64U>>::Err(
+        private_key.error());
   }
   // The PEM decode above stays exactly as it was; only the signing operation
   // itself moves behind the crypto provider, which takes a raw 32-byte seed
@@ -436,15 +456,15 @@ common::Result<std::array<unsigned char, 64U>> SignIntegrityManifest(
   if (EVP_PKEY_get_raw_private_key(private_key.value().get(), seed.data(),
                                    &seed_size) != 1 ||
       seed_size != seed.size()) {
-    return common::Result<std::array<unsigned char, 64U>>::ErrFromStaticLifetime(
-        kPrivateKeyError);
+    return common::Result<std::array<unsigned char, 64U>>::
+        ErrFromStaticLifetime(kPrivateKeyError);
   }
   const auto signature = provider.SignEd25519(bytes, seed);
   // Do not propagate E_CRYPTO_UNAVAILABLE (or any other provider error): fold
   // it into the same error this function already returned for a failed sign.
   if (!signature.ok()) {
-    return common::Result<std::array<unsigned char, 64U>>::ErrFromStaticLifetime(
-        kPrivateKeyError);
+    return common::Result<std::array<unsigned char, 64U>>::
+        ErrFromStaticLifetime(kPrivateKeyError);
   }
   return common::Result<std::array<unsigned char, 64U>>::Ok(signature.value());
 }
@@ -457,8 +477,8 @@ common::Result<void> WriteIntegrityArtifactAtomicallyImpl(
   if (!IsAbsoluteNormalizedPath(output) || output.filename().empty()) {
     return common::Result<void>::ErrFromStaticLifetime(kOutputError);
   }
-  UniqueFd directory(OpenNoIntr(output.parent_path(),
-                                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  UniqueFd directory(OpenNoIntr(
+      output.parent_path(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   struct stat directory_status {};
   if (directory.get() < 0 || !FstatNoIntr(directory.get(), &directory_status) ||
       !S_ISDIR(directory_status.st_mode)) {
@@ -466,13 +486,14 @@ common::Result<void> WriteIntegrityArtifactAtomicallyImpl(
   }
 
   const std::string base = output.filename().string();
-  for (std::size_t attempt = 0U; attempt < kMaximumTemporaryAttempts; ++attempt) {
-    const std::string temporary = "." + base + ".tmp-" +
-                                  std::to_string(::getpid()) + "-" +
-                                  std::to_string(g_temporary_sequence.fetch_add(1U));
+  for (std::size_t attempt = 0U; attempt < kMaximumTemporaryAttempts;
+       ++attempt) {
+    const std::string temporary =
+        "." + base + ".tmp-" + std::to_string(::getpid()) + "-" +
+        std::to_string(g_temporary_sequence.fetch_add(1U));
     UniqueFd file(::openat(directory.get(), temporary.c_str(),
-                            O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                            S_IRUSR | S_IWUSR));
+                           O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                           S_IRUSR | S_IWUSR));
     if (file.get() < 0) {
       if (errno == EEXIST) {
         continue;
@@ -486,9 +507,8 @@ common::Result<void> WriteIntegrityArtifactAtomicallyImpl(
     }
 
     struct stat destination {};
-    const bool destination_exists =
-        FstatAtNoIntr(directory.get(), base.c_str(), &destination,
-                      AT_SYMLINK_NOFOLLOW);
+    const bool destination_exists = FstatAtNoIntr(
+        directory.get(), base.c_str(), &destination, AT_SYMLINK_NOFOLLOW);
     if (!destination_exists && errno != ENOENT) {
       return common::Result<void>::ErrFromStaticLifetime(kOutputError);
     }
@@ -545,8 +565,7 @@ common::Result<void> WriteIntegrityArtifactAtomically(
 namespace testing {
 
 common::Result<void> WriteIntegrityArtifactAtomicallyWithPrePublishHook(
-    const std::filesystem::path& output,
-    std::span<const unsigned char> bytes,
+    const std::filesystem::path& output, std::span<const unsigned char> bytes,
     std::function<void()> before_publish) {
   return WriteIntegrityArtifactAtomicallyImpl(output, bytes, &before_publish);
 }

@@ -31,13 +31,15 @@ TEST(OsdRulesTest, AcceptsExactlyTheThreeTypesAndFourPositions) {
   EXPECT_FALSE(IsAllowedOsdPosition("center"));
 }
 
-TEST(OsdRulesTest, PrintableTextIsBoundedInUtf8BytesAndFreeOfControlCharacters) {
+TEST(OsdRulesTest,
+     PrintableTextIsBoundedInUtf8BytesAndFreeOfControlCharacters) {
   EXPECT_TRUE(IsPrintableOsdText(""));
   EXPECT_TRUE(IsPrintableOsdText(std::string(64, 'x')));
   EXPECT_FALSE(IsPrintableOsdText(std::string(65, 'x')));
   // 21 Hangul syllables = 63 bytes, 22 = 66 bytes.
   std::string hangul21;
-  for (int i = 0; i < 21; ++i) hangul21 += "\xea\xb0\x80";  // 가
+  for (int i = 0; i < 21; ++i)
+    hangul21 += "\xea\xb0\x80";  // 가
   EXPECT_TRUE(IsPrintableOsdText(hangul21));
   EXPECT_FALSE(IsPrintableOsdText(hangul21 + "\xea\xb0\x80"));
   EXPECT_FALSE(IsPrintableOsdText("a\tb"));

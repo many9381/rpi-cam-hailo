@@ -5,8 +5,8 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -42,9 +42,8 @@ constexpr std::string_view kAuthenticationFailureMessage =
 
 template <typename T>
 common::Result<T> AuthenticationFailure() {
-  return common::Result<T>::Err(
-      {std::string(kAuthenticationFailureCode),
-       std::string(kAuthenticationFailureMessage)});
+  return common::Result<T>::Err({std::string(kAuthenticationFailureCode),
+                                 std::string(kAuthenticationFailureMessage)});
 }
 
 template <typename T>
@@ -218,8 +217,8 @@ const ProcessDummyPassword& DummyPassword() {
 bool HasSafeDeadline(std::int64_t now_seconds,
                      std::int64_t idle_timeout_seconds) {
   return now_seconds >= 0 && idle_timeout_seconds > 0 &&
-         now_seconds <= std::numeric_limits<std::int64_t>::max() -
-                            idle_timeout_seconds;
+         now_seconds <=
+             std::numeric_limits<std::int64_t>::max() - idle_timeout_seconds;
 }
 
 bool PasswordRecordsEqual(const PasswordRecord& first,
@@ -230,10 +229,9 @@ bool PasswordRecordsEqual(const PasswordRecord& first,
       first.derived.size() != second.derived.size()) {
     return false;
   }
-  const bool salt_equal =
-      first.salt.size() == 0U ||
-      ::CRYPTO_memcmp(first.salt.data(), second.salt.data(),
-                      first.salt.size()) == 0;
+  const bool salt_equal = first.salt.size() == 0U ||
+                          ::CRYPTO_memcmp(first.salt.data(), second.salt.data(),
+                                          first.salt.size()) == 0;
   const bool derived_equal =
       first.derived.size() == 0U ||
       ::CRYPTO_memcmp(first.derived.data(), second.derived.data(),
@@ -265,8 +263,7 @@ std::string_view UserRoleName(UserRole role) {
 
 class AuthService::FirmwareLogWorker {
  public:
-  FirmwareLogWorker(SecurityStore& store,
-                    AuthClockCallback now_seconds,
+  FirmwareLogWorker(SecurityStore& store, AuthClockCallback now_seconds,
                     AuthRandomCallback random_bytes,
                     AuthHighSeverityLogCallback callback,
                     FirmwareLogBeforeAckCallback before_ack)
@@ -332,9 +329,8 @@ class AuthService::FirmwareLogWorker {
   bool RunIteration(std::chrono::milliseconds& retry_delay) {
     {
       std::unique_lock lock(mutex_);
-      condition_.wait_for(lock, kPollInterval, [this] {
-        return stopping_ || wake_requested_;
-      });
+      condition_.wait_for(lock, kPollInterval,
+                          [this] { return stopping_ || wake_requested_; });
       if (stopping_) {
         return false;
       }
@@ -343,8 +339,8 @@ class AuthService::FirmwareLogWorker {
 
     const std::int64_t now_seconds = now_seconds_();
     if (now_seconds < 0 ||
-        now_seconds > std::numeric_limits<std::int64_t>::max() -
-                          kLeaseDurationSeconds) {
+        now_seconds >
+            std::numeric_limits<std::int64_t>::max() - kLeaseDurationSeconds) {
       return true;
     }
     auto claimable = store_.HasClaimableFirmwareLogOutbox(now_seconds);
@@ -352,8 +348,7 @@ class AuthService::FirmwareLogWorker {
       return true;
     }
     auto token_result = random_bytes_(kLeaseTokenBytes);
-    if (!token_result.ok() ||
-        token_result.value().size() != kLeaseTokenBytes) {
+    if (!token_result.ok() || token_result.value().size() != kLeaseTokenBytes) {
       return true;
     }
     auto lease_token = std::move(token_result).value();
@@ -399,8 +394,7 @@ class AuthService::FirmwareLogWorker {
         entry.id, {lease_owner_.data(), lease_owner_.size()},
         {lease_token.data(), lease_token.size()});
     std::unique_lock lock(mutex_);
-    condition_.wait_for(lock, retry_delay,
-                        [this] { return stopping_; });
+    condition_.wait_for(lock, retry_delay, [this] { return stopping_; });
     if (stopping_) {
       return false;
     }
@@ -424,8 +418,7 @@ class AuthService::FirmwareLogWorker {
 
 class AuthService::SessionExpiryWorker {
  public:
-  SessionExpiryWorker(SecurityStore& store,
-                      AuthClockCallback now_seconds,
+  SessionExpiryWorker(SecurityStore& store, AuthClockCallback now_seconds,
                       AuthServiceRuntimeHooks hooks)
       : store_(store),
         now_seconds_(std::move(now_seconds)),
@@ -457,9 +450,8 @@ class AuthService::SessionExpiryWorker {
   // that a previous operation's Wake() is still owed.
   void WaitForIdleForTesting() {
     std::unique_lock lock(mutex_);
-    condition_.wait(lock, [this] {
-      return stopping_ || (idle_ && !wake_requested_);
-    });
+    condition_.wait(
+        lock, [this] { return stopping_ || (idle_ && !wake_requested_); });
   }
 
  private:
@@ -483,8 +475,8 @@ class AuthService::SessionExpiryWorker {
       if (!expired.ok()) {
         return {};
       }
-      auto lapsed = store_.ExpireLapsedManagementAuthority(transaction,
-                                                           now_seconds);
+      auto lapsed =
+          store_.ExpireLapsedManagementAuthority(transaction, now_seconds);
       if (!lapsed.ok()) {
         return {};
       }
@@ -528,15 +520,13 @@ class AuthService::SessionExpiryWorker {
       }
       if (!sweep.ok) {
         IdleScope idle(*this);
-        condition_.wait_for(lock, std::chrono::seconds(1), [this] {
-          return stopping_ || wake_requested_;
-        });
+        condition_.wait_for(lock, std::chrono::seconds(1),
+                            [this] { return stopping_ || wake_requested_; });
         continue;
       }
       if (!sweep.next_expiry.has_value()) {
         IdleScope idle(*this);
-        condition_.wait(lock,
-                        [this] { return stopping_ || wake_requested_; });
+        condition_.wait(lock, [this] { return stopping_ || wake_requested_; });
         continue;
       }
       std::int64_t now_seconds = 0;
@@ -544,21 +534,18 @@ class AuthService::SessionExpiryWorker {
         now_seconds = now_seconds_();
       } catch (...) {
         IdleScope idle(*this);
-        condition_.wait_for(lock, std::chrono::seconds(1), [this] {
-          return stopping_ || wake_requested_;
-        });
+        condition_.wait_for(lock, std::chrono::seconds(1),
+                            [this] { return stopping_ || wake_requested_; });
         continue;
       }
       if (now_seconds >= *sweep.next_expiry) {
         continue;
       }
-      const auto delay_seconds =
-          std::min<std::int64_t>(*sweep.next_expiry - now_seconds,
-                                 std::int64_t{24} * 60 * 60);
+      const auto delay_seconds = std::min<std::int64_t>(
+          *sweep.next_expiry - now_seconds, std::int64_t{24} * 60 * 60);
       IdleScope idle(*this);
-      condition_.wait_for(lock, std::chrono::seconds(delay_seconds), [this] {
-        return stopping_ || wake_requested_;
-      });
+      condition_.wait_for(lock, std::chrono::seconds(delay_seconds),
+                          [this] { return stopping_ || wake_requested_; });
     }
   }
 
@@ -584,8 +571,7 @@ class AuthService::SessionExpiryWorker {
   std::thread worker_;
 };
 
-AuthService::AuthService(SecurityStore& store,
-                         AuthServiceRuntimeHooks hooks)
+AuthService::AuthService(SecurityStore& store, AuthServiceRuntimeHooks hooks)
     : AuthService(store, AuthServiceDependencies{}, std::move(hooks), {}) {}
 
 AuthService::AuthService(SecurityStore& store,
@@ -593,10 +579,9 @@ AuthService::AuthService(SecurityStore& store,
     : AuthService(store, std::move(dependencies), AuthServiceRuntimeHooks{},
                   {}) {}
 
-AuthService::AuthService(
-    SecurityStore& store,
-    AuthServiceDependencies dependencies,
-    FirmwareLogBeforeAckCallback firmware_log_before_ack)
+AuthService::AuthService(SecurityStore& store,
+                         AuthServiceDependencies dependencies,
+                         FirmwareLogBeforeAckCallback firmware_log_before_ack)
     : AuthService(store, std::move(dependencies), AuthServiceRuntimeHooks{},
                   std::move(firmware_log_before_ack)) {}
 
@@ -605,20 +590,18 @@ AuthService::AuthService(SecurityStore& store,
                          AuthServiceRuntimeHooks hooks)
     : AuthService(store, std::move(dependencies), std::move(hooks), {}) {}
 
-AuthService::AuthService(
-    SecurityStore& store,
-    AuthServiceDependencies dependencies,
-    AuthServiceRuntimeHooks hooks,
-    FirmwareLogBeforeAckCallback firmware_log_before_ack)
+AuthService::AuthService(SecurityStore& store,
+                         AuthServiceDependencies dependencies,
+                         AuthServiceRuntimeHooks hooks,
+                         FirmwareLogBeforeAckCallback firmware_log_before_ack)
     : AuthService(store, std::move(dependencies), std::move(hooks),
                   std::move(firmware_log_before_ack), {}) {}
 
-AuthService::AuthService(
-    SecurityStore& store,
-    AuthServiceDependencies dependencies,
-    AuthServiceRuntimeHooks hooks,
-    FirmwareLogBeforeAckCallback firmware_log_before_ack,
-    LoginRoleValidatorCallback login_role_validator)
+AuthService::AuthService(SecurityStore& store,
+                         AuthServiceDependencies dependencies,
+                         AuthServiceRuntimeHooks hooks,
+                         FirmwareLogBeforeAckCallback firmware_log_before_ack,
+                         LoginRoleValidatorCallback login_role_validator)
     : store_(store),
       dependencies_(std::move(dependencies)),
       hooks_(std::move(hooks)),
@@ -628,34 +611,31 @@ AuthService::AuthService(
   }
   if (!dependencies_.random_bytes) {
     dependencies_.random_bytes =
-        dependencies_.provider
-            ? ProviderRandomCallback(dependencies_.provider)
-            : AuthRandomCallback(DefaultRandom);
+        dependencies_.provider ? ProviderRandomCallback(dependencies_.provider)
+                               : AuthRandomCallback(DefaultRandom);
   }
   if (!dependencies_.verify_password) {
     dependencies_.verify_password = VerifyPassword;
   }
   if (!dependencies_.high_severity_log) {
-    dependencies_.high_severity_log =
-        [](std::string_view category, std::string_view normalized_peer_ip) {
-          std::array<char, 128> message{};
-          const int length = std::snprintf(
-              message.data(), message.size(), "%.*s|%.*s",
-              static_cast<int>(category.size()), category.data(),
-              static_cast<int>(normalized_peer_ip.size()),
-              normalized_peer_ip.data());
-          if (length > 0 &&
-              static_cast<std::size_t>(length) < message.size()) {
-            common::Logger::instance().log(common::Logger::Level::kError,
-                                           message.data());
-          }
-        };
+    dependencies_.high_severity_log = [](std::string_view category,
+                                         std::string_view normalized_peer_ip) {
+      std::array<char, 128> message{};
+      const int length =
+          std::snprintf(message.data(), message.size(), "%.*s|%.*s",
+                        static_cast<int>(category.size()), category.data(),
+                        static_cast<int>(normalized_peer_ip.size()),
+                        normalized_peer_ip.data());
+      if (length > 0 && static_cast<std::size_t>(length) < message.size()) {
+        common::Logger::instance().log(common::Logger::Level::kError,
+                                       message.data());
+      }
+    };
   }
   if (!dependencies_.firmware_log_random_bytes) {
     dependencies_.firmware_log_random_bytes =
-        dependencies_.provider
-            ? ProviderRandomCallback(dependencies_.provider)
-            : AuthRandomCallback(DefaultRandom);
+        dependencies_.provider ? ProviderRandomCallback(dependencies_.provider)
+                               : AuthRandomCallback(DefaultRandom);
   }
   if (!login_role_validator_) {
     login_role_validator_ = [](UserRole role) {
@@ -773,8 +753,7 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
 
     const auto immutable_context_equal = [&snapshot, &context] {
       if (snapshot.value().state != context.value().state ||
-          snapshot.value().peer_registered !=
-              context.value().peer_registered ||
+          snapshot.value().peer_registered != context.value().peer_registered ||
           snapshot.value().user.has_value() !=
               context.value().user.has_value()) {
         return false;
@@ -804,20 +783,18 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
               context_user->last_login_at_seconds));
 
     const bool has_user = context_user != nullptr;
-    const bool operational =
-        context.value().state == DeviceState::kOperational;
+    const bool operational = context.value().state == DeviceState::kOperational;
     const bool peer_registered = context.value().peer_registered;
     const bool enabled = has_user && context_user->enabled;
     const std::optional<UserRole> user_role =
         has_user ? ParseUserRole(context_user->role) : std::nullopt;
-    const bool lock_active =
-        has_user && context_user->lock_until_seconds.has_value() &&
-        now_seconds < *context_user->lock_until_seconds;
+    const bool lock_active = has_user &&
+                             context_user->lock_until_seconds.has_value() &&
+                             now_seconds < *context_user->lock_until_seconds;
     const bool clock_valid =
-        !has_user ||
-        (now_seconds >= context_user->created_at_seconds &&
-         (!context_user->last_login_at_seconds.has_value() ||
-          now_seconds >= *context_user->last_login_at_seconds));
+        !has_user || (now_seconds >= context_user->created_at_seconds &&
+                      (!context_user->last_login_at_seconds.has_value() ||
+                       now_seconds >= *context_user->last_login_at_seconds));
     if (immutable_context_current && !clock_valid) {
       return rollback_unavailable();
     }
@@ -855,8 +832,7 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
                           decision_state_current;
 
     const std::optional<std::int64_t> actor_user_id =
-        has_user ? std::optional<std::int64_t>(context_user->id)
-                 : std::nullopt;
+        has_user ? std::optional<std::int64_t>(context_user->id) : std::nullopt;
     const bool duplicate_check_allowed =
         peer_authorized && enabled && user_role.has_value() && !lock_active &&
         password_matches && immutable_context_current;
@@ -871,8 +847,8 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
         return rollback_unavailable();
       }
       expired_identities = std::move(expired).value();
-      auto active_session = store_.ReadSessionByUserId(
-          transaction, context_user->id);
+      auto active_session =
+          store_.ReadSessionByUserId(transaction, context_user->id);
       if (!active_session.ok()) {
         return rollback_unavailable();
       }
@@ -906,26 +882,23 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       // operational path is unchanged. Default-state login flooding is bounded
       // by the request-rate limit instead of the lock.
       const bool counts_as_failure =
-          peer_authorized && enabled && user_role.has_value() &&
-          !lock_active && !password_matches && immutable_context_current &&
-          !initial_account;
+          peer_authorized && enabled && user_role.has_value() && !lock_active &&
+          !password_matches && immutable_context_current && !initial_account;
       if (counts_as_failure) {
         const bool prior_lock_expired =
             context_user->lock_until_seconds.has_value() &&
             now_seconds >= *context_user->lock_until_seconds;
         const std::int64_t previous_failures =
-            prior_lock_expired
-                ? 0
-                : std::clamp<std::int64_t>(
-                      context_user->failed_login_count, 0, 5);
+            prior_lock_expired ? 0
+                               : std::clamp<std::int64_t>(
+                                     context_user->failed_login_count, 0, 5);
         const std::int64_t failures =
             std::min<std::int64_t>(previous_failures + 1, kFailureLimit);
         reached_limit = failures == kFailureLimit;
         const std::optional<std::int64_t> lock_until =
-            reached_limit
-                ? std::optional<std::int64_t>(now_seconds +
-                                              kLockDurationSeconds)
-                : std::nullopt;
+            reached_limit ? std::optional<std::int64_t>(now_seconds +
+                                                        kLockDurationSeconds)
+                          : std::nullopt;
         auto updated = store_.SetLoginFailureState(
             transaction, context_user->id, failures, lock_until);
         if (!updated.ok()) {
@@ -941,9 +914,8 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       }
       if (reached_limit) {
         auto limit_audit = store_.InsertAuditEvent(
-            transaction, now_seconds, "authentication_limit_reached",
-            "failure", actor_user_id, normalized_peer,
-            "consecutive_failure_limit");
+            transaction, now_seconds, "authentication_limit_reached", "failure",
+            actor_user_id, normalized_peer, "consecutive_failure_limit");
         if (!limit_audit.ok()) {
           return rollback_unavailable();
         }
@@ -990,8 +962,7 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
       if (session_token.size() != kSessionTokenBytes) {
         return rollback_unavailable();
       }
-      auto hashed = HashToken(
-          {session_token.data(), session_token.size()});
+      auto hashed = HashToken({session_token.data(), session_token.size()});
       if (!hashed.ok()) {
         return rollback_unavailable();
       }
@@ -1028,14 +999,14 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
         now_seconds + dependencies_.session_idle_timeout_seconds;
     const std::int64_t management_expires_at_seconds = expires_at_seconds;
     auto inserted = store_.InsertSession(
-        transaction, {token_hash.data(), token_hash.size()},
-        context_user->id, UserRoleName(*user_role), now_seconds,
-        expires_at_seconds, normalized_peer, management_expires_at_seconds);
+        transaction, {token_hash.data(), token_hash.size()}, context_user->id,
+        UserRoleName(*user_role), now_seconds, expires_at_seconds,
+        normalized_peer, management_expires_at_seconds);
     if (!inserted.ok()) {
       return rollback_unavailable();
     }
-    auto reset = store_.SetLoginSuccessState(
-        transaction, context_user->id, now_seconds);
+    auto reset =
+        store_.SetLoginSuccessState(transaction, context_user->id, now_seconds);
     if (!reset.ok()) {
       return rollback_unavailable();
     }
@@ -1060,8 +1031,7 @@ common::Result<LoginResult> AuthService::Login(LoginRequest request) {
 }
 
 common::Result<Principal> AuthService::Verify(
-    std::span<const unsigned char> token,
-    std::string_view peer_ip,
+    std::span<const unsigned char> token, std::string_view peer_ip,
     ManagementActivity activity) {
   try {
     auto token_hash = HashToken(token);
@@ -1108,13 +1078,11 @@ common::Result<Principal> AuthService::Verify(
       return rollback_unavailable();
     }
     auto& session_slot = session.value();
-    auto* stored_session =
-        session_slot.has_value() ? &*session_slot : nullptr;
+    auto* stored_session = session_slot.has_value() ? &*session_slot : nullptr;
     if (stored_session != nullptr) {
       stored_hash_cleanup.Bind(stored_session->token_hash);
     }
-    const unsigned char* expected_hash =
-        DummyPassword().record.derived.data();
+    const unsigned char* expected_hash = DummyPassword().record.derived.data();
     if (stored_session != nullptr &&
         stored_session->token_hash.size() == kSessionTokenHashBytes) {
       expected_hash = stored_session->token_hash.data();
@@ -1128,9 +1096,8 @@ common::Result<Principal> AuthService::Verify(
       return rollback_unavailable();
     }
     const std::optional<UserRole> role =
-        stored_session != nullptr
-            ? ParseUserRole(stored_session->role)
-            : std::nullopt;
+        stored_session != nullptr ? ParseUserRole(stored_session->role)
+                                  : std::nullopt;
     bool valid = stored_session != nullptr && hash_matches &&
                  stored_session->peer_ip == normalized_peer &&
                  role.has_value() &&
@@ -1184,16 +1151,15 @@ common::Result<Principal> AuthService::Verify(
       return AuthenticationFailure<Principal>();
     }
     return common::Result<Principal>::Ok(
-        {stored_session->user_id, std::move(stored_session->username),
-         *role, std::move(session_identity), management_valid});
+        {stored_session->user_id, std::move(stored_session->username), *role,
+         std::move(session_identity), management_valid});
   } catch (...) {
     return AuthenticationUnavailable<Principal>();
   }
 }
 
-common::Result<void> AuthService::Logout(
-    std::span<const unsigned char> token,
-    std::string_view peer_ip) {
+common::Result<void> AuthService::Logout(std::span<const unsigned char> token,
+                                         std::string_view peer_ip) {
   try {
     auto token_hash = HashToken(token);
     if (!token_hash.ok() || !DummyPassword().valid) {
@@ -1239,13 +1205,11 @@ common::Result<void> AuthService::Logout(
       return rollback_unavailable();
     }
     auto& session_slot = session.value();
-    auto* stored_session =
-        session_slot.has_value() ? &*session_slot : nullptr;
+    auto* stored_session = session_slot.has_value() ? &*session_slot : nullptr;
     if (stored_session != nullptr) {
       stored_hash_cleanup.Bind(stored_session->token_hash);
     }
-    const unsigned char* expected_hash =
-        DummyPassword().record.derived.data();
+    const unsigned char* expected_hash = DummyPassword().record.derived.data();
     if (stored_session != nullptr &&
         stored_session->token_hash.size() == kSessionTokenHashBytes) {
       expected_hash = stored_session->token_hash.data();
@@ -1283,16 +1247,14 @@ common::Result<void> AuthService::Logout(
     token_hash_cleanup.Clear();
     PublishSessionRevocations(identities, hooks_.revoke_sessions,
                               hooks_.revoke_all_streams);
-    return valid ? common::Result<void>::Ok()
-                 : AuthenticationFailure<void>();
+    return valid ? common::Result<void>::Ok() : AuthenticationFailure<void>();
   } catch (...) {
     return AuthenticationUnavailable<void>();
   }
 }
 
 common::Result<std::int64_t> AuthService::Reauthenticate(
-    std::span<const unsigned char> token,
-    std::string_view peer_ip,
+    std::span<const unsigned char> token, std::string_view peer_ip,
     common::SecureBytes password) {
   try {
     SensitiveCleanupGuard password_cleanup(password);
@@ -1340,13 +1302,11 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
       return rollback_unavailable();
     }
     auto& session_slot = session.value();
-    auto* stored_session =
-        session_slot.has_value() ? &*session_slot : nullptr;
+    auto* stored_session = session_slot.has_value() ? &*session_slot : nullptr;
     if (stored_session != nullptr) {
       stored_hash_cleanup.Bind(stored_session->token_hash);
     }
-    const unsigned char* expected_hash =
-        DummyPassword().record.derived.data();
+    const unsigned char* expected_hash = DummyPassword().record.derived.data();
     if (stored_session != nullptr &&
         stored_session->token_hash.size() == kSessionTokenHashBytes) {
       expected_hash = stored_session->token_hash.data();
@@ -1354,10 +1314,9 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
     const bool hash_matches =
         ::CRYPTO_memcmp(token_hash.value().data(), expected_hash,
                         kSessionTokenHashBytes) == 0;
-    const bool session_valid =
-        stored_session != nullptr && hash_matches &&
-        stored_session->peer_ip == normalized_peer &&
-        ParseUserRole(stored_session->role).has_value();
+    const bool session_valid = stored_session != nullptr && hash_matches &&
+                               stored_session->peer_ip == normalized_peer &&
+                               ParseUserRole(stored_session->role).has_value();
 
     const std::string canonical_username =
         session_valid ? CanonicalUsername(stored_session->username)
@@ -1370,8 +1329,7 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
     const auto& context_user_slot = context.value().user;
     const auto* context_user =
         context_user_slot.has_value() ? &*context_user_slot : nullptr;
-    const bool has_user =
-        session_valid && context_user != nullptr;
+    const bool has_user = session_valid && context_user != nullptr;
 
     // Always run the KDF so a missing or mismatched session takes the same
     // time as a wrong password.
@@ -1386,9 +1344,9 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
     }
     password.clear();
 
-    const bool lock_active =
-        has_user && context_user->lock_until_seconds.has_value() &&
-        now_seconds < *context_user->lock_until_seconds;
+    const bool lock_active = has_user &&
+                             context_user->lock_until_seconds.has_value() &&
+                             now_seconds < *context_user->lock_until_seconds;
     const bool enabled = has_user && context_user->enabled;
 
     if (!session_valid) {
@@ -1403,8 +1361,7 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
     }
 
     const std::optional<std::int64_t> actor_user_id =
-        has_user ? std::optional<std::int64_t>(context_user->id)
-                 : std::nullopt;
+        has_user ? std::optional<std::int64_t>(context_user->id) : std::nullopt;
 
     if (!password_matches || !enabled || lock_active) {
       if (has_user && enabled && !lock_active) {
@@ -1414,16 +1371,14 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
         const std::int64_t previous_failures =
             prior_lock_expired
                 ? 0
-                : std::clamp<std::int64_t>(
-                      context_user->failed_login_count, 0,
-                      kFailureLimit);
+                : std::clamp<std::int64_t>(context_user->failed_login_count, 0,
+                                           kFailureLimit);
         const std::int64_t failures =
             std::min<std::int64_t>(previous_failures + 1, kFailureLimit);
         const std::optional<std::int64_t> lock_until =
-            failures == kFailureLimit
-                ? std::optional<std::int64_t>(now_seconds +
-                                              kLockDurationSeconds)
-                : std::nullopt;
+            failures == kFailureLimit ? std::optional<std::int64_t>(
+                                            now_seconds + kLockDurationSeconds)
+                                      : std::nullopt;
         auto updated = store_.SetLoginFailureState(
             transaction, context_user->id, failures, lock_until);
         if (!updated.ok()) {
@@ -1453,8 +1408,8 @@ common::Result<std::int64_t> AuthService::Reauthenticate(
     if (!refreshed.ok()) {
       return rollback_unavailable();
     }
-    auto cleared = store_.SetLoginFailureState(
-        transaction, context_user->id, 0, std::nullopt);
+    auto cleared = store_.SetLoginFailureState(transaction, context_user->id, 0,
+                                               std::nullopt);
     if (!cleared.ok()) {
       return rollback_unavailable();
     }

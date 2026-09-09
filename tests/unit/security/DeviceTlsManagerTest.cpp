@@ -21,10 +21,10 @@
 
 #include <fcntl.h>
 #include <poll.h>
-#include <sys/stat.h>
-#include <sys/inotify.h>
-#include <sys/wait.h>
 #include <signal.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -40,9 +40,7 @@ extern "C" int __real_close(int descriptor);
 extern "C" int __real_fsync(int descriptor);
 extern "C" void __real_OPENSSL_cleanse(void* pointer, std::size_t length);
 extern "C" int __real_camera_firmware_tls_rename_noreplace(
-    int old_directory,
-    const char* old_name,
-    int new_directory,
+    int old_directory, const char* old_name, int new_directory,
     const char* new_name);
 
 namespace {
@@ -196,8 +194,7 @@ void RewriteCertificateAsExpired(
 
 void RewriteCertificateValidity(
     const camera_firmware::security::ResolvedTlsMaterial& material,
-    std::time_t not_before,
-    std::time_t not_after) {
+    std::time_t not_before, std::time_t not_after) {
   auto certificate = LoadCertificate(material.certificate_path);
   auto private_key = LoadPrivateKey(material.private_key_path);
   ASSERT_TRUE(certificate);
@@ -217,21 +214,23 @@ void RewriteCertificateValidity(
 
 void RewriteCertificateWithMalformedTime(
     const camera_firmware::security::ResolvedTlsMaterial& material,
-    bool malformed_not_before,
-    std::time_t valid_time) {
+    bool malformed_not_before, std::time_t valid_time) {
   auto certificate = LoadCertificate(material.certificate_path);
   auto private_key = LoadPrivateKey(material.private_key_path);
   ASSERT_TRUE(certificate);
   ASSERT_TRUE(private_key);
-  ASSERT_NE(ASN1_TIME_set(X509_getm_notBefore(certificate.get()), valid_time - 60),
-            nullptr);
-  ASSERT_NE(ASN1_TIME_set(X509_getm_notAfter(certificate.get()), valid_time + 60),
-            nullptr);
+  ASSERT_NE(
+      ASN1_TIME_set(X509_getm_notBefore(certificate.get()), valid_time - 60),
+      nullptr);
+  ASSERT_NE(
+      ASN1_TIME_set(X509_getm_notAfter(certificate.get()), valid_time + 60),
+      nullptr);
   ASN1_TIME* malformed = malformed_not_before
                              ? X509_getm_notBefore(certificate.get())
                              : X509_getm_notAfter(certificate.get());
   constexpr std::string_view kMalformed = "not-a-valid-time";
-  ASSERT_EQ(ASN1_STRING_set(malformed, kMalformed.data(), kMalformed.size()), 1);
+  ASSERT_EQ(ASN1_STRING_set(malformed, kMalformed.data(), kMalformed.size()),
+            1);
   ASSERT_GT(X509_sign(certificate.get(), private_key.get(), EVP_sha256()), 0);
 
   BioPtr output(BIO_new_file(material.certificate_path.c_str(), "w"), BIO_free);
@@ -260,10 +259,9 @@ void AddCertificateExtension(X509* certificate, int nid, const char* value) {
   X509_EXTENSION_free(extension);
 }
 
-void RewriteGeneratedCertificate(
-    const TemporaryDirectory& state,
-    const std::function<void(X509*)>& alter,
-    const EVP_MD* digest = EVP_sha256()) {
+void RewriteGeneratedCertificate(const TemporaryDirectory& state,
+                                 const std::function<void(X509*)>& alter,
+                                 const EVP_MD* digest = EVP_sha256()) {
   auto certificate = LoadCertificate(LiveCertificate(state));
   auto private_key = LoadPrivateKey(LivePrivateKey(state));
   ASSERT_TRUE(certificate);
@@ -350,10 +348,10 @@ void RewritePrivateKeyAsEncrypted(
   password.fill(0x5aU);
   BioPtr output(BIO_new_file(material.private_key_path.c_str(), "w"), BIO_free);
   ASSERT_TRUE(output);
-  ASSERT_EQ(PEM_write_bio_PrivateKey(
-                output.get(), private_key.get(), EVP_aes_256_cbc(),
-                password.data(), static_cast<int>(password.size()), nullptr,
-                nullptr),
+  ASSERT_EQ(PEM_write_bio_PrivateKey(output.get(), private_key.get(),
+                                     EVP_aes_256_cbc(), password.data(),
+                                     static_cast<int>(password.size()), nullptr,
+                                     nullptr),
             1);
   OPENSSL_cleanse(password.data(), password.size());
   output.reset();
@@ -408,7 +406,7 @@ BoundedTlsHealthResult RunTlsHealthInBoundedSubprocess(
         camera_firmware::security::CheckTlsMaterialHealth(material, now);
     const unsigned char result =
         !health.ok() && health.error().code == "E_SECURITY_TLS_HEALTH" ? 1U
-                                                                        : 0U;
+                                                                       : 0U;
     (void)::write(result_pipe[1], &result, sizeof(result));
     (void)::close(result_pipe[1]);
     ::_exit(0);
@@ -466,7 +464,8 @@ PrivatePemCleanseObservation EndPrivatePemCleanseObservation() {
   return private_pem_cleanse_observation;
 }
 
-void ObservePrivatePemCleanse(const void* pointer, std::size_t length) noexcept {
+void ObservePrivatePemCleanse(const void* pointer,
+                              std::size_t length) noexcept {
   if (!observe_private_pem_cleanse ||
       length != expected_private_pem_cleanse_size) {
     return;
@@ -492,10 +491,8 @@ std::vector<std::filesystem::path> TemporaryIdentityEntries(
 }
 
 std::filesystem::path CreateStaleTemporaryIdentity(
-    const TemporaryDirectory& state,
-    const TemporaryDirectory& source,
-    std::string_view suffix,
-    bool include_certificate,
+    const TemporaryDirectory& state, const TemporaryDirectory& source,
+    std::string_view suffix, bool include_certificate,
     bool include_private_key) {
   const auto temporary =
       state.path() / (std::string(".device-tls.tmp-") + std::string(suffix));
@@ -520,9 +517,11 @@ std::filesystem::path CreateStaleTemporaryIdentity(
   return temporary;
 }
 
-TEST(DeviceTlsManagerTest, GenerationRefusesWhenProviderNotSelfTestedWithoutLeakingProviderCode) {
+TEST(DeviceTlsManagerTest,
+     GenerationRefusesWhenProviderNotSelfTestedWithoutLeakingProviderCode) {
   TemporaryDirectory state;
-  camera_firmware::crypto::OpenSslCryptoProvider provider;  // deliberately not self-tested
+  camera_firmware::crypto::OpenSslCryptoProvider
+      provider;  // deliberately not self-tested
 
   const auto result = camera_firmware::security::ResolveTlsMaterial(
       DevelopmentTls(), state.path(), provider);
@@ -574,10 +573,10 @@ TEST(DeviceTlsManagerTest, GeneratesAndReusesProtectedDevelopmentIdentity) {
   EXPECT_TRUE(second.value().generated_for_development);
   EXPECT_EQ(CertificateFingerprint(second.value().certificate_path),
             fingerprint);
-  EXPECT_TRUE(first.value().certificate_path.string().starts_with(
-      "/proc/self/fd/"));
-  EXPECT_TRUE(first.value().private_key_path.string().starts_with(
-      "/proc/self/fd/"));
+  EXPECT_TRUE(
+      first.value().certificate_path.string().starts_with("/proc/self/fd/"));
+  EXPECT_TRUE(
+      first.value().private_key_path.string().starts_with("/proc/self/fd/"));
 }
 
 TEST(DeviceTlsManagerTest, ConstructsProcPathsBeforeMovingDescriptorOwner) {
@@ -638,7 +637,8 @@ TEST(DeviceTlsManagerTest, ConfiguredIdentityRequiresProtectedMetadata) {
   EXPECT_EQ(wrong_owner.error().code, "E_HTTP_TLS_IDENTITY");
 }
 
-TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement) {
+TEST(DeviceTlsManagerTest,
+     ResolvedMaterialRemainsBoundAfterLivePathReplacement) {
   TemporaryDirectory generated_state;
   TemporaryDirectory replacement_state;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
@@ -684,16 +684,17 @@ TEST(DeviceTlsManagerTest, ResolvedMaterialRemainsBoundAfterLivePathReplacement)
             generated_fingerprint);
 }
 
-TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) {
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) {
   TemporaryDirectory state;
   auto material = camera_firmware::security::ResolveTlsMaterial(
       DevelopmentTls(), state.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
   const auto now = std::chrono::system_clock::now();
 
-  EXPECT_TRUE(camera_firmware::security::CheckTlsMaterialHealth(
-                  material.value(), now)
-                  .ok());
+  EXPECT_TRUE(
+      camera_firmware::security::CheckTlsMaterialHealth(material.value(), now)
+          .ok());
   EXPECT_FALSE(camera_firmware::security::CheckTlsMaterialHealth(
                    material.value(), now - std::chrono::hours(24))
                    .ok());
@@ -703,12 +704,12 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthUsesPinnedDescriptorsAndClock) 
 
   const auto preserved_certificate = state.path() / "preserved-certificate.pem";
   std::filesystem::rename(LiveCertificate(state), preserved_certificate);
-  ASSERT_EQ(::symlink(preserved_certificate.c_str(),
-                      LiveCertificate(state).c_str()),
-            0);
-  EXPECT_TRUE(camera_firmware::security::CheckTlsMaterialHealth(
-                  material.value(), now)
-                  .ok());
+  ASSERT_EQ(
+      ::symlink(preserved_certificate.c_str(), LiveCertificate(state).c_str()),
+      0);
+  EXPECT_TRUE(
+      camera_firmware::security::CheckTlsMaterialHealth(material.value(), now)
+          .ok());
 }
 
 TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthIncludesExactValidityBounds) {
@@ -730,7 +731,8 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthIncludesExactValidityBounds) {
           .ok());
 }
 
-TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMalformedValidityTimes) {
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthRejectsMalformedValidityTimes) {
   constexpr std::time_t kNowSeconds = 1700000000;
   const auto now = std::chrono::system_clock::from_time_t(kNowSeconds);
 
@@ -750,7 +752,8 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMalformedValidityTimes) 
   }
 }
 
-TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) {
+TEST(DeviceTlsManagerTest,
+     CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) {
   TemporaryDirectory state;
   TemporaryDirectory replacement;
   auto material = camera_firmware::security::ResolveTlsMaterial(
@@ -758,7 +761,8 @@ TEST(DeviceTlsManagerTest, CheckTlsMaterialHealthRejectsMismatchAndTrailingPem) 
   auto replacement_material = camera_firmware::security::ResolveTlsMaterial(
       DevelopmentTls(), replacement.path(), TestCryptoProvider());
   ASSERT_TRUE(material.ok()) << material.error().message;
-  ASSERT_TRUE(replacement_material.ok()) << replacement_material.error().message;
+  ASSERT_TRUE(replacement_material.ok())
+      << replacement_material.error().message;
 
   ReplaceFileContents(LivePrivateKey(replacement), LivePrivateKey(state), 0600);
   auto mismatched = camera_firmware::security::CheckTlsMaterialHealth(
@@ -938,7 +942,8 @@ TEST(DeviceTlsManagerTest, InterruptedLinuxCloseIsNeverRetried) {
   interrupted_close_descriptor = -1;
 }
 
-TEST(DeviceTlsManagerTest, GeneratedIdentityUsesEcP256MatchingKeyAndDeviceSans) {
+TEST(DeviceTlsManagerTest,
+     GeneratedIdentityUsesEcP256MatchingKeyAndDeviceSans) {
   TemporaryDirectory state;
   auto resolved = camera_firmware::security::ResolveTlsMaterial(
       DevelopmentTls(), state.path(), TestCryptoProvider());
@@ -1065,51 +1070,66 @@ TEST(DeviceTlsManagerTest, RejectsAlteredGeneratedCertificateProfile) {
     const EVP_MD* digest;
   };
   const std::vector<Alteration> alterations{
-      {"not X509v3", [](X509* certificate) {
+      {"not X509v3",
+       [](X509* certificate) {
          while (X509_get_ext_count(certificate) > 0) {
            X509_EXTENSION* extension = X509_delete_ext(certificate, 0);
            X509_EXTENSION_free(extension);
          }
          ASSERT_EQ(X509_set_version(certificate, 1), 1);
-       }, EVP_sha256()},
+       },
+       EVP_sha256()},
       {"not SHA-256", [](X509*) {}, EVP_sha384()},
-      {"CA true", [](X509* certificate) {
+      {"CA true",
+       [](X509* certificate) {
          RemoveCertificateExtensions(certificate, NID_basic_constraints);
          AddCertificateExtension(certificate, NID_basic_constraints,
                                  "critical,CA:TRUE");
-       }, EVP_sha256()},
-      {"wrong key usage", [](X509* certificate) {
+       },
+       EVP_sha256()},
+      {"wrong key usage",
+       [](X509* certificate) {
          RemoveCertificateExtensions(certificate, NID_key_usage);
          AddCertificateExtension(certificate, NID_key_usage,
                                  "critical,keyEncipherment");
-       }, EVP_sha256()},
-      {"wrong extended key usage", [](X509* certificate) {
+       },
+       EVP_sha256()},
+      {"wrong extended key usage",
+       [](X509* certificate) {
          RemoveCertificateExtensions(certificate, NID_ext_key_usage);
-         AddCertificateExtension(certificate, NID_ext_key_usage,
-                                 "clientAuth");
-       }, EVP_sha256()},
-      {"non-exact SAN set", [](X509* certificate) {
+         AddCertificateExtension(certificate, NID_ext_key_usage, "clientAuth");
+       },
+       EVP_sha256()},
+      {"non-exact SAN set",
+       [](X509* certificate) {
          RemoveCertificateExtensions(certificate, NID_subject_alt_name);
          AddCertificateExtension(
              certificate, NID_subject_alt_name,
              "DNS:localhost,DNS:camera.local,DNS:unexpected.local,"
              "IP:127.0.0.1,IP:::1");
-       }, EVP_sha256()},
-      {"overlong validity", [](X509* certificate) {
+       },
+       EVP_sha256()},
+      {"overlong validity",
+       [](X509* certificate) {
          ASSERT_NE(X509_gmtime_adj(X509_getm_notBefore(certificate), -300),
                    nullptr);
          ASSERT_NE(X509_gmtime_adj(X509_getm_notAfter(certificate),
                                    6L * 365L * 24L * 60L * 60L),
                    nullptr);
-       }, EVP_sha256()},
-      {"extra noncritical extension", [](X509* certificate) {
+       },
+       EVP_sha256()},
+      {"extra noncritical extension",
+       [](X509* certificate) {
          AddCertificateExtension(certificate, NID_netscape_comment,
                                  "unexpected");
-       }, EVP_sha256()},
-      {"extra critical extension", [](X509* certificate) {
+       },
+       EVP_sha256()},
+      {"extra critical extension",
+       [](X509* certificate) {
          AddCertificateExtension(certificate, NID_netscape_comment,
                                  "critical,unexpected");
-       }, EVP_sha256()},
+       },
+       EVP_sha256()},
   };
 
   for (const auto& alteration : alterations) {
@@ -1265,7 +1285,8 @@ TEST(DeviceTlsManagerTest, RestartScavengesCompleteAndPrivateOnlyStaleTemps) {
   EXPECT_TRUE(TemporaryIdentityEntries(fresh_state.path()).empty());
 }
 
-TEST(DeviceTlsManagerTest, RetriesInterruptedStaleCleanupDirectoryAndParentSyncs) {
+TEST(DeviceTlsManagerTest,
+     RetriesInterruptedStaleCleanupDirectoryAndParentSyncs) {
   TemporaryDirectory state;
   auto generated = camera_firmware::security::ResolveTlsMaterial(
       DevelopmentTls(), state.path(), TestCryptoProvider());
@@ -1286,8 +1307,7 @@ TEST(DeviceTlsManagerTest, RetriesInterruptedStaleCleanupDirectoryAndParentSyncs
   EXPECT_FALSE(std::filesystem::exists(stale));
   EXPECT_EQ(interrupted_fsync_calls[0], 2);
   EXPECT_EQ(interrupted_fsync_calls[1], 2);
-  EXPECT_NE(interrupted_fsync_descriptors[0],
-            interrupted_fsync_descriptors[1]);
+  EXPECT_NE(interrupted_fsync_descriptors[0], interrupted_fsync_descriptors[1]);
   EXPECT_EQ(interrupted_close_calls, 0);
 }
 
@@ -1298,8 +1318,7 @@ TEST(DeviceTlsManagerTest, UnsafeStaleTemporaryIdentityFailsClosed) {
   ASSERT_TRUE(source_material.ok()) << source_material.error().message;
 
   TemporaryDirectory state;
-  const auto unsafe = state.path() /
-                      ".device-tls.tmp-0123456789abcdef01234567";
+  const auto unsafe = state.path() / ".device-tls.tmp-0123456789abcdef01234567";
   ASSERT_TRUE(std::filesystem::create_directory(unsafe));
   ASSERT_EQ(::chmod(unsafe.c_str(), 0700), 0);
   ASSERT_EQ(::symlink(LivePrivateKey(source).c_str(),
@@ -1331,8 +1350,7 @@ TEST(DeviceTlsManagerTest, PublicationFailureRemovesWrittenTemporaryIdentity) {
 
 }  // namespace
 
-void ConfigureFstatOwnerSpoofForSecurityStoreTest(
-    std::optional<ino_t> inode) {
+void ConfigureFstatOwnerSpoofForSecurityStoreTest(std::optional<ino_t> inode) {
   spoofed_owner_inode = inode;
 }
 
@@ -1395,9 +1413,7 @@ extern "C" int __wrap_fsync(int descriptor) {
 }
 
 extern "C" int __wrap_camera_firmware_tls_rename_noreplace(
-    int old_directory,
-    const char* old_name,
-    int new_directory,
+    int old_directory, const char* old_name, int new_directory,
     const char* new_name) {
   if (fail_rename_noreplace) {
     errno = ENOSYS;
@@ -1410,6 +1426,6 @@ extern "C" int __wrap_camera_firmware_tls_rename_noreplace(
     preempt_rename_destination = false;
     (void)::mkdirat(new_directory, new_name, 0700);
   }
-  return __real_camera_firmware_tls_rename_noreplace(
-      old_directory, old_name, new_directory, new_name);
+  return __real_camera_firmware_tls_rename_noreplace(old_directory, old_name,
+                                                     new_directory, new_name);
 }

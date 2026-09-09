@@ -17,8 +17,8 @@ inline constexpr std::size_t kMaximumProtectionResultTextBytes =
 
 using SystemProtectionSnapshotProvider =
     std::function<security::SystemProtectionSnapshot()>;
-using SystemProtectionStartProvider = std::function<
-    common::Result<security::SystemProtectionSnapshot>()>;
+using SystemProtectionStartProvider =
+    std::function<common::Result<security::SystemProtectionSnapshot>()>;
 
 [[nodiscard]] common::Result<Json::Value> BuildSystemProtectionJson(
     const security::SystemProtectionSnapshot& snapshot);

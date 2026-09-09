@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <new>
@@ -16,13 +16,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <openssl/crypto.h>
 #include <gtest/gtest.h>
+#include <openssl/crypto.h>
 
+#include "IntegrityVerifierTestAccess.hpp"
 #include "camera_firmware/crypto/OpenSslCryptoProvider.hpp"
 #include "camera_firmware/integrity/IntegrityVerifier.hpp"
 #include "camera_firmware/integrity/SafeFileDigest.hpp"
-#include "IntegrityVerifierTestAccess.hpp"
 
 namespace {
 
@@ -45,8 +45,12 @@ class AllocationFailureReset {
 
 }  // namespace
 
-void* operator new(std::size_t size) { return AllocateForIntegrityTest(size); }
-void* operator new[](std::size_t size) { return AllocateForIntegrityTest(size); }
+void* operator new(std::size_t size) {
+  return AllocateForIntegrityTest(size);
+}
+void* operator new[](std::size_t size) {
+  return AllocateForIntegrityTest(size);
+}
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
   try {
     return AllocateForIntegrityTest(size);
@@ -61,8 +65,12 @@ void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
     return nullptr;
   }
 }
-void operator delete(void* allocation) noexcept { std::free(allocation); }
-void operator delete[](void* allocation) noexcept { std::free(allocation); }
+void operator delete(void* allocation) noexcept {
+  std::free(allocation);
+}
+void operator delete[](void* allocation) noexcept {
+  std::free(allocation);
+}
 void operator delete(void* allocation, const std::nothrow_t&) noexcept {
   std::free(allocation);
 }
@@ -79,18 +87,24 @@ void operator delete[](void* allocation, std::size_t) noexcept {
 namespace camera_firmware::integrity {
 namespace {
 
-using testing::EphemeralEd25519Key;
-using testing::EphemeralEcKey;
-using testing::TemporaryDirectory;
 using testing::AppendFile;
+using testing::EphemeralEcKey;
+using testing::EphemeralEd25519Key;
+using testing::TemporaryDirectory;
 using testing::WriteFile;
 
 std::string Entry(std::string_view id, std::string_view category,
                   const std::filesystem::path& path, std::string_view digest) {
-  return "  - id: " + std::string(id) + "\n"
-         "    category: " + std::string(category) + "\n"
-         "    path: " + path.string() + "\n"
-         "    sha256: " + std::string(digest) + "\n";
+  return "  - id: " + std::string(id) +
+         "\n"
+         "    category: " +
+         std::string(category) +
+         "\n"
+         "    path: " +
+         path.string() +
+         "\n"
+         "    sha256: " +
+         std::string(digest) + "\n";
 }
 
 std::string DigestFor(const std::filesystem::path& path) {
@@ -119,7 +133,8 @@ struct SignedManifest {
            "created_at: '2026-07-19T00:00:00Z'\nfiles:\n" +
            Entry("firmware", "firmware", firmware, DigestFor(firmware)) +
            Entry("configuration", "configuration", config, DigestFor(config)) +
-           Entry("kernel", "kernel", kernel, DigestFor(kernel)) + std::string(extra);
+           Entry("kernel", "kernel", kernel, DigestFor(kernel)) +
+           std::string(extra);
   }
 
   void WriteSigned(std::string_view text) {
@@ -154,8 +169,8 @@ TEST(IntegrityVerifierTest, VerifiesSignedManifestAndReturnsOrderedReport) {
   ASSERT_TRUE(provider.SelfTest().ok());
 
   const auto result = VerifyIntegrityManifest(
-      fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-      fixture.config, provider);
+      fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+      fixture.firmware, fixture.config, provider);
 
   ASSERT_TRUE(result.ok());
   EXPECT_TRUE(result.value().passed);
@@ -177,8 +192,8 @@ TEST(IntegrityVerifierTest, RejectsInvalidSignatureLengths) {
     std::copy_n(signature.begin(), std::min(signature.size(), invalid.size()),
                 invalid.begin());
     const auto result = VerifyEd25519Signature(
-        {reinterpret_cast<const unsigned char*>(text.data()), text.size()}, invalid,
-        key.PublicPem(), provider);
+        {reinterpret_cast<const unsigned char*>(text.data()), text.size()},
+        invalid, key.PublicPem(), provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_SIGNATURE_FORMAT");
   }
@@ -193,8 +208,8 @@ TEST(IntegrityVerifierTest, RejectsWrongLengthSignatureArtifacts) {
     const std::string invalid(length, 'x');
     WriteFile(fixture.signature, invalid);
     const auto result = VerifyIntegrityManifest(
-        fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-        fixture.config, provider);
+        fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+        fixture.firmware, fixture.config, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_SIGNATURE_FORMAT");
   }
@@ -209,13 +224,14 @@ TEST(IntegrityVerifierTest, RejectsChangedManifestWrongKeyAndMalformedPem) {
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
   for (const auto [bytes, pem] : {
-           std::pair<std::string, std::string>{text + "# changed\n", fixture.key.PublicPem()},
+           std::pair<std::string, std::string>{text + "# changed\n",
+                                               fixture.key.PublicPem()},
            {text, wrong_key.PublicPem()},
            {text, "not a PEM"},
        }) {
     const auto result = VerifyEd25519Signature(
-        {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()}, signature,
-        pem, provider);
+        {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()},
+        signature, pem, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_TRUE(result.error().code == "E_INTEGRITY_SIGNATURE_INVALID" ||
                 result.error().code == "E_INTEGRITY_PUBLIC_KEY");
@@ -230,11 +246,11 @@ TEST(IntegrityVerifierTest, RejectsNonEd25519AndTrailingPublicPems) {
   EphemeralEcKey non_ed25519;
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
-  for (const std::string& pem : {non_ed25519.PublicPem(),
-                                 fixture.key.PublicPem() + "trailing-data"}) {
+  for (const std::string& pem :
+       {non_ed25519.PublicPem(), fixture.key.PublicPem() + "trailing-data"}) {
     const auto result = VerifyEd25519Signature(
-        {reinterpret_cast<const unsigned char*>(text.data()), text.size()}, signature, pem,
-        provider);
+        {reinterpret_cast<const unsigned char*>(text.data()), text.size()},
+        signature, pem, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_PUBLIC_KEY");
   }
@@ -254,9 +270,9 @@ TEST(IntegrityVerifierTest, RejectsManifestAndSignatureSymlinks) {
            std::pair{manifest_link, fixture.signature},
            {fixture.manifest, signature_link},
        }) {
-    const auto result = VerifyIntegrityManifest(
-        manifest, signature, fixture.key.PublicPem(), fixture.firmware, fixture.config,
-        provider);
+    const auto result =
+        VerifyIntegrityManifest(manifest, signature, fixture.key.PublicPem(),
+                                fixture.firmware, fixture.config, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_ARTIFACT_TYPE");
   }
@@ -287,9 +303,9 @@ TEST(IntegrityVerifierTest, RejectsInvalidArtifactPathsAtPublicBoundary) {
            {fixture.manifest, std::filesystem::path{nul_signature}},
            {fixture.manifest, overlong},
        }) {
-    const auto result = VerifyIntegrityManifest(
-        manifest, signature, fixture.key.PublicPem(), fixture.firmware,
-        fixture.config, provider);
+    const auto result =
+        VerifyIntegrityManifest(manifest, signature, fixture.key.PublicPem(),
+                                fixture.firmware, fixture.config, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_ARTIFACT_PATH");
     EXPECT_EQ(result.error().message.find(fixture.directory.path().string()),
@@ -319,8 +335,8 @@ TEST(IntegrityVerifierTest, RejectsInvalidActivePathsAtPublicBoundary) {
            {fixture.firmware, overlong},
        }) {
     const auto result = VerifyIntegrityManifest(
-        fixture.manifest, fixture.signature, fixture.key.PublicPem(), executable,
-        config, provider);
+        fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+        executable, config, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_MANIFEST_CONTRACT");
   }
@@ -347,20 +363,21 @@ TEST(IntegrityVerifierTest, RejectsNonRegularArtifactsWithoutBlocking) {
   }
 }
 
-TEST(IntegrityVerifierTest, ReturnsEveryEntryFailureWithoutLeakingPathsOrHashes) {
+TEST(IntegrityVerifierTest,
+     ReturnsEveryEntryFailureWithoutLeakingPathsOrHashes) {
   SignedManifest fixture;
   const auto library = fixture.directory.path() / "library";
   WriteFile(library, "library");
-  fixture.WriteSigned(fixture.Text(Entry("library", "library", library,
-                                        DigestFor(library))));
+  fixture.WriteSigned(
+      fixture.Text(Entry("library", "library", library, DigestFor(library))));
   WriteFile(fixture.config, "changed config");
   WriteFile(library, "changed library");
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
 
   const auto result = VerifyIntegrityManifest(
-      fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-      fixture.config, provider);
+      fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+      fixture.firmware, fixture.config, provider);
 
   ASSERT_TRUE(result.ok());
   EXPECT_FALSE(result.value().passed);
@@ -370,21 +387,24 @@ TEST(IntegrityVerifierTest, ReturnsEveryEntryFailureWithoutLeakingPathsOrHashes)
   EXPECT_FALSE(result.value().items[3].passed);
   EXPECT_EQ(result.value().items[1].code, "E_INTEGRITY_DIGEST_MISMATCH");
   EXPECT_EQ(result.value().items[1].id, "configuration");
-  EXPECT_EQ(result.value().items[1].id.find(fixture.config.string()), std::string::npos);
+  EXPECT_EQ(result.value().items[1].id.find(fixture.config.string()),
+            std::string::npos);
 }
 
-TEST(IntegrityVerifierTest, RejectsManifestContractAndChecksSignatureBeforeYaml) {
+TEST(IntegrityVerifierTest,
+     RejectsManifestContractAndChecksSignatureBeforeYaml) {
   SignedManifest fixture;
   const std::string malformed = "not: [valid yaml";
   fixture.WriteSigned(malformed);
   const auto invalid_signature = std::array<unsigned char, 64U>{};
-  WriteFile(fixture.signature, {reinterpret_cast<const char*>(invalid_signature.data()),
-                                invalid_signature.size()});
+  WriteFile(fixture.signature,
+            {reinterpret_cast<const char*>(invalid_signature.data()),
+             invalid_signature.size()});
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
   const auto signature_first = VerifyIntegrityManifest(
-      fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-      fixture.config, provider);
+      fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+      fixture.firmware, fixture.config, provider);
   ASSERT_FALSE(signature_first.ok());
   EXPECT_EQ(signature_first.error().code, "E_INTEGRITY_SIGNATURE_INVALID");
 
@@ -401,13 +421,13 @@ TEST(IntegrityVerifierTest, RejectsOversizedManifestAndActivePathMismatch) {
   std::string oversized(1024U * 1024U + 1U, '#');
   WriteFile(fixture.manifest, oversized);
   const std::array<unsigned char, 64U> signature{};
-  WriteFile(fixture.signature,
-            {reinterpret_cast<const char*>(signature.data()), signature.size()});
+  WriteFile(fixture.signature, {reinterpret_cast<const char*>(signature.data()),
+                                signature.size()});
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
   const auto oversized_result = VerifyIntegrityManifest(
-      fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-      fixture.config, provider);
+      fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+      fixture.firmware, fixture.config, provider);
   ASSERT_FALSE(oversized_result.ok());
   EXPECT_EQ(oversized_result.error().code, "E_INTEGRITY_ARTIFACT_SIZE");
 
@@ -424,15 +444,17 @@ TEST(IntegrityVerifierTest, RejectsManifestMissingRequiredKernelCategory) {
   const std::string missing_kernel =
       "schema_version: 1\nproduct: camera-firmware\n"
       "created_at: '2026-07-19T00:00:00Z'\nfiles:\n" +
-      Entry("firmware", "firmware", fixture.firmware, DigestFor(fixture.firmware)) +
-      Entry("configuration", "configuration", fixture.config, DigestFor(fixture.config));
+      Entry("firmware", "firmware", fixture.firmware,
+            DigestFor(fixture.firmware)) +
+      Entry("configuration", "configuration", fixture.config,
+            DigestFor(fixture.config));
   fixture.WriteSigned(missing_kernel);
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
 
   const auto result = VerifyIntegrityManifest(
-      fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-      fixture.config, provider);
+      fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+      fixture.firmware, fixture.config, provider);
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_INTEGRITY_MANIFEST_CONTRACT");
@@ -443,11 +465,12 @@ TEST(IntegrityVerifierTest, RejectsWrongAndNonCanonicalActiveConfigInputs) {
   fixture.WriteSigned(fixture.Text());
   crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
-  for (const auto& config : {fixture.directory.path() / "other-config",
-                             fixture.directory.path() / "nested/../config.yaml"}) {
+  for (const auto& config :
+       {fixture.directory.path() / "other-config",
+        fixture.directory.path() / "nested/../config.yaml"}) {
     const auto result = VerifyIntegrityManifest(
-        fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-        config, provider);
+        fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+        fixture.firmware, config, provider);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, "E_INTEGRITY_MANIFEST_CONTRACT");
   }
@@ -464,8 +487,8 @@ TEST(IntegrityVerifierTest, RejectsManifestMutationAndReplacementWhileReading) {
       WriteFile(replacement, "replacement manifest");
     }
     const auto result = testing::VerifyIntegrityManifestWithArtifactReadHook(
-        fixture.manifest, fixture.signature, fixture.key.PublicPem(), fixture.firmware,
-        fixture.config, provider, [&] {
+        fixture.manifest, fixture.signature, fixture.key.PublicPem(),
+        fixture.firmware, fixture.config, provider, [&] {
           if (replace) {
             std::filesystem::rename(replacement, fixture.manifest);
           } else {
@@ -477,7 +500,8 @@ TEST(IntegrityVerifierTest, RejectsManifestMutationAndReplacementWhileReading) {
   }
 }
 
-TEST(IntegrityVerifierTest, RejectsSignatureMutationAndReplacementWhileReading) {
+TEST(IntegrityVerifierTest,
+     RejectsSignatureMutationAndReplacementWhileReading) {
   for (const bool replace : {false, true}) {
     SignedManifest fixture;
     fixture.WriteSigned(fixture.Text());
@@ -619,7 +643,8 @@ TEST(IntegrityVerifierTest, ConvertsOrdinaryReportExceptionsToStableError) {
   EXPECT_EQ(result.error().message.find("injected"), std::string::npos);
 }
 
-TEST(IntegrityVerifierTest, ReturnsStaticErrorDuringSustainedAllocationFailure) {
+TEST(IntegrityVerifierTest,
+     ReturnsStaticErrorDuringSustainedAllocationFailure) {
   SignedManifest fixture;
   fixture.WriteSigned(fixture.Text());
   crypto::OpenSslCryptoProvider provider;

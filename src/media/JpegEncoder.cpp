@@ -2,10 +2,10 @@
 
 #include <fcntl.h>
 #include <linux/dma-buf.h>
-#include <csetjmp>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <csetjmp>
 
 #include <jpeglib.h>
 
@@ -30,9 +30,7 @@ common::Result<JpegImage> EncodeError(const char* message) {
   return common::Result<JpegImage>::Err({"E_JPEG_ENCODE", message});
 }
 
-bool CheckedAdd(std::size_t left,
-                std::size_t right,
-                std::size_t& result) {
+bool CheckedAdd(std::size_t left, std::size_t right, std::size_t& result) {
   if (left > std::numeric_limits<std::size_t>::max() - right) {
     return false;
   }
@@ -40,9 +38,7 @@ bool CheckedAdd(std::size_t left,
   return true;
 }
 
-bool CheckedMultiply(std::size_t left,
-                     std::size_t right,
-                     std::size_t& result) {
+bool CheckedMultiply(std::size_t left, std::size_t right, std::size_t& result) {
   if (left != 0U && right > std::numeric_limits<std::size_t>::max() / left) {
     return false;
   }
@@ -96,8 +92,7 @@ class DmaBufReadSession {
     bool success = true;
     while (active_count_ > 0U) {
       const int fd = active_fds_[active_count_ - 1U];
-      const bool ended =
-          SyncDmaBuf(fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+      const bool ended = SyncDmaBuf(fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
       --active_count_;
       if (!ended) {
         success = false;
@@ -118,10 +113,8 @@ struct MappedReadPlane {
   std::size_t mapping_size{0};
 
   MappedReadPlane() = default;
-  MappedReadPlane(const std::uint8_t* plane_data,
-                  std::size_t plane_size,
-                  void* mapped_address,
-                  std::size_t mapped_size)
+  MappedReadPlane(const std::uint8_t* plane_data, std::size_t plane_size,
+                  void* mapped_address, std::size_t mapped_size)
       : data(plane_data),
         size(plane_size),
         mapping(mapped_address),
@@ -171,8 +164,7 @@ std::optional<MappedReadPlane> MapPlaneReadOnly(const FramePlane& plane) {
                          mapping_size};
 }
 
-bool PlaneContainsRows(const FramePlane& plane,
-                       std::size_t row_bytes,
+bool PlaneContainsRows(const FramePlane& plane, std::size_t row_bytes,
                        std::size_t rows) {
   if (rows == 0U || row_bytes == 0U || plane.stride < row_bytes) {
     return false;
@@ -186,7 +178,7 @@ bool PlaneContainsRows(const FramePlane& plane,
 }
 
 std::optional<unsigned int> ScaledEvenHeight(const FrameHandle& source,
-                                              unsigned int output_width) {
+                                             unsigned int output_width) {
   const std::uint64_t source_height = source.height;
   const std::uint64_t scaled_product =
       source_height * static_cast<std::uint64_t>(output_width);
@@ -237,9 +229,8 @@ void ConvertScaledNv12ToRgb(const FrameHandle& source,
           static_cast<std::uint64_t>(column) * source.width / output_width;
       const std::size_t y_index =
           source_row * source.planes[0].stride + source_column;
-      const std::size_t uv_index =
-          (source_row / 2U) * source.planes[1].stride +
-          (source_column / 2U) * 2U;
+      const std::size_t uv_index = (source_row / 2U) * source.planes[1].stride +
+                                   (source_column / 2U) * 2U;
       const int y = y_plane.data[y_index];
       const int u = uv_plane.data[uv_index] - 128;
       const int v = uv_plane.data[uv_index + 1U] - 128;
@@ -247,10 +238,9 @@ void ConvertScaledNv12ToRgb(const FrameHandle& source,
 
       const std::size_t output_index =
           (static_cast<std::size_t>(row) * output_width + column) * 3U;
-      rgb[output_index] =
-          ClampToByte((298 * adjusted_y + 409 * v + 128) >> 8);
-      rgb[output_index + 1U] = ClampToByte(
-          (298 * adjusted_y - 100 * u - 208 * v + 128) >> 8);
+      rgb[output_index] = ClampToByte((298 * adjusted_y + 409 * v + 128) >> 8);
+      rgb[output_index + 1U] =
+          ClampToByte((298 * adjusted_y - 100 * u - 208 * v + 128) >> 8);
       rgb[output_index + 2U] =
           ClampToByte((298 * adjusted_y + 516 * u + 128) >> 8);
     }
@@ -280,10 +270,9 @@ void JpegErrorExit(j_common_ptr cinfo) {
 
 void SuppressJpegMessage(j_common_ptr) {}
 
-common::Result<JpegImage> EncodeRgbJpeg(unsigned int width,
-                                       unsigned int height,
-                                       unsigned int quality,
-                                       const std::vector<std::uint8_t>& rgb) {
+common::Result<JpegImage> EncodeRgbJpeg(unsigned int width, unsigned int height,
+                                        unsigned int quality,
+                                        const std::vector<std::uint8_t>& rgb) {
   std::unique_ptr<JpegCompressionState> state;
   try {
     state = std::make_unique<JpegCompressionState>();

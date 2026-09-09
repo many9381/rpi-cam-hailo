@@ -99,9 +99,9 @@ GstHarness* MakeRtcpHarness() {
 
 void SetRtpCaps(GstHarness* harness) {
   GstCaps* rtp_caps = gst_caps_new_simple(
-      "application/x-rtp", "media", G_TYPE_STRING, "video",
-      "payload", G_TYPE_INT, 96, "clock-rate", G_TYPE_INT, 90000,
-      "encoding-name", G_TYPE_STRING, "H264", nullptr);
+      "application/x-rtp", "media", G_TYPE_STRING, "video", "payload",
+      G_TYPE_INT, 96, "clock-rate", G_TYPE_INT, 90000, "encoding-name",
+      G_TYPE_STRING, "H264", nullptr);
   gst_harness_set_src_caps(harness, rtp_caps);
 }
 
@@ -121,8 +121,7 @@ void ExpectSecureCaps(GstCaps* caps, const char* media_type) {
   const char* auth = gst_structure_get_string(structure, "srtp-auth");
   ASSERT_NE(auth, nullptr);
   EXPECT_STREQ(auth, "hmac-sha1-80");
-  const char* rtcp_cipher =
-      gst_structure_get_string(structure, "srtcp-cipher");
+  const char* rtcp_cipher = gst_structure_get_string(structure, "srtcp-cipher");
   ASSERT_NE(rtcp_cipher, nullptr);
   EXPECT_STREQ(rtcp_cipher, "aes-128-icm");
   const char* rtcp_auth = gst_structure_get_string(structure, "srtcp-auth");
@@ -158,13 +157,8 @@ struct CapturedDebugLog {
   std::vector<std::string> messages;
 };
 
-void CaptureDebugLog(GstDebugCategory*,
-                     GstDebugLevel,
-                     const gchar*,
-                     const gchar*,
-                     gint,
-                     GObject*,
-                     GstDebugMessage* message,
+void CaptureDebugLog(GstDebugCategory*, GstDebugLevel, const gchar*,
+                     const gchar*, gint, GObject*, GstDebugMessage* message,
                      gpointer user_data) {
   auto* captured = static_cast<CapturedDebugLog*>(user_data);
   const gchar* text = gst_debug_message_get(message);
@@ -309,9 +303,8 @@ TEST(CfSecureSrtpEncTest, CapsOwnedSessionKeyBufferZeroizesWhenReleased) {
   ASSERT_EQ(gst_pad_link(src, peer_sink), GST_PAD_LINK_OK);
 
   GstCaps* rtp_caps = gst_caps_new_simple(
-      "application/x-rtp", "media", G_TYPE_STRING, "video",
-      "clock-rate", G_TYPE_INT, 90000, "encoding-name", G_TYPE_STRING,
-      "H264", nullptr);
+      "application/x-rtp", "media", G_TYPE_STRING, "video", "clock-rate",
+      G_TYPE_INT, 90000, "encoding-name", G_TYPE_STRING, "H264", nullptr);
   CapturedDebugLog captured_log;
   gst_debug_add_log_function(CaptureDebugLog, &captured_log, nullptr);
   const gboolean caps_sent =
@@ -326,10 +319,7 @@ TEST(CfSecureSrtpEncTest, CapsOwnedSessionKeyBufferZeroizesWhenReleased) {
   gst_object_unref(src);
 
   guint caps_zeroize_count = 0;
-  g_object_get(enc,
-               "caps-key-zeroize-count",
-               &caps_zeroize_count,
-               nullptr);
+  g_object_get(enc, "caps-key-zeroize-count", &caps_zeroize_count, nullptr);
   EXPECT_GE(caps_zeroize_count, 1u);
   gst_debug_remove_log_function_by_data(&captured_log);
   EXPECT_TRUE(caps_sent);

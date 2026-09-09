@@ -22,7 +22,7 @@ void FailNextSessionStreamRevocationThreadLaunchesForTesting(
     std::size_t count) noexcept;
 void ResetSessionStreamLeaseStateDestructionsForTesting() noexcept;
 std::size_t SessionStreamLeaseStateDestructionsForTesting() noexcept;
-}
+}  // namespace internal
 
 namespace {
 
@@ -172,7 +172,8 @@ TEST(SessionStreamRegistryTest, RevokeAllRevokesEveryCurrentLease) {
   EXPECT_FALSE(acquired_after_revoke_all->revoked());
 }
 
-TEST(SessionStreamRegistryTest, HandlerRegistrationConcurrentWithRevokeIsExactOnce) {
+TEST(SessionStreamRegistryTest,
+     HandlerRegistrationConcurrentWithRevokeIsExactOnce) {
   for (std::size_t iteration = 0; iteration < 200U; ++iteration) {
     SessionStreamRegistry registry;
     auto lease = registry.Acquire(Identity(9));
@@ -207,8 +208,8 @@ TEST(SessionStreamRegistryTest,
   auto first_marked_future = first_marked.get_future();
   std::promise<void> release_marking;
   auto release_marking_future = release_marking.get_future().share();
-  internal::SetSessionStreamBatchMarkPauseForTesting(
-      &first_marked, release_marking_future);
+  internal::SetSessionStreamBatchMarkPauseForTesting(&first_marked,
+                                                     release_marking_future);
   const std::array revoked{Identity(10)};
   auto revoking =
       std::async(std::launch::async, [&] { registry.Revoke(revoked); });
@@ -264,7 +265,8 @@ TEST(SessionStreamRegistryTest,
   internal::FailNextSessionStreamRevocationThreadLaunchesForTesting(0U);
 }
 
-TEST(SessionStreamRegistryTest, CallbacksExecuteOutsideRegistryAndLeaseMutexes) {
+TEST(SessionStreamRegistryTest,
+     CallbacksExecuteOutsideRegistryAndLeaseMutexes) {
   SessionStreamRegistry registry;
   auto lease = registry.Acquire(Identity(3));
   std::atomic_bool returned_from_nested_calls{false};

@@ -197,8 +197,7 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config);
 // web client would refuse to render can never reach the pipeline or the UI.
 common::Result<void> ValidateCameraOsdSemantics(const CameraOsdConfig& config);
 common::Result<void> ValidateAiConfigSemantics(
-    const AiConfig& ai_config,
-    const CameraConfig& camera_config);
+    const AiConfig& ai_config, const CameraConfig& camera_config);
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
 common::Result<void> ValidateHttpSnapshotSemantics(

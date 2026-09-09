@@ -32,8 +32,7 @@ TEST(ResultTest, CopiesAndMovesOwningErrors) {
 
 TEST(ResultTest, CarriesStaticLifetimeErrorWithoutOwningCopy) {
   static const Error kStaticError{"E_STATIC", "static failure"};
-  static_assert(
-      noexcept(Result<int>::ErrFromStaticLifetime(kStaticError)));
+  static_assert(noexcept(Result<int>::ErrFromStaticLifetime(kStaticError)));
 
   auto original = Result<int>::ErrFromStaticLifetime(kStaticError);
   auto copied = original;
@@ -48,8 +47,7 @@ TEST(ResultTest, CarriesStaticLifetimeErrorWithoutOwningCopy) {
 
 TEST(ResultTest, VoidResultCarriesStaticLifetimeError) {
   static const Error kStaticError{"E_STATIC_VOID", "static void failure"};
-  static_assert(
-      noexcept(Result<void>::ErrFromStaticLifetime(kStaticError)));
+  static_assert(noexcept(Result<void>::ErrFromStaticLifetime(kStaticError)));
 
   auto result = Result<void>::ErrFromStaticLifetime(kStaticError);
   auto copied = result;

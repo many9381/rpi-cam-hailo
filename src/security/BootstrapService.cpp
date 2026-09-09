@@ -124,9 +124,7 @@ std::array<char, 94U> PasswordAlphabet() {
 // folded, so no symbol is favoured.
 template <typename Draw>
 common::Result<common::SecureBytes> DrawFromAlphabet(
-    const Draw& draw,
-    std::span<const char> alphabet,
-    std::size_t count) {
+    const Draw& draw, std::span<const char> alphabet, std::size_t count) {
   constexpr int kMaximumDrawRounds = 32;
   const auto alphabet_size = static_cast<unsigned int>(alphabet.size());
   const unsigned int limit = 256U - (256U % alphabet_size);
@@ -189,8 +187,7 @@ std::string CanonicalUsername(std::string_view username) {
 }  // namespace
 
 BootstrapService::BootstrapService(
-    SecurityStore& store,
-    config::AppConfig config,
+    SecurityStore& store, config::AppConfig config,
     std::vector<std::string> reserved_identities,
     PasswordHasherDependencies hasher_dependencies)
     : store_(store),
@@ -241,8 +238,7 @@ BootstrapService::EnsureInitialAccount() {
          attempt < kInitialGenerationAttempts && username.empty(); ++attempt) {
       auto generated = GenerateInitialUsername(draw);
       if (!generated.ok()) {
-        return common::Result<InitialAccountCredential>::Err(
-            generated.error());
+        return common::Result<InitialAccountCredential>::Err(generated.error());
       }
       if (ValidateInitialUsername(generated.value(), reserved_views).ok()) {
         username = std::move(generated).value();
@@ -258,11 +254,10 @@ BootstrapService::EnsureInitialAccount() {
     for (int attempt = 0;
          attempt < kInitialGenerationAttempts && password.size() == 0U;
          ++attempt) {
-      auto generated = DrawFromAlphabet(
-          draw, std::span<const char>(alphabet), kInitialPasswordLength);
+      auto generated = DrawFromAlphabet(draw, std::span<const char>(alphabet),
+                                        kInitialPasswordLength);
       if (!generated.ok()) {
-        return common::Result<InitialAccountCredential>::Err(
-            generated.error());
+        return common::Result<InitialAccountCredential>::Err(generated.error());
       }
       if (ValidatePassword(username, generated.value()).ok()) {
         password = std::move(generated).value();
@@ -283,9 +278,9 @@ BootstrapService::EnsureInitialAccount() {
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
-    auto stored = store_.ReplaceInitialAccount(
-        CanonicalUsername(username), username,
-        std::move(password_record).value(), now);
+    auto stored =
+        store_.ReplaceInitialAccount(CanonicalUsername(username), username,
+                                     std::move(password_record).value(), now);
     if (!stored.ok()) {
       password.clear();
       return common::Result<InitialAccountCredential>::Err(stored.error());
@@ -311,8 +306,8 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
     auto actual = NormalizePeerIp(request.actual_peer_ip);
     if (!confirmed.ok() || !actual.ok() ||
         confirmed.value() != actual.value()) {
-      return BootstrapError<BootstrapResult>("E_BOOTSTRAP_PEER",
-                                             "peer address confirmation failed");
+      return BootstrapError<BootstrapResult>(
+          "E_BOOTSTRAP_PEER", "peer address confirmation failed");
     }
 
     // Validated in full before anything is written. The browser rejects
@@ -344,8 +339,8 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
     // list may hold one fewer than that. Rejected here, before the device has
     // been touched, rather than discovered part way through the transaction.
     if (additional_management_ips.size() + 1U > kMaximumManagementIpsPerRole) {
-      return BootstrapError<BootstrapResult>(
-          "E_MANAGEMENT_IP_LIMIT", "too many management addresses");
+      return BootstrapError<BootstrapResult>("E_MANAGEMENT_IP_LIMIT",
+                                             "too many management addresses");
     }
 
     std::vector<std::string_view> reserved_views;
@@ -356,14 +351,12 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
     auto username_validation =
         ValidateInitialUsername(request.username, reserved_views);
     if (!username_validation.ok()) {
-      return common::Result<BootstrapResult>::Err(
-          username_validation.error());
+      return common::Result<BootstrapResult>::Err(username_validation.error());
     }
-    auto password_validation = ValidatePassword(request.username,
-                                                request.password);
+    auto password_validation =
+        ValidatePassword(request.username, request.password);
     if (!password_validation.ok()) {
-      return common::Result<BootstrapResult>::Err(
-          password_validation.error());
+      return common::Result<BootstrapResult>::Err(password_validation.error());
     }
 
     auto password_record = DerivePassword(request.password);
@@ -375,22 +368,23 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
-    BootstrapRecord record{
-        CanonicalUsername(request.username), request.username,
-        std::move(password_record).value(), std::move(confirmed).value(), now,
-        std::move(additional_management_ips)};
-    auto initialized = store_.InitializeDevice(
-        std::move(record), [this, &request] {
+    BootstrapRecord record{CanonicalUsername(request.username),
+                           request.username,
+                           std::move(password_record).value(),
+                           std::move(confirmed).value(),
+                           now,
+                           std::move(additional_management_ips)};
+    auto initialized =
+        store_.InitializeDevice(std::move(record), [this, &request] {
           return store_.InstallBootstrapRtspCredential(
-              config_.secure_rtsp.client_auth.credential_file,
-              request.username, config_.secure_rtsp.client_auth.realm,
+              config_.secure_rtsp.client_auth.credential_file, request.username,
+              config_.secure_rtsp.client_auth.realm,
               {request.password.data(), request.password.size()});
         });
     if (!initialized.ok()) {
       return common::Result<BootstrapResult>::Err(initialized.error());
     }
-    return common::Result<BootstrapResult>::Ok(
-        {DeviceState::kOperational});
+    return common::Result<BootstrapResult>::Ok({DeviceState::kOperational});
   } catch (...) {
     return BootstrapError<BootstrapResult>("E_BOOTSTRAP_FAILED",
                                            "device setup failed");
@@ -400,7 +394,7 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
 std::vector<std::string> BuildReservedIdentities(
     const config::AppConfig& config) {
   std::vector<std::string> identities = {
-      "root", "admin", "administrator", "camera", "camera-firmware",
+      "root",         "admin", "administrator", "camera", "camera-firmware",
       "raspberry-pi", "hailo", "imx708"};
   if (!config.camera.id.empty()) {
     identities.push_back(config.camera.id);

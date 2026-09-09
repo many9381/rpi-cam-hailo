@@ -21,8 +21,8 @@ constexpr int kYoloMaxBoxesPerClass = 100;
 constexpr std::size_t kYoloValuesPerBox = 5U;
 constexpr std::size_t kYoloNmsFloatCount =
     static_cast<std::size_t>(kYoloClassCount) *
-    (1U + (static_cast<std::size_t>(kYoloMaxBoxesPerClass) *
-           kYoloValuesPerBox));
+    (1U +
+     (static_cast<std::size_t>(kYoloMaxBoxesPerClass) * kYoloValuesPerBox));
 
 struct ModelInputGeometry {
   std::uint32_t scaled_width{0};
@@ -69,17 +69,17 @@ ModelInputGeometry BuildModelInputGeometry(
     return geometry;
   }
 
-  const double scale = std::min(
-      static_cast<double>(target.width) / source.width,
-      static_cast<double>(target.height) / source.height);
-  geometry.scaled_width = std::min(
-      target.width,
-      std::max(1U, static_cast<std::uint32_t>(
-                       static_cast<double>(source.width) * scale)));
-  geometry.scaled_height = std::min(
-      target.height,
-      std::max(1U, static_cast<std::uint32_t>(
-                       static_cast<double>(source.height) * scale)));
+  const double scale =
+      std::min(static_cast<double>(target.width) / source.width,
+               static_cast<double>(target.height) / source.height);
+  geometry.scaled_width =
+      std::min(target.width,
+               std::max(1U, static_cast<std::uint32_t>(
+                                static_cast<double>(source.width) * scale)));
+  geometry.scaled_height =
+      std::min(target.height,
+               std::max(1U, static_cast<std::uint32_t>(
+                                static_cast<double>(source.height) * scale)));
   geometry.x_offset = (target.width - geometry.scaled_width) / 2U;
   geometry.y_offset = (target.height - geometry.scaled_height) / 2U;
   return geometry;
@@ -154,10 +154,8 @@ class DefaultModelProcessor final : public AiModelProcessor {
  public:
   explicit DefaultModelProcessor(config::AiModelConfig model)
       : model_(std::move(model)),
-        preprocessor_(model_.input.width,
-                      model_.input.height,
-                      model_.input.letterbox,
-                      114U) {}
+        preprocessor_(model_.input.width, model_.input.height,
+                      model_.input.letterbox, 114U) {}
 
   [[nodiscard]] std::string_view model_id() const noexcept override {
     return model_.id;
@@ -216,22 +214,17 @@ class DefaultModelProcessor final : public AiModelProcessor {
       if ((tensor.size() % kYoloPoseRowFloatCount) != 0U) {
         throw std::runtime_error(
             "AI pose output size " + std::to_string(tensor.size()) +
-            " floats does not match " +
-            std::to_string(kYoloPoseRowFloatCount) +
+            " floats does not match " + std::to_string(kYoloPoseRowFloatCount) +
             "-float YOLO pose row shape");
       }
       event.result_state = "decoded";
-      event.detections =
-          ParseYoloPoseRows(tensor.data(),
-                            tensor.size(),
-                            model_.confidence_threshold,
-                            model_.confidence_threshold);
+      event.detections = ParseYoloPoseRows(tensor.data(), tensor.size(),
+                                           model_.confidence_threshold,
+                                           model_.confidence_threshold);
       for (auto& detection : event.detections) {
         MapBoxFromLetterboxedModel(model_.input, source_frame, detection.box);
         for (auto& keypoint : detection.keypoints) {
-          MapKeypointFromLetterboxedModel(model_.input,
-                                          source_frame,
-                                          keypoint);
+          MapKeypointFromLetterboxedModel(model_.input, source_frame, keypoint);
         }
       }
       publisher.Publish(event);
@@ -253,11 +246,8 @@ class DefaultModelProcessor final : public AiModelProcessor {
     const TensorView tensor(output_view.data, output_view.size);
     event.result_state = "decoded";
     event.detections =
-        ParseYoloHailoNms(tensor.data(),
-                          tensor.size(),
-                          kYoloClassCount,
-                          kYoloMaxBoxesPerClass,
-                          model_.confidence_threshold);
+        ParseYoloHailoNms(tensor.data(), tensor.size(), kYoloClassCount,
+                          kYoloMaxBoxesPerClass, model_.confidence_threshold);
     for (auto& detection : event.detections) {
       MapBoxFromLetterboxedModel(model_.input, source_frame, detection.box);
     }

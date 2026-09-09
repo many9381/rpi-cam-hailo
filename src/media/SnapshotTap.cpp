@@ -17,9 +17,8 @@ SnapshotTap::Clock::time_point SteadyNow() {
   return SnapshotTap::Clock::now();
 }
 
-std::optional<JpegBytes> EncodeSnapshot(
-    std::optional<FrameLease> latest,
-    std::string_view camera_id) {
+std::optional<JpegBytes> EncodeSnapshot(std::optional<FrameLease> latest,
+                                        std::string_view camera_id) {
   if (!latest.has_value() || !latest->valid()) {
     return std::nullopt;
   }
@@ -94,8 +93,7 @@ void SnapshotTap::Publish(FrameLease frame, SourceEpoch source_epoch) {
   {
     std::lock_guard lock(mutex_);
     if (!source_active_ || source_epoch_ != source_epoch ||
-        (latest_.has_value() &&
-         latest_->publication_id > publication_id)) {
+        (latest_.has_value() && latest_->publication_id > publication_id)) {
       return;
     }
     old.swap(latest_);
@@ -153,21 +151,18 @@ std::optional<FrameLease> SnapshotTap::Latest(
   return std::move(publication->frame);
 }
 
-bool SnapshotTap::HasFreshFrame(
-    std::chrono::milliseconds maximum_age) const {
+bool SnapshotTap::HasFreshFrame(std::chrono::milliseconds maximum_age) const {
   auto latest = Latest(maximum_age);
   return latest.has_value() && latest->valid();
 }
 
-std::optional<JpegBytes> BuildLatestSnapshotJpeg(
-    const SnapshotTap& tap,
-    std::string_view camera_id) {
+std::optional<JpegBytes> BuildLatestSnapshotJpeg(const SnapshotTap& tap,
+                                                 std::string_view camera_id) {
   return EncodeSnapshot(tap.Latest(), camera_id);
 }
 
 std::optional<JpegBytes> BuildLatestSnapshotJpeg(
-    const SnapshotTap& tap,
-    std::string_view camera_id,
+    const SnapshotTap& tap, std::string_view camera_id,
     std::chrono::milliseconds maximum_age) {
   return EncodeSnapshot(tap.Latest(maximum_age), camera_id);
 }

@@ -25,14 +25,13 @@ class Result {
   static Result Err(Error error) { return Result(std::move(error)); }
 
   // The referenced Error must have static storage duration. This path stores
-  // only its address so resource-exhaustion handlers can return without allocation.
+  // only its address so resource-exhaustion handlers can return without
+  // allocation.
   static Result ErrFromStaticLifetime(const Error& error) noexcept {
     return Result(&error);
   }
 
-  [[nodiscard]] bool ok() const noexcept {
-    return state_.index() == 0U;
-  }
+  [[nodiscard]] bool ok() const noexcept { return state_.index() == 0U; }
 
   [[nodiscard]] const T& value() const& {
     assert(ok());
@@ -80,7 +79,8 @@ class Result<void> {
   static Result Err(Error error) { return Result(std::move(error)); }
 
   // The referenced Error must have static storage duration. This path stores
-  // only its address so resource-exhaustion handlers can return without allocation.
+  // only its address so resource-exhaustion handlers can return without
+  // allocation.
   static Result ErrFromStaticLifetime(const Error& error) noexcept {
     return Result(&error);
   }

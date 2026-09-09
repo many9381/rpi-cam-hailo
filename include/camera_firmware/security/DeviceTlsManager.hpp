@@ -29,14 +29,12 @@ class ResolvedTlsMaterial {
 
  private:
   friend common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
-      const config::HttpTlsConfig&,
-      const std::filesystem::path&,
+      const config::HttpTlsConfig&, const std::filesystem::path&,
       crypto::CryptoProvider&);
   friend common::Result<void> CheckTlsMaterialHealth(
       const ResolvedTlsMaterial&, std::chrono::system_clock::time_point);
   ResolvedTlsMaterial(
-      std::filesystem::path certificate,
-      std::filesystem::path private_key,
+      std::filesystem::path certificate, std::filesystem::path private_key,
       bool generated,
       std::shared_ptr<detail::ResolvedTlsHandles> handles) noexcept;
 

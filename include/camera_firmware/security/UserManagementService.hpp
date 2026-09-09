@@ -63,58 +63,45 @@ struct UserManagementDependencies {
 
 class UserManagementService {
  public:
-  UserManagementService(
-      SecurityStore& store,
-      std::vector<std::string> reserved_identities,
-      UserManagementDependencies dependencies = {});
+  UserManagementService(SecurityStore& store,
+                        std::vector<std::string> reserved_identities,
+                        UserManagementDependencies dependencies = {});
 
   common::Result<std::vector<ManagedUser>> ListUsers() const;
-  common::Result<ManagedUser> CreateViewer(
-      std::string username,
-      common::SecureBytes password,
-      const UserMutationContext& context);
-  common::Result<void> SetViewerEnabled(
-      std::int64_t user_id,
-      bool enabled,
-      const UserMutationContext& context);
-  common::Result<void> ResetViewerPassword(
-      std::int64_t user_id,
-      common::SecureBytes password,
-      const UserMutationContext& context);
-  common::Result<void> DeleteViewer(
-      std::int64_t user_id,
-      const UserMutationContext& context);
+  common::Result<ManagedUser> CreateViewer(std::string username,
+                                           common::SecureBytes password,
+                                           const UserMutationContext& context);
+  common::Result<void> SetViewerEnabled(std::int64_t user_id, bool enabled,
+                                        const UserMutationContext& context);
+  common::Result<void> ResetViewerPassword(std::int64_t user_id,
+                                           common::SecureBytes password,
+                                           const UserMutationContext& context);
+  common::Result<void> DeleteViewer(std::int64_t user_id,
+                                    const UserMutationContext& context);
   common::Result<void> ChangeOwnPassword(
       common::SecureBytes current_password,
       common::SecureBytes replacement_password,
       const UserMutationContext& context);
   common::Result<std::vector<ManagementIpEntry>> ListManagementIps() const;
   common::Result<ManagementIpEntry> AddManagementIp(
-      UserRole role,
-      std::string address,
-      const UserMutationContext& context);
-  common::Result<void> UpdateManagementIp(
-      std::int64_t management_ip_id,
-      UserRole role,
-      std::string replacement_address,
-      const UserMutationContext& context);
-  common::Result<void> DeleteManagementIp(
-      std::int64_t management_ip_id,
-      UserRole role,
-      const UserMutationContext& context);
+      UserRole role, std::string address, const UserMutationContext& context);
+  common::Result<void> UpdateManagementIp(std::int64_t management_ip_id,
+                                          UserRole role,
+                                          std::string replacement_address,
+                                          const UserMutationContext& context);
+  common::Result<void> DeleteManagementIp(std::int64_t management_ip_id,
+                                          UserRole role,
+                                          const UserMutationContext& context);
 
  private:
-  common::Result<void> RecordFailure(
-      std::int64_t now_seconds,
-      std::string_view event_type,
-      std::string_view detail_code,
-      std::string_view subject_identity,
-      const UserMutationContext& context) const;
+  common::Result<void> RecordFailure(std::int64_t now_seconds,
+                                     std::string_view event_type,
+                                     std::string_view detail_code,
+                                     std::string_view subject_identity,
+                                     const UserMutationContext& context) const;
   common::Result<void> RecordManagementIpFailure(
-      std::int64_t now_seconds,
-      std::string_view event_type,
-      std::string_view detail_code,
-      std::string_view subject_identity,
+      std::int64_t now_seconds, std::string_view event_type,
+      std::string_view detail_code, std::string_view subject_identity,
       const UserMutationContext& context) const;
 
   SecurityStore& store_;

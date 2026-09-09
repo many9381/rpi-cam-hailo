@@ -141,8 +141,8 @@ FragmentRing::Reader::WaitNext(std::chrono::milliseconds timeout) {
     return Result::Ok(std::nullopt);
   }
 
-  const auto offset = static_cast<std::size_t>(
-      cursor_->next_fragment_sequence - earliest);
+  const auto offset =
+      static_cast<std::size_t>(cursor_->next_fragment_sequence - earliest);
   assert(offset < state->fragments.size());
   const auto& entry = state->fragments[offset];
   cursor_->next_fragment_sequence = entry.sequence + 1U;
@@ -220,8 +220,7 @@ common::Result<std::uint64_t> FragmentRing::BeginGeneration(
 }
 
 common::Result<void> FragmentRing::Publish(
-    std::vector<std::uint8_t> media_fragment,
-    bool random_access) {
+    std::vector<std::uint8_t> media_fragment, bool random_access) {
   std::lock_guard lock(state_->mutex);
   const auto invalidate = [this] {
     ++state_->generation;

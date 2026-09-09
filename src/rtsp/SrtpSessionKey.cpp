@@ -1,7 +1,7 @@
 #include "camera_firmware/rtsp/SrtpSessionKey.hpp"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdio>
 
@@ -146,7 +146,9 @@ const unsigned char* SrtpSessionKey::data() const noexcept {
   return bytes_.data();
 }
 
-std::size_t SrtpSessionKey::size() const noexcept { return bytes_.size(); }
+std::size_t SrtpSessionKey::size() const noexcept {
+  return bytes_.size();
+}
 
 std::size_t SrtpSessionKey::zeroize_count_for_test() const noexcept {
   return bytes_.zeroize_count_for_test();
@@ -160,7 +162,8 @@ common::Result<SrtpSessionKey> LoadSrtpSessionKey(
   }
   if (session_key_config.source != "file") {
     return common::Result<SrtpSessionKey>::Err(
-        {"E_SRTP_KEY_SOURCE", "only file-backed SRTP session keys are supported"});
+        {"E_SRTP_KEY_SOURCE",
+         "only file-backed SRTP session keys are supported"});
   }
   if (session_key_config.encoding != "hex") {
     return common::Result<SrtpSessionKey>::Err(
@@ -177,8 +180,7 @@ common::Result<SrtpSessionKey> LoadSrtpSessionKey(
   std::array<unsigned char, 256> chunk{};
   bool too_large = false;
   while (true) {
-    const std::size_t read =
-        std::fread(chunk.data(), 1, chunk.size(), file);
+    const std::size_t read = std::fread(chunk.data(), 1, chunk.size(), file);
     if (read > 0U) {
       if (!buffer.append(chunk.data(), read)) {
         too_large = true;

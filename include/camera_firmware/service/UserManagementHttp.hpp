@@ -38,19 +38,15 @@ struct ParsedManagementIpRequest {
 };
 
 [[nodiscard]] common::Result<ParsedCreateViewerRequest> ParseCreateViewerJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedSetViewerEnabledRequest>
 ParseSetViewerEnabledJson(std::string_view body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedPasswordResetRequest> ParsePasswordResetJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedOwnPasswordRequest> ParseOwnPasswordJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedManagementIpRequest> ParseManagementIpJson(
-    std::string_view body,
-    std::string_view content_type);
+    std::string_view body, std::string_view content_type);
 [[nodiscard]] common::Result<void> ValidateEmptyRequestBody(
     std::string_view body);
 

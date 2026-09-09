@@ -35,10 +35,9 @@ class AiBackend {
   [[nodiscard]] virtual common::Result<ModelHandle> LoadModel(
       const config::AiModelConfig& model) = 0;
   virtual void Unload(ModelHandle handle) = 0;
-  [[nodiscard]] virtual common::Result<void> Submit(
-      ModelHandle handle,
-      InputView input,
-      InferCallback callback) = 0;
+  [[nodiscard]] virtual common::Result<void> Submit(ModelHandle handle,
+                                                    InputView input,
+                                                    InferCallback callback) = 0;
 };
 
 class UnavailableAiBackend final : public AiBackend {
@@ -50,10 +49,8 @@ class UnavailableAiBackend final : public AiBackend {
   [[nodiscard]] common::Result<ModelHandle> LoadModel(
       const config::AiModelConfig& model) override;
   void Unload(ModelHandle handle) override;
-  [[nodiscard]] common::Result<void> Submit(
-      ModelHandle handle,
-      InputView input,
-      InferCallback callback) override;
+  [[nodiscard]] common::Result<void> Submit(ModelHandle handle, InputView input,
+                                            InferCallback callback) override;
 
  private:
   ModelHandle next_handle_{1};

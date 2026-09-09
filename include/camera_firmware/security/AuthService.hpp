@@ -52,14 +52,12 @@ struct Principal {
 };
 
 using AuthClockCallback = std::function<std::int64_t()>;
-using AuthRandomCallback = std::function<common::Result<common::SecureBytes>(
-    std::size_t output_size)>;
-using AuthPasswordVerifyCallback =
-    std::function<common::Result<bool>(const common::SecureBytes& password,
-                                      const PasswordRecord& record)>;
-using AuthHighSeverityLogCallback =
-    std::function<void(std::string_view category,
-                       std::string_view normalized_peer_ip)>;
+using AuthRandomCallback =
+    std::function<common::Result<common::SecureBytes>(std::size_t output_size)>;
+using AuthPasswordVerifyCallback = std::function<common::Result<bool>(
+    const common::SecureBytes& password, const PasswordRecord& record)>;
+using AuthHighSeverityLogCallback = std::function<void(
+    std::string_view category, std::string_view normalized_peer_ip)>;
 
 struct AuthServiceDependencies {
   AuthClockCallback now_seconds;
@@ -67,8 +65,7 @@ struct AuthServiceDependencies {
   AuthPasswordVerifyCallback verify_password;
   AuthHighSeverityLogCallback high_severity_log;
   AuthRandomCallback firmware_log_random_bytes;
-  std::int64_t session_idle_timeout_seconds{
-      kDefaultSessionIdleTimeoutSeconds};
+  std::int64_t session_idle_timeout_seconds{kDefaultSessionIdleTimeoutSeconds};
   crypto::CryptoProvider* provider{nullptr};
   // The account BootstrapService minted for this boot, and the only account
   // Login() will accept while the device is in `default` state. Engaged only
@@ -102,8 +99,7 @@ class AuthService {
   common::Result<void> Logout(std::span<const unsigned char> token,
                               std::string_view peer_ip);
   common::Result<std::int64_t> Reauthenticate(
-      std::span<const unsigned char> token,
-      std::string_view peer_ip,
+      std::span<const unsigned char> token, std::string_view peer_ip,
       common::SecureBytes password);
 
  private:
@@ -116,18 +112,14 @@ class AuthService {
   using LoginRoleValidatorCallback = std::function<bool(UserRole)>;
 
   AuthService(SecurityStore& store, AuthServiceDependencies dependencies);
-  AuthService(SecurityStore& store,
-              AuthServiceDependencies dependencies,
+  AuthService(SecurityStore& store, AuthServiceDependencies dependencies,
               FirmwareLogBeforeAckCallback firmware_log_before_ack);
-  AuthService(SecurityStore& store,
-              AuthServiceDependencies dependencies,
+  AuthService(SecurityStore& store, AuthServiceDependencies dependencies,
               AuthServiceRuntimeHooks hooks);
-  AuthService(SecurityStore& store,
-              AuthServiceDependencies dependencies,
+  AuthService(SecurityStore& store, AuthServiceDependencies dependencies,
               AuthServiceRuntimeHooks hooks,
               FirmwareLogBeforeAckCallback firmware_log_before_ack);
-  AuthService(SecurityStore& store,
-              AuthServiceDependencies dependencies,
+  AuthService(SecurityStore& store, AuthServiceDependencies dependencies,
               AuthServiceRuntimeHooks hooks,
               FirmwareLogBeforeAckCallback firmware_log_before_ack,
               LoginRoleValidatorCallback login_role_validator);

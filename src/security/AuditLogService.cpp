@@ -33,10 +33,9 @@ constexpr std::size_t kCursorHeaderBytes = 14U;
 
 static_assert(static_cast<unsigned char>(AuditSortField::kTimestamp) == 0U);
 static_assert(static_cast<unsigned char>(AuditSortField::kSubject) == 5U);
-static_assert(
-    static_cast<unsigned char>(AuditSortDirection::kAscending) == 0U);
-static_assert(
-    static_cast<unsigned char>(AuditSortDirection::kDescending) == 1U);
+static_assert(static_cast<unsigned char>(AuditSortDirection::kAscending) == 0U);
+static_assert(static_cast<unsigned char>(AuditSortDirection::kDescending) ==
+              1U);
 
 struct InetAddressDeleter {
   void operator()(GInetAddress* address) const noexcept {
@@ -71,8 +70,7 @@ struct ValidatedAuditQuery {
   std::optional<DecodedAuditCursor> cursor;
 };
 
-bool IsValidText(std::string_view value,
-                 std::size_t minimum_bytes,
+bool IsValidText(std::string_view value, std::size_t minimum_bytes,
                  std::size_t maximum_bytes) {
   return value.size() >= minimum_bytes && value.size() <= maximum_bytes &&
          value.find('\0') == std::string_view::npos &&
@@ -81,8 +79,7 @@ bool IsValidText(std::string_view value,
 }
 
 bool ValidateOptionalText(const std::optional<std::string>& input,
-                          std::size_t minimum_bytes,
-                          std::size_t maximum_bytes,
+                          std::size_t minimum_bytes, std::size_t maximum_bytes,
                           std::optional<std::string>& output) {
   if (!input.has_value()) {
     return true;
@@ -190,15 +187,14 @@ std::uint64_t ReadUint64(const std::vector<unsigned char>& input,
 
 std::optional<std::string> EncodeBase64Url(
     const std::vector<unsigned char>& input) {
-  if (input.empty() ||
-      input.size() > static_cast<std::size_t>(
-                         std::numeric_limits<int>::max())) {
+  if (input.empty() || input.size() > static_cast<std::size_t>(
+                                          std::numeric_limits<int>::max())) {
     return std::nullopt;
   }
   const std::size_t encoded_size = 4U * ((input.size() + 2U) / 3U);
   std::vector<unsigned char> buffer(encoded_size + 1U, 0U);
-  const int written = EVP_EncodeBlock(
-      buffer.data(), input.data(), static_cast<int>(input.size()));
+  const int written = EVP_EncodeBlock(buffer.data(), input.data(),
+                                      static_cast<int>(input.size()));
   if (written < 0 || static_cast<std::size_t>(written) != encoded_size) {
     return std::nullopt;
   }
@@ -246,8 +242,7 @@ std::optional<std::vector<unsigned char>> DecodeBase64Url(
   const int decoded_size = EVP_DecodeBlock(
       decoded.data(), reinterpret_cast<const unsigned char*>(standard.data()),
       static_cast<int>(standard.size()));
-  if (decoded_size < 0 ||
-      static_cast<std::size_t>(decoded_size) < padding) {
+  if (decoded_size < 0 || static_cast<std::size_t>(decoded_size) < padding) {
     return std::nullopt;
   }
   decoded.resize(static_cast<std::size_t>(decoded_size) - padding);
@@ -259,8 +254,7 @@ std::optional<std::vector<unsigned char>> DecodeBase64Url(
 }
 
 bool IsValidCursorText(AuditSortField field, const std::string& value) {
-  const std::size_t minimum =
-      field == AuditSortField::kSubject ? 0U : 1U;
+  const std::size_t minimum = field == AuditSortField::kSubject ? 0U : 1U;
   if (!IsValidText(value, minimum, kMaximumQueryTextBytes)) {
     return false;
   }
@@ -275,8 +269,7 @@ bool IsValidCursorText(AuditSortField field, const std::string& value) {
 }
 
 std::optional<DecodedAuditCursor> DecodeCursor(
-    std::string_view encoded,
-    AuditSortField requested_field,
+    std::string_view encoded, AuditSortField requested_field,
     AuditSortDirection requested_direction) {
   const auto decoded = DecodeBase64Url(encoded);
   if (!decoded.has_value() || decoded->size() < kCursorHeaderBytes) {
@@ -293,14 +286,13 @@ std::optional<DecodedAuditCursor> DecodeCursor(
     return std::nullopt;
   }
   const bool expects_integer = field == AuditSortField::kTimestamp;
-  if (bytes[3] !=
-      (expects_integer ? kIntegerCursorKey : kTextCursorKey)) {
+  if (bytes[3] != (expects_integer ? kIntegerCursorKey : kTextCursorKey)) {
     return std::nullopt;
   }
   const std::uint64_t sequence = ReadUint64(bytes, 4U);
   if (sequence == 0U ||
-      sequence >
-          static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      sequence > static_cast<std::uint64_t>(
+                     std::numeric_limits<std::int64_t>::max())) {
     return std::nullopt;
   }
   const std::size_t key_length =
@@ -317,8 +309,8 @@ std::optional<DecodedAuditCursor> DecodeCursor(
       return std::nullopt;
     }
     const std::uint64_t key = ReadUint64(bytes, kCursorHeaderBytes);
-    if (key > static_cast<std::uint64_t>(
-                  std::numeric_limits<std::int64_t>::max())) {
+    if (key >
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
       return std::nullopt;
     }
     cursor.integer_key = static_cast<std::int64_t>(key);
@@ -397,20 +389,18 @@ std::optional<ValidatedAuditQuery> ValidateAuditQuery(
                                kMaximumEpochSecondsDigits,
                                query.from_seconds) ||
       !ParseNonnegativeInteger(parameters.to_seconds,
-                               kMaximumEpochSecondsDigits,
-                               query.to_seconds) ||
+                               kMaximumEpochSecondsDigits, query.to_seconds) ||
       (query.from_seconds.has_value() && query.to_seconds.has_value() &&
        *query.from_seconds > *query.to_seconds) ||
-      !ValidateOptionalText(parameters.event_type, 1U,
-                            kMaximumQueryTextBytes, query.event_type) ||
+      !ValidateOptionalText(parameters.event_type, 1U, kMaximumQueryTextBytes,
+                            query.event_type) ||
       !ValidateOptionalText(parameters.outcome, 1U, 7U, query.outcome) ||
       !ValidateOptionalText(parameters.actor_identity, 1U,
                             kMaximumQueryTextBytes, query.actor_identity) ||
-      !ValidateOptionalText(parameters.subject_type, 1U,
-                            kMaximumQueryTextBytes, query.subject_type) ||
+      !ValidateOptionalText(parameters.subject_type, 1U, kMaximumQueryTextBytes,
+                            query.subject_type) ||
       !ValidateOptionalText(parameters.subject_identity, 1U,
-                            kMaximumQueryTextBytes,
-                            query.subject_identity)) {
+                            kMaximumQueryTextBytes, query.subject_identity)) {
     return std::nullopt;
   }
   if (query.outcome.has_value() && *query.outcome != "success" &&
@@ -477,12 +467,9 @@ AuditLogService::AuditLogService(SecurityStore& store) : store_(store) {}
 
 common::Result<void> AuditLogService::AppendEvent(
     std::optional<std::int64_t> actor_user_id,
-    std::string_view normalized_peer_ip,
-    std::string_view event_type,
-    std::string_view outcome,
-    std::string_view detail_code,
-    std::string_view subject_type,
-    std::string_view subject_identity) {
+    std::string_view normalized_peer_ip, std::string_view event_type,
+    std::string_view outcome, std::string_view detail_code,
+    std::string_view subject_type, std::string_view subject_identity) {
   try {
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch())
@@ -519,22 +506,17 @@ common::Result<void> AuditLogService::AppendEvent(
 }
 
 common::Result<void> AuditLogService::AppendSystemEvent(
-    std::string_view event_type,
-    std::string_view outcome,
-    std::string_view detail_code,
-    std::string_view subject_type,
+    std::string_view event_type, std::string_view outcome,
+    std::string_view detail_code, std::string_view subject_type,
     std::string_view subject_identity) {
   return AppendEvent(std::nullopt, "127.0.0.1", event_type, outcome,
                      detail_code, subject_type, subject_identity);
 }
 
 common::Result<void> AuditLogService::AppendAdministratorEvent(
-    const Principal& actor,
-    std::string_view normalized_peer_ip,
-    std::string_view event_type,
-    std::string_view outcome,
-    std::string_view detail_code,
-    std::string_view subject_type,
+    const Principal& actor, std::string_view normalized_peer_ip,
+    std::string_view event_type, std::string_view outcome,
+    std::string_view detail_code, std::string_view subject_type,
     std::string_view subject_identity) {
   if (actor.role != UserRole::kAdministrator) {
     return common::Result<void>::Err(
@@ -566,18 +548,13 @@ common::Result<AuditStatus> AuditLogService::ReadStatus(
   }
   const auto& snapshot = stored.value();
   return common::Result<AuditStatus>::Ok(
-      {snapshot.current_events,
-       snapshot.max_events,
-       snapshot.usage_percent,
-       snapshot.warning,
-       snapshot.rotated_event_count,
-       snapshot.last_rotation_at_seconds,
-       snapshot.last_rotated_sequence});
+      {snapshot.current_events, snapshot.max_events, snapshot.usage_percent,
+       snapshot.warning, snapshot.rotated_event_count,
+       snapshot.last_rotation_at_seconds, snapshot.last_rotated_sequence});
 }
 
 common::Result<AuditEventPage> AuditLogService::ListEvents(
-    const AuditQueryParameters& parameters,
-    const Principal& actor) const {
+    const AuditQueryParameters& parameters, const Principal& actor) const {
   if (actor.role != UserRole::kAdministrator) {
     return common::Result<AuditEventPage>::Err(
         {"E_AUDIT_FORBIDDEN", "audit event access is forbidden"});
@@ -636,14 +613,10 @@ common::Result<AuditEventPage> AuditLogService::ListEvents(
   page.events.reserve(result.events.size());
   for (auto& event : result.events) {
     page.events.push_back(
-        {event.sequence,
-         event.server_timestamp_seconds,
-         std::move(event.event_type),
-         std::move(event.outcome),
-         std::move(event.actor_identity),
-         std::move(event.peer_ip),
-         std::move(event.detail_code),
-         std::move(event.subject_type),
+        {event.sequence, event.server_timestamp_seconds,
+         std::move(event.event_type), std::move(event.outcome),
+         std::move(event.actor_identity), std::move(event.peer_ip),
+         std::move(event.detail_code), std::move(event.subject_type),
          std::move(event.subject_identity)});
   }
   if (result.has_more) {

@@ -3,17 +3,17 @@
 #include "camera_firmware/rtsp/RtspDigestCredentials.hpp"
 #include "camera_firmware/rtsp/RtspDigestCrypto.hpp"
 
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
-#include <fcntl.h>
 #include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <termios.h>
-#include <unistd.h>
 
 #include <glib.h>
 
@@ -124,8 +124,7 @@ Result<Options> ParseOptions(int argc, char** argv) {
 
   for (int index = 2; index < argc; ++index) {
     const std::string_view argument(argv[index]);
-    if (argument.starts_with("--password") &&
-        argument != "--password-stdin") {
+    if (argument.starts_with("--password") && argument != "--password-stdin") {
       return UsageError();
     }
     if (argument == "--password-stdin") {
@@ -272,8 +271,7 @@ Result<SecureBytes> ReadPassword(int fd) {
     return PasswordPolicyError();
   }
   if (!g_utf8_validate(reinterpret_cast<const gchar*>(input.data()),
-                       static_cast<gssize>(password_size),
-                       nullptr)) {
+                       static_cast<gssize>(password_size), nullptr)) {
     return PasswordPolicyError();
   }
 
@@ -305,12 +303,9 @@ Result<SecureBytes> ReadPasswordFromTty() {
 }
 
 int ReportError(std::string_view code, std::string_view category, int status) {
-  static_cast<void>(std::fprintf(stderr,
-               "%.*s: category=%.*s\n",
-               static_cast<int>(code.size()),
-               code.data(),
-               static_cast<int>(category.size()),
-               category.data()));
+  static_cast<void>(std::fprintf(
+      stderr, "%.*s: category=%.*s\n", static_cast<int>(code.size()),
+      code.data(), static_cast<int>(category.size()), category.data()));
   return status;
 }
 
@@ -320,14 +315,12 @@ int Run(int argc, char** argv) {
     return ReportError(options.error().code, "arguments", 2);
   }
 
-  auto password = options.value().password_stdin
-                      ? ReadPassword(STDIN_FILENO)
-                      : ReadPasswordFromTty();
+  auto password = options.value().password_stdin ? ReadPassword(STDIN_FILENO)
+                                                 : ReadPasswordFromTty();
   if (!password.ok()) {
     const bool policy = password.error().code == "E_RTSP_CREDENTIAL_PASSWORD";
     return ReportError(password.error().code,
-                       policy ? "password-policy" : "input",
-                       policy ? 2 : 1);
+                       policy ? "password-policy" : "input", policy ? 2 : 1);
   }
 
   RtspDigestProvisionRequest request;
@@ -337,9 +330,8 @@ int Run(int argc, char** argv) {
   request.algorithm = options.value().algorithm;
   request.allow_md5 = options.value().allow_md5;
   auto provisioned = ProvisionRtspDigestCredential(
-      request,
-      std::span<const unsigned char>(password.value().data(),
-                                     password.value().size()));
+      request, std::span<const unsigned char>(password.value().data(),
+                                              password.value().size()));
   password.value().clear();
   if (!provisioned.ok()) {
     return ReportError(provisioned.error().code, "provision", 1);

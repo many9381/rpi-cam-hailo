@@ -70,7 +70,8 @@ std::u32string DecodeUtf8(std::string_view utf8) {
     }
     bool valid = true;
     for (int k = 1; k <= extra; ++k) {
-      const auto byte = static_cast<unsigned char>(utf8[i + static_cast<std::size_t>(k)]);
+      const auto byte =
+          static_cast<unsigned char>(utf8[i + static_cast<std::size_t>(k)]);
       if ((byte & 0xC0U) != 0x80U) {
         valid = false;
         break;
@@ -96,21 +97,26 @@ struct TextRasterizer::Impl {
   stbtt_fontinfo info{};
   std::unordered_map<std::uint64_t, std::unique_ptr<GlyphBitmap>> cache;
 
-  // font_px is the em size, exactly like the CSS font-size the web overlay uses.
+  // font_px is the em size, exactly like the CSS font-size the web overlay
+  // uses.
   [[nodiscard]] float Scale(int pixel_height) const {
-    return stbtt_ScaleForMappingEmToPixels(&info, static_cast<float>(pixel_height));
+    return stbtt_ScaleForMappingEmToPixels(&info,
+                                           static_cast<float>(pixel_height));
   }
 };
 
-TextRasterizer::TextRasterizer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+TextRasterizer::TextRasterizer(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
 TextRasterizer::~TextRasterizer() = default;
 TextRasterizer::TextRasterizer(TextRasterizer&&) noexcept = default;
 TextRasterizer& TextRasterizer::operator=(TextRasterizer&&) noexcept = default;
 
-common::Result<TextRasterizer> TextRasterizer::Load(std::span<const std::uint8_t> ttf) {
+common::Result<TextRasterizer> TextRasterizer::Load(
+    std::span<const std::uint8_t> ttf) {
   auto impl = std::make_unique<Impl>();
   if (ttf.empty()) {
-    return common::Result<TextRasterizer>::Err({"E_OSD_FONT", "OSD font is empty"});
+    return common::Result<TextRasterizer>::Err(
+        {"E_OSD_FONT", "OSD font is empty"});
   }
   const int offset = stbtt_GetFontOffsetForIndex(ttf.data(), 0);
   if (offset < 0 || stbtt_InitFont(&impl->info, ttf.data(), offset) == 0) {
@@ -128,29 +134,34 @@ bool TextRasterizer::HasGlyph(char32_t codepoint) const {
   return stbtt_FindGlyphIndex(&impl_->info, static_cast<int>(codepoint)) != 0;
 }
 
-const GlyphBitmap& TextRasterizer::GetGlyph(char32_t codepoint, int pixel_height) {
+const GlyphBitmap& TextRasterizer::GetGlyph(char32_t codepoint,
+                                            int pixel_height) {
   const auto key = CacheKey(codepoint, pixel_height);
   if (const auto found = impl_->cache.find(key); found != impl_->cache.end()) {
     return *found->second;
   }
   auto glyph = std::make_unique<GlyphBitmap>();
   const float scale = impl_->Scale(pixel_height);
-  glyph->glyph_index = stbtt_FindGlyphIndex(&impl_->info, static_cast<int>(codepoint));
+  glyph->glyph_index =
+      stbtt_FindGlyphIndex(&impl_->info, static_cast<int>(codepoint));
   int advance = 0;
   int left_side_bearing = 0;
-  stbtt_GetGlyphHMetrics(&impl_->info, glyph->glyph_index, &advance, &left_side_bearing);
+  stbtt_GetGlyphHMetrics(&impl_->info, glyph->glyph_index, &advance,
+                         &left_side_bearing);
   glyph->advance = RoundToInt(static_cast<float>(advance) * scale);
   int x0 = 0;
   int y0 = 0;
   int x1 = 0;
   int y1 = 0;
-  stbtt_GetGlyphBitmapBox(&impl_->info, glyph->glyph_index, scale, scale, &x0, &y0, &x1, &y1);
+  stbtt_GetGlyphBitmapBox(&impl_->info, glyph->glyph_index, scale, scale, &x0,
+                          &y0, &x1, &y1);
   glyph->width = x1 - x0;
   glyph->height = y1 - y0;
   glyph->bearing_x = x0;
   glyph->bearing_y = y0;
   if (glyph->width > 0 && glyph->height > 0) {
-    glyph->alpha.assign(static_cast<std::size_t>(glyph->width) * glyph->height, 0U);
+    glyph->alpha.assign(static_cast<std::size_t>(glyph->width) * glyph->height,
+                        0U);
     stbtt_MakeGlyphBitmap(&impl_->info, glyph->alpha.data(), glyph->width,
                           glyph->height, glyph->width, scale, scale,
                           glyph->glyph_index);
@@ -172,9 +183,10 @@ TextRun TextRasterizer::Shape(std::string_view utf8, int pixel_height) {
   for (const char32_t codepoint : DecodeUtf8(utf8)) {
     const GlyphBitmap& glyph = GetGlyph(codepoint, pixel_height);
     if (previous != nullptr) {
-      pen += RoundToInt(static_cast<float>(stbtt_GetGlyphKernAdvance(
-                            &impl_->info, previous->glyph_index, glyph.glyph_index)) *
-                        scale);
+      pen += RoundToInt(
+          static_cast<float>(stbtt_GetGlyphKernAdvance(
+              &impl_->info, previous->glyph_index, glyph.glyph_index)) *
+          scale);
     }
     run.glyphs.push_back({&glyph, pen});
     run.width = std::max(run.width, pen + glyph.bearing_x + glyph.width);

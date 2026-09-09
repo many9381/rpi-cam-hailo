@@ -32,8 +32,8 @@ TEST(TextRasterizerTest, RejectsBytesThatAreNotAFont) {
 TEST(TextRasterizerTest, CoversLatinAndHangulButNotUnassignedCodepoints) {
   auto font = LoadFont();
   EXPECT_TRUE(font.HasGlyph(U'A'));
-  EXPECT_TRUE(font.HasGlyph(U'가'));  // 가
-  EXPECT_TRUE(font.HasGlyph(U'힣'));  // 힣 (last modern syllable)
+  EXPECT_TRUE(font.HasGlyph(U'가'));   // 가
+  EXPECT_TRUE(font.HasGlyph(U'힣'));   // 힣 (last modern syllable)
   EXPECT_FALSE(font.HasGlyph(U'͸'));  // unassigned
   EXPECT_GT(font.GetGlyph(U'͸', 38).width, 0);
 }
@@ -48,8 +48,9 @@ TEST(TextRasterizerTest, ShapesLatinAndHangulLeftToRight) {
     EXPECT_GT(placed.glyph->width, 0);
     EXPECT_GT(placed.glyph->height, 0);
     EXPECT_LE(placed.glyph->height, 48);
-    EXPECT_EQ(placed.glyph->alpha.size(),
-              static_cast<std::size_t>(placed.glyph->width) * placed.glyph->height);
+    EXPECT_EQ(
+        placed.glyph->alpha.size(),
+        static_cast<std::size_t>(placed.glyph->width) * placed.glyph->height);
   }
   EXPECT_GT(run.ascent, 0);
   EXPECT_GT(run.descent, 0);

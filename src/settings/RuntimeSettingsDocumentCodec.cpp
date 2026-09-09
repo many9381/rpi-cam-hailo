@@ -23,7 +23,8 @@ constexpr std::size_t kMaximumDocumentBytes = std::size_t{16} * 1024U;
 constexpr std::size_t kMaximumApplyCodeBytes = 64U;
 
 common::Error DocumentError() {
-  return {"E_RUNTIME_SETTINGS_DOCUMENT", "runtime settings document is invalid"};
+  return {"E_RUNTIME_SETTINGS_DOCUMENT",
+          "runtime settings document is invalid"};
 }
 
 template <typename T>
@@ -159,8 +160,7 @@ common::Result<unsigned int> DecodeUnsigned(const Json::Value& value) {
 }
 
 common::Result<RuntimeSettings> DecodeSettings(
-    const Json::Value& value,
-    const config::AppConfig& base_config,
+    const Json::Value& value, const config::AppConfig& base_config,
     const CameraProfileCatalog& profiles) {
   if (!HasKeysWithOptional(value, {"camera", "models"},
                            {"sub_stream", "osd"}) ||
@@ -232,8 +232,7 @@ common::Result<RuntimeSettings> DecodeSettings(
 
   settings.models.reserve(value["models"].size());
   for (const auto& model_value : value["models"]) {
-    if (!HasExactKeys(
-            model_value, {"id", "enabled", "confidence_threshold"}) ||
+    if (!HasExactKeys(model_value, {"id", "enabled", "confidence_threshold"}) ||
         !model_value["id"].isString() ||
         !IsValidUtf8(model_value["id"].asString()) ||
         !model_value["enabled"].isBool() ||
@@ -245,12 +244,13 @@ common::Result<RuntimeSettings> DecodeSettings(
     if (!std::isfinite(threshold) || threshold < 0.0 || threshold > 1.0) {
       return InvalidDocument<RuntimeSettings>();
     }
-    settings.models.push_back(
-        {model_value["id"].asString(), model_value["enabled"].asBool(),
-         static_cast<float>(threshold)});
+    settings.models.push_back({model_value["id"].asString(),
+                               model_value["enabled"].asBool(),
+                               static_cast<float>(threshold)});
   }
 
-  const auto validated = ValidateRuntimeSettings(settings, base_config, profiles);
+  const auto validated =
+      ValidateRuntimeSettings(settings, base_config, profiles);
   if (!validated.ok()) {
     return InvalidDocument<RuntimeSettings>();
   }
@@ -289,8 +289,8 @@ common::Result<LastApplyResult> DecodeLastApply(const Json::Value& value) {
 
 void AppendUnsigned(std::string& output, std::uint64_t value) {
   std::array<char, 32U> buffer{};
-  const auto [end, error] = std::to_chars(buffer.data(),
-                                          buffer.data() + buffer.size(), value);
+  const auto [end, error] =
+      std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
   if (error == std::errc()) {
     output.append(buffer.data(), end);
   }
@@ -298,8 +298,8 @@ void AppendUnsigned(std::string& output, std::uint64_t value) {
 
 void AppendFloat(std::string& output, float value) {
   std::array<char, 32U> buffer{};
-  const auto [end, error] = std::to_chars(buffer.data(),
-                                          buffer.data() + buffer.size(), value);
+  const auto [end, error] =
+      std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
   if (error == std::errc()) {
     output.append(buffer.data(), end);
   }
@@ -430,8 +430,7 @@ bool IsValidSettingsForDocument(const RuntimeSettings& settings,
 }  // namespace
 
 common::Result<RuntimeSettingsDocument> DecodeRuntimeSettingsDocument(
-    std::string_view input,
-    const config::AppConfig& base_config,
+    std::string_view input, const config::AppConfig& base_config,
     const CameraProfileCatalog& profiles) {
   if (input.size() > kMaximumDocumentBytes || !IsValidUtf8(input)) {
     return InvalidDocument<RuntimeSettingsDocument>();
@@ -454,15 +453,14 @@ common::Result<RuntimeSettingsDocument> DecodeRuntimeSettingsDocument(
   Json::Value root;
   std::string errors;
   const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-  if (!reader->parse(input.data(), input.data() + input.size(), &root, &errors) ||
-      !HasExactKeys(root,
-                    {"schema_version", "revision", "active", "pending",
-                     "last_apply"}) ||
+  if (!reader->parse(input.data(), input.data() + input.size(), &root,
+                     &errors) ||
+      !HasExactKeys(root, {"schema_version", "revision", "active", "pending",
+                           "last_apply"}) ||
       !IsIntegralJsonValue(root["schema_version"]) ||
       !root["schema_version"].isUInt() ||
       root["schema_version"].asUInt() != 1U ||
-      !IsIntegralJsonValue(root["revision"]) ||
-      !root["revision"].isUInt64()) {
+      !IsIntegralJsonValue(root["revision"]) || !root["revision"].isUInt64()) {
     return InvalidDocument<RuntimeSettingsDocument>();
   }
 

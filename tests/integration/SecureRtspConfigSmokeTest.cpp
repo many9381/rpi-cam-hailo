@@ -3,13 +3,13 @@
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
-#include <netinet/in.h>
 #include <string>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -79,8 +79,7 @@ void WriteValidClientCredentials(const std::filesystem::path& path,
   }
   std::filesystem::permissions(
       path,
-      std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_write,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
       std::filesystem::perm_options::replace);
 }
 
@@ -119,8 +118,8 @@ TEST(SecureRtspConfigSmokeTest, SecureServerStartsAndStopsWithoutCamera) {
   auto started = server.Start(config, ring);
 
   std::filesystem::remove(key_path);
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
   EXPECT_EQ(server.PerMediaKeyZeroizeCount(), 0u);
   server.Stop();
 }
@@ -128,17 +127,16 @@ TEST(SecureRtspConfigSmokeTest, SecureServerStartsAndStopsWithoutCamera) {
 TEST(SecureRtspConfigSmokeTest, SecureEncoderHooksReturnProjectElement) {
   auto hook_probe = camera_firmware::rtsp::VerifySecureEncoderHooks();
 
-  ASSERT_TRUE(hook_probe.ok()) << hook_probe.error().code << ": "
-                               << hook_probe.error().message;
+  ASSERT_TRUE(hook_probe.ok())
+      << hook_probe.error().code << ": " << hook_probe.error().message;
   EXPECT_EQ(hook_probe.value().rtp_element_factory_name, "cfsecuresrtpenc");
   EXPECT_EQ(hook_probe.value().rtcp_element_factory_name, "cfsecuresrtpenc");
   EXPECT_GE(hook_probe.value().per_media_key_zeroize_count, 1u);
 }
 
 TEST(SecureRtspConfigSmokeTest, SecureServerStartStopKeepsOnlyActiveKeyOwner) {
-  const auto key_path =
-      std::filesystem::temp_directory_path() /
-      "camera-firmware-test-cleanup-srtp.hex";
+  const auto key_path = std::filesystem::temp_directory_path() /
+                        "camera-firmware-test-cleanup-srtp.hex";
   {
     std::ofstream out(key_path);
     out << std::string(60, '2');
@@ -158,15 +156,15 @@ TEST(SecureRtspConfigSmokeTest, SecureServerStartStopKeepsOnlyActiveKeyOwner) {
   camera_firmware::rtsp::SecureRtspServer server;
   auto started = server.Start(config, ring);
   std::filesystem::remove(key_path);
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
   server.Stop();
 }
 
-TEST(SecureRtspConfigSmokeTest, SecureServerRegistersOptionalSubMountAndStopsCleanly) {
-  const auto key_path =
-      std::filesystem::temp_directory_path() /
-      "camera-firmware-test-sub-mount-srtp.hex";
+TEST(SecureRtspConfigSmokeTest,
+     SecureServerRegistersOptionalSubMountAndStopsCleanly) {
+  const auto key_path = std::filesystem::temp_directory_path() /
+                        "camera-firmware-test-sub-mount-srtp.hex";
   {
     std::ofstream out(key_path);
     out << std::string(60, '3');
@@ -197,8 +195,8 @@ TEST(SecureRtspConfigSmokeTest, SecureServerRegistersOptionalSubMountAndStopsCle
   auto started = server.Start(config, main_ring, &sub);
 
   std::filesystem::remove(key_path);
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
   // No client ever connects in this test, so the on-demand edges must stay
   // quiet; real prepared/unprepared firing needs an actual RTSP client and
   // is covered on-device.
@@ -344,8 +342,8 @@ TEST(SecureRtspConfigSmokeTest,
     out << "not-a-credential-file\n";
   }
   std::filesystem::permissions(
-      credentials, std::filesystem::perms::owner_read |
-                       std::filesystem::perms::owner_write,
+      credentials,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
       std::filesystem::perm_options::replace);
   const int port = FindFreeLoopbackPort();
   auto config = ClientAuthConfig(port, credentials);
@@ -365,12 +363,11 @@ TEST(SecureRtspConfigSmokeTest,
   const auto credentials = std::filesystem::temp_directory_path() /
                            "cf-insecure-rtsp-client-auth.credentials";
   WriteValidClientCredentials(credentials, '0');
-  std::filesystem::permissions(
-      credentials,
-      std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_write |
-          std::filesystem::perms::group_read,
-      std::filesystem::perm_options::replace);
+  std::filesystem::permissions(credentials,
+                               std::filesystem::perms::owner_read |
+                                   std::filesystem::perms::owner_write |
+                                   std::filesystem::perms::group_read,
+                               std::filesystem::perm_options::replace);
   const int port = FindFreeLoopbackPort();
   auto config = ClientAuthConfig(port, credentials);
   camera_firmware::media::EncodedRing ring(4);
@@ -384,8 +381,7 @@ TEST(SecureRtspConfigSmokeTest,
   EXPECT_TRUE(CanBindLoopbackPort(port));
 }
 
-TEST(SecureRtspConfigSmokeTest,
-     ClientAuthEnabledStartsAndReloadsCredentials) {
+TEST(SecureRtspConfigSmokeTest, ClientAuthEnabledStartsAndReloadsCredentials) {
   const auto credentials = std::filesystem::temp_directory_path() /
                            "cf-valid-rtsp-client-auth.credentials";
   WriteValidClientCredentials(credentials, '0');
@@ -395,8 +391,8 @@ TEST(SecureRtspConfigSmokeTest,
   camera_firmware::rtsp::SecureRtspServer server;
 
   auto started = server.Start(config, ring);
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
   WriteValidClientCredentials(credentials, '1');
   auto reloaded = server.ReloadClientCredentials();
 
@@ -409,17 +405,17 @@ TEST(SecureRtspConfigSmokeTest,
 
 TEST(SecureRtspConfigSmokeTest, ClientAuthDisabledPreservesStartupBehavior) {
   const int port = FindFreeLoopbackPort();
-  auto config = ClientAuthConfig(
-      port, std::filesystem::temp_directory_path() /
-                "cf-unused-disabled-client-auth.credentials");
+  auto config =
+      ClientAuthConfig(port, std::filesystem::temp_directory_path() /
+                                 "cf-unused-disabled-client-auth.credentials");
   config.client_auth.enabled = false;
   camera_firmware::media::EncodedRing ring(4);
   camera_firmware::rtsp::SecureRtspServer server;
 
   auto started = server.Start(config, ring);
 
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
   auto reload = server.ReloadClientCredentials();
   EXPECT_FALSE(reload.ok());
   server.Stop();

@@ -46,9 +46,8 @@ std::string CameraStateForManagedRuntime(ManagedRuntimeState state) {
 
 }  // namespace
 
-ManagedFirmwareRuntime::ManagedFirmwareRuntime(
-    config::AppConfig initial_config,
-    FirmwareRuntimeFactory factory)
+ManagedFirmwareRuntime::ManagedFirmwareRuntime(config::AppConfig initial_config,
+                                               FirmwareRuntimeFactory factory)
     : active_config_(std::move(initial_config)), factory_(std::move(factory)) {}
 
 ManagedFirmwareRuntime::~ManagedFirmwareRuntime() {
@@ -170,8 +169,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
     const common::Error error = promoted.error();
     StopRuntime(candidate);
     const bool restored = RestorePrevious(previous.runtime);
-    return {RuntimeReplacementResult::Outcome::kCommitFailed, restored,
-            error};
+    return {RuntimeReplacementResult::Outcome::kCommitFailed, restored, error};
   }
 
   {
@@ -221,8 +219,8 @@ ai::AiRuntimeStatus ManagedFirmwareRuntime::AiStatus() const {
   return status;
 }
 
-std::vector<ai::AiModelRunnerStatus>
-ManagedFirmwareRuntime::AiRunnerStatuses() const {
+std::vector<ai::AiModelRunnerStatus> ManagedFirmwareRuntime::AiRunnerStatuses()
+    const {
   auto runtime = ReadSnapshot().runtime;
   return runtime ? runtime->AiRunnerStatuses()
                  : std::vector<ai::AiModelRunnerStatus>{};
@@ -256,8 +254,8 @@ ManagedFirmwareRuntime::OpenLiveStream(std::string_view camera_id) {
   return runtime->OpenLiveStream(camera_id);
 }
 
-std::vector<ai::DetectionEvent>
-ManagedFirmwareRuntime::DetectionSnapshot() const {
+std::vector<ai::DetectionEvent> ManagedFirmwareRuntime::DetectionSnapshot()
+    const {
   auto runtime = ReadSnapshot().runtime;
   return runtime ? runtime->DetectionSnapshot()
                  : std::vector<ai::DetectionEvent>{};
@@ -281,8 +279,8 @@ std::uint64_t ManagedFirmwareRuntime::PerMediaKeyZeroizeCount() const noexcept {
   }
 }
 
-ManagedFirmwareRuntime::RuntimeSnapshot
-ManagedFirmwareRuntime::ReadSnapshot() const {
+ManagedFirmwareRuntime::RuntimeSnapshot ManagedFirmwareRuntime::ReadSnapshot()
+    const {
   std::lock_guard snapshot_lock(snapshot_mutex_);
   return {current_runtime_, active_config_, state_};
 }

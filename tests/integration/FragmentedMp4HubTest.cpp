@@ -28,15 +28,11 @@ struct X264Deleter {
   }
 };
 
-std::vector<media::EncodedAccessUnit> EncodeAnnexBFrames(
-    int width,
-    int height,
-    int fps,
-    int gop,
-    int frame_count) {
+std::vector<media::EncodedAccessUnit> EncodeAnnexBFrames(int width, int height,
+                                                         int fps, int gop,
+                                                         int frame_count) {
   x264_param_t params{};
-  EXPECT_EQ(x264_param_default_preset(&params, "ultrafast", "zerolatency"),
-            0);
+  EXPECT_EQ(x264_param_default_preset(&params, "ultrafast", "zerolatency"), 0);
   params.i_width = width;
   params.i_height = height;
   params.i_csp = X264_CSP_I420;
@@ -77,8 +73,8 @@ std::vector<media::EncodedAccessUnit> EncodeAnnexBFrames(
 
     x264_nal_t* nals = nullptr;
     int nal_count = 0;
-    const int encoded = x264_encoder_encode(encoder.get(), &nals, &nal_count,
-                                            &input, &output);
+    const int encoded =
+        x264_encoder_encode(encoder.get(), &nals, &nal_count, &input, &output);
     EXPECT_GT(encoded, 0);
     if (encoded <= 0) {
       continue;
@@ -126,8 +122,8 @@ std::vector<std::string> TopLevelBoxTypes(
     if (size < header || size > bytes.size() - offset) {
       return {};
     }
-    types.emplace_back(reinterpret_cast<const char*>(bytes.data() + offset + 4U),
-                       4U);
+    types.emplace_back(
+        reinterpret_cast<const char*>(bytes.data() + offset + 4U), 4U);
     offset += static_cast<std::size_t>(size);
   }
   if (offset != bytes.size()) {
@@ -170,13 +166,11 @@ TEST(FragmentedMp4HubTest, PackagesOneEncodeForSharedReaders) {
   config.height = kHeight;
   config.fps = kFps;
   config.fragment_duration_ms = 200U;
-  config.ring_limits =
-      {.max_fragments = 8U, .max_bytes = 4U * 1024U * 1024U,
-       .max_readers = 2U};
+  config.ring_limits = {
+      .max_fragments = 8U, .max_bytes = 4U * 1024U * 1024U, .max_readers = 2U};
   ASSERT_TRUE(hub.Start(config).ok());
 
-  const auto access_units =
-      EncodeAnnexBFrames(kWidth, kHeight, kFps, 10, 45);
+  const auto access_units = EncodeAnnexBFrames(kWidth, kHeight, kFps, 10, 45);
   ASSERT_EQ(access_units.size(), 45U);
   for (const auto& access_unit : access_units) {
     encoded_ring.Publish(access_unit);
@@ -185,8 +179,7 @@ TEST(FragmentedMp4HubTest, PackagesOneEncodeForSharedReaders) {
   bool packaged = false;
   for (int attempt = 0; attempt < 150; ++attempt) {
     const auto status = hub.Status();
-    if (status.pushed_access_units == 45U &&
-        status.published_fragments >= 4U) {
+    if (status.pushed_access_units == 45U && status.published_fragments >= 4U) {
       packaged = true;
       break;
     }

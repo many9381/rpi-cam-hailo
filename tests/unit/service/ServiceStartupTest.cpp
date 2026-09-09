@@ -1,5 +1,5 @@
-#include "camera_firmware/service/ServiceStartup.hpp"
 #include "camera_firmware/service/ServiceApp.hpp"
+#include "camera_firmware/service/ServiceStartup.hpp"
 
 #include <chrono>
 #include <future>
@@ -68,9 +68,7 @@ TEST(ServiceStartupSignalTest, CleanupJoinsCompletedServiceThread) {
   bool stop_requested = false;
 
   auto stopped = camera_firmware::service::internal::StopServiceThreadWithin(
-      service_thread,
-      completion_future,
-      std::chrono::seconds(1),
+      service_thread, completion_future, std::chrono::seconds(1),
       [&stop_requested] { stop_requested = true; });
 
   ASSERT_TRUE(stopped.ok()) << stopped.error().message;
@@ -91,9 +89,7 @@ TEST(ServiceStartupSignalTest, CleanupTimeoutLeavesThreadForSafeJoin) {
 
   const auto start = std::chrono::steady_clock::now();
   auto stopped = camera_firmware::service::internal::StopServiceThreadWithin(
-      service_thread,
-      completion_future,
-      std::chrono::milliseconds(10),
+      service_thread, completion_future, std::chrono::milliseconds(10),
       [&stop_requested] { stop_requested = true; });
   const auto elapsed = std::chrono::steady_clock::now() - start;
 

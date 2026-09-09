@@ -13,7 +13,6 @@ namespace camera_firmware::security {
     std::span<const std::string_view> reserved_identities);
 
 [[nodiscard]] common::Result<void> ValidatePassword(
-    std::string_view username,
-    const common::SecureBytes& password);
+    std::string_view username, const common::SecureBytes& password);
 
 }  // namespace camera_firmware::security

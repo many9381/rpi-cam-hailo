@@ -8,15 +8,13 @@ namespace {
 
 common::Result<void> BootError(std::string_view code,
                                std::string_view message) {
-  return common::Result<void>::Err(
-      {std::string(code), std::string(message)});
+  return common::Result<void>::Err({std::string(code), std::string(message)});
 }
 
 }  // namespace
 
 FirmwareBootCoordinator::FirmwareBootCoordinator(
-    FirmwareBootConfig config,
-    FirmwareBootDependencies dependencies)
+    FirmwareBootConfig config, FirmwareBootDependencies dependencies)
     : config_(config), dependencies_(std::move(dependencies)) {}
 
 FirmwareBootCoordinator::~FirmwareBootCoordinator() {
@@ -144,13 +142,11 @@ void FirmwareBootCoordinator::Stop() noexcept {
   bool stop_runtime = false;
   {
     std::unique_lock lock(mutex_);
-    condition_.wait(lock, [this] {
-      return state_ != FirmwareBootState::kStarting;
-    });
+    condition_.wait(lock,
+                    [this] { return state_ != FirmwareBootState::kStarting; });
     if (state_ == FirmwareBootState::kStopping) {
-      condition_.wait(lock, [this] {
-        return state_ == FirmwareBootState::kStopped;
-      });
+      condition_.wait(lock,
+                      [this] { return state_ == FirmwareBootState::kStopped; });
       return;
     }
     if (state_ == FirmwareBootState::kStopped) {

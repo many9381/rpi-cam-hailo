@@ -10,8 +10,7 @@ namespace camera_firmware::integrity::testing {
 
 [[nodiscard]] common::Result<void>
 WriteIntegrityArtifactAtomicallyWithPrePublishHook(
-    const std::filesystem::path& output,
-    std::span<const unsigned char> bytes,
+    const std::filesystem::path& output, std::span<const unsigned char> bytes,
     std::function<void()> before_publish);
 
 }  // namespace camera_firmware::integrity::testing

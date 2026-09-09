@@ -31,26 +31,21 @@ constexpr std::size_t kTemporaryRandomBytes = 16U;
 constexpr std::size_t kMaximumTemporaryCreateAttempts = 128U;
 constexpr std::string_view kFileHeader = "CFDIGEST1";
 constexpr std::string_view kTemporaryPrefix = ".cf-rtsp-credentials-";
-constexpr std::string_view kPolicyInvalid =
-    "credential policy is invalid";
+constexpr std::string_view kPolicyInvalid = "credential policy is invalid";
 constexpr std::string_view kLookupInvalid =
     "credential lookup request is invalid";
 constexpr std::string_view kProvisionInvalid =
     "credential provisioning request is invalid";
 constexpr std::string_view kPermissionsInvalid =
     "credential file permissions are invalid";
-constexpr std::string_view kSizeInvalid =
-    "credential file size is invalid";
-constexpr std::string_view kFormatInvalid =
-    "credential file format is invalid";
-constexpr std::string_view kReadFailed =
-    "credential file could not be read";
+constexpr std::string_view kSizeInvalid = "credential file size is invalid";
+constexpr std::string_view kFormatInvalid = "credential file format is invalid";
+constexpr std::string_view kReadFailed = "credential file could not be read";
 constexpr std::string_view kReplaceFailed =
     "credential file could not be replaced";
 constexpr std::string_view kDurabilityUnconfirmed =
     "credential file replacement durability could not be confirmed";
-constexpr std::string_view kOperationFailed =
-    "credential operation failed";
+constexpr std::string_view kOperationFailed = "credential operation failed";
 
 common::Error CredentialError(std::string_view message) {
   return {"E_RTSP_AUTH_CREDENTIALS", std::string(message)};
@@ -77,8 +72,7 @@ class UniqueFd {
   UniqueFd(const UniqueFd&) = delete;
   UniqueFd& operator=(const UniqueFd&) = delete;
 
-  UniqueFd(UniqueFd&& other) noexcept
-      : fd_(std::exchange(other.fd_, -1)) {}
+  UniqueFd(UniqueFd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
 
   UniqueFd& operator=(UniqueFd&& other) noexcept {
     if (this != &other) {
@@ -186,9 +180,8 @@ common::Result<AlgorithmPolicy> ValidatePolicy(
     if (!IsKnownAlgorithm(algorithm)) {
       return CredentialFailure<AlgorithmPolicy>(kPolicyInvalid);
     }
-    bool* selected = algorithm == RtspDigestAlgorithm::kSha256
-                         ? &enabled.sha256
-                         : &enabled.md5;
+    bool* selected = algorithm == RtspDigestAlgorithm::kSha256 ? &enabled.sha256
+                                                               : &enabled.md5;
     if (*selected) {
       return CredentialFailure<AlgorithmPolicy>(kPolicyInvalid);
     }
@@ -225,8 +218,8 @@ bool UsernameEqual(const std::vector<unsigned char>& left,
   return BytesEqual({left.data(), left.size()}, right);
 }
 
-std::size_t FindByte(std::span<const unsigned char> bytes,
-                     std::size_t begin, unsigned char value) noexcept {
+std::size_t FindByte(std::span<const unsigned char> bytes, std::size_t begin,
+                     unsigned char value) noexcept {
   for (std::size_t index = begin; index < bytes.size(); ++index) {
     if (bytes[index] == value) {
       return index;
@@ -254,10 +247,10 @@ bool SplitRecordLine(
   }
 
   (*fields)[0] = line.first(separators[0]);
-  (*fields)[1] = line.subspan(separators[0] + 1U,
-                              separators[1] - separators[0] - 1U);
-  (*fields)[2] = line.subspan(separators[1] + 1U,
-                              separators[2] - separators[1] - 1U);
+  (*fields)[1] =
+      line.subspan(separators[0] + 1U, separators[1] - separators[0] - 1U);
+  (*fields)[2] =
+      line.subspan(separators[1] + 1U, separators[2] - separators[1] - 1U);
   (*fields)[3] = line.subspan(separators[2] + 1U);
   return true;
 }
@@ -269,8 +262,7 @@ common::Result<RtspDigestAlgorithm> ParseCredentialAlgorithm(
         RtspDigestAlgorithm::kSha256);
   }
   if (BytesEqual(value, "md5")) {
-    return common::Result<RtspDigestAlgorithm>::Ok(
-        RtspDigestAlgorithm::kMd5);
+    return common::Result<RtspDigestAlgorithm>::Ok(RtspDigestAlgorithm::kMd5);
   }
   return CredentialFailure<RtspDigestAlgorithm>(kFormatInvalid);
 }
@@ -342,8 +334,8 @@ common::Result<CredentialState> ParseCredentialBytes(
       return CredentialFailure<CredentialState>(kFormatInvalid);
     }
 
-    const std::string_view hex(
-        reinterpret_cast<const char*>(fields[3].data()), fields[3].size());
+    const std::string_view hex(reinterpret_cast<const char*>(fields[3].data()),
+                               fields[3].size());
     auto decoded = DecodeRtspDigestHex(hex, digest_size);
     if (!decoded.ok()) {
       return CredentialFailure<CredentialState>(kFormatInvalid);
@@ -393,9 +385,8 @@ common::Result<LoadedCredentialState> LoadCredentialFile(
       (status.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
     return CredentialFailure<LoadedCredentialState>(kPermissionsInvalid);
   }
-  if (status.st_size <= 0 ||
-      static_cast<unsigned long long>(status.st_size) >
-          kMaximumCredentialFileBytes) {
+  if (status.st_size <= 0 || static_cast<unsigned long long>(status.st_size) >
+                                 kMaximumCredentialFileBytes) {
     return CredentialFailure<LoadedCredentialState>(kSizeInvalid);
   }
 
@@ -408,8 +399,8 @@ common::Result<LoadedCredentialState> LoadCredentialFile(
 
   std::size_t offset = 0U;
   while (offset < file_bytes.size()) {
-    const ssize_t count =
-        ::read(fd.get(), file_bytes.data() + offset, file_bytes.size() - offset);
+    const ssize_t count = ::read(fd.get(), file_bytes.data() + offset,
+                                 file_bytes.size() - offset);
     if (count < 0 && errno == EINTR) {
       continue;
     }
@@ -471,8 +462,7 @@ int OpenAtReadOnlyNoFollow(int parent_fd, const char* name) noexcept {
 common::Result<LoadedCredentialState> LoadCredentialAt(
     int parent_fd, const std::string& target_name, std::string_view realm,
     const AlgorithmPolicy& policy, bool allow_missing) {
-  const int opened_fd =
-      OpenAtReadOnlyNoFollow(parent_fd, target_name.c_str());
+  const int opened_fd = OpenAtReadOnlyNoFollow(parent_fd, target_name.c_str());
   if (opened_fd < 0) {
     if (allow_missing && errno == ENOENT) {
       return common::Result<LoadedCredentialState>::Ok({});
@@ -512,8 +502,7 @@ common::ZeroizeAudit CleanseDummies(
 
 void AccumulateAudit(common::ZeroizeAudit addition,
                      common::ZeroizeAudit* total) noexcept {
-  if (addition.count >
-      std::numeric_limits<std::size_t>::max() - total->count) {
+  if (addition.count > std::numeric_limits<std::size_t>::max() - total->count) {
     total->count = std::numeric_limits<std::size_t>::max();
   } else {
     total->count += addition.count;
@@ -555,7 +544,8 @@ common::Result<common::SecureBytes> SerializeCredentials(
   std::size_t total_size = kFileHeader.size() + 1U;
   for (const auto& record : state.records) {
     const std::string_view algorithm = RtspDigestConfigName(record.algorithm);
-    if (algorithm.empty() || record.ha1.size() != RtspDigestSize(record.algorithm) ||
+    if (algorithm.empty() ||
+        record.ha1.size() != RtspDigestSize(record.algorithm) ||
         !CheckedAdd(record.username.size(), &total_size) ||
         !CheckedAdd(1U, &total_size) ||
         !CheckedAdd(realm.size(), &total_size) ||
@@ -579,7 +569,7 @@ common::Result<common::SecureBytes> SerializeCredentials(
 
   std::size_t offset = 0U;
   const auto append = [&serialized, &offset](const unsigned char* data,
-                                              std::size_t size) {
+                                             std::size_t size) {
     if (size != 0U) {
       std::memcpy(serialized.data() + offset, data, size);
       offset += size;
@@ -599,8 +589,8 @@ common::Result<common::SecureBytes> SerializeCredentials(
     append(&colon, 1U);
     append_string(RtspDigestConfigName(record.algorithm));
     append(&colon, 1U);
-    auto encoded = EncodeRtspDigestLowerHex(
-        {record.ha1.data(), record.ha1.size()});
+    auto encoded =
+        EncodeRtspDigestLowerHex({record.ha1.data(), record.ha1.size()});
     if (!encoded.ok()) {
       serialized.clear();
       return CredentialFailure<common::SecureBytes>(kOperationFailed);
@@ -710,8 +700,8 @@ struct TemporaryFile {
 
 common::Result<std::string> GenerateTemporaryName() {
   std::array<unsigned char, kTemporaryRandomBytes> random_bytes{};
-  if (RAND_bytes(random_bytes.data(),
-                 static_cast<int>(random_bytes.size())) != 1) {
+  if (RAND_bytes(random_bytes.data(), static_cast<int>(random_bytes.size())) !=
+      1) {
     return CredentialFailure<std::string>(kOperationFailed);
   }
 
@@ -726,8 +716,8 @@ common::Result<std::string> GenerateTemporaryName() {
 }
 
 common::Result<TemporaryFile> CreateTemporaryFileAt(int parent_fd) {
-  for (std::size_t attempt = 0U;
-       attempt < kMaximumTemporaryCreateAttempts; ++attempt) {
+  for (std::size_t attempt = 0U; attempt < kMaximumTemporaryCreateAttempts;
+       ++attempt) {
     auto generated_name = GenerateTemporaryName();
     if (!generated_name.ok()) {
       return CredentialFailure<TemporaryFile>(generated_name.error().message);
@@ -735,9 +725,9 @@ common::Result<TemporaryFile> CreateTemporaryFileAt(int parent_fd) {
     std::string name = std::move(generated_name).value();
 
     while (true) {
-      const int fd = ::openat(
-          parent_fd, name.c_str(),
-          O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+      const int fd =
+          ::openat(parent_fd, name.c_str(),
+                   O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
       if (fd >= 0) {
         return common::Result<TemporaryFile>::Ok(
             TemporaryFile(parent_fd, std::move(name), fd));
@@ -813,9 +803,9 @@ std::size_t CountUsers(const CredentialState& state) noexcept {
   return count;
 }
 
-common::Result<void> UpsertCredential(
-    CredentialState* state, const RtspDigestProvisionRequest& request,
-    common::SecureBytes ha1) {
+common::Result<void> UpsertCredential(CredentialState* state,
+                                      const RtspDigestProvisionRequest& request,
+                                      common::SecureBytes ha1) {
   for (auto& record : state->records) {
     if (record.algorithm == request.algorithm &&
         UsernameEqual(record.username, request.username)) {
@@ -824,11 +814,11 @@ common::Result<void> UpsertCredential(
     }
   }
 
-  const bool known_user = std::any_of(
-      state->records.begin(), state->records.end(),
-      [&request](const CredentialRecord& record) {
-        return UsernameEqual(record.username, request.username);
-      });
+  const bool known_user =
+      std::any_of(state->records.begin(), state->records.end(),
+                  [&request](const CredentialRecord& record) {
+                    return UsernameEqual(record.username, request.username);
+                  });
   if (state->records.size() == kMaximumRecords ||
       (!known_user && CountUsers(*state) == kMaximumUsers)) {
     return CredentialFailureVoid(kProvisionInvalid);
@@ -858,7 +848,9 @@ RtspDigestCredentialStore::RtspDigestCredentialStore(
     std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
-RtspDigestCredentialStore::~RtspDigestCredentialStore() { Clear(); }
+RtspDigestCredentialStore::~RtspDigestCredentialStore() {
+  Clear();
+}
 
 common::Result<std::unique_ptr<RtspDigestCredentialStore>>
 RtspDigestCredentialStore::Create(RtspDigestCredentialPolicy policy) {
@@ -923,9 +915,8 @@ common::Result<void> RtspDigestCredentialStore::Reload(
   }
 }
 
-common::Result<RtspDigestCredentialLookup>
-RtspDigestCredentialStore::Lookup(std::string_view username,
-                                  RtspDigestAlgorithm algorithm) const {
+common::Result<RtspDigestCredentialLookup> RtspDigestCredentialStore::Lookup(
+    std::string_view username, RtspDigestAlgorithm algorithm) const {
   if (!IsKnownAlgorithm(algorithm) || !IsEnabled(impl_->policy, algorithm)) {
     return CredentialFailure<RtspDigestCredentialLookup>(kLookupInvalid);
   }

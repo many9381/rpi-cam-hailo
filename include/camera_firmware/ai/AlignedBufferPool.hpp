@@ -33,7 +33,8 @@ struct PageAlignedBuffer {
 // acquire on the runner thread while completions release from the hailort
 // callback thread. Reused buffers are NOT zeroed -- same contract as the
 // fresh posix_memalign allocations they replace.
-class AlignedBufferPool : public std::enable_shared_from_this<AlignedBufferPool> {
+class AlignedBufferPool
+    : public std::enable_shared_from_this<AlignedBufferPool> {
  public:
   explicit AlignedBufferPool(std::size_t maximum_retained)
       : maximum_retained_(maximum_retained) {}

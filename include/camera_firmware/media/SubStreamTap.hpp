@@ -50,7 +50,8 @@ class SubStreamTap {
 
   // Blocks up to timeout for a frame. Returns nullopt on timeout, on
   // SetActive(false), or on Close().
-  [[nodiscard]] std::optional<FrameLease> WaitNext(std::chrono::milliseconds timeout);
+  [[nodiscard]] std::optional<FrameLease> WaitNext(
+      std::chrono::milliseconds timeout);
 
   // Arm one-shot demand for the next frame.
   void RequestNext() noexcept;

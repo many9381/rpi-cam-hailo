@@ -75,22 +75,16 @@ struct ParsedSetupRequest {
 [[nodiscard]] common::Result<common::SecureBytes> ParseSessionCookieHeaders(
     std::span<const std::string> cookie_headers);
 [[nodiscard]] common::Result<ParsedLoginRequest> ParseLoginJson(
-    std::string_view body,
-    std::string_view content_type);
+    std::string_view body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedLoginRequest> ParseLoginJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<common::SecureBytes> ParseReauthenticateJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedSetupRequest> ParseSetupJson(
-    std::string_view body,
-    std::string_view content_type);
+    std::string_view body, std::string_view content_type);
 [[nodiscard]] common::Result<ParsedSetupRequest> ParseSetupJson(
-    common::SecureBytes body,
-    std::string_view content_type);
+    common::SecureBytes body, std::string_view content_type);
 [[nodiscard]] common::Result<void> ValidateEmptyJsonObject(
-    std::string_view body,
-    std::string_view content_type);
+    std::string_view body, std::string_view content_type);
 
 }  // namespace camera_firmware::service

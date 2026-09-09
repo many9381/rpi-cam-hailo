@@ -5,16 +5,13 @@ namespace camera_firmware::ai {
 AiRuntimeController::AiRuntimeController(const config::AppConfig& config,
                                          AiRuntime& runtime,
                                          AiFramePump& frame_pump)
-    : config_(config),
-      runtime_(runtime),
-      frame_pump_(frame_pump) {}
+    : config_(config), runtime_(runtime), frame_pump_(frame_pump) {}
 
 common::Result<void> AiRuntimeController::Restart() {
   std::lock_guard lock(mutex_);
   if (shutting_down_) {
     return common::Result<void>::Err(
-        {"E_AI_CONTROL_SHUTTING_DOWN",
-         "AI runtime control is shutting down"});
+        {"E_AI_CONTROL_SHUTTING_DOWN", "AI runtime control is shutting down"});
   }
   return RestartLocked();
 }

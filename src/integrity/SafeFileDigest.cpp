@@ -103,7 +103,8 @@ int OpenNoFollow(const std::filesystem::path& path, int flags) noexcept {
   unsigned int retries = 0U;
   while (true) {
     const int descriptor = ::open(path.c_str(), flags);
-    if (descriptor >= 0 || errno != EINTR || retries++ == kMaximumEintrRetries) {
+    if (descriptor >= 0 || errno != EINTR ||
+        retries++ == kMaximumEintrRetries) {
       return descriptor;
     }
   }
@@ -121,7 +122,8 @@ bool FstatNoIntr(int descriptor, struct stat* status) noexcept {
   }
 }
 
-bool SameSnapshot(const struct stat& before, const struct stat& after) noexcept {
+bool SameSnapshot(const struct stat& before,
+                  const struct stat& after) noexcept {
   return before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
          before.st_size == after.st_size &&
          before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
@@ -168,13 +170,15 @@ common::Result<Sha256Digest> DigestRegularFileImpl(
   }
 
   EvpMdContext context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
+  if (!context ||
+      EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
     return common::Result<Sha256Digest>::Err(CryptoError());
   }
 
   unsigned int eintr_retries = 0U;
   while (true) {
-    const ssize_t count = ::read(descriptor.get(), buffer.data(), buffer.size());
+    const ssize_t count =
+        ::read(descriptor.get(), buffer.data(), buffer.size());
     if (count > 0) {
       eintr_retries = 0U;
       if (EVP_DigestUpdate(context.get(), buffer.data(),
@@ -207,8 +211,7 @@ common::Result<Sha256Digest> DigestRegularFileImpl(
     return common::Result<Sha256Digest>::Err(FileChangedError());
   }
 
-  UniqueFd path_descriptor(
-      OpenNoFollow(path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
+  UniqueFd path_descriptor(OpenNoFollow(path, O_PATH | O_CLOEXEC | O_NOFOLLOW));
   if (path_descriptor.get() < 0) {
     return common::Result<Sha256Digest>::Err(FileChangedError());
   }

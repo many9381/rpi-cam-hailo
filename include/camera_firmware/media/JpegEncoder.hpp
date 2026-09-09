@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "camera_firmware/common/Result.hpp"
 #include <string>
+#include "camera_firmware/common/Result.hpp"
 
 #include "camera_firmware/media/FrameLease.hpp"
 
@@ -21,8 +21,6 @@ struct JpegImage {
 };
 
 [[nodiscard]] common::Result<JpegImage> EncodeNv12Jpeg(
-    const FrameLease& frame,
-    unsigned int maximum_width,
-    unsigned int quality);
+    const FrameLease& frame, unsigned int maximum_width, unsigned int quality);
 
 }  // namespace camera_firmware::media

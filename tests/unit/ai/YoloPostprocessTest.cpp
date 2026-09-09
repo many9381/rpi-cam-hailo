@@ -14,12 +14,8 @@ TEST(YoloPostprocessTest, ParsesHailoNmsByClassDetections) {
   buffer.insert(buffer.end(), {0.30F, 0.40F, 0.70F, 0.80F, 0.85F});
   buffer.insert(buffer.end(), {0.10F, 0.10F, 0.20F, 0.20F, 0.30F});
 
-  const auto detections =
-      camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                             buffer.size(),
-                                             3,
-                                             2,
-                                             0.50F);
+  const auto detections = camera_firmware::ai::ParseYoloHailoNms(
+      buffer.data(), buffer.size(), 3, 2, 0.50F);
 
   ASSERT_EQ(detections.size(), 2U);
   EXPECT_EQ(detections[0].class_id, 0);
@@ -50,12 +46,8 @@ TEST(YoloPostprocessTest, ParsesCompactHailoNmsByClassDetections) {
   }
   buffer.resize(kProductionCapacityFloats, 123.25F);
 
-  const auto detections =
-      camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                             buffer.size(),
-                                             80,
-                                             100,
-                                             0.50F);
+  const auto detections = camera_firmware::ai::ParseYoloHailoNms(
+      buffer.data(), buffer.size(), 80, 100, 0.50F);
 
   ASSERT_EQ(detections.size(), 2U);
   EXPECT_EQ(detections[0].class_id, 1);
@@ -68,20 +60,13 @@ TEST(YoloPostprocessTest, ParsesCompactHailoNmsByClassDetections) {
 
 TEST(YoloPostprocessTest, RejectsInvalidHailoNmsDetectionFields) {
   const std::vector<float> buffer = {
-      5.0F,
-      0.10F, 0.20F, 0.50F, 0.60F, 0.90F,
-      0.10F, 0.20F, 0.50F, 0.60F, 1.10F,
-      0.10F, -0.20F, 0.50F, 0.60F, 0.80F,
-      0.10F, 0.20F, 0.50F, 1.10F, 0.80F,
-      0.50F, 0.20F, 0.50F, 0.60F, 0.80F,
+      5.0F,  0.10F, 0.20F, 0.50F,  0.60F, 0.90F, 0.10F, 0.20F, 0.50F,
+      0.60F, 1.10F, 0.10F, -0.20F, 0.50F, 0.60F, 0.80F, 0.10F, 0.20F,
+      0.50F, 1.10F, 0.80F, 0.50F,  0.20F, 0.50F, 0.60F, 0.80F,
   };
 
-  const auto detections =
-      camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                             buffer.size(),
-                                             1,
-                                             5,
-                                             0.50F);
+  const auto detections = camera_firmware::ai::ParseYoloHailoNms(
+      buffer.data(), buffer.size(), 1, 5, 0.50F);
 
   ASSERT_EQ(detections.size(), 1U);
   EXPECT_FLOAT_EQ(detections[0].confidence, 0.90F);
@@ -92,22 +77,15 @@ TEST(YoloPostprocessTest, RejectsInvalidHailoNmsDetectionFields) {
 }
 
 TEST(YoloPostprocessTest, RejectsMalformedHailoNmsCounts) {
-  for (const float count : {std::numeric_limits<float>::quiet_NaN(),
-                            -1.0F,
-                            1.50F,
-                            3.0F}) {
+  for (const float count :
+       {std::numeric_limits<float>::quiet_NaN(), -1.0F, 1.50F, 3.0F}) {
     const std::vector<float> buffer = {
-        count,
-        0.10F, 0.20F, 0.50F, 0.60F, 0.90F,
-        0.10F, 0.20F, 0.50F, 0.60F, 0.80F,
-        0.10F, 0.20F, 0.50F, 0.60F, 0.70F,
+        count, 0.10F, 0.20F, 0.50F, 0.60F, 0.90F, 0.10F, 0.20F,
+        0.50F, 0.60F, 0.80F, 0.10F, 0.20F, 0.50F, 0.60F, 0.70F,
     };
 
-    EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                                       buffer.size(),
-                                                       1,
-                                                       2,
-                                                       0.50F)
+    EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(
+                    buffer.data(), buffer.size(), 1, 2, 0.50F)
                     .empty())
         << "count=" << count;
   }
@@ -118,31 +96,21 @@ TEST(YoloPostprocessTest, ReturnsEmptyForNullOrTruncatedBuffers) {
                   .empty());
 
   const std::vector<float> truncated = {1.0F, 0.1F, 0.2F};
-  EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(truncated.data(),
-                                                    truncated.size(),
-                                                    1,
-                                                    1,
-                                                    0.4F)
+  EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(
+                  truncated.data(), truncated.size(), 1, 1, 0.4F)
                   .empty());
 }
 
 TEST(YoloPostprocessTest, SkipsNonFiniteOrInvertedBoxes) {
   std::vector<float> buffer;
   buffer.push_back(3.0F);
-  buffer.insert(buffer.end(),
-                {std::numeric_limits<float>::quiet_NaN(),
-                 0.20F,
-                 0.50F,
-                 0.60F,
-                 0.90F});
+  buffer.insert(buffer.end(), {std::numeric_limits<float>::quiet_NaN(), 0.20F,
+                               0.50F, 0.60F, 0.90F});
   buffer.insert(buffer.end(), {0.30F, 0.80F, 0.70F, 0.40F, 0.85F});
   buffer.insert(buffer.end(), {0.30F, 0.40F, 0.30F, 0.80F, 0.95F});
 
   EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                                    buffer.size(),
-                                                    1,
-                                                    3,
-                                                    0.50F)
+                                                     buffer.size(), 1, 3, 0.50F)
                   .empty());
 }
 
@@ -153,10 +121,7 @@ TEST(YoloPostprocessTest, RejectsCountsAboveConfiguredMaximum) {
   buffer.insert(buffer.end(), {0.20F, 0.30F, 0.60F, 0.70F, 0.80F});
 
   EXPECT_TRUE(camera_firmware::ai::ParseYoloHailoNms(buffer.data(),
-                                                    buffer.size(),
-                                                    1,
-                                                    2,
-                                                    0.50F)
+                                                     buffer.size(), 1, 2, 0.50F)
                   .empty());
 }
 
@@ -180,11 +145,8 @@ TEST(YoloPostprocessTest, ParsesYoloPoseRowsWithCoco17Keypoints) {
   row[right_shoulder + 1U] = 0.53F;
   row[right_shoulder + 2U] = 0.20F;
 
-  const auto detections =
-      camera_firmware::ai::ParseYoloPoseRows(row.data(),
-                                             row.size(),
-                                             0.50F,
-                                             0.50F);
+  const auto detections = camera_firmware::ai::ParseYoloPoseRows(
+      row.data(), row.size(), 0.50F, 0.50F);
 
   ASSERT_EQ(detections.size(), 1U);
   EXPECT_EQ(detections[0].class_id, 0);
@@ -207,10 +169,8 @@ TEST(YoloPostprocessTest, ParsesYoloPoseRowsWithCoco17Keypoints) {
 
 TEST(YoloPostprocessTest, RejectsMalformedYoloPoseRows) {
   const std::vector<float> truncated = {0.1F, 0.2F, 0.3F};
-  EXPECT_TRUE(camera_firmware::ai::ParseYoloPoseRows(truncated.data(),
-                                                    truncated.size(),
-                                                    0.50F,
-                                                    0.50F)
+  EXPECT_TRUE(camera_firmware::ai::ParseYoloPoseRows(
+                  truncated.data(), truncated.size(), 0.50F, 0.50F)
                   .empty());
 
   constexpr std::size_t kPoseRowFloats = 5U + (17U * 3U);
@@ -220,9 +180,7 @@ TEST(YoloPostprocessTest, RejectsMalformedYoloPoseRows) {
   inverted[2] = 0.10F;
   inverted[3] = 0.80F;
   inverted[4] = 0.92F;
-  EXPECT_TRUE(camera_firmware::ai::ParseYoloPoseRows(inverted.data(),
-                                                    inverted.size(),
-                                                    0.50F,
-                                                    0.50F)
+  EXPECT_TRUE(camera_firmware::ai::ParseYoloPoseRows(
+                  inverted.data(), inverted.size(), 0.50F, 0.50F)
                   .empty());
 }
