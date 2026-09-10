@@ -30,7 +30,7 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
-                                                       bool rollback);
+                                                      bool rollback);
 
 namespace camera_firmware::security {
 namespace {
@@ -101,16 +101,13 @@ config::AppConfig BootstrapConfig(const std::filesystem::path& state,
   return config;
 }
 
-BootstrapRequest Request(std::string username,
-                         std::string_view password,
-                         std::string confirmed_peer,
-                         std::string actual_peer) {
+BootstrapRequest Request(std::string username, std::string_view password,
+                         std::string confirmed_peer, std::string actual_peer) {
   return {std::move(username), Bytes(password), std::move(confirmed_peer),
           std::move(actual_peer)};
 }
 
-BootstrapRequest RequestWithIps(std::string username,
-                                std::string_view password,
+BootstrapRequest RequestWithIps(std::string username, std::string_view password,
                                 std::string confirmed_peer,
                                 std::string actual_peer,
                                 std::vector<std::string> management_ips) {
@@ -155,8 +152,8 @@ void ExecuteDatabaseSql(const std::filesystem::path& database_path,
     throw std::runtime_error("failed to open test database");
   }
   char* error_message = nullptr;
-  const int status = ::sqlite3_exec(database, sql, nullptr, nullptr,
-                                    &error_message);
+  const int status =
+      ::sqlite3_exec(database, sql, nullptr, nullptr, &error_message);
   std::string message;
   if (error_message != nullptr) {
     message = error_message;
@@ -180,7 +177,8 @@ std::string QueryText(const std::filesystem::path& database_path,
     throw std::runtime_error("failed to open test database");
   }
   sqlite3_stmt* statement = nullptr;
-  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK ||
+  if (::sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) !=
+          SQLITE_OK ||
       ::sqlite3_step(statement) != SQLITE_ROW) {
     if (statement != nullptr) {
       (void)::sqlite3_finalize(statement);
@@ -217,18 +215,18 @@ PasswordRecord LoadPasswordRecord(const std::filesystem::path& database_path) {
     throw std::runtime_error("failed to load password record");
   }
   PasswordRecord record;
-  record.algorithm = reinterpret_cast<const char*>(
-      ::sqlite3_column_text(statement, 0));
+  record.algorithm =
+      reinterpret_cast<const char*>(::sqlite3_column_text(statement, 0));
   record.iterations =
       static_cast<std::uint32_t>(::sqlite3_column_int64(statement, 1));
-  const auto* salt = static_cast<const unsigned char*>(
-      ::sqlite3_column_blob(statement, 2));
-  const auto salt_size = static_cast<std::size_t>(
-      ::sqlite3_column_bytes(statement, 2));
-  const auto* derived = static_cast<const unsigned char*>(
-      ::sqlite3_column_blob(statement, 3));
-  const auto derived_size = static_cast<std::size_t>(
-      ::sqlite3_column_bytes(statement, 3));
+  const auto* salt =
+      static_cast<const unsigned char*>(::sqlite3_column_blob(statement, 2));
+  const auto salt_size =
+      static_cast<std::size_t>(::sqlite3_column_bytes(statement, 2));
+  const auto* derived =
+      static_cast<const unsigned char*>(::sqlite3_column_blob(statement, 3));
+  const auto derived_size =
+      static_cast<std::size_t>(::sqlite3_column_bytes(statement, 3));
   record.salt.assign(salt, salt_size);
   record.derived.assign(derived, derived_size);
   (void)::sqlite3_finalize(statement);
@@ -261,8 +259,8 @@ TEST(BootstrapServiceTest,
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto initialized = service.Initialize(Request(
-      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto initialized = service.Initialize(
+      Request("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
   EXPECT_EQ(initialized.value().state, DeviceState::kOperational);
@@ -291,13 +289,13 @@ TEST(BootstrapServiceTest,
                                  {RtspDigestAlgorithm::kSha256}});
   ASSERT_TRUE(credential_store.ok()) << credential_store.error().message;
   ASSERT_TRUE(credential_store.value()->Reload(credential).ok());
-  auto lookup = credential_store.value()->Lookup(
-      "Operator.One", RtspDigestAlgorithm::kSha256);
+  auto lookup = credential_store.value()->Lookup("Operator.One",
+                                                 RtspDigestAlgorithm::kSha256);
   auto rtsp_password = Bytes("NorthStar!9");
-  auto expected = rtsp::ComputeRtspDigestHa1(
-      RtspDigestAlgorithm::kSha256, "Operator.One",
-      config.secure_rtsp.client_auth.realm,
-      {rtsp_password.data(), rtsp_password.size()});
+  auto expected =
+      rtsp::ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, "Operator.One",
+                                 config.secure_rtsp.client_auth.realm,
+                                 {rtsp_password.data(), rtsp_password.size()});
   ASSERT_TRUE(lookup.ok()) << lookup.error().message;
   ASSERT_TRUE(expected.ok()) << expected.error().message;
   EXPECT_TRUE(lookup.value().matched);
@@ -322,8 +320,7 @@ TEST(BootstrapServiceTest, NormalizesEquivalentIpv6ToExactStoredPeer) {
                            BuildReservedIdentities(config));
 
   auto initialized = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "2001:0db8:0:0:0:0:0:1",
-      "2001:db8::1"));
+      "operator.one", "NorthStar!9", "2001:0db8:0:0:0:0:0:1", "2001:db8::1"));
 
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
   EXPECT_EQ(QueryText(store.value()->database_path(),
@@ -346,18 +343,16 @@ TEST(BootstrapServiceTest, ReplacesStaleCredentialWithOnlyNewSha256Admin) {
       RtspDigestAlgorithm::kMd5, true};
   auto stale_password = Bytes("stale-password");
   ASSERT_TRUE(rtsp::ProvisionRtspDigestCredential(
-                  stale_sha,
-                  {stale_password.data(), stale_password.size()})
+                  stale_sha, {stale_password.data(), stale_password.size()})
                   .ok());
   ASSERT_TRUE(rtsp::ProvisionRtspDigestCredential(
-                  stale_md5,
-                  {stale_password.data(), stale_password.size()})
+                  stale_md5, {stale_password.data(), stale_password.size()})
                   .ok());
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto initialized = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto initialized = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
   const std::string installed = ReadFile(credential);
@@ -386,8 +381,8 @@ TEST(BootstrapServiceTest, RejectsIpv4Ipv6MismatchAndNonAddressPeerText) {
   }};
 
   for (const auto& [confirmed, actual] : peers) {
-    auto rejected = service.Initialize(Request(
-        "operator.one", "NorthStar!9", confirmed, actual));
+    auto rejected = service.Initialize(
+        Request("operator.one", "NorthStar!9", confirmed, actual));
     ASSERT_FALSE(rejected.ok()) << confirmed;
     EXPECT_EQ(rejected.error().code, "E_BOOTSTRAP_PEER") << confirmed;
     EXPECT_EQ(rejected.error().message.find(confirmed), std::string::npos);
@@ -405,10 +400,10 @@ TEST(BootstrapServiceTest, AppliesReservedIdentityAndPasswordPolicy) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto reserved = service.Initialize(Request(
-      "imx708-main", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
-  auto weak = service.Initialize(Request(
-      "operator.one", "SecretAAA!9", "192.0.2.10", "192.0.2.10"));
+  auto reserved = service.Initialize(
+      Request("imx708-main", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto weak = service.Initialize(
+      Request("operator.one", "SecretAAA!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(reserved.ok());
   ASSERT_FALSE(weak.ok());
@@ -440,10 +435,10 @@ TEST(BootstrapServiceTest, ConcurrentInitializationHasOneWinner) {
     threads[index] = std::thread([&, index] {
       start.arrive_and_wait();
       auto& service = index == 0 ? first_service : second_service;
-      auto result = service.Initialize(Request(
-          index == 0 ? "operator.one" : "operator.two",
-          index == 0 ? "NorthStar!9" : "SouthMoon!8", "192.0.2.10",
-          "192.0.2.10"));
+      auto result = service.Initialize(
+          Request(index == 0 ? "operator.one" : "operator.two",
+                  index == 0 ? "NorthStar!9" : "SouthMoon!8", "192.0.2.10",
+                  "192.0.2.10"));
       succeeded[index] = result.ok();
       if (!result.ok()) {
         errors[index] = result.error().code;
@@ -483,8 +478,8 @@ TEST(BootstrapServiceTest, InstallerFailureLeavesSqliteAuthoritativeDefault) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto failed = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto failed = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(failed.ok());
   EXPECT_EQ(failed.error().code, "E_BOOTSTRAP_CREDENTIAL");
@@ -511,8 +506,8 @@ TEST(BootstrapServiceTest,
                            BuildReservedIdentities(config));
   common::Result<BootstrapResult> failed = [&] {
     ScopedTransactionFailures failures(true, false);
-    return service.Initialize(Request(
-        "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+    return service.Initialize(
+        Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
   }();
 
   ASSERT_FALSE(failed.ok());
@@ -531,8 +526,8 @@ TEST(BootstrapServiceTest,
   EXPECT_NE(ReadFile(credential).find("operator.one:rpi-camera:sha-256:"),
             std::string::npos);
 
-  auto retried = service.Initialize(Request(
-      "operator.two", "SouthMoon!8", "192.0.2.10", "192.0.2.10"));
+  auto retried = service.Initialize(
+      Request("operator.two", "SouthMoon!8", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_TRUE(retried.ok()) << retried.error().message;
   EXPECT_EQ(store.value()->State().value(), DeviceState::kOperational);
@@ -557,8 +552,8 @@ TEST(BootstrapServiceTest,
                            BuildReservedIdentities(config));
   common::Result<BootstrapResult> failed = [&] {
     ScopedTransactionFailures failures(true, true);
-    return service.Initialize(Request(
-        "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+    return service.Initialize(
+        Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
   }();
 
   ASSERT_FALSE(failed.ok());
@@ -576,8 +571,8 @@ TEST(BootstrapServiceTest,
             "0");
   BootstrapService recovered_service(*recovered_store.value(), config,
                                      BuildReservedIdentities(config));
-  auto retried = recovered_service.Initialize(Request(
-      "operator.two", "SouthMoon!8", "192.0.2.10", "192.0.2.10"));
+  auto retried = recovered_service.Initialize(
+      Request("operator.two", "SouthMoon!8", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_TRUE(retried.ok()) << retried.error().message;
   EXPECT_EQ(recovered_store.value()->State().value(),
@@ -599,8 +594,8 @@ TEST(BootstrapServiceTest, RejectsCredentialPathOutsideActualStoreBoundary) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto result = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto result = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_BOOTSTRAP_CREDENTIAL");
@@ -617,8 +612,8 @@ TEST(BootstrapServiceTest, RejectsCredentialDestinationAtSecurityDatabase) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto result = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto result = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_BOOTSTRAP_CREDENTIAL");
@@ -640,8 +635,8 @@ TEST(BootstrapServiceTest, RejectsSymlinkedCredentialParentBeforeReplacement) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto result = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto result = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_BOOTSTRAP_CREDENTIAL");
@@ -660,8 +655,8 @@ TEST(BootstrapServiceTest, RequiresProtectedNestedCredentialDirectories) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto result = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto result = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_BOOTSTRAP_CREDENTIAL");
@@ -680,8 +675,8 @@ TEST(BootstrapServiceTest, InstallsThroughProtectedNestedDirectory) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto result = service.Initialize(Request(
-      "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto result = service.Initialize(
+      Request("operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
 
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(FileMode(nested / "rtsp.credentials"), 0600);
@@ -717,9 +712,9 @@ TEST(BootstrapServiceTest, FirstBootCreatesInitialViewerAccount) {
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
             "1");
-  EXPECT_EQ(QueryText(store.value()->database_path(),
-                      "SELECT role FROM users;"),
-            "viewer");
+  EXPECT_EQ(
+      QueryText(store.value()->database_path(), "SELECT role FROM users;"),
+      "viewer");
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT CAST(enabled AS TEXT) FROM users;"),
             "1");
@@ -734,9 +729,9 @@ TEST(BootstrapServiceTest, FirstBootCreatesInitialViewerAccount) {
       ValidateInitialUsername(credential.value().username, reserved).ok());
 
   // The generated password must satisfy the product's own policy.
-  EXPECT_TRUE(ValidatePassword(credential.value().username,
-                               credential.value().password)
-                  .ok());
+  EXPECT_TRUE(
+      ValidatePassword(credential.value().username, credential.value().password)
+          .ok());
 
   // The stored hash must verify against the plaintext handed back, otherwise
   // the account the operator is shown is not the account that exists.
@@ -794,8 +789,8 @@ TEST(BootstrapServiceTest, SetupDeletesTheInitialAccountAtomically) {
                            BuildReservedIdentities(config));
   ASSERT_TRUE(service.EnsureInitialAccount().ok());
 
-  auto initialized = service.Initialize(Request(
-      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
+  auto initialized = service.Initialize(
+      Request("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10"));
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
 
   EXPECT_EQ(QueryText(store.value()->database_path(),
@@ -827,16 +822,16 @@ TEST(BootstrapServiceTest, FailedSetupLeavesTheInitialAccountUsable) {
   ASSERT_TRUE(credential.ok()) << credential.error().message;
 
   // "short" fails the password policy, so setup must abort before any write.
-  auto rejected = service.Initialize(Request(
-      "Operator.One", "short", "192.0.2.10", "192.0.2.10"));
+  auto rejected = service.Initialize(
+      Request("Operator.One", "short", "192.0.2.10", "192.0.2.10"));
   EXPECT_FALSE(rejected.ok());
 
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
             "1");
-  EXPECT_EQ(QueryText(store.value()->database_path(),
-                      "SELECT role FROM users;"),
-            "viewer");
+  EXPECT_EQ(
+      QueryText(store.value()->database_path(), "SELECT role FROM users;"),
+      "viewer");
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT state FROM device_state;"),
             "default");
@@ -867,9 +862,9 @@ TEST(BootstrapServiceTest, StoreFailureDuringSetupKeepsTheInitialAccount) {
   // wrong as a grant that was never recorded.
   common::Result<BootstrapResult> failed = [&] {
     ScopedTransactionFailures failures(true, false);
-    return service.Initialize(RequestWithIps(
-        "operator.one", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-        {"198.51.100.7"}));
+    return service.Initialize(RequestWithIps("operator.one", "NorthStar!9",
+                                             "192.0.2.10", "192.0.2.10",
+                                             {"198.51.100.7"}));
   }();
 
   ASSERT_FALSE(failed.ok());
@@ -878,9 +873,9 @@ TEST(BootstrapServiceTest, StoreFailureDuringSetupKeepsTheInitialAccount) {
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM users;"),
             "1");
-  EXPECT_EQ(QueryText(store.value()->database_path(),
-                      "SELECT role FROM users;"),
-            "viewer");
+  EXPECT_EQ(
+      QueryText(store.value()->database_path(), "SELECT role FROM users;"),
+      "viewer");
   EXPECT_EQ(QueryText(store.value()->database_path(),
                       "SELECT CAST(COUNT(*) AS TEXT) FROM audit_events;"),
             "0");
@@ -900,9 +895,9 @@ TEST(BootstrapServiceTest, RegistersEverySubmittedManagementIpAtSetup) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto initialized = service.Initialize(RequestWithIps(
-      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-      {"198.51.100.7", "2001:0db8:0:0:0:0:0:2"}));
+  auto initialized = service.Initialize(
+      RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+                     {"198.51.100.7", "2001:0db8:0:0:0:0:0:2"}));
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
 
   // Order is the confirming peer first, then the submitted list in the order
@@ -929,9 +924,9 @@ TEST(BootstrapServiceTest, RegistersTheConfirmingPeerEvenWhenTheListOmitsIt) {
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
 
-  auto initialized = service.Initialize(RequestWithIps(
-      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-      {"198.51.100.7"}));
+  auto initialized = service.Initialize(
+      RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+                     {"198.51.100.7"}));
   ASSERT_TRUE(initialized.ok()) << initialized.error().message;
 
   EXPECT_EQ(QueryText(store.value()->database_path(),
@@ -987,16 +982,22 @@ TEST(BootstrapServiceTest, RejectsManagementIpsThatAreNotSingleHosts) {
   // The browser rejects all of these with a visible reason, but the browser is
   // a convenience. Nothing stops a caller posting the body directly.
   const std::vector<std::string> not_single_hosts = {
-      "198.51.100.0/24", "198.51.100.*", "198.51.100.1-198.51.100.9",
-      "0.0.0.0",         "::",           "any",
-      "",                "localhost",    "198.51.100.7 ",
+      "198.51.100.0/24",
+      "198.51.100.*",
+      "198.51.100.1-198.51.100.9",
+      "0.0.0.0",
+      "::",
+      "any",
+      "",
+      "localhost",
+      "198.51.100.7 ",
   };
   for (const auto& entry : not_single_hosts) {
     // A valid entry first, so the failure is proven to abort the whole
     // submission rather than to stop at the first element.
-    auto rejected = service.Initialize(RequestWithIps(
-        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-        {"198.51.100.7", entry}));
+    auto rejected = service.Initialize(
+        RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10",
+                       "192.0.2.10", {"198.51.100.7", entry}));
     ASSERT_FALSE(rejected.ok()) << entry;
     EXPECT_EQ(rejected.error().code, "E_MANAGEMENT_IP_INVALID") << entry;
 
@@ -1007,9 +1008,9 @@ TEST(BootstrapServiceTest, RejectsManagementIpsThatAreNotSingleHosts) {
                         "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
               "0")
         << entry;
-    EXPECT_EQ(QueryText(store.value()->database_path(),
-                        "SELECT role FROM users;"),
-              "viewer")
+    EXPECT_EQ(
+        QueryText(store.value()->database_path(), "SELECT role FROM users;"),
+        "viewer")
         << entry;
   }
 
@@ -1019,9 +1020,9 @@ TEST(BootstrapServiceTest, RejectsManagementIpsThatAreNotSingleHosts) {
   EXPECT_TRUE(verified.value());
 
   // And the rejections left setup runnable rather than poisoned.
-  auto accepted = service.Initialize(RequestWithIps(
-      "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-      {"198.51.100.7"}));
+  auto accepted = service.Initialize(
+      RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
+                     {"198.51.100.7"}));
   ASSERT_TRUE(accepted.ok()) << accepted.error().message;
 }
 
@@ -1104,9 +1105,9 @@ TEST(BootstrapServiceTest, BoundsRegisteredManagementIpsAtThePerRoleLimit) {
     // 32 distinct entries plus the confirming peer is 33 administrator rows,
     // one past what SecurityStore allows per role scope. The peer is never the
     // one dropped to make room.
-    auto rejected = service.Initialize(RequestWithIps(
-        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-        addresses(32U)));
+    auto rejected = service.Initialize(
+        RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10",
+                       "192.0.2.10", addresses(32U)));
     ASSERT_FALSE(rejected.ok());
     EXPECT_EQ(rejected.error().code, "E_MANAGEMENT_IP_LIMIT");
     EXPECT_EQ(store.value()->State().value(), DeviceState::kDefault);
@@ -1124,9 +1125,9 @@ TEST(BootstrapServiceTest, BoundsRegisteredManagementIpsAtThePerRoleLimit) {
     BootstrapService service(*store.value(), config,
                              BuildReservedIdentities(config));
 
-    auto accepted = service.Initialize(RequestWithIps(
-        "Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10",
-        addresses(31U)));
+    auto accepted = service.Initialize(
+        RequestWithIps("Operator.One", "NorthStar!9", "192.0.2.10",
+                       "192.0.2.10", addresses(31U)));
     ASSERT_TRUE(accepted.ok()) << accepted.error().message;
     EXPECT_EQ(QueryText(store.value()->database_path(),
                         "SELECT CAST(COUNT(*) AS TEXT) FROM management_ips;"),
@@ -1154,9 +1155,9 @@ TEST(BootstrapServiceTest, ReopensTheStoreWhileTheInitialAccountExists) {
 
   ASSERT_TRUE(reopened.ok()) << reopened.error().message;
   EXPECT_EQ(reopened.value()->State().value(), DeviceState::kDefault);
-  EXPECT_EQ(QueryText(reopened.value()->database_path(),
-                      "SELECT role FROM users;"),
-            "viewer");
+  EXPECT_EQ(
+      QueryText(reopened.value()->database_path(), "SELECT role FROM users;"),
+      "viewer");
 
   // And the next boot's replacement still works against the reopened store.
   auto config = BootstrapConfig(state, state / "rtsp.credentials");

@@ -24,10 +24,10 @@ common::SecureBytes Bytes(std::string_view value) {
   return bytes;
 }
 
-// A tiny, purpose-built JSON reader for tests/data/password-policy-vectors.json.
-// It understands exactly the shape that file uses (an object holding a
-// "vectors" array of flat string/bool objects) and nothing more; it is not a
-// general JSON parser.
+// A tiny, purpose-built JSON reader for
+// tests/data/password-policy-vectors.json. It understands exactly the shape
+// that file uses (an object holding a "vectors" array of flat string/bool
+// objects) and nothing more; it is not a general JSON parser.
 struct PasswordVector {
   std::string username;
   std::string password;
@@ -69,7 +69,8 @@ class MiniJsonReader {
     SkipWhitespace();
     Expect('}');
     if (!found_vectors) {
-      throw std::runtime_error("vector file is missing a top-level 'vectors' array");
+      throw std::runtime_error(
+          "vector file is missing a top-level 'vectors' array");
     }
     return vectors;
   }
@@ -101,8 +102,8 @@ class MiniJsonReader {
 
   void SkipWhitespace() {
     while (pos_ < text_.size() &&
-           (text_[pos_] == ' ' || text_[pos_] == '\t' ||
-            text_[pos_] == '\n' || text_[pos_] == '\r')) {
+           (text_[pos_] == ' ' || text_[pos_] == '\t' || text_[pos_] == '\n' ||
+            text_[pos_] == '\r')) {
       ++pos_;
     }
   }
@@ -229,8 +230,8 @@ std::vector<PasswordVector> LoadSharedPasswordPolicyVectors() {
                                      "tests/data/password-policy-vectors.json";
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    throw std::runtime_error("unable to open shared password policy vector file: " +
-                             path.string());
+    throw std::runtime_error(
+        "unable to open shared password policy vector file: " + path.string());
   }
   std::ostringstream buffer;
   buffer << input.rdbuf();
@@ -279,14 +280,12 @@ TEST(PasswordPolicyTest, RejectsReservedAndGuessableUsernames) {
 
 TEST(PasswordPolicyTest, EnforcesExactUsernameBoundsAndLeadingLetter) {
   EXPECT_TRUE(ValidateInitialUsername("Abc12", kReservedIdentities).ok());
-  EXPECT_TRUE(
-      ValidateInitialUsername("A1234567890123456789012345678901",
-                              kReservedIdentities)
-          .ok());
+  EXPECT_TRUE(ValidateInitialUsername("A1234567890123456789012345678901",
+                                      kReservedIdentities)
+                  .ok());
 
   ExpectUsernameError("Abc1", "E_USERNAME_FORMAT");
-  ExpectUsernameError("A12345678901234567890123456789012",
-                      "E_USERNAME_FORMAT");
+  ExpectUsernameError("A12345678901234567890123456789012", "E_USERNAME_FORMAT");
   ExpectUsernameError("1operator", "E_USERNAME_FORMAT");
   ExpectUsernameError(".operator", "E_USERNAME_FORMAT");
   ExpectUsernameError("_operator", "E_USERNAME_FORMAT");
@@ -306,8 +305,7 @@ TEST(PasswordPolicyTest, RejectsReservedStandaloneTokensIgnoringCase) {
 
   EXPECT_TRUE(
       ValidateInitialUsername("rooted.userx", kReservedIdentities).ok());
-  EXPECT_TRUE(
-      ValidateInitialUsername("opsimx708x", kReservedIdentities).ok());
+  EXPECT_TRUE(ValidateInitialUsername("opsimx708x", kReservedIdentities).ok());
 }
 
 TEST(PasswordPolicyTest, RejectsPasswordsOutsideExactByteBounds) {
@@ -340,8 +338,7 @@ TEST(PasswordPolicyTest, RejectsMissingCharacterClasses) {
 
 TEST(PasswordPolicyTest, RejectsOnlyExactUsernameEqualityIgnoringCase) {
   ExpectPasswordError("OpErAtOr.OnE", "E_PASSWORD_USERNAME");
-  EXPECT_TRUE(
-      ValidatePassword("operator.one", Bytes("X!9OPERATOR.ONEz")).ok());
+  EXPECT_TRUE(ValidatePassword("operator.one", Bytes("X!9OPERATOR.ONEz")).ok());
 }
 
 TEST(PasswordPolicyTest, RejectsThreeRepeatedAsciiLettersOrDigits) {
@@ -368,11 +365,10 @@ TEST(PasswordPolicyTest, RejectsForwardAndReverseKeyboardSequences) {
 // TypeScript counterpart (setupPolicy.test.ts) fails.
 TEST(PasswordPolicyTest, MatchesSharedPasswordPolicyVectorFile) {
   const std::unordered_map<std::string, std::string> kRuleToErrorCode = {
-      {"length", "E_PASSWORD_LENGTH"},   {"charset", "E_PASSWORD_ASCII"},
-      {"uppercase", "E_PASSWORD_CLASS"}, {"lowercase", "E_PASSWORD_CLASS"},
-      {"digit", "E_PASSWORD_CLASS"},     {"special", "E_PASSWORD_CLASS"},
-      {"username", "E_PASSWORD_USERNAME"},
-      {"repeat", "E_PASSWORD_REPEAT"},
+      {"length", "E_PASSWORD_LENGTH"},     {"charset", "E_PASSWORD_ASCII"},
+      {"uppercase", "E_PASSWORD_CLASS"},   {"lowercase", "E_PASSWORD_CLASS"},
+      {"digit", "E_PASSWORD_CLASS"},       {"special", "E_PASSWORD_CLASS"},
+      {"username", "E_PASSWORD_USERNAME"}, {"repeat", "E_PASSWORD_REPEAT"},
       {"sequence", "E_PASSWORD_SEQUENCE"},
   };
 
@@ -382,7 +378,7 @@ TEST(PasswordPolicyTest, MatchesSharedPasswordPolicyVectorFile) {
   for (std::size_t index = 0; index < vectors.size(); ++index) {
     const PasswordVector& vector = vectors[index];
     SCOPED_TRACE(::testing::Message() << "vector index " << index
-                                       << " username=" << vector.username);
+                                      << " username=" << vector.username);
     const auto result =
         ValidatePassword(vector.username, Bytes(vector.password));
     if (vector.accept) {

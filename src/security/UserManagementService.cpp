@@ -133,8 +133,7 @@ bool IsSemanticManagementIpError(std::string_view code) {
 
 common::Result<bool> VerifyWithCallback(
     const AuthPasswordVerifyCallback& verify,
-    const common::SecureBytes& password,
-    const PasswordRecord& record) {
+    const common::SecureBytes& password, const PasswordRecord& record) {
   try {
     return verify(password, record);
   } catch (...) {
@@ -173,8 +172,7 @@ common::Result<std::string> NormalizeManagementIp(std::string_view input) {
 }
 
 UserManagementService::UserManagementService(
-    SecurityStore& store,
-    std::vector<std::string> reserved_identities,
+    SecurityStore& store, std::vector<std::string> reserved_identities,
     UserManagementDependencies dependencies)
     : store_(store),
       reserved_identities_(std::move(reserved_identities)),
@@ -188,10 +186,8 @@ UserManagementService::UserManagementService(
 }
 
 common::Result<void> UserManagementService::RecordFailure(
-    std::int64_t now_seconds,
-    std::string_view event_type,
-    std::string_view detail_code,
-    std::string_view subject_identity,
+    std::int64_t now_seconds, std::string_view event_type,
+    std::string_view detail_code, std::string_view subject_identity,
     const UserMutationContext& context) const {
   auto started = store_.BeginTransaction();
   if (!started.ok()) {
@@ -226,10 +222,8 @@ common::Result<void> UserManagementService::RecordFailure(
 }
 
 common::Result<void> UserManagementService::RecordManagementIpFailure(
-    std::int64_t now_seconds,
-    std::string_view event_type,
-    std::string_view detail_code,
-    std::string_view subject_identity,
+    std::int64_t now_seconds, std::string_view event_type,
+    std::string_view detail_code, std::string_view subject_identity,
     const UserMutationContext& context) const {
   auto started = store_.BeginTransaction();
   if (!started.ok()) {
@@ -264,8 +258,8 @@ common::Result<void> UserManagementService::RecordManagementIpFailure(
   }
 }
 
-common::Result<std::vector<ManagedUser>>
-UserManagementService::ListUsers() const {
+common::Result<std::vector<ManagedUser>> UserManagementService::ListUsers()
+    const {
   auto stored = store_.ReadManagedUsers();
   if (!stored.ok()) {
     return Unavailable<std::vector<ManagedUser>>();
@@ -283,8 +277,7 @@ UserManagementService::ListUsers() const {
 }
 
 common::Result<ManagedUser> UserManagementService::CreateViewer(
-    std::string username,
-    common::SecureBytes password,
+    std::string username, common::SecureBytes password,
     const UserMutationContext& context) {
   SecretCleanup password_cleanup(password);
   try {
@@ -335,9 +328,9 @@ common::Result<ManagedUser> UserManagementService::CreateViewer(
       return Unavailable<ManagedUser>();
     }
     password_cleanup.Clear();
-    auto inserted = store_.InsertViewer(
-        canonical, std::move(username), std::move(derived).value(), now_seconds,
-        StoreContext(context));
+    auto inserted = store_.InsertViewer(canonical, std::move(username),
+                                        std::move(derived).value(), now_seconds,
+                                        StoreContext(context));
     if (!inserted.ok()) {
       if (IsSemanticUserError(inserted.error().code)) {
         return common::Result<ManagedUser>::Err(inserted.error());
@@ -352,9 +345,7 @@ common::Result<ManagedUser> UserManagementService::CreateViewer(
 }
 
 common::Result<void> UserManagementService::SetViewerEnabled(
-    std::int64_t user_id,
-    bool enabled,
-    const UserMutationContext& context) {
+    std::int64_t user_id, bool enabled, const UserMutationContext& context) {
   try {
     const std::int64_t now_seconds = dependencies_.now_seconds();
     if (now_seconds < 0) {
@@ -388,8 +379,7 @@ common::Result<void> UserManagementService::SetViewerEnabled(
 }
 
 common::Result<void> UserManagementService::ResetViewerPassword(
-    std::int64_t user_id,
-    common::SecureBytes password,
+    std::int64_t user_id, common::SecureBytes password,
     const UserMutationContext& context) {
   SecretCleanup password_cleanup(password);
   try {
@@ -399,8 +389,8 @@ common::Result<void> UserManagementService::ResetViewerPassword(
     }
     const std::string fallback_subject = std::to_string(user_id);
     if (context.actor.role != UserRole::kAdministrator) {
-      if (!RecordFailure(now_seconds, "viewer_password_reset",
-                         "role_forbidden", fallback_subject, context)
+      if (!RecordFailure(now_seconds, "viewer_password_reset", "role_forbidden",
+                         fallback_subject, context)
                .ok()) {
         return UnavailableVoid();
       }
@@ -421,11 +411,10 @@ common::Result<void> UserManagementService::ResetViewerPassword(
     }
     auto snapshot = std::move(read).value();
     const std::string subject = snapshot.canonical_username;
-    const auto fail_after_snapshot = [&](std::string code,
-                                         std::string detail) {
+    const auto fail_after_snapshot = [&](std::string code, std::string detail) {
       ClearSnapshot(snapshot);
-      if (!RecordFailure(now_seconds, "viewer_password_reset", detail,
-                         subject, context)
+      if (!RecordFailure(now_seconds, "viewer_password_reset", detail, subject,
+                         context)
                .ok()) {
         return UnavailableVoid();
       }
@@ -443,16 +432,16 @@ common::Result<void> UserManagementService::ResetViewerPassword(
       }
       return common::Result<void>::Err(error);
     }
-    auto current_reuse = VerifyWithCallback(
-        dependencies_.verify_password, password, snapshot.current);
+    auto current_reuse = VerifyWithCallback(dependencies_.verify_password,
+                                            password, snapshot.current);
     if (!current_reuse.ok()) {
       return fail_after_snapshot("E_USER_MANAGEMENT_UNAVAILABLE",
                                  "cryptographic_failure");
     }
     bool reused = current_reuse.value();
     if (snapshot.previous.has_value()) {
-      auto previous_reuse = VerifyWithCallback(
-          dependencies_.verify_password, password, *snapshot.previous);
+      auto previous_reuse = VerifyWithCallback(dependencies_.verify_password,
+                                               password, *snapshot.previous);
       if (!previous_reuse.ok()) {
         return fail_after_snapshot("E_USER_MANAGEMENT_UNAVAILABLE",
                                    "cryptographic_failure");
@@ -489,8 +478,7 @@ common::Result<void> UserManagementService::ResetViewerPassword(
 }
 
 common::Result<void> UserManagementService::DeleteViewer(
-    std::int64_t user_id,
-    const UserMutationContext& context) {
+    std::int64_t user_id, const UserMutationContext& context) {
   try {
     const std::int64_t now_seconds = dependencies_.now_seconds();
     if (now_seconds < 0) {
@@ -533,8 +521,7 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     if (now_seconds < 0) {
       return UnavailableVoid();
     }
-    auto read =
-        store_.ReadPasswordMutationSnapshot(context.actor.user_id);
+    auto read = store_.ReadPasswordMutationSnapshot(context.actor.user_id);
     if (!read.ok()) {
       if (read.error().code == "E_USER_NOT_FOUND") {
         if (!RecordFailure(now_seconds, "password_changed", "user_not_found",
@@ -548,8 +535,7 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     }
     auto snapshot = std::move(read).value();
     const std::string subject = snapshot.canonical_username;
-    const auto fail_after_snapshot = [&](std::string code,
-                                         std::string detail) {
+    const auto fail_after_snapshot = [&](std::string code, std::string detail) {
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "password_changed", detail, subject,
                          context)
@@ -582,17 +568,16 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
       return common::Result<void>::Err(error);
     }
     auto current_reuse = VerifyWithCallback(
-        dependencies_.verify_password, replacement_password,
-        snapshot.current);
+        dependencies_.verify_password, replacement_password, snapshot.current);
     if (!current_reuse.ok()) {
       return fail_after_snapshot("E_USER_MANAGEMENT_UNAVAILABLE",
                                  "cryptographic_failure");
     }
     bool reused = current_reuse.value();
     if (snapshot.previous.has_value()) {
-      auto previous_reuse = VerifyWithCallback(
-          dependencies_.verify_password, replacement_password,
-          *snapshot.previous);
+      auto previous_reuse =
+          VerifyWithCallback(dependencies_.verify_password,
+                             replacement_password, *snapshot.previous);
       if (!previous_reuse.ok()) {
         return fail_after_snapshot("E_USER_MANAGEMENT_UNAVAILABLE",
                                    "cryptographic_failure");
@@ -602,9 +587,9 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     if (reused) {
       return fail_after_snapshot("E_PASSWORD_REUSE", "password_reuse");
     }
-    auto derived = DerivePassword(
-        replacement_password,
-        PasswordHasherDependencies{dependencies_.random_bytes});
+    auto derived =
+        DerivePassword(replacement_password,
+                       PasswordHasherDependencies{dependencies_.random_bytes});
     if (!derived.ok()) {
       return fail_after_snapshot("E_USER_MANAGEMENT_UNAVAILABLE",
                                  "cryptographic_failure");
@@ -612,8 +597,8 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     current_cleanup.Clear();
     replacement_cleanup.Clear();
     auto replaced = store_.ReplacePasswordIfCurrent(
-        snapshot, std::move(derived).value(),
-        PasswordMutationKind::kSelfChange, now_seconds, StoreContext(context));
+        snapshot, std::move(derived).value(), PasswordMutationKind::kSelfChange,
+        now_seconds, StoreContext(context));
     ClearSnapshot(snapshot);
     if (!replaced.ok()) {
       return IsSemanticUserError(replaced.error().code)
@@ -649,9 +634,7 @@ UserManagementService::ListManagementIps() const {
 }
 
 common::Result<ManagementIpEntry> UserManagementService::AddManagementIp(
-    UserRole role,
-    std::string address,
-    const UserMutationContext& context) {
+    UserRole role, std::string address, const UserMutationContext& context) {
   try {
     const std::int64_t now_seconds = dependencies_.now_seconds();
     if (now_seconds < 0) {
@@ -677,8 +660,9 @@ common::Result<ManagementIpEntry> UserManagementService::AddManagementIp(
       }
       return common::Result<ManagementIpEntry>::Err(normalized.error());
     }
-    auto inserted = store_.InsertManagementIp(
-        role, std::move(normalized).value(), now_seconds, StoreContext(context));
+    auto inserted =
+        store_.InsertManagementIp(role, std::move(normalized).value(),
+                                  now_seconds, StoreContext(context));
     if (!inserted.ok()) {
       return IsSemanticManagementIpError(inserted.error().code)
                  ? common::Result<ManagementIpEntry>::Err(inserted.error())
@@ -692,10 +676,8 @@ common::Result<ManagementIpEntry> UserManagementService::AddManagementIp(
 }
 
 common::Result<void> UserManagementService::UpdateManagementIp(
-    std::int64_t management_ip_id,
-    UserRole role,
-    std::string replacement_address,
-    const UserMutationContext& context) {
+    std::int64_t management_ip_id, UserRole role,
+    std::string replacement_address, const UserMutationContext& context) {
   try {
     const std::int64_t now_seconds = dependencies_.now_seconds();
     if (now_seconds < 0) {
@@ -740,8 +722,7 @@ common::Result<void> UserManagementService::UpdateManagementIp(
 }
 
 common::Result<void> UserManagementService::DeleteManagementIp(
-    std::int64_t management_ip_id,
-    UserRole role,
+    std::int64_t management_ip_id, UserRole role,
     const UserMutationContext& context) {
   try {
     const std::int64_t now_seconds = dependencies_.now_seconds();

@@ -7,15 +7,15 @@
 #include <optional>
 #include <string_view>
 
-#include "camera_firmware/media/JpegEncoder.hpp"
 #include <vector>
+#include "camera_firmware/media/JpegEncoder.hpp"
 
 #include "camera_firmware/runtime/FirmwareRuntime.hpp"
 
 namespace camera_firmware::runtime {
 
-using FirmwareRuntimeFactory = std::function<
-    common::Result<std::shared_ptr<FirmwareRuntime>>(
+using FirmwareRuntimeFactory =
+    std::function<common::Result<std::shared_ptr<FirmwareRuntime>>(
         const config::AppConfig&)>;
 
 enum class ManagedRuntimeState {

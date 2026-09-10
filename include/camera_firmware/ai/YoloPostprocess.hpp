@@ -20,16 +20,11 @@ inline constexpr std::size_t kYoloPoseRowFloatCount =
 [[nodiscard]] const std::vector<std::string>& Coco17PoseKeypointNames();
 
 [[nodiscard]] std::vector<Detection> ParseYoloHailoNms(
-    const float* tensor,
-    std::size_t total_floats,
-    int num_classes,
-    int max_bboxes_per_class,
-    float confidence_threshold);
+    const float* tensor, std::size_t total_floats, int num_classes,
+    int max_bboxes_per_class, float confidence_threshold);
 
 [[nodiscard]] std::vector<Detection> ParseYoloPoseRows(
-    const float* tensor,
-    std::size_t total_floats,
-    float confidence_threshold,
+    const float* tensor, std::size_t total_floats, float confidence_threshold,
     float keypoint_confidence_threshold);
 
 }  // namespace camera_firmware::ai

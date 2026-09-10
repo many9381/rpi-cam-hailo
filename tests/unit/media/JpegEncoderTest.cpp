@@ -21,8 +21,8 @@
 #include <utility>
 #include <vector>
 
-#include <jpeglib.h>
 #include <gtest/gtest.h>
+#include <jpeglib.h>
 
 namespace {
 
@@ -143,8 +143,7 @@ struct DistinctNv12Frame {
   int uv_fd;
 };
 
-int CreateMemfd(std::string_view name,
-                const std::vector<std::uint8_t>& bytes) {
+int CreateMemfd(std::string_view name, const std::vector<std::uint8_t>& bytes) {
   const int fd = memfd_create(name.data(), MFD_CLOEXEC);
   if (fd < 0) {
     return fd;
@@ -160,9 +159,7 @@ int CreateMemfd(std::string_view name,
 
 int CreateNv12Memfd() {
   const std::vector<std::uint8_t> nv12{
-      0x20, 0x40, 0x80, 0xc0,
-      0x30, 0x50, 0x90, 0xd0,
-      0x80, 0x80, 0x80, 0x80,
+      0x20, 0x40, 0x80, 0xc0, 0x30, 0x50, 0x90, 0xd0, 0x80, 0x80, 0x80, 0x80,
   };
   return CreateMemfd("cf-nv12-encoder", nv12);
 }
@@ -205,8 +202,7 @@ DistinctNv12Frame OffsetPaddedColorLease() {
     const std::uint8_t u = row < 2U ? 255U : 0U;
     const std::uint8_t v = row < 2U ? 0U : 255U;
     for (std::size_t pair = 0U; pair < 4U; ++pair) {
-      const std::size_t offset =
-          kUvPlaneOffset + row * kUvStride + pair * 2U;
+      const std::size_t offset = kUvPlaneOffset + row * kUvStride + pair * 2U;
       uv_bytes[offset] = u;
       uv_bytes[offset + 1U] = v;
     }
@@ -231,16 +227,16 @@ DistinctNv12Frame OffsetPaddedColorLease() {
                       .offset = kUvPlaneOffset,
                       .length = kUvPlaneLength,
                       .stride = kUvStride};
-  return {FrameLease(std::move(handle), [y_fd, uv_fd] {
-            if (y_fd >= 0) {
-              (void)close(y_fd);
-            }
-            if (uv_fd >= 0) {
-              (void)close(uv_fd);
-            }
-          }),
-          y_fd,
-          uv_fd};
+  return {FrameLease(std::move(handle),
+                     [y_fd, uv_fd] {
+                       if (y_fd >= 0) {
+                         (void)close(y_fd);
+                       }
+                       if (uv_fd >= 0) {
+                         (void)close(uv_fd);
+                       }
+                     }),
+          y_fd, uv_fd};
 }
 
 bool IsStartOfFrame(std::uint8_t marker) {
@@ -252,8 +248,10 @@ bool IsStartOfFrame(std::uint8_t marker) {
 
 std::optional<JpegDimensions> ReadJpegDimensions(
     const camera_firmware::media::JpegBytes& jpeg_bytes) {
-  const auto* bytes_data = reinterpret_cast<const std::uint8_t*>(jpeg_bytes.data());
-  const std::vector<std::uint8_t> bytes(bytes_data, bytes_data + jpeg_bytes.size());
+  const auto* bytes_data =
+      reinterpret_cast<const std::uint8_t*>(jpeg_bytes.data());
+  const std::vector<std::uint8_t> bytes(bytes_data,
+                                        bytes_data + jpeg_bytes.size());
   if (bytes.size() < 4U || bytes[0] != 0xffU || bytes[1] != 0xd8U ||
       bytes[bytes.size() - 2U] != 0xffU || bytes.back() != 0xd9U) {
     return std::nullopt;
@@ -276,8 +274,7 @@ std::optional<JpegDimensions> ReadJpegDimensions(
       return std::nullopt;
     }
     const std::size_t segment_length =
-        (static_cast<std::size_t>(bytes[cursor]) << 8U) |
-        bytes[cursor + 1U];
+        (static_cast<std::size_t>(bytes[cursor]) << 8U) | bytes[cursor + 1U];
     if (segment_length < 2U || segment_length > bytes.size() - cursor) {
       return std::nullopt;
     }
@@ -317,11 +314,10 @@ void JpegDecompressErrorExit(j_common_ptr cinfo) {
 void SuppressJpegMessage(j_common_ptr) {}
 
 std::optional<std::vector<std::uint8_t>> DecodeJpegRgb(
-    const camera_firmware::media::JpegBytes& jpeg,
-    unsigned int expected_width,
+    const camera_firmware::media::JpegBytes& jpeg, unsigned int expected_width,
     unsigned int expected_height) {
-  std::vector<std::uint8_t> rgb(
-      static_cast<std::size_t>(expected_width) * expected_height * 3U);
+  std::vector<std::uint8_t> rgb(static_cast<std::size_t>(expected_width) *
+                                expected_height * 3U);
   auto state = std::make_unique<JpegDecompressState>();
   state->decompressor.err = jpeg_std_error(&state->error.pub);
   state->error.pub.error_exit = JpegDecompressErrorExit;
@@ -353,10 +349,9 @@ std::optional<std::vector<std::uint8_t>> DecodeJpegRgb(
 
   const std::size_t row_bytes = static_cast<std::size_t>(expected_width) * 3U;
   while (state->decompressor.output_scanline < expected_height) {
-    JSAMPROW row = rgb.data() +
-                   static_cast<std::size_t>(
-                       state->decompressor.output_scanline) *
-                       row_bytes;
+    JSAMPROW row = rgb.data() + static_cast<std::size_t>(
+                                    state->decompressor.output_scanline) *
+                                    row_bytes;
     if (jpeg_read_scanlines(&state->decompressor, &row, 1U) != 1U) {
       jpeg_destroy_decompress(&state->decompressor);
       return std::nullopt;
@@ -368,19 +363,15 @@ std::optional<std::vector<std::uint8_t>> DecodeJpegRgb(
   return rgb;
 }
 
-RgbPixel PixelAt(const std::vector<std::uint8_t>& rgb,
-                 unsigned int width,
-                 unsigned int column,
-                 unsigned int row) {
+RgbPixel PixelAt(const std::vector<std::uint8_t>& rgb, unsigned int width,
+                 unsigned int column, unsigned int row) {
   const std::size_t index =
       (static_cast<std::size_t>(row) * width + column) * 3U;
   return {rgb[index], rgb[index + 1U], rgb[index + 2U]};
 }
 
-void ExpectSyncCall(const std::vector<SyncCall>& calls,
-                    std::size_t index,
-                    int fd,
-                    std::uint64_t flags) {
+void ExpectSyncCall(const std::vector<SyncCall>& calls, std::size_t index,
+                    int fd, std::uint64_t flags) {
   ASSERT_LT(index, calls.size());
   EXPECT_EQ(calls[index].fd, fd);
   EXPECT_EQ(calls[index].flags, flags);
@@ -551,12 +542,10 @@ TEST_F(JpegEncoderTest, EndsFirstFdWhenSecondSyncStartFails) {
   EXPECT_EQ(encoded.error().code, "E_JPEG_ENCODE");
   const auto calls = DmaBufSyncCalls();
   ASSERT_EQ(calls.size(), 3U);
-  ExpectSyncCall(calls, 0U, frame.y_fd,
-                 DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+  ExpectSyncCall(calls, 0U, frame.y_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
   ExpectSyncCall(calls, 1U, frame.uv_fd,
                  DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-  ExpectSyncCall(calls, 2U, frame.y_fd,
-                 DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+  ExpectSyncCall(calls, 2U, frame.y_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 }
 
 TEST_F(JpegEncoderTest, FailsClosedWhenSyncEndFails) {
@@ -591,14 +580,11 @@ TEST_F(JpegEncoderTest, ReadsOffsetPaddedDistinctPlanesWithCorrectNv12Color) {
 
   const auto calls = DmaBufSyncCalls();
   ASSERT_EQ(calls.size(), 4U);
-  ExpectSyncCall(calls, 0U, frame.y_fd,
-                 DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+  ExpectSyncCall(calls, 0U, frame.y_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
   ExpectSyncCall(calls, 1U, frame.uv_fd,
                  DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-  ExpectSyncCall(calls, 2U, frame.uv_fd,
-                 DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
-  ExpectSyncCall(calls, 3U, frame.y_fd,
-                 DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+  ExpectSyncCall(calls, 2U, frame.uv_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+  ExpectSyncCall(calls, 3U, frame.y_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 }
 
 }  // namespace

@@ -13,9 +13,9 @@ namespace {
 
 using camera_firmware::common::Error;
 using camera_firmware::common::Result;
+using camera_firmware::service::BuildProtectionRestrictedResponse;
 using camera_firmware::service::BuildRuntimeSettingsApplyResponse;
 using camera_firmware::service::BuildRuntimeSettingsErrorResponse;
-using camera_firmware::service::BuildProtectionRestrictedResponse;
 using camera_firmware::service::BuildRuntimeSettingsSnapshotJson;
 using camera_firmware::service::BuildRuntimeSettingsSnapshotResponse;
 using camera_firmware::service::ParseRuntimeSettingsCommandJson;
@@ -117,12 +117,10 @@ RuntimeSettingsSnapshot MakeSnapshot() {
   snapshot.active.osd = {true,
                          {{"custom_text", "Front Door", "top_left"},
                           {"timestamp", "", "bottom_right"}}};
-  snapshot.active.models = {{"objects", true, 0.40F},
-                            {"pose", true, 0.35F}};
+  snapshot.active.models = {{"objects", true, 0.40F}, {"pose", true, 0.35F}};
   snapshot.pending = snapshot.active;
   snapshot.pending->camera = {"imx708-1080p30", 8000U, 30U};
-  snapshot.pending->models = {{"objects", true, 0.55F},
-                              {"pose", false, 0.25F}};
+  snapshot.pending->models = {{"objects", true, 0.55F}, {"pose", false, 0.25F}};
   snapshot.last_apply = {ApplyStatus::kFailed,
                          "E_PRIVATE_BACKEND_/opt/models/model.hef", true};
   snapshot.camera_profiles = {
@@ -130,17 +128,14 @@ RuntimeSettingsSnapshot MakeSnapshot() {
       {"imx708-1080p30", "1080p 30 fps", 1920U, 1080U, 30U},
   };
   snapshot.model_capabilities = {
-      {"objects", "object_detection", 640U, 640U, "rgb8", true,
-       "coco80"},
-      {"pose", "pose_estimation", 640U, 640U, "rgb8", false,
-       "pose17"},
+      {"objects", "object_detection", 640U, 640U, "rgb8", true, "coco80"},
+      {"pose", "pose_estimation", 640U, 640U, "rgb8", false, "pose17"},
   };
   return snapshot;
 }
 
 void ExpectPublicError(const drogon::HttpResponsePtr& response,
-                       drogon::HttpStatusCode status,
-                       std::string_view code,
+                       drogon::HttpStatusCode status, std::string_view code,
                        std::string_view message) {
   ASSERT_NE(response, nullptr);
   EXPECT_EQ(response->statusCode(), status);
@@ -176,9 +171,8 @@ TEST(RuntimeSettingsHttpTest, ParsesExactCompleteUpdateAndPreservesModelOrder) {
 }
 
 TEST(RuntimeSettingsHttpTest, ParsesOptionalSubStreamAndRoundTripsFields) {
-  const auto parsed =
-      ParseRuntimeSettingsUpdateJson(kUpdateJsonWithSubStream,
-                                     "application/json");
+  const auto parsed = ParseRuntimeSettingsUpdateJson(kUpdateJsonWithSubStream,
+                                                     "application/json");
 
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_TRUE(parsed.value().settings.sub_stream.enabled);
@@ -213,12 +207,13 @@ TEST(RuntimeSettingsHttpTest, ParsesBothOptionalSubStreamAndOsdTogether) {
   EXPECT_EQ(parsed.value().settings.osd.items[0].position, "bottom_right");
 }
 
-TEST(RuntimeSettingsHttpTest, ParsesZeroedDisabledSubStreamSoValidationCanReject) {
+TEST(RuntimeSettingsHttpTest,
+     ParsesZeroedDisabledSubStreamSoValidationCanReject) {
   // The persistent settings-UI DoS body: a non-web client PUTs a disabled
   // sub_stream with zeroed geometry. This is structurally well-formed JSON, so
-  // the wire parser MUST accept it (all five keys, correct types) and hand it to
-  // the validation layer, which rejects it (E_RUNTIME_SETTINGS_SUB_GEOMETRY ->
-  // 422). If the parser rejected it here we would only be masking the seam.
+  // the wire parser MUST accept it (all five keys, correct types) and hand it
+  // to the validation layer, which rejects it (E_RUNTIME_SETTINGS_SUB_GEOMETRY
+  // -> 422). If the parser rejected it here we would only be masking the seam.
   constexpr std::string_view kZeroedDisabledSubStream = R"({
     "expected_revision": 7,
     "settings": {
@@ -228,8 +223,8 @@ TEST(RuntimeSettingsHttpTest, ParsesZeroedDisabledSubStreamSoValidationCanReject
     }
   })";
 
-  const auto parsed =
-      ParseRuntimeSettingsUpdateJson(kZeroedDisabledSubStream, "application/json");
+  const auto parsed = ParseRuntimeSettingsUpdateJson(kZeroedDisabledSubStream,
+                                                     "application/json");
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_FALSE(parsed.value().settings.sub_stream.enabled);
   EXPECT_EQ(parsed.value().settings.sub_stream.width, 0U);
@@ -268,7 +263,8 @@ TEST(RuntimeSettingsHttpTest, ParsesOutOfRangeOsdSoValidationCanReject) {
     if (index > 0) {
       nine_items_body += ",";
     }
-    nine_items_body += R"({"type":"timestamp","text":"","position":"top_left"})";
+    nine_items_body +=
+        R"({"type":"timestamp","text":"","position":"top_left"})";
   }
   nine_items_body += "]}}}";
   const auto nine_items =
@@ -328,7 +324,8 @@ TEST(RuntimeSettingsHttpTest, RejectsMalformedOsdPayloads) {
       R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"osd":{"enabled":true,"items":[{"type":1,"text":"","position":"top_left"}]}}})",
       // Size-3 settings object whose third key is neither sub_stream nor osd.
       R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"not_osd":{}}})",
-      // Size-5 settings object (camera, models, sub_stream, osd, and an extra key).
+      // Size-5 settings object (camera, models, sub_stream, osd, and an extra
+      // key).
       R"({"expected_revision":7,"settings":{"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[],"sub_stream":{"enabled":true,"width":1280,"height":720,"fps":25,"bitrate_kbps":3000},"osd":{"enabled":true,"items":[]},"extra":1}})",
   };
 
@@ -350,8 +347,7 @@ TEST(RuntimeSettingsHttpTest, ParsesExactExpectedRevisionCommand) {
 }
 
 TEST(RuntimeSettingsHttpTest, RejectsNonJsonContentTypeAndBodiesOver16KiB) {
-  auto wrong_type =
-      ParseRuntimeSettingsUpdateJson(kUpdateJson, "text/json");
+  auto wrong_type = ParseRuntimeSettingsUpdateJson(kUpdateJson, "text/json");
   ASSERT_FALSE(wrong_type.ok());
   EXPECT_EQ(wrong_type.error().code, "E_SETTINGS_REQUEST_INVALID");
 
@@ -411,10 +407,8 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
   EXPECT_EQ(json["schema_version"].asUInt(), 1U);
   EXPECT_EQ(json["revision"].asUInt64(), 7U);
   EXPECT_EQ(json["state"].asString(), "pending");
-  EXPECT_EQ(json["capabilities"]["bitrate_kbps"]["minimum"].asUInt(),
-            500U);
-  EXPECT_EQ(json["capabilities"]["bitrate_kbps"]["maximum"].asUInt(),
-            20000U);
+  EXPECT_EQ(json["capabilities"]["bitrate_kbps"]["minimum"].asUInt(), 500U);
+  EXPECT_EQ(json["capabilities"]["bitrate_kbps"]["maximum"].asUInt(), 20000U);
   EXPECT_FALSE(json["capabilities"]["bitrate_kbps"].isMember("min"));
   EXPECT_FALSE(json["capabilities"]["bitrate_kbps"].isMember("max"));
   EXPECT_EQ(json["capabilities"]["gop"]["minimum"].asUInt(), 1U);
@@ -422,11 +416,9 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
   EXPECT_FALSE(json["capabilities"]["gop"].isMember("min"));
   EXPECT_FALSE(json["capabilities"]["gop"].isMember("max"));
   ASSERT_EQ(json["capabilities"]["models"].size(), 2U);
-  EXPECT_EQ(json["capabilities"]["models"][0U]["id"].asString(),
-            "objects");
+  EXPECT_EQ(json["capabilities"]["models"][0U]["id"].asString(), "objects");
   EXPECT_TRUE(json["capabilities"]["models"][0U]["labels"].isString());
-  EXPECT_EQ(json["capabilities"]["models"][0U]["labels"].asString(),
-            "coco80");
+  EXPECT_EQ(json["capabilities"]["models"][0U]["labels"].asString(), "coco80");
   EXPECT_FALSE(json["capabilities"]["models"][0U].isMember("hef_path"));
   EXPECT_FALSE(json["capabilities"]["models"][0U].isMember("output_name"));
   EXPECT_EQ(json["active"]["models"][0U]["id"].asString(), "objects");
@@ -449,8 +441,7 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
             "Front Door");
   EXPECT_EQ(json["active"]["osd"]["items"][0U]["position"].asString(),
             "top_left");
-  EXPECT_EQ(json["active"]["osd"]["items"][1U]["type"].asString(),
-            "timestamp");
+  EXPECT_EQ(json["active"]["osd"]["items"][1U]["type"].asString(), "timestamp");
   EXPECT_EQ(json["active"]["osd"]["items"][1U]["text"].asString(), "");
   EXPECT_EQ(json["active"]["osd"]["items"][1U]["position"].asString(),
             "bottom_right");
@@ -458,8 +449,7 @@ TEST(RuntimeSettingsHttpTest, SnapshotJsonContainsOnlySafeOrderedCapabilities) {
   ASSERT_EQ(json["pending"]["osd"]["items"].size(), 2U);
   EXPECT_EQ(json["pending"]["osd"]["items"][0U]["type"].asString(),
             "custom_text");
-  EXPECT_EQ(json["last_apply"]["code"].asString(),
-            "E_SETTINGS_APPLY_FAILED");
+  EXPECT_EQ(json["last_apply"]["code"].asString(), "E_SETTINGS_APPLY_FAILED");
 }
 
 TEST(RuntimeSettingsHttpTest, SnapshotResponseUsesJsonContract) {
@@ -472,7 +462,8 @@ TEST(RuntimeSettingsHttpTest, SnapshotResponseUsesJsonContract) {
   EXPECT_EQ((*json)["schema_version"].asUInt(), 1U);
 }
 
-TEST(RuntimeSettingsHttpTest, ProtectionRestrictionResponseIsStableAndSecretFree) {
+TEST(RuntimeSettingsHttpTest,
+     ProtectionRestrictionResponseIsStableAndSecretFree) {
   const auto response = BuildProtectionRestrictedResponse();
 
   ExpectPublicError(response, drogon::k423Locked, "E_PROTECTION_RESTRICTED",
@@ -532,9 +523,11 @@ TEST(RuntimeSettingsHttpTest, InternalErrorsMapToBoundedPublicContract) {
 }
 
 TEST(RuntimeSettingsHttpTest, ApplyFailureReportsTruthfulRestorationSafely) {
-  SettingsApplyResult result{MakeSnapshot(), false, true,
-                             {"E_PRIVATE_BACKEND_FAILURE",
-                              "private /opt/backend/model.hef detail"}};
+  SettingsApplyResult result{
+      MakeSnapshot(),
+      false,
+      true,
+      {"E_PRIVATE_BACKEND_FAILURE", "private /opt/backend/model.hef detail"}};
 
   const auto response = BuildRuntimeSettingsApplyResponse(result);
 

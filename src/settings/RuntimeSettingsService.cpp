@@ -93,6 +93,8 @@ RuntimeSettingsService::ApplyingGuard::~ApplyingGuard() noexcept {
     try {
       owner_.PublishApplyCompletion(std::nullopt);
     } catch (...) {
+      // swallowed: destructors must not throw; the completion is published best
+      // effort
     }
   }
 }
@@ -196,9 +198,8 @@ SettingsApplyResult RuntimeSettingsService::Apply(
   }
 
   if (!candidate_validator_) {
-    return RejectApply(
-        {"E_RUNTIME_SETTINGS_APPLY",
-         "runtime settings candidate validator is unavailable"});
+    return RejectApply({"E_RUNTIME_SETTINGS_APPLY",
+                        "runtime settings candidate validator is unavailable"});
   }
   common::Result<void> candidate_validated = common::Result<void>::Ok();
   try {
@@ -217,8 +218,8 @@ SettingsApplyResult RuntimeSettingsService::Apply(
   ApplyingGuard applying_guard(*this);
   runtime::RuntimeReplacementResult replacement;
   try {
-    replacement = runtime_replacer_(
-        candidate.value(), [&]() -> common::Result<void> {
+    replacement =
+        runtime_replacer_(candidate.value(), [&]() -> common::Result<void> {
           auto promoted = store_.PromotePending(expected_revision);
           if (!promoted.ok()) {
             return common::Result<void>::Err(promoted.error());
@@ -229,8 +230,7 @@ SettingsApplyResult RuntimeSettingsService::Apply(
   } catch (...) {
     auto failed = FinishFailedApply(
         expected_revision,
-        {"E_RUNTIME_SETTINGS_APPLY",
-         "runtime settings replacement failed"},
+        {"E_RUNTIME_SETTINGS_APPLY", "runtime settings replacement failed"},
         false);
     applying_guard.Dismiss();
     return failed;
@@ -247,7 +247,7 @@ SettingsApplyResult RuntimeSettingsService::Apply(
       applying_guard.Dismiss();
       return failed;
     }
-    PublishApplyCompletion(std::move(*promoted_document));
+    PublishApplyCompletion(std::move(promoted_document));
     applying_guard.Dismiss();
     return {Snapshot(), true, false, {}};
   }
@@ -317,8 +317,8 @@ SettingsApplyResult RuntimeSettingsService::FinishFailedApply(
     std::uint64_t expected_revision, common::Error primary_error,
     bool restored) {
   primary_error = PublicApplyError(std::move(primary_error));
-  auto recorded =
-      store_.RecordApplyFailure(expected_revision, primary_error.code, restored);
+  auto recorded = store_.RecordApplyFailure(expected_revision,
+                                            primary_error.code, restored);
   common::Error result_error = primary_error;
   std::optional<RuntimeSettingsDocument> recorded_document;
   if (recorded.ok()) {

@@ -12,9 +12,9 @@ namespace camera_firmware::media {
 
 struct SubStreamEncoderParams {
   int src_width{0};
-  int src_height{0};   // main stream geometry (e.g. 1920x1080)
+  int src_height{0};  // main stream geometry (e.g. 1920x1080)
   int dst_width{0};
-  int dst_height{0};   // sub geometry (e.g. 640x360)
+  int dst_height{0};  // sub geometry (e.g. 640x360)
   unsigned int fps{0};
   unsigned int bitrate_kbps{0};
   unsigned int gop{0};
@@ -33,7 +33,7 @@ struct SubStreamEncoderParams {
 class SubStreamEncoder {
  public:
   SubStreamEncoder(SubStreamTap& tap, EncodedRing& out_ring,
-                    SubStreamEncoderParams params);
+                   SubStreamEncoderParams params);
   ~SubStreamEncoder();  // Stop() if running
 
   SubStreamEncoder(const SubStreamEncoder&) = delete;

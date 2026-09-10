@@ -14,8 +14,8 @@
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/media/CameraPipeline.hpp"
-#include "camera_firmware/media/JpegEncoder.hpp"
 #include "camera_firmware/media/FragmentedMp4Hub.hpp"
+#include "camera_firmware/media/JpegEncoder.hpp"
 #include "camera_firmware/media/SubStreamTap.hpp"
 
 namespace camera_firmware::runtime {
@@ -45,8 +45,7 @@ struct FirmwareRuntimeDependencies {
   std::function<ai::AiRuntimeStatus()> ai_status;
   std::function<std::vector<ai::AiModelRunnerStatus>()> ai_runner_statuses;
   std::function<common::Result<void>()> restart_ai;
-  std::function<std::optional<media::JpegBytes>(std::string_view)>
-      snapshot;
+  std::function<std::optional<media::JpegBytes>(std::string_view)> snapshot;
   std::function<common::Result<media::FragmentRing::Reader>(std::string_view)>
       open_live_stream;
   std::function<std::vector<ai::DetectionEvent>()> detection_snapshot;

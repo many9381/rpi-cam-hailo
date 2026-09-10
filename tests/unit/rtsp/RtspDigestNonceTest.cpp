@@ -6,12 +6,12 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
-#include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <csignal>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -48,8 +48,7 @@ common::Error TestDependencyError() {
   return {"E_TEST", "test dependency failed"};
 }
 
-Result<SecureBytes> SecureSequence(std::size_t size,
-                                   unsigned char first) {
+Result<SecureBytes> SecureSequence(std::size_t size, unsigned char first) {
   SecureBytes bytes;
   bytes.resize(size);
   for (std::size_t index = 0U; index < size; ++index) {
@@ -71,8 +70,7 @@ struct DeterministicInputs {
       return clock->load(std::memory_order_relaxed);
     };
     dependencies.random_bytes = [calls = random_calls](std::size_t size) {
-      const std::size_t call =
-          calls->fetch_add(1U, std::memory_order_relaxed);
+      const std::size_t call = calls->fetch_add(1U, std::memory_order_relaxed);
       if (call == 0U) {
         if (size != 32U) {
           return Result<SecureBytes>::Err(TestDependencyError());
@@ -93,8 +91,8 @@ struct DeterministicInputs {
 std::unique_ptr<RtspDigestNonceManager> CreateManager(
     const DeterministicInputs& inputs, std::chrono::seconds ttl = 5s,
     std::size_t replay_capacity = 4096U) {
-  auto created = RtspDigestNonceManager::Create(
-      ttl, inputs.Dependencies(), replay_capacity);
+  auto created = RtspDigestNonceManager::Create(ttl, inputs.Dependencies(),
+                                                replay_capacity);
   EXPECT_TRUE(created.ok())
       << (created.ok() ? std::string{} : created.error().message);
   if (!created.ok()) {
@@ -146,11 +144,11 @@ bool ChildCompletesWithin(std::chrono::milliseconds timeout,
   return false;
 }
 
-RtspDigestNonceValidation IssueAndValidate(
-    RtspDigestNonceManager* manager, std::string* nonce = nullptr) {
+RtspDigestNonceValidation IssueAndValidate(RtspDigestNonceManager* manager,
+                                           std::string* nonce = nullptr) {
   auto issued = manager->Issue();
-  EXPECT_TRUE(issued.ok())
-      << (issued.ok() ? std::string{} : issued.error().message);
+  EXPECT_TRUE(issued.ok()) << (issued.ok() ? std::string{}
+                                           : issued.error().message);
   if (!issued.ok()) {
     return {};
   }
@@ -173,13 +171,11 @@ TEST(RtspDigestNonceTest, IssuesFixedLengthHmacAuthenticatedNonce) {
   ASSERT_TRUE(issued.ok()) << issued.error().message;
   EXPECT_EQ(issued.value(), kVectorNonce);
   EXPECT_EQ(issued.value().size(), 76U);
-  EXPECT_TRUE(std::all_of(issued.value().begin(), issued.value().end(),
-                          [](unsigned char byte) {
-                            return (byte >= 'A' && byte <= 'Z') ||
-                                   (byte >= 'a' && byte <= 'z') ||
-                                   (byte >= '0' && byte <= '9') ||
-                                   byte == '-' || byte == '_';
-                          }));
+  EXPECT_TRUE(std::all_of(
+      issued.value().begin(), issued.value().end(), [](unsigned char byte) {
+        return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+               (byte >= '0' && byte <= '9') || byte == '-' || byte == '_';
+      }));
 
   auto validated = manager->Validate(issued.value());
   ASSERT_TRUE(validated.ok()) << validated.error().message;
@@ -189,13 +185,13 @@ TEST(RtspDigestNonceTest, IssuesFixedLengthHmacAuthenticatedNonce) {
   const auto nonce_bytes = std::span<const unsigned char>(
       reinterpret_cast<const unsigned char*>(issued.value().data()),
       issued.value().size());
-  auto expected_id =
-      RtspDigestHash(RtspDigestAlgorithm::kSha256, nonce_bytes);
+  auto expected_id = RtspDigestHash(RtspDigestAlgorithm::kSha256, nonce_bytes);
   ASSERT_TRUE(expected_id.ok()) << expected_id.error().message;
   ASSERT_EQ(expected_id.value().size(), validated.value().nonce_id.size());
-  EXPECT_TRUE(std::equal(expected_id.value().data(),
-                         expected_id.value().data() + expected_id.value().size(),
-                         validated.value().nonce_id.begin()));
+  EXPECT_TRUE(
+      std::equal(expected_id.value().data(),
+                 expected_id.value().data() + expected_id.value().size(),
+                 validated.value().nonce_id.begin()));
 }
 
 TEST(RtspDigestNonceTest, RejectsTamperedAndFutureNonce) {
@@ -210,13 +206,11 @@ TEST(RtspDigestNonceTest, RejectsTamperedAndFutureNonce) {
   tampered[20] = tampered[20] == 'A' ? 'B' : 'A';
   auto tampered_result = manager->Validate(tampered);
   ASSERT_TRUE(tampered_result.ok()) << tampered_result.error().message;
-  EXPECT_EQ(tampered_result.value().status,
-            RtspDigestNonceStatus::kInvalid);
+  EXPECT_EQ(tampered_result.value().status, RtspDigestNonceStatus::kInvalid);
 
   auto wrong_version = manager->Validate(kWrongVersionAuthenticatedNonce);
   ASSERT_TRUE(wrong_version.ok()) << wrong_version.error().message;
-  EXPECT_EQ(wrong_version.value().status,
-            RtspDigestNonceStatus::kInvalid);
+  EXPECT_EQ(wrong_version.value().status, RtspDigestNonceStatus::kInvalid);
 
   inputs.now->store(kVectorTimestamp - 1U, std::memory_order_relaxed);
   auto future_result = manager->Validate(issued.value());
@@ -389,8 +383,7 @@ TEST(RtspDigestNonceTest, DependencyCallbackCanReenterManagerWithoutDeadlock) {
     dependencies.random_bytes = [](std::size_t size) {
       return SecureSequence(size, 0x00U);
     };
-    auto created =
-        RtspDigestNonceManager::Create(5s, std::move(dependencies));
+    auto created = RtspDigestNonceManager::Create(5s, std::move(dependencies));
     if (!created.ok()) {
       return 1;
     }
@@ -403,9 +396,8 @@ TEST(RtspDigestNonceTest, DependencyCallbackCanReenterManagerWithoutDeadlock) {
     validation.expires_at = 105U;
     reenter_manager = true;
     auto committed = manager->Commit("operator", validation, 1U);
-    return nested_commit_succeeded && committed.ok() && committed.value()
-               ? 0
-               : 2;
+    return nested_commit_succeeded && committed.ok() && committed.value() ? 0
+                                                                          : 2;
   }));
 }
 
@@ -432,13 +424,11 @@ TEST(RtspDigestNonceTest,
       }
       state->issue_entered = true;
       state->condition.notify_all();
-      state->condition.wait(lock,
-                            [state] { return state->release_issue; });
+      state->condition.wait(lock, [state] { return state->release_issue; });
       lock.unlock();
       return SecureSequence(size, 0xa0U);
     };
-    auto created =
-        RtspDigestNonceManager::Create(5s, std::move(dependencies));
+    auto created = RtspDigestNonceManager::Create(5s, std::move(dependencies));
     if (!created.ok()) {
       return 1;
     }
@@ -588,14 +578,13 @@ TEST(RtspDigestNonceTest, UsesInclusiveExpiryBoundaryConsistently) {
 
 TEST(RtspDigestNonceTest, RejectsInvalidConfigurationAndKeyGeneration) {
   DeterministicInputs inputs;
-  auto zero_ttl = RtspDigestNonceManager::Create(
-      0s, inputs.Dependencies(), 1U);
-  auto negative_ttl = RtspDigestNonceManager::Create(
-      -1s, inputs.Dependencies(), 1U);
-  auto zero_capacity = RtspDigestNonceManager::Create(
-      5s, inputs.Dependencies(), 0U);
-  auto excessive_capacity = RtspDigestNonceManager::Create(
-      5s, inputs.Dependencies(), 4097U);
+  auto zero_ttl = RtspDigestNonceManager::Create(0s, inputs.Dependencies(), 1U);
+  auto negative_ttl =
+      RtspDigestNonceManager::Create(-1s, inputs.Dependencies(), 1U);
+  auto zero_capacity =
+      RtspDigestNonceManager::Create(5s, inputs.Dependencies(), 0U);
+  auto excessive_capacity =
+      RtspDigestNonceManager::Create(5s, inputs.Dependencies(), 4097U);
 
   RtspDigestNonceDependencies wrong_key;
   wrong_key.now_seconds = [] { return 100U; };

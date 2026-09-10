@@ -72,8 +72,7 @@ class RuntimeSettingsService final {
       std::uint64_t expected_revision, RuntimeSettings settings);
   [[nodiscard]] common::Result<RuntimeSettingsSnapshot> Discard(
       std::uint64_t expected_revision);
-  [[nodiscard]] SettingsApplyResult Apply(
-      std::uint64_t expected_revision);
+  [[nodiscard]] SettingsApplyResult Apply(std::uint64_t expected_revision);
 
  private:
   class ApplyingGuard {
@@ -93,8 +92,7 @@ class RuntimeSettingsService final {
       runtime::ManagedRuntimeState runtime_state) const;
   void Publish(RuntimeSettingsDocument document);
   void BeginApplying();
-  void PublishApplyCompletion(
-      std::optional<RuntimeSettingsDocument> document);
+  void PublishApplyCompletion(std::optional<RuntimeSettingsDocument> document);
   [[nodiscard]] SettingsApplyResult RejectApply(common::Error error) const;
   [[nodiscard]] SettingsApplyResult FinishFailedApply(
       std::uint64_t expected_revision, common::Error primary_error,

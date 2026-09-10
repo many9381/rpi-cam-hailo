@@ -18,10 +18,8 @@ class OpenSslCryptoProvider final : public CryptoProvider {
   [[nodiscard]] common::Result<common::SecureBytes> RandomBytesPrivate(
       std::size_t output_size) override;
   [[nodiscard]] common::Result<common::SecureBytes> DeriveKeyPbkdf2(
-      const common::SecureBytes& password,
-      std::span<const unsigned char> salt,
-      std::uint32_t iterations,
-      std::size_t output_size) override;
+      const common::SecureBytes& password, std::span<const unsigned char> salt,
+      std::uint32_t iterations, std::size_t output_size) override;
   [[nodiscard]] common::Result<
       std::array<unsigned char, kEd25519SignatureBytes>>
   SignEd25519(std::span<const unsigned char> message,
@@ -31,15 +29,13 @@ class OpenSslCryptoProvider final : public CryptoProvider {
       std::span<const unsigned char> signature,
       std::span<const unsigned char> public_key) override;
   [[nodiscard]] common::Result<void> SealAesGcm(
-      std::span<const unsigned char> key,
-      std::span<const unsigned char> nonce,
+      std::span<const unsigned char> key, std::span<const unsigned char> nonce,
       std::span<const unsigned char> plaintext,
       std::span<const unsigned char> associated_data,
       std::span<unsigned char> ciphertext_out,
       std::span<unsigned char> tag_out) override;
   [[nodiscard]] common::Result<void> OpenAesGcm(
-      std::span<const unsigned char> key,
-      std::span<const unsigned char> nonce,
+      std::span<const unsigned char> key, std::span<const unsigned char> nonce,
       std::span<const unsigned char> ciphertext,
       std::span<const unsigned char> associated_data,
       std::span<const unsigned char> tag,

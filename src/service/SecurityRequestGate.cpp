@@ -62,9 +62,8 @@ std::string UpperMethod(std::string_view method) {
 }
 
 bool IsStaticAsset(std::string_view path, std::string_view method) {
-  return method == "GET" &&
-         (path == "/" || path == "/index.html" || path == "/app.js" ||
-          path == "/styles.css");
+  return method == "GET" && (path == "/" || path == "/index.html" ||
+                             path == "/app.js" || path == "/styles.css");
 }
 
 bool IsStateChanging(std::string_view method) {
@@ -106,8 +105,7 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
       return std::nullopt;
     }
     const auto suffix = remainder.substr(slash);
-    if ((suffix == "/enabled" || suffix == "/password") &&
-        method == "PUT") {
+    if ((suffix == "/enabled" || suffix == "/password") && method == "PUT") {
       return RoutePolicy::kAdministrator;
     }
     return std::nullopt;
@@ -138,8 +136,7 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
                : std::nullopt;
   }
 
-  if ((path == "/api/v1/audit/status" ||
-       path == "/api/v1/audit/events") &&
+  if ((path == "/api/v1/audit/status" || path == "/api/v1/audit/events") &&
       method == "GET") {
     return RoutePolicy::kAdministrator;
   }
@@ -162,8 +159,8 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
       return RoutePolicy::kAdministrator;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::array<std::string_view, 2> suffixes = {
-        "/snapshot.jpg", "/live.mp4"};
+    constexpr std::array<std::string_view, 2> suffixes = {"/snapshot.jpg",
+                                                          "/live.mp4"};
     for (const auto suffix : suffixes) {
       if (path.starts_with(prefix) && path.ends_with(suffix) &&
           path.size() > prefix.size() + suffix.size()) {
@@ -179,8 +176,7 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
     return RoutePolicy::kAdministrator;
   }
   if (method == "POST" &&
-      (path == "/api/v1/ai/restart" ||
-       path == "/api/v1/runtime/restart" ||
+      (path == "/api/v1/ai/restart" || path == "/api/v1/runtime/restart" ||
        path == "/api/v1/auth/logout" ||
        path == "/api/v1/settings/runtime/apply" ||
        path == "/api/v1/settings/runtime/discard")) {
@@ -205,8 +201,7 @@ bool RouteRefreshesManagementDeadlineImpl(std::string_view path,
       return method == "DELETE";
     }
     const auto suffix = remainder.substr(slash);
-    return method == "PUT" &&
-           (suffix == "/enabled" || suffix == "/password");
+    return method == "PUT" && (suffix == "/enabled" || suffix == "/password");
   }
   if (path == "/api/v1/security/management-ips") {
     return method == "GET";
@@ -236,8 +231,7 @@ bool RouteRefreshesManagementDeadlineImpl(std::string_view path,
            path == "/api/v1/settings/runtime/discard" ||
            path == "/api/v1/system/self-tests" ||
            path == "/api/v1/system/integrity-checks" ||
-           path == "/api/v1/runtime/restart" ||
-           path == "/api/v1/ai/restart";
+           path == "/api/v1/runtime/restart" || path == "/api/v1/ai/restart";
   }
   return false;
 }
@@ -304,9 +298,8 @@ common::Result<std::string> CanonicalOrigin(std::string_view origin,
   if (port <= 0 || port > 65535) {
     return InvalidRequest<std::string>();
   }
-  return common::Result<std::string>::Ok(normalized_scheme + "://" +
-                                          normalized_host + ":" +
-                                          std::to_string(port));
+  return common::Result<std::string>::Ok(
+      normalized_scheme + "://" + normalized_host + ":" + std::to_string(port));
 }
 
 bool SameOrigin(std::string_view actual, std::string_view expected) {
@@ -359,10 +352,8 @@ class InSituCredentialParser {
   // `management_ips` is the one key whose value is not a string. Passing
   // nullptr for it keeps the key rejected outright, which is what every caller
   // but setup wants: an unrecognized key still fails the whole parse.
-  bool Parse(bool require_peer,
-             std::string& username,
-             common::SecureBytes& password,
-             std::string& peer_ip,
+  bool Parse(bool require_peer, std::string& username,
+             common::SecureBytes& password, std::string& peer_ip,
              std::vector<std::string>* management_ips = nullptr) {
     if (body_.size() == 0U ||
         !g_utf8_validate(reinterpret_cast<const char*>(body_.data()),
@@ -589,8 +580,8 @@ class InSituCredentialParser {
             if (!ParseHexCodeUnit(low) || low < 0xdc00U || low > 0xdfffU) {
               return false;
             }
-            code_point = 0x10000U + ((code_point - 0xd800U) << 10U) +
-                         (low - 0xdc00U);
+            code_point =
+                0x10000U + ((code_point - 0xd800U) << 10U) + (low - 0xdc00U);
           } else if (code_point >= 0xdc00U && code_point <= 0xdfffU) {
             return false;
           }
@@ -631,17 +622,17 @@ class InSituCredentialParser {
     } else if (code_point <= 0xffffU) {
       body_.data()[output++] =
           static_cast<unsigned char>(0xe0U | (code_point >> 12U));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 6U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 6U) & 0x3fU));
       body_.data()[output++] =
           static_cast<unsigned char>(0x80U | (code_point & 0x3fU));
     } else {
       body_.data()[output++] =
           static_cast<unsigned char>(0xf0U | (code_point >> 18U));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 12U) & 0x3fU));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 6U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 12U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 6U) & 0x3fU));
       body_.data()[output++] =
           static_cast<unsigned char>(0x80U | (code_point & 0x3fU));
     }
@@ -718,12 +709,11 @@ common::Result<void> AuthorizeSecurityRequest(
             {"/api/v1/setup/initialize", "POST"},
             {"/api/v1/setup/runtime", "POST"},
         }};
-    const bool permitted_route =
-        std::any_of(kDefaultStateRoutes.begin(), kDefaultStateRoutes.end(),
-                    [&](const auto& route) {
-                      return context.path == route.first &&
-                             method == route.second;
-                    });
+    const bool permitted_route = std::any_of(
+        kDefaultStateRoutes.begin(), kDefaultStateRoutes.end(),
+        [&](const auto& route) {
+          return context.path == route.first && method == route.second;
+        });
     if (!permitted_route) {
       return GateError("E_ACCESS_DENIED", "request denied");
     }
@@ -745,8 +735,7 @@ common::Result<void> AuthorizeSecurityRequest(
       context.path == "/api/v1/setup/runtime") {
     return GateError("E_ACCESS_DENIED", "request denied");
   }
-  const bool login =
-      context.path == "/api/v1/auth/login" && method == "POST";
+  const bool login = context.path == "/api/v1/auth/login" && method == "POST";
   if (!login && !IsKnownProtectedRoute(context.path, method)) {
     return GateError("E_ACCESS_DENIED", "request denied");
   }
@@ -833,8 +822,7 @@ common::Result<common::SecureBytes> ParseSessionCookie(
     if (equals != std::string_view::npos &&
         segment.substr(0, equals) == kSessionCookieName) {
       if (token_view.has_value()) {
-        return InvalidRequest<common::SecureBytes>(
-            "E_AUTHENTICATION_REQUIRED");
+        return InvalidRequest<common::SecureBytes>("E_AUTHENTICATION_REQUIRED");
       }
       token_view = segment.substr(equals + 1U);
     }
@@ -870,8 +858,7 @@ common::Result<common::SecureBytes> ParseSessionCookieHeaders(
 }
 
 common::Result<ParsedLoginRequest> ParseLoginJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto secure_body = SecureRequestBody(body);
   if (!secure_body.ok()) {
     return common::Result<ParsedLoginRequest>::Err(secure_body.error());
@@ -880,8 +867,7 @@ common::Result<ParsedLoginRequest> ParseLoginJson(
 }
 
 common::Result<ParsedLoginRequest> ParseLoginJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   if (body.size() > kMaximumSecurityBodyBytes) {
     return InvalidRequest<ParsedLoginRequest>("E_REQUEST_TOO_LARGE");
   }
@@ -902,8 +888,7 @@ common::Result<ParsedLoginRequest> ParseLoginJson(
 }
 
 common::Result<common::SecureBytes> ParseReauthenticateJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   if (body.size() > kMaximumSecurityBodyBytes) {
     return InvalidRequest<common::SecureBytes>("E_REQUEST_TOO_LARGE");
   }
@@ -920,8 +905,7 @@ common::Result<common::SecureBytes> ParseReauthenticateJson(
 }
 
 common::Result<ParsedSetupRequest> ParseSetupJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto secure_body = SecureRequestBody(body);
   if (!secure_body.ok()) {
     return common::Result<ParsedSetupRequest>::Err(secure_body.error());
@@ -930,8 +914,7 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
 }
 
 common::Result<ParsedSetupRequest> ParseSetupJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   if (body.size() > kMaximumSecurityBodyBytes) {
     return InvalidRequest<ParsedSetupRequest>("E_REQUEST_TOO_LARGE");
   }
@@ -961,9 +944,8 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
   return common::Result<ParsedSetupRequest>::Ok(std::move(parsed));
 }
 
-common::Result<void> ValidateEmptyJsonObject(
-    std::string_view body,
-    std::string_view content_type) {
+common::Result<void> ValidateEmptyJsonObject(std::string_view body,
+                                             std::string_view content_type) {
   if (body.size() > kMaximumSecurityBodyBytes) {
     return InvalidRequest<void>("E_REQUEST_TOO_LARGE");
   }
@@ -973,8 +955,8 @@ common::Result<void> ValidateEmptyJsonObject(
   std::string compact;
   compact.reserve(body.size());
   for (const unsigned char byte : body) {
-    const bool json_whitespace = byte == ' ' || byte == '\t' ||
-                                 byte == '\r' || byte == '\n';
+    const bool json_whitespace =
+        byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n';
     if (!json_whitespace) {
       compact.push_back(static_cast<char>(byte));
     }

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -21,10 +21,9 @@ constexpr std::size_t kMaximumUsernameBytes = 32U;
 constexpr std::size_t kMaximumPasswordBytes = 128U;
 
 #if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
-using SecretCleanupObserverForTesting = void (*)(
-    std::string_view,
-    common::ZeroizeAudit,
-    common::ZeroizeAudit) noexcept;
+using SecretCleanupObserverForTesting = void (*)(std::string_view,
+                                                 common::ZeroizeAudit,
+                                                 common::ZeroizeAudit) noexcept;
 
 std::atomic<SecretCleanupObserverForTesting>&
 SecretCleanupObserverStorageForTesting() {
@@ -33,16 +32,16 @@ SecretCleanupObserverStorageForTesting() {
 }
 #endif
 
-void NotifySecretCleanup(std::string_view label,
-                         common::ZeroizeAudit before,
+void NotifySecretCleanup(std::string_view label, common::ZeroizeAudit before,
                          common::ZeroizeAudit after) noexcept {
 #if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
-  const auto observer = SecretCleanupObserverStorageForTesting().load(
-      std::memory_order_acquire);
+  const auto observer =
+      SecretCleanupObserverStorageForTesting().load(std::memory_order_acquire);
   if (observer != nullptr) {
     try {
       observer(label, before, after);
     } catch (...) {
+      // swallowed: test observer errors must not escape this noexcept notifier
     }
   }
 #else
@@ -223,8 +222,8 @@ class StrictInSituJsonObjectParser {
             if (!ParseHexCodeUnit(low) || low < 0xdc00U || low > 0xdfffU) {
               return false;
             }
-            code_point = 0x10000U + ((code_point - 0xd800U) << 10U) +
-                         (low - 0xdc00U);
+            code_point =
+                0x10000U + ((code_point - 0xd800U) << 10U) + (low - 0xdc00U);
           } else if (code_point >= 0xdc00U && code_point <= 0xdfffU) {
             return false;
           }
@@ -254,7 +253,8 @@ class StrictInSituJsonObjectParser {
     return false;
   }
 
-  bool KeyEquals(const DecodedJsonString& key, std::string_view expected) const {
+  bool KeyEquals(const DecodedJsonString& key,
+                 std::string_view expected) const {
     return key.size == expected.size() &&
            std::equal(expected.begin(), expected.end(),
                       body_.data() + key.offset);
@@ -298,17 +298,17 @@ class StrictInSituJsonObjectParser {
     } else if (code_point <= 0xffffU) {
       body_.data()[output++] =
           static_cast<unsigned char>(0xe0U | (code_point >> 12U));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 6U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 6U) & 0x3fU));
       body_.data()[output++] =
           static_cast<unsigned char>(0x80U | (code_point & 0x3fU));
     } else {
       body_.data()[output++] =
           static_cast<unsigned char>(0xf0U | (code_point >> 18U));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 12U) & 0x3fU));
-      body_.data()[output++] = static_cast<unsigned char>(
-          0x80U | ((code_point >> 6U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 12U) & 0x3fU));
+      body_.data()[output++] =
+          static_cast<unsigned char>(0x80U | ((code_point >> 6U) & 0x3fU));
       body_.data()[output++] =
           static_cast<unsigned char>(0x80U | (code_point & 0x3fU));
     }
@@ -379,7 +379,8 @@ bool IsValidUsernameSize(std::string_view username) {
 }
 
 std::string_view RoleName(security::UserRole role) {
-  return role == security::UserRole::kAdministrator ? "administrator" : "viewer";
+  return role == security::UserRole::kAdministrator ? "administrator"
+                                                    : "viewer";
 }
 
 struct PublicError {
@@ -396,18 +397,19 @@ bool ContainsCode(const std::array<std::string_view, Size>& codes,
 
 bool IsConflictCode(std::string_view code) {
   constexpr std::array<std::string_view, 9> kCodes = {
-      "E_USER_DUPLICATE", "E_VIEWER_LIMIT", "E_USER_PROTECTED",
-      "E_USER_CONFLICT", "E_PASSWORD_REUSE", "E_MANAGEMENT_IP_DUPLICATE",
-      "E_MANAGEMENT_IP_LIMIT", "E_MANAGEMENT_IP_ROLE_MISMATCH",
+      "E_USER_DUPLICATE",         "E_VIEWER_LIMIT",
+      "E_USER_PROTECTED",         "E_USER_CONFLICT",
+      "E_PASSWORD_REUSE",         "E_MANAGEMENT_IP_DUPLICATE",
+      "E_MANAGEMENT_IP_LIMIT",    "E_MANAGEMENT_IP_ROLE_MISMATCH",
       "E_MANAGEMENT_IP_PROTECTED"};
   return ContainsCode(kCodes, code);
 }
 
 bool IsPolicyCode(std::string_view code) {
   constexpr std::array<std::string_view, 8> kCodes = {
-      "E_USERNAME_RESERVED", "E_USERNAME_FORMAT", "E_PASSWORD_LENGTH",
-      "E_PASSWORD_ASCII", "E_PASSWORD_USERNAME", "E_PASSWORD_CLASS",
-      "E_PASSWORD_REPEAT", "E_PASSWORD_SEQUENCE"};
+      "E_USERNAME_RESERVED", "E_USERNAME_FORMAT",   "E_PASSWORD_LENGTH",
+      "E_PASSWORD_ASCII",    "E_PASSWORD_USERNAME", "E_PASSWORD_CLASS",
+      "E_PASSWORD_REPEAT",   "E_PASSWORD_SEQUENCE"};
   return ContainsCode(kCodes, code);
 }
 
@@ -416,8 +418,7 @@ PublicError MapPublicError(std::string_view code) {
     return {drogon::k413RequestEntityTooLarge, "E_REQUEST_TOO_LARGE",
             "request could not be processed"};
   }
-  if (code == "E_USER_FORBIDDEN" ||
-      code == "E_MANAGEMENT_IP_FORBIDDEN" ||
+  if (code == "E_USER_FORBIDDEN" || code == "E_MANAGEMENT_IP_FORBIDDEN" ||
       code == "E_AUTHORIZATION_REQUIRED") {
     return {drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED",
             "authorization required"};
@@ -428,8 +429,7 @@ PublicError MapPublicError(std::string_view code) {
   }
   if (code == "E_CURRENT_PASSWORD" || code == "E_MANAGEMENT_IP_INVALID" ||
       IsPolicyCode(code)) {
-    return {drogon::k400BadRequest, code,
-            "user management request is invalid"};
+    return {drogon::k400BadRequest, code, "user management request is invalid"};
   }
   if (code == "E_USER_NOT_FOUND" || code == "E_MANAGEMENT_IP_NOT_FOUND") {
     return {drogon::k404NotFound, code,
@@ -449,27 +449,24 @@ PublicError MapPublicError(std::string_view code) {
 namespace internal {
 
 using UserManagementSecretCleanupObserverForTesting = void (*)(
-    std::string_view,
-    common::ZeroizeAudit,
-    common::ZeroizeAudit) noexcept;
+    std::string_view, common::ZeroizeAudit, common::ZeroizeAudit) noexcept;
 
 void SetUserManagementSecretCleanupObserverForTesting(
     UserManagementSecretCleanupObserverForTesting observer) noexcept {
   SecretCleanupObserverStorageForTesting().store(observer,
-                                                  std::memory_order_release);
+                                                 std::memory_order_release);
 }
 
 void ResetUserManagementSecretCleanupObserverForTesting() noexcept {
   SecretCleanupObserverStorageForTesting().store(nullptr,
-                                                  std::memory_order_release);
+                                                 std::memory_order_release);
 }
 
 }  // namespace internal
 #endif
 
 common::Result<ParsedCreateViewerRequest> ParseCreateViewerJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   SecretCleanupGuard body_cleanup(body, "create.request_body");
   const auto valid = ValidateJsonBody(body, content_type);
   if (!valid.ok()) {
@@ -488,7 +485,8 @@ common::Result<ParsedCreateViewerRequest> ParseCreateViewerJson(
     DecodedJsonString key;
     bool escaped = false;
     DecodedJsonString value;
-    if (!parser.NextKey(key, escaped) || escaped || !parser.ParseString(value)) {
+    if (!parser.NextKey(key, escaped) || escaped ||
+        !parser.ParseString(value)) {
       return InvalidRequest<ParsedCreateViewerRequest>();
     }
     if (parser.KeyEquals(key, "username") && !username) {
@@ -519,8 +517,7 @@ common::Result<ParsedCreateViewerRequest> ParseCreateViewerJson(
 }
 
 common::Result<ParsedSetViewerEnabledRequest> ParseSetViewerEnabledJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto secure_body = SecureJsonBody(body);
   if (!secure_body.ok()) {
     return common::Result<ParsedSetViewerEnabledRequest>::Err(
@@ -548,8 +545,7 @@ common::Result<ParsedSetViewerEnabledRequest> ParseSetViewerEnabledJson(
 }
 
 common::Result<ParsedPasswordResetRequest> ParsePasswordResetJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   SecretCleanupGuard body_cleanup(body, "reset.request_body");
   const auto valid = ValidateJsonBody(body, content_type);
   if (!valid.ok()) {
@@ -579,8 +575,7 @@ common::Result<ParsedPasswordResetRequest> ParsePasswordResetJson(
 }
 
 common::Result<ParsedOwnPasswordRequest> ParseOwnPasswordJson(
-    common::SecureBytes body,
-    std::string_view content_type) {
+    common::SecureBytes body, std::string_view content_type) {
   SecretCleanupGuard body_cleanup(body, "own.request_body");
   const auto valid = ValidateJsonBody(body, content_type);
   if (!valid.ok()) {
@@ -602,14 +597,14 @@ common::Result<ParsedOwnPasswordRequest> ParseOwnPasswordJson(
     DecodedJsonString key;
     DecodedJsonString value;
     bool escaped = false;
-    if (!parser.NextKey(key, escaped) || escaped || !parser.ParseString(value)) {
+    if (!parser.NextKey(key, escaped) || escaped ||
+        !parser.ParseString(value)) {
       return InvalidRequest<ParsedOwnPasswordRequest>();
     }
     if (parser.KeyEquals(key, "current_password") && !current) {
       parser.CopySecret(value, parsed.current_password);
       current = true;
-    } else if (parser.KeyEquals(key, "replacement_password") &&
-               !replacement) {
+    } else if (parser.KeyEquals(key, "replacement_password") && !replacement) {
       parser.CopySecret(value, parsed.replacement_password);
       replacement = true;
     } else {
@@ -623,20 +618,19 @@ common::Result<ParsedOwnPasswordRequest> ParseOwnPasswordJson(
       break;
     }
   }
-  if (!current || !replacement || !IsValidPasswordSize(parsed.current_password) ||
+  if (!current || !replacement ||
+      !IsValidPasswordSize(parsed.current_password) ||
       !IsValidPasswordSize(parsed.replacement_password)) {
     return InvalidRequest<ParsedOwnPasswordRequest>();
   }
-  auto result = common::Result<ParsedOwnPasswordRequest>::Ok(
-      std::move(parsed));
+  auto result = common::Result<ParsedOwnPasswordRequest>::Ok(std::move(parsed));
   current_cleanup.Release();
   replacement_cleanup.Release();
   return result;
 }
 
 common::Result<ParsedManagementIpRequest> ParseManagementIpJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto secure_body = SecureJsonBody(body);
   if (!secure_body.ok()) {
     return common::Result<ParsedManagementIpRequest>::Err(secure_body.error());
@@ -678,7 +672,8 @@ common::Result<std::int64_t> ParseManagedResourceId(std::string_view value) {
   std::int64_t parsed = 0;
   const auto [end, error] =
       std::from_chars(value.data(), value.data() + value.size(), parsed);
-  if (error != std::errc() || end != value.data() + value.size() || parsed <= 0) {
+  if (error != std::errc() || end != value.data() + value.size() ||
+      parsed <= 0) {
     return InvalidRequest<std::int64_t>();
   }
   return common::Result<std::int64_t>::Ok(parsed);
@@ -701,14 +696,17 @@ Json::Value BuildManagedUserJson(const security::ManagedUser& user) {
   json["username"] = user.username;
   json["role"] = std::string(RoleName(user.role));
   json["enabled"] = user.enabled;
-  json["lock_until_seconds"] = user.lock_until_seconds.has_value()
-                                   ? Json::Value(Json::Int64(*user.lock_until_seconds))
-                                   : Json::Value(Json::nullValue);
+  json["lock_until_seconds"] =
+      user.lock_until_seconds.has_value()
+          ? Json::Value(Json::Int64(*user.lock_until_seconds))
+          : Json::Value(Json::nullValue);
   json["created_at_seconds"] = Json::Int64(user.created_at_seconds);
-  json["password_changed_at_seconds"] = Json::Int64(user.password_changed_at_seconds);
-  json["last_login_at_seconds"] = user.last_login_at_seconds.has_value()
-                                      ? Json::Value(Json::Int64(*user.last_login_at_seconds))
-                                      : Json::Value(Json::nullValue);
+  json["password_changed_at_seconds"] =
+      Json::Int64(user.password_changed_at_seconds);
+  json["last_login_at_seconds"] =
+      user.last_login_at_seconds.has_value()
+          ? Json::Value(Json::Int64(*user.last_login_at_seconds))
+          : Json::Value(Json::nullValue);
   return json;
 }
 

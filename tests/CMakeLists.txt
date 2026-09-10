@@ -489,6 +489,7 @@ gtest_discover_tests(camera_firmware_async_stream_backpressure_tests
 
 add_executable(camera_firmware_service_tests
     unit/service/AuditLogHttpTest.cpp
+    unit/service/HeaderInjectionHardeningTest.cpp
     unit/service/SecurityRequestGateTest.cpp
     unit/service/SessionStreamRegistryTest.cpp
     unit/service/ServiceResponseTest.cpp

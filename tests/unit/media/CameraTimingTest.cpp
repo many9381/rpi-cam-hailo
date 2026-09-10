@@ -7,17 +7,13 @@
 #include <gtest/gtest.h>
 
 TEST(CameraTimingTest, BuildsFixedFrameDurationLimits) {
-  const auto fifty_fps =
-      camera_firmware::media::FixedFrameDurationLimits(50U);
+  const auto fifty_fps = camera_firmware::media::FixedFrameDurationLimits(50U);
   ASSERT_TRUE(fifty_fps.ok()) << fifty_fps.error().message;
-  EXPECT_EQ(fifty_fps.value(),
-            (std::array<std::int64_t, 2>{20000, 20000}));
+  EXPECT_EQ(fifty_fps.value(), (std::array<std::int64_t, 2>{20000, 20000}));
 
-  const auto thirty_fps =
-      camera_firmware::media::FixedFrameDurationLimits(30U);
+  const auto thirty_fps = camera_firmware::media::FixedFrameDurationLimits(30U);
   ASSERT_TRUE(thirty_fps.ok()) << thirty_fps.error().message;
-  EXPECT_EQ(thirty_fps.value(),
-            (std::array<std::int64_t, 2>{33333, 33333}));
+  EXPECT_EQ(thirty_fps.value(), (std::array<std::int64_t, 2>{33333, 33333}));
 }
 
 TEST(CameraTimingTest, RejectsUnrepresentableFrameRates) {

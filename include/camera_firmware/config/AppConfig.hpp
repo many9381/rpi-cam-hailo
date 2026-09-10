@@ -9,7 +9,7 @@
 namespace camera_firmware::config {
 
 inline constexpr std::uint64_t kMaximumAiModelInputBytes =
-    16U * 1024U * 1024U;
+    std::uint64_t{16} * 1024U * 1024U;
 
 struct SessionKeyConfig {
   std::string source{"file"};
@@ -197,8 +197,7 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config);
 // web client would refuse to render can never reach the pipeline or the UI.
 common::Result<void> ValidateCameraOsdSemantics(const CameraOsdConfig& config);
 common::Result<void> ValidateAiConfigSemantics(
-    const AiConfig& ai_config,
-    const CameraConfig& camera_config);
+    const AiConfig& ai_config, const CameraConfig& camera_config);
 common::Result<void> ValidateSecureRtspSemantics(
     const SecureRtspConfig& config);
 common::Result<void> ValidateHttpSnapshotSemantics(

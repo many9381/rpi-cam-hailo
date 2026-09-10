@@ -35,8 +35,8 @@ BoundedWorker::~BoundedWorker() {
   std::thread detach_owner;
   {
     std::unique_lock lifecycle_lock(lifecycle_mutex_);
-    lifecycle_condition_.wait(
-        lifecycle_lock, [this] { return !join_in_progress_; });
+    lifecycle_condition_.wait(lifecycle_lock,
+                              [this] { return !join_in_progress_; });
     if (!worker_released_) {
       detach_owner = std::move(worker_);
       worker_released_ = true;
@@ -78,8 +78,8 @@ void BoundedWorker::Stop() noexcept {
   std::thread join_owner;
   {
     std::unique_lock lifecycle_lock(lifecycle_mutex_);
-    lifecycle_condition_.wait(
-        lifecycle_lock, [this] { return !join_in_progress_; });
+    lifecycle_condition_.wait(lifecycle_lock,
+                              [this] { return !join_in_progress_; });
     if (worker_released_) {
       return;
     }
@@ -115,6 +115,7 @@ void BoundedWorker::Run(const std::shared_ptr<State>& state) noexcept {
     try {
       task();
     } catch (...) {
+      // swallowed: a throwing task must not take down the worker thread
     }
   }
 }

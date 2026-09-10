@@ -8,7 +8,8 @@
 namespace camera_firmware::ai {
 
 struct AiFrameTap::SubscriberSlot {
-  explicit SubscriberSlot(Subscriber callback) : subscriber(std::move(callback)) {}
+  explicit SubscriberSlot(Subscriber callback)
+      : subscriber(std::move(callback)) {}
 
   std::mutex mutex;
   std::condition_variable idle;
@@ -17,8 +18,8 @@ struct AiFrameTap::SubscriberSlot {
   bool subscribed{true};
 };
 
-AiFrameTap::Subscription::Subscription(
-    std::weak_ptr<SharedState> shared_state, std::uint64_t subscriber_id) noexcept
+AiFrameTap::Subscription::Subscription(std::weak_ptr<SharedState> shared_state,
+                                       std::uint64_t subscriber_id) noexcept
     : shared_state_(std::move(shared_state)), subscriber_id_(subscriber_id) {}
 
 AiFrameTap::Subscription::Subscription(Subscription&& other) noexcept
@@ -37,7 +38,9 @@ AiFrameTap::Subscription& AiFrameTap::Subscription::operator=(
   return *this;
 }
 
-AiFrameTap::Subscription::~Subscription() { Reset(); }
+AiFrameTap::Subscription::~Subscription() {
+  Reset();
+}
 
 bool AiFrameTap::Subscription::valid() const noexcept {
   return !shared_state_.expired();
@@ -78,8 +81,7 @@ void AiFrameTap::PublishLatest(media::FrameLease frame) {
     shared_state_->latest.reset();
     delivered = std::move(frame);
     subscribers.reserve(shared_state_->subscribers.size());
-    for (const auto& [subscriber_id, subscriber] :
-         shared_state_->subscribers) {
+    for (const auto& [subscriber_id, subscriber] : shared_state_->subscribers) {
       (void)subscriber_id;
       subscribers.push_back(subscriber);
     }
@@ -104,10 +106,11 @@ bool AiFrameTap::ConsumeDemand() noexcept {
 
 std::optional<media::FrameLease> AiFrameTap::Latest() const {
   std::lock_guard lock(shared_state_->mutex);
-  if (!shared_state_->latest.has_value()) {
+  const auto& latest = shared_state_->latest;
+  if (!latest.has_value()) {
     return std::nullopt;
   }
-  return shared_state_->latest->CloneRef();
+  return latest->CloneRef();
 }
 
 AiFrameTap::Subscription AiFrameTap::Subscribe(Subscriber subscriber) {
@@ -129,9 +132,8 @@ void AiFrameTap::CancelSubscriber(
   std::unique_lock lock(subscriber->mutex);
   subscriber->subscribed = false;
   subscriber->subscriber = nullptr;
-  subscriber->idle.wait(lock, [&subscriber] {
-    return subscriber->active_callbacks == 0U;
-  });
+  subscriber->idle.wait(
+      lock, [&subscriber] { return subscriber->active_callbacks == 0U; });
 }
 
 void AiFrameTap::InvokeSubscriber(

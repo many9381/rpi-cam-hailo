@@ -20,8 +20,7 @@ class SessionStreamTerminalElection {
       SessionStreamTerminalElection&&) noexcept = default;
   ~SessionStreamTerminalElection() = default;
 
-  SessionStreamTerminalElection(const SessionStreamTerminalElection&) =
-      delete;
+  SessionStreamTerminalElection(const SessionStreamTerminalElection&) = delete;
   SessionStreamTerminalElection& operator=(
       const SessionStreamTerminalElection&) = delete;
 
@@ -30,13 +29,10 @@ class SessionStreamTerminalElection {
  private:
   friend struct SessionStreamLeaseState;
 
-  SessionStreamTerminalElection(
-      std::shared_ptr<SessionStreamLeaseState> state,
-      std::unique_lock<std::mutex> lock,
-      bool accepted) noexcept
-      : state_(std::move(state)),
-        lock_(std::move(lock)),
-        accepted_(accepted) {}
+  SessionStreamTerminalElection(std::shared_ptr<SessionStreamLeaseState> state,
+                                std::unique_lock<std::mutex> lock,
+                                bool accepted) noexcept
+      : state_(std::move(state)), lock_(std::move(lock)), accepted_(accepted) {}
 
   std::shared_ptr<SessionStreamLeaseState> state_;
   std::unique_lock<std::mutex> lock_;
@@ -47,8 +43,7 @@ struct SessionStreamLeaseState
     : public std::enable_shared_from_this<SessionStreamLeaseState> {
   SessionStreamLeaseState(
       std::weak_ptr<SessionStreamRegistryState> registry_owner,
-      const security::SessionIdentity& session_identity,
-      std::uint64_t id);
+      const security::SessionIdentity& session_identity, std::uint64_t id);
   ~SessionStreamLeaseState();
 
   void SetHandler(StreamRevocationHandler new_handler);

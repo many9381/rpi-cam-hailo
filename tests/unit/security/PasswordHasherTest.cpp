@@ -112,9 +112,7 @@ class FakeCryptoProvider : public crypto::CryptoProvider {
   }
 
   [[nodiscard]] common::Result<common::SecureBytes> DeriveKeyPbkdf2(
-      const common::SecureBytes&,
-      std::span<const unsigned char>,
-      std::uint32_t,
+      const common::SecureBytes&, std::span<const unsigned char>, std::uint32_t,
       std::size_t output_size) override {
     derive_key_called = true;
     if (status_ != crypto::ProviderStatus::kOperational) {
@@ -129,37 +127,30 @@ class FakeCryptoProvider : public crypto::CryptoProvider {
       std::array<unsigned char, crypto::kEd25519SignatureBytes>>
   SignEd25519(std::span<const unsigned char>,
               std::span<const unsigned char>) override {
-    return common::Result<
-        std::array<unsigned char, crypto::kEd25519SignatureBytes>>::Err(
-        {"E_NOT_IMPLEMENTED", "unused by this test"});
+    return common::
+        Result<std::array<unsigned char, crypto::kEd25519SignatureBytes>>::Err(
+            {"E_NOT_IMPLEMENTED", "unused by this test"});
   }
 
   [[nodiscard]] common::Result<bool> VerifyEd25519(
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
+      std::span<const unsigned char>, std::span<const unsigned char>,
       std::span<const unsigned char>) override {
     return common::Result<bool>::Err(
         {"E_NOT_IMPLEMENTED", "unused by this test"});
   }
 
   [[nodiscard]] common::Result<void> SealAesGcm(
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<unsigned char>,
-      std::span<unsigned char>) override {
+      std::span<const unsigned char>, std::span<const unsigned char>,
+      std::span<const unsigned char>, std::span<const unsigned char>,
+      std::span<unsigned char>, std::span<unsigned char>) override {
     return common::Result<void>::Err(
         {"E_NOT_IMPLEMENTED", "unused by this test"});
   }
 
   [[nodiscard]] common::Result<void> OpenAesGcm(
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<const unsigned char>,
-      std::span<unsigned char>) override {
+      std::span<const unsigned char>, std::span<const unsigned char>,
+      std::span<const unsigned char>, std::span<const unsigned char>,
+      std::span<const unsigned char>, std::span<unsigned char>) override {
     return common::Result<void>::Err(
         {"E_NOT_IMPLEMENTED", "unused by this test"});
   }
@@ -201,8 +192,8 @@ TEST(PasswordHasherTest, UsesUniqueSaltAndVerifiesPassword) {
 }
 
 TEST(PasswordHasherTest, PublicVerificationApiHasExactlyTwoArguments) {
-  using VerifySignature = common::Result<bool> (*)(
-      const common::SecureBytes&, const PasswordRecord&);
+  using VerifySignature = common::Result<bool> (*)(const common::SecureBytes&,
+                                                   const PasswordRecord&);
   VerifySignature verify = &VerifyPassword;
   EXPECT_NE(verify, nullptr);
 }
@@ -221,14 +212,13 @@ TEST(PasswordHasherTest, RejectsPartialInjectedRandomAndKdfOutputs) {
   DeterministicRandom random;
   PasswordHasherDependencies short_kdf;
   short_kdf.random_bytes = random.Callback();
-  short_kdf.derive_bytes =
-      [](const common::SecureBytes&, std::span<const unsigned char>,
-         std::uint32_t, std::size_t size) {
-        return common::Result<common::SecureBytes>::Ok(
-            FilledBytes(size - 1U, 0xa5U));
-      };
-  auto kdf_result =
-      DerivePassword(Bytes("NorthStar!9"), std::move(short_kdf));
+  short_kdf.derive_bytes = [](const common::SecureBytes&,
+                              std::span<const unsigned char>, std::uint32_t,
+                              std::size_t size) {
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(size - 1U, 0xa5U));
+  };
+  auto kdf_result = DerivePassword(Bytes("NorthStar!9"), std::move(short_kdf));
   ASSERT_FALSE(kdf_result.ok());
   EXPECT_EQ(kdf_result.error().code, "E_PASSWORD_HASH");
 }
@@ -248,16 +238,15 @@ TEST(PasswordHasherTest, CleansesKdfScratchOnSuccessAndFailure) {
   DeterministicRandom failure_random;
   PasswordHasherDependencies failure;
   failure.random_bytes = failure_random.Callback();
-  failure.derive_bytes =
-      [](const common::SecureBytes&, std::span<const unsigned char>,
-         std::uint32_t, std::size_t size) {
-        return common::Result<common::SecureBytes>::Ok(
-            FilledBytes(size - 1U, 0xa5U));
-      };
+  failure.derive_bytes = [](const common::SecureBytes&,
+                            std::span<const unsigned char>, std::uint32_t,
+                            std::size_t size) {
+    return common::Result<common::SecureBytes>::Ok(
+        FilledBytes(size - 1U, 0xa5U));
+  };
   failure.scratch_audit = failure_audit.Callback();
 
-  const auto failed =
-      DerivePassword(Bytes("NorthStar!9"), std::move(failure));
+  const auto failed = DerivePassword(Bytes("NorthStar!9"), std::move(failure));
 
   ASSERT_FALSE(failed.ok());
   EXPECT_EQ(failed.error().code, "E_PASSWORD_HASH");
@@ -284,10 +273,8 @@ TEST(PasswordHasherTest, AcceptsStoredIterationCompatibilityBoundaries) {
   auto minimum = RecordWithIterations(kPasswordMinAcceptedIterations);
   auto maximum = RecordWithIterations(kPasswordMaxAcceptedIterations);
 
-  const auto minimum_result =
-      VerifyPassword(Bytes("NorthStar!9"), minimum);
-  const auto maximum_result =
-      VerifyPassword(Bytes("NorthStar!9"), maximum);
+  const auto minimum_result = VerifyPassword(Bytes("NorthStar!9"), minimum);
+  const auto maximum_result = VerifyPassword(Bytes("NorthStar!9"), maximum);
 
   ASSERT_TRUE(minimum_result.ok()) << minimum_result.error().message;
   ASSERT_TRUE(maximum_result.ok()) << maximum_result.error().message;
@@ -295,7 +282,8 @@ TEST(PasswordHasherTest, AcceptsStoredIterationCompatibilityBoundaries) {
   EXPECT_FALSE(maximum_result.value());
 }
 
-TEST(PasswordHasherTest, RejectsIterationsImmediatelyOutsideCompatibilityBounds) {
+TEST(PasswordHasherTest,
+     RejectsIterationsImmediatelyOutsideCompatibilityBounds) {
   auto below = RecordWithIterations(kPasswordMinAcceptedIterations - 1U);
   auto above = RecordWithIterations(kPasswordMaxAcceptedIterations + 1U);
 
@@ -349,7 +337,7 @@ TEST(PasswordHasherTest, EmptyCallbacksFallBackToInjectedProvider) {
   ASSERT_TRUE(provider.SelfTest().ok());
 
   PasswordHasherDependencies dependencies;
-  dependencies.provider = &provider;   // callbacks left empty
+  dependencies.provider = &provider;  // callbacks left empty
 
   auto record = DerivePassword(Bytes("NorthStar!9"), dependencies);
   ASSERT_TRUE(record.ok()) << record.error().message;
@@ -385,14 +373,12 @@ TEST(PasswordHasherTest, SuppliedDeriveCallbackStillWinsOverProvider) {
   bool callback_ran = false;
   PasswordHasherDependencies dependencies;
   dependencies.provider = &provider;
-  dependencies.derive_bytes =
-      [&callback_ran](const common::SecureBytes&,
-                      std::span<const unsigned char>, std::uint32_t,
-                      std::size_t size) {
-        callback_ran = true;
-        return common::Result<common::SecureBytes>::Ok(
-            FilledBytes(size, 0x77U));
-      };
+  dependencies.derive_bytes = [&callback_ran](const common::SecureBytes&,
+                                              std::span<const unsigned char>,
+                                              std::uint32_t, std::size_t size) {
+    callback_ran = true;
+    return common::Result<common::SecureBytes>::Ok(FilledBytes(size, 0x77U));
+  };
 
   ASSERT_TRUE(DerivePassword(Bytes("NorthStar!9"), dependencies).ok());
   EXPECT_TRUE(callback_ran);

@@ -52,8 +52,7 @@ int CreateNv12Memfd() {
     return fd;
   }
   const std::vector<std::uint8_t> nv12{
-      0x40, 0x80, 0x80, 0xc0,
-      0x80, 0x80,
+      0x40, 0x80, 0x80, 0xc0, 0x80, 0x80,
   };
   if (ftruncate(fd, static_cast<off_t>(nv12.size())) != 0 ||
       write(fd, nv12.data(), nv12.size()) !=
@@ -187,10 +186,9 @@ TEST(FirmwareRuntimeTest, StartsAndStopsEachComponentExactlyOnce) {
   EXPECT_EQ(calls.ai_stops.load(), 1U);
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "live.start",
-                                      "live.stop", "camera.stop", "ai.stop",
-                                      "rtsp.stop"}));
+            (std::vector<std::string>{"rtsp.start", "ai.start", "camera.start",
+                                      "live.start", "live.stop", "camera.stop",
+                                      "ai.stop", "rtsp.stop"}));
 }
 
 TEST(FirmwareRuntimeTest, LiveStartFailureUnwindsCameraAndEarlierComponents) {
@@ -212,12 +210,13 @@ TEST(FirmwareRuntimeTest, LiveStartFailureUnwindsCameraAndEarlierComponents) {
   EXPECT_EQ(calls.live_stops.load(), 0U);
   EXPECT_EQ(calls.camera_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "live.start",
-                                      "camera.stop", "ai.stop", "rtsp.stop"}));
+            (std::vector<std::string>{"rtsp.start", "ai.start", "camera.start",
+                                      "live.start", "camera.stop", "ai.stop",
+                                      "rtsp.stop"}));
 }
 
-TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) {
+TEST(FirmwareRuntimeTest,
+     PartialFailureUnwindsStartedComponentsInReverseOrder) {
   config::AppConfig config;
   config.camera.id = "configured-camera";
   Calls calls;
@@ -239,9 +238,8 @@ TEST(FirmwareRuntimeTest, PartialFailureUnwindsStartedComponentsInReverseOrder) 
   EXPECT_EQ(calls.ai_stops.load(), 1U);
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "ai.stop",
-                                      "rtsp.stop"}));
+            (std::vector<std::string>{"rtsp.start", "ai.start", "camera.start",
+                                      "ai.stop", "rtsp.stop"}));
   const auto statuses = runtime.CameraStatuses();
   ASSERT_EQ(statuses.size(), 1U);
   EXPECT_EQ(statuses.front().id, "configured-camera");
@@ -259,7 +257,8 @@ TEST(FirmwareRuntimeTest, StoppedRuntimeReturnsSafeProviderValues) {
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.camera_statuses = [&] {
     calls.provider_calls.fetch_add(1U);
-    return std::vector<media::CameraPipelineStatus>{{"camera", "running", true}};
+    return std::vector<media::CameraPipelineStatus>{
+        {"camera", "running", true}};
   };
   dependencies.restart_ai = [&] {
     calls.provider_calls.fetch_add(1U);
@@ -267,7 +266,8 @@ TEST(FirmwareRuntimeTest, StoppedRuntimeReturnsSafeProviderValues) {
   };
   dependencies.snapshot = [&](std::string_view) {
     calls.provider_calls.fetch_add(1U);
-    return std::optional<camera_firmware::media::JpegBytes>{std::string("\x01\x02\x03", 3U)};
+    return std::optional<camera_firmware::media::JpegBytes>{
+        std::string("\x01\x02\x03", 3U)};
   };
   FirmwareRuntime runtime(config, std::move(dependencies));
 
@@ -321,7 +321,8 @@ TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
   auto dependencies = SuccessfulDependencies(calls);
   dependencies.camera_statuses = [&] {
     calls.provider_calls.fetch_add(1U);
-    return std::vector<media::CameraPipelineStatus>{{"camera", "running", true}};
+    return std::vector<media::CameraPipelineStatus>{
+        {"camera", "running", true}};
   };
   dependencies.ai_status = [&] {
     calls.provider_calls.fetch_add(1U);
@@ -337,7 +338,8 @@ TEST(FirmwareRuntimeTest, RunningProvidersDelegateToOwnedDependencies) {
   dependencies.snapshot = [&](std::string_view camera_id) {
     calls.provider_calls.fetch_add(1U);
     if (camera_id == "camera") {
-      return std::optional<camera_firmware::media::JpegBytes>{std::string("\x01\x02\x03", 3U)};
+      return std::optional<camera_firmware::media::JpegBytes>{
+          std::string("\x01\x02\x03", 3U)};
     }
     return std::optional<camera_firmware::media::JpegBytes>{};
   };
@@ -428,10 +430,9 @@ TEST(FirmwareRuntimeTest, StopContinuesUnwindWhenCallbacksThrow) {
   EXPECT_EQ(calls.ai_stops.load(), 1U);
   EXPECT_EQ(calls.rtsp_stops.load(), 1U);
   EXPECT_EQ(calls.ordered,
-            (std::vector<std::string>{"rtsp.start", "ai.start",
-                                      "camera.start", "live.start",
-                                      "live.stop", "camera.stop", "ai.stop",
-                                      "rtsp.stop"}));
+            (std::vector<std::string>{"rtsp.start", "ai.start", "camera.start",
+                                      "live.start", "live.stop", "camera.stop",
+                                      "ai.stop", "rtsp.stop"}));
 }
 
 TEST(FirmwareRuntimeTest, ProductionConstructorOwnsCompleteComponentGraph) {
@@ -464,34 +465,33 @@ TEST(FirmwareRuntimeTest,
   handle.width = 2U;
   handle.height = 2U;
   handle.plane_count = 2U;
-  handle.planes[0] =
-      {.dmabuf_fd = fd, .offset = 0U, .length = 4U, .stride = 2U};
-  handle.planes[1] =
-      {.dmabuf_fd = fd, .offset = 4U, .length = 2U, .stride = 2U};
-  snapshot_tap.Publish(media::FrameLease(std::move(handle), [fd] {
-    (void)close(fd);
-  }));
+  handle.planes[0] = {
+      .dmabuf_fd = fd, .offset = 0U, .length = 4U, .stride = 2U};
+  handle.planes[1] = {
+      .dmabuf_fd = fd, .offset = 4U, .length = 2U, .stride = 2U};
+  snapshot_tap.Publish(
+      media::FrameLease(std::move(handle), [fd] { (void)close(fd); }));
 
   ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
   EXPECT_TRUE(pipeline.Status(maximum_age).front().snapshot_available);
-  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(
-                  snapshot_tap, config.camera.id, maximum_age)
+  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(snapshot_tap, config.camera.id,
+                                             maximum_age)
                   .has_value());
 
   now += maximum_age;
 
   ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
   EXPECT_TRUE(pipeline.Status(maximum_age).front().snapshot_available);
-  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(
-                  snapshot_tap, config.camera.id, maximum_age)
+  EXPECT_TRUE(media::BuildLatestSnapshotJpeg(snapshot_tap, config.camera.id,
+                                             maximum_age)
                   .has_value());
 
   now += std::chrono::milliseconds(1);
 
   ASSERT_EQ(pipeline.Status(maximum_age).size(), 1U);
   EXPECT_FALSE(pipeline.Status(maximum_age).front().snapshot_available);
-  EXPECT_FALSE(media::BuildLatestSnapshotJpeg(
-                   snapshot_tap, config.camera.id, maximum_age)
+  EXPECT_FALSE(media::BuildLatestSnapshotJpeg(snapshot_tap, config.camera.id,
+                                              maximum_age)
                    .has_value());
 }
 
@@ -505,8 +505,7 @@ TEST(FirmwareRuntimeTest,
   config.camera.sub_stream.enabled = true;
   config.camera.sub_stream.mount = config.secure_rtsp.mount;
 
-  auto dependencies =
-      FirmwareRuntimeTestAccess::ProductionDependencies(config);
+  auto dependencies = FirmwareRuntimeTestAccess::ProductionDependencies(config);
   const auto started = dependencies.start_rtsp();
 
   // The main mount starts normally; the sub is disabled, not fatal.
@@ -524,8 +523,7 @@ TEST(FirmwareRuntimeTest,
   config.camera.sub_stream.enabled = true;
   ASSERT_NE(config.camera.sub_stream.mount, config.secure_rtsp.mount);
 
-  auto dependencies =
-      FirmwareRuntimeTestAccess::ProductionDependencies(config);
+  auto dependencies = FirmwareRuntimeTestAccess::ProductionDependencies(config);
   const auto started = dependencies.start_rtsp();
 
   ASSERT_TRUE(started.ok()) << started.error().message;
@@ -561,10 +559,10 @@ media::FrameLease MakeSmallNv12SubFrame(std::uint32_t width,
   handle.width = width;
   handle.height = height;
   handle.plane_count = 2;
-  handle.planes[0] = {.dmabuf_fd = fd, .offset = 0, .length = y_size,
-                      .stride = width};
-  handle.planes[1] = {.dmabuf_fd = fd, .offset = y_size, .length = uv_size,
-                      .stride = width};
+  handle.planes[0] = {
+      .dmabuf_fd = fd, .offset = 0, .length = y_size, .stride = width};
+  handle.planes[1] = {
+      .dmabuf_fd = fd, .offset = y_size, .length = uv_size, .stride = width};
 
   return media::FrameLease(std::move(handle), [fd] {
     if (fd >= 0) {

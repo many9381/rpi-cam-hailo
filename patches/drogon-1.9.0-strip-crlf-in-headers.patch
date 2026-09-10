@@ -1,0 +1,93 @@
+--- a/lib/src/HttpResponseImpl.h	2026-09-10 00:19:09.826611118 +0900
++++ b/lib/src/HttpResponseImpl.h	2026-09-10 00:19:09.889509390 +0900
+@@ -157,6 +157,22 @@
+         headers_.erase(lowerKey);
+     }
+ 
++    // CVE-2023-26137 / CVE-2023-26138 hardening: a CR or LF inside a header
++    // name or value would terminate the header line and let the caller inject
++    // further headers (response splitting). Drop both characters at the point
++    // they enter the response so no code path can serialize them.
++    static void stripLineBreaks(std::string &text)
++    {
++        std::string cleaned;
++        cleaned.reserve(text.size());
++        for (const char c : text)
++        {
++            if (c != '\r' && c != '\n')
++                cleaned.push_back(c);
++        }
++        text.swap(cleaned);
++    }
++
+     void addHeader(std::string field, const std::string &value) override
+     {
+         fullHeaderString_.reset();
+@@ -164,7 +180,10 @@
+                   field.end(),
+                   field.begin(),
+                   [](unsigned char c) { return tolower(c); });
+-        headers_[std::move(field)] = value;
++        stripLineBreaks(field);
++        std::string cleaned = value;
++        stripLineBreaks(cleaned);
++        headers_[std::move(field)] = std::move(cleaned);
+     }
+ 
+     void addHeader(std::string field, std::string &&value) override
+@@ -174,6 +193,8 @@
+                   field.end(),
+                   field.begin(),
+                   [](unsigned char c) { return tolower(c); });
++        stripLineBreaks(field);
++        stripLineBreaks(value);
+         headers_[std::move(field)] = std::move(value);
+     }
+ 
+--- a/lib/src/Cookie.cc	2026-09-10 00:19:09.835940067 +0900
++++ b/lib/src/Cookie.cc	2026-09-10 00:19:09.889672799 +0900
+@@ -17,12 +17,28 @@
+ #include <trantor/utils/Logger.h>
+ using namespace drogon;
+ 
++// CVE-2023-26137 hardening: CR/LF inside a cookie attribute would end the
++// Set-Cookie line and inject further headers. Serialize sanitized copies.
++static std::string withoutLineBreaks(const std::string &text)
++{
++    std::string cleaned;
++    cleaned.reserve(text.size());
++    for (const char c : text)
++    {
++        if (c != '\r' && c != '\n')
++            cleaned.push_back(c);
++    }
++    return cleaned;
++}
++
+ std::string Cookie::cookieString() const
+ {
++    const std::string key = withoutLineBreaks(key_);
++    const std::string value = withoutLineBreaks(value_);
+     std::string ret = "Set-Cookie: ";
+     // reserve space to reduce frequency allocation
+-    ret.reserve(ret.size() + key_.size() + value_.size() + 30);
+-    ret.append(key_).append("=").append(value_).append("; ");
++    ret.reserve(ret.size() + key.size() + value.size() + 30);
++    ret.append(key).append("=").append(value).append("; ");
+     if (expiresDate_.microSecondsSinceEpoch() !=
+             (std::numeric_limits<int64_t>::max)() &&
+         expiresDate_.microSecondsSinceEpoch() >= 0)
+@@ -39,11 +55,11 @@
+     }
+     if (!domain_.empty())
+     {
+-        ret.append("Domain=").append(domain_).append("; ");
++        ret.append("Domain=").append(withoutLineBreaks(domain_)).append("; ");
+     }
+     if (!path_.empty())
+     {
+-        ret.append("Path=").append(path_).append("; ");
++        ret.append("Path=").append(withoutLineBreaks(path_)).append("; ");
+     }
+     if (sameSite_ != SameSite::kNull)
+     {

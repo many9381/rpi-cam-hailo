@@ -45,9 +45,8 @@ bool MultiplicationOverflows(std::size_t left, std::size_t right) {
 }
 
 common::Result<std::size_t> Rgb8ByteCount(std::uint32_t width,
-                                           std::uint32_t height) {
-  if (width == 0U || height == 0U ||
-      MultiplicationOverflows(width, height) ||
+                                          std::uint32_t height) {
+  if (width == 0U || height == 0U || MultiplicationOverflows(width, height) ||
       MultiplicationOverflows(static_cast<std::size_t>(width) * height,
                               kRgbChannels)) {
     return common::Result<std::size_t>::Err(
@@ -62,13 +61,13 @@ common::Result<std::size_t> Rgb8ByteCount(std::uint32_t width,
 }
 
 common::Result<std::size_t> RequiredPlaneBytes(std::uint32_t stride,
-                                                std::uint32_t rows) {
+                                               std::uint32_t rows) {
   if (stride == 0U || rows == 0U || MultiplicationOverflows(stride, rows)) {
     return common::Result<std::size_t>::Err(
         PreprocessError("NV12 plane dimensions are invalid"));
   }
-  return common::Result<std::size_t>::Ok(
-      static_cast<std::size_t>(stride) * rows);
+  return common::Result<std::size_t>::Ok(static_cast<std::size_t>(stride) *
+                                         rows);
 }
 
 // Page-alignment bookkeeping for mmap()'ing a (possibly unaligned) dmabuf
@@ -104,16 +103,13 @@ common::Result<PlaneMappingParams> ComputePlaneMappingParams(
     return common::Result<PlaneMappingParams>::Err(
         PreprocessError("NV12 plane mapping range is invalid"));
   }
-  return common::Result<PlaneMappingParams>::Ok(
-      PlaneMappingParams{mapping_offset, data_offset, data_offset + plane.length});
+  return common::Result<PlaneMappingParams>::Ok(PlaneMappingParams{
+      mapping_offset, data_offset, data_offset + plane.length});
 }
 
 common::Result<ModelInputGeometry> BuildModelInputGeometry(
-    std::uint32_t source_width,
-    std::uint32_t source_height,
-    std::uint32_t target_width,
-    std::uint32_t target_height,
-    bool letterbox) {
+    std::uint32_t source_width, std::uint32_t source_height,
+    std::uint32_t target_width, std::uint32_t target_height, bool letterbox) {
   if (source_width == 0U || source_height == 0U || target_width == 0U ||
       target_height == 0U) {
     return common::Result<ModelInputGeometry>::Err(
@@ -125,15 +121,15 @@ common::Result<ModelInputGeometry> BuildModelInputGeometry(
     return common::Result<ModelInputGeometry>::Ok(geometry);
   }
 
-  const double scale = std::min(
-      static_cast<double>(target_width) / source_width,
-      static_cast<double>(target_height) / source_height);
-  geometry.scaled_width = std::min(
-      target_width,
-      std::max(1U, static_cast<std::uint32_t>(source_width * scale)));
-  geometry.scaled_height = std::min(
-      target_height,
-      std::max(1U, static_cast<std::uint32_t>(source_height * scale)));
+  const double scale =
+      std::min(static_cast<double>(target_width) / source_width,
+               static_cast<double>(target_height) / source_height);
+  geometry.scaled_width =
+      std::min(target_width,
+               std::max(1U, static_cast<std::uint32_t>(source_width * scale)));
+  geometry.scaled_height =
+      std::min(target_height,
+               std::max(1U, static_cast<std::uint32_t>(source_height * scale)));
   geometry.x_offset = (target_width - geometry.scaled_width) / 2U;
   geometry.y_offset = (target_height - geometry.scaled_height) / 2U;
   return common::Result<ModelInputGeometry>::Ok(geometry);
@@ -142,9 +138,7 @@ common::Result<ModelInputGeometry> BuildModelInputGeometry(
 }  // namespace
 
 struct Nv12RgbPreprocessor::Impl {
-  Impl(std::uint32_t width,
-       std::uint32_t height,
-       bool use_letterbox,
+  Impl(std::uint32_t width, std::uint32_t height, bool use_letterbox,
        std::uint8_t fill)
       : target_width(width),
         target_height(height),
@@ -236,7 +230,8 @@ struct Nv12RgbPreprocessor::Impl {
       }
       struct stat backing {};
       if (::fstat(plane.dmabuf_fd, &backing) == 0 &&
-          backing.st_dev == it->backing_dev && backing.st_ino == it->backing_ino) {
+          backing.st_dev == it->backing_dev &&
+          backing.st_ino == it->backing_ino) {
         return common::Result<const std::uint8_t*>::Ok(
             static_cast<const std::uint8_t*>(it->address) +
             mapping_params.data_offset);
@@ -262,11 +257,8 @@ struct Nv12RgbPreprocessor::Impl {
           PreprocessError("NV12 plane range exceeds its backing file"));
     }
 
-    void* mapping = ::mmap(nullptr,
-                           mapping_params.mapping_size,
-                           PROT_READ,
-                           MAP_SHARED,
-                           plane.dmabuf_fd,
+    void* mapping = ::mmap(nullptr, mapping_params.mapping_size, PROT_READ,
+                           MAP_SHARED, plane.dmabuf_fd,
                            static_cast<off_t>(mapping_params.mapping_offset));
     if (mapping == MAP_FAILED) {
       return common::Result<const std::uint8_t*>::Err(
@@ -297,11 +289,8 @@ struct Nv12RgbPreprocessor::Impl {
 
 Nv12RgbPreprocessor::Nv12RgbPreprocessor(std::uint32_t target_width,
                                          std::uint32_t target_height,
-                                         bool letterbox,
-                                         std::uint8_t padding)
-    : impl_(std::make_unique<Impl>(target_width,
-                                   target_height,
-                                   letterbox,
+                                         bool letterbox, std::uint8_t padding)
+    : impl_(std::make_unique<Impl>(target_width, target_height, letterbox,
                                    padding)) {}
 
 Nv12RgbPreprocessor::~Nv12RgbPreprocessor() = default;
@@ -313,11 +302,9 @@ namespace {
 // matches keeps its pad bands from the previous conversion; the content
 // region is fully overwritten by the caller either way. Downstream only
 // reads the buffer (Hailo DMA), so the pads stay trustworthy across reuse.
-void EnsureCanvasPadding(ModelInputBuffer& canvas,
-                         std::size_t target_bytes,
+void EnsureCanvasPadding(ModelInputBuffer& canvas, std::size_t target_bytes,
                          std::uint32_t source_width,
-                         std::uint32_t source_height,
-                         std::uint8_t padding) {
+                         std::uint32_t source_height, std::uint8_t padding) {
   if (canvas.bytes.size() == target_bytes && canvas.padded &&
       canvas.padded_source_width == source_width &&
       canvas.padded_source_height == source_height) {
@@ -344,24 +331,23 @@ common::Result<void> Nv12RgbPreprocessor::ConvertBgr888(
     return ResultBytes::Err(
         PreprocessError("AI processor received an invalid BGR888 frame"));
   }
-  const std::uint32_t row_bytes = source.width * static_cast<std::uint32_t>(kRgbChannels);
+  const std::uint32_t row_bytes =
+      source.width * static_cast<std::uint32_t>(kRgbChannels);
   if (source.planes[0].stride < row_bytes) {
     return ResultBytes::Err(
         PreprocessError("BGR888 stride is smaller than the source row"));
   }
-  const auto plane_required = RequiredPlaneBytes(source.planes[0].stride,
-                                                source.height);
+  const auto plane_required =
+      RequiredPlaneBytes(source.planes[0].stride, source.height);
   if (!plane_required.ok() ||
       source.planes[0].length < plane_required.value()) {
     return ResultBytes::Err(
         PreprocessError("BGR888 plane is shorter than expected"));
   }
 
-  const auto geometry = BuildModelInputGeometry(source.width,
-                                                source.height,
-                                                impl_->target_width,
-                                                impl_->target_height,
-                                                impl_->letterbox);
+  const auto geometry =
+      BuildModelInputGeometry(source.width, source.height, impl_->target_width,
+                              impl_->target_height, impl_->letterbox);
   if (!geometry.ok()) {
     return ResultBytes::Err(geometry.error());
   }
@@ -370,8 +356,8 @@ common::Result<void> Nv12RgbPreprocessor::ConvertBgr888(
     return ResultBytes::Err(PreprocessError(
         "BGR888 frame does not match the model letterbox content size"));
   }
-  const auto target_bytes = Rgb8ByteCount(impl_->target_width,
-                                          impl_->target_height);
+  const auto target_bytes =
+      Rgb8ByteCount(impl_->target_width, impl_->target_height);
   if (!target_bytes.ok()) {
     return ResultBytes::Err(target_bytes.error());
   }
@@ -393,7 +379,8 @@ common::Result<void> Nv12RgbPreprocessor::ConvertBgr888(
   }
 
   const std::uint8_t* source_base = mapped.value();
-  std::uint8_t* target_base = canvas.bytes.data() +
+  std::uint8_t* target_base =
+      canvas.bytes.data() +
       ((static_cast<std::size_t>(geometry.value().y_offset) *
             impl_->target_width +
         geometry.value().x_offset) *
@@ -401,10 +388,10 @@ common::Result<void> Nv12RgbPreprocessor::ConvertBgr888(
   const std::size_t target_stride =
       static_cast<std::size_t>(impl_->target_width) * kRgbChannels;
   for (std::uint32_t row = 0; row < source.height; ++row) {
-    std::memcpy(target_base + static_cast<std::size_t>(row) * target_stride,
-                source_base +
-                    static_cast<std::size_t>(row) * source.planes[0].stride,
-                row_bytes);
+    std::memcpy(
+        target_base + static_cast<std::size_t>(row) * target_stride,
+        source_base + static_cast<std::size_t>(row) * source.planes[0].stride,
+        row_bytes);
   }
   return ResultBytes::Ok();
 }
@@ -416,8 +403,7 @@ common::Result<std::vector<std::uint8_t>> Nv12RgbPreprocessor::Convert(
   if (!converted.ok()) {
     return common::Result<std::vector<std::uint8_t>>::Err(converted.error());
   }
-  return common::Result<std::vector<std::uint8_t>>::Ok(
-      std::move(canvas.bytes));
+  return common::Result<std::vector<std::uint8_t>>::Ok(std::move(canvas.bytes));
 }
 
 common::Result<void> Nv12RgbPreprocessor::ConvertInto(
@@ -443,10 +429,10 @@ common::Result<void> Nv12RgbPreprocessor::ConvertInto(
         PreprocessError("NV12 plane stride is smaller than the source width"));
   }
 
-  const auto y_required = RequiredPlaneBytes(source.planes[0].stride,
-                                             source.height);
-  const auto uv_required = RequiredPlaneBytes(source.planes[1].stride,
-                                              source.height / 2U);
+  const auto y_required =
+      RequiredPlaneBytes(source.planes[0].stride, source.height);
+  const auto uv_required =
+      RequiredPlaneBytes(source.planes[1].stride, source.height / 2U);
   if (!y_required.ok() || !uv_required.ok() ||
       source.planes[0].length < y_required.value() ||
       source.planes[1].length < uv_required.value()) {
@@ -454,21 +440,21 @@ common::Result<void> Nv12RgbPreprocessor::ConvertInto(
         PreprocessError("AI processor received inconsistent NV12 planes"));
   }
 
-  const auto geometry = BuildModelInputGeometry(source.width,
-                                                source.height,
-                                                impl_->target_width,
-                                                impl_->target_height,
-                                                impl_->letterbox);
-  const auto target_bytes = Rgb8ByteCount(impl_->target_width,
-                                          impl_->target_height);
+  const auto geometry =
+      BuildModelInputGeometry(source.width, source.height, impl_->target_width,
+                              impl_->target_height, impl_->letterbox);
+  const auto target_bytes =
+      Rgb8ByteCount(impl_->target_width, impl_->target_height);
   if (!geometry.ok()) {
     return common::Result<void>::Err(geometry.error());
   }
   if (!target_bytes.ok()) {
     return common::Result<void>::Err(target_bytes.error());
   }
-  if (source.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-      source.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+  if (source.width >
+          static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+      source.height >
+          static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
       source.planes[0].stride >
           static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
       source.planes[1].stride >
@@ -493,17 +479,11 @@ common::Result<void> Nv12RgbPreprocessor::ConvertInto(
   }
 
   impl_->sws = sws_getCachedContext(
-      impl_->sws,
-      static_cast<int>(source.width),
-      static_cast<int>(source.height),
-      AV_PIX_FMT_NV12,
+      impl_->sws, static_cast<int>(source.width),
+      static_cast<int>(source.height), AV_PIX_FMT_NV12,
       static_cast<int>(geometry.value().scaled_width),
-      static_cast<int>(geometry.value().scaled_height),
-      AV_PIX_FMT_RGB24,
-      SWS_BILINEAR,
-      nullptr,
-      nullptr,
-      nullptr);
+      static_cast<int>(geometry.value().scaled_height), AV_PIX_FMT_RGB24,
+      SWS_BILINEAR, nullptr, nullptr, nullptr);
   if (impl_->sws == nullptr) {
     return common::Result<void>::Err(
         PreprocessError("failed to create NV12 conversion context"));
@@ -528,15 +508,12 @@ common::Result<void> Nv12RgbPreprocessor::ConvertInto(
             impl_->target_width +
         geometry.value().x_offset) *
        kRgbChannels)};
-  int target_strides[1] = {static_cast<int>(impl_->target_width * kRgbChannels)};
+  int target_strides[1] = {
+      static_cast<int>(impl_->target_width * kRgbChannels)};
 
-  const int scaled_rows = sws_scale(impl_->sws,
-                                    source_planes,
-                                    source_strides,
-                                    0,
-                                    static_cast<int>(source.height),
-                                    target_planes,
-                                    target_strides);
+  const int scaled_rows =
+      sws_scale(impl_->sws, source_planes, source_strides, 0,
+                static_cast<int>(source.height), target_planes, target_strides);
   if (scaled_rows != static_cast<int>(geometry.value().scaled_height)) {
     // The canvas content region may now hold a partial scale; drop the
     // padding tag so the next use repaints the whole canvas.

@@ -36,37 +36,59 @@ struct Frame {
   std::vector<std::uint8_t> uv_storage;
 
   Frame(int w, int h, int y_stride)
-      : width(w), height(h), y_stride(y_stride), uv_stride(w + (w % 2)),
-        y_storage(kGuard + static_cast<std::size_t>(y_stride) * h + kGuard, 128U),
-        uv_storage(kGuard + static_cast<std::size_t>(uv_stride) * ((h + 1) / 2) + kGuard, 128U) {
+      : width(w),
+        height(h),
+        y_stride(y_stride),
+        uv_stride(w + (w % 2)),
+        y_storage(kGuard + static_cast<std::size_t>(y_stride) * h + kGuard,
+                  128U),
+        uv_storage(kGuard +
+                       static_cast<std::size_t>(uv_stride) * ((h + 1) / 2) +
+                       kGuard,
+                   128U) {
     std::fill_n(y_storage.begin(), kGuard, kGuardByte);
-    std::fill_n(y_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard, kGuardByte);
+    std::fill_n(y_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard,
+                kGuardByte);
     std::fill_n(uv_storage.begin(), kGuard, kGuardByte);
-    std::fill_n(uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard, kGuardByte);
+    std::fill_n(uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), kGuard,
+                kGuardByte);
   }
   Frame(int w, int h) : Frame(w, h, w) {}
   void FillChroma(std::uint8_t value) {
-    std::fill(uv_storage.begin() + kGuard, uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), value);
+    std::fill(uv_storage.begin() + kGuard,
+              uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), value);
   }
   Nv12MutableView view() {
-    return {y_storage.data() + kGuard, uv_storage.data() + kGuard, y_stride, uv_stride, width, height};
+    return {y_storage.data() + kGuard,
+            uv_storage.data() + kGuard,
+            y_stride,
+            uv_stride,
+            width,
+            height};
   }
   std::uint8_t Y(int x, int y) const {
     return y_storage[kGuard + static_cast<std::size_t>(y) * y_stride + x];
   }
   std::uint8_t U(int x, int y) const {  // chroma sample for luma (x, y)
-    return uv_storage[kGuard + static_cast<std::size_t>(y / 2) * uv_stride + (x / 2) * 2];
+    return uv_storage[kGuard + static_cast<std::size_t>(y / 2) * uv_stride +
+                      (x / 2) * 2];
   }
   bool GuardsIntact() const {
     auto ok = [](const std::vector<std::uint8_t>& s) {
-      return std::all_of(s.begin(), s.begin() + kGuard, [](auto b) { return b == kGuardByte; }) &&
-             std::all_of(s.end() - static_cast<std::ptrdiff_t>(kGuard), s.end(), [](auto b) { return b == kGuardByte; });
+      return std::all_of(s.begin(), s.begin() + kGuard,
+                         [](auto b) { return b == kGuardByte; }) &&
+             std::all_of(s.end() - static_cast<std::ptrdiff_t>(kGuard), s.end(),
+                         [](auto b) { return b == kGuardByte; });
     };
     return ok(y_storage) && ok(uv_storage);
   }
   bool Untouched() const {
-    return std::all_of(y_storage.begin() + kGuard, y_storage.end() - static_cast<std::ptrdiff_t>(kGuard), [](auto b) { return b == 128U; }) &&
-           std::all_of(uv_storage.begin() + kGuard, uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard), [](auto b) { return b == 128U; });
+    return std::all_of(y_storage.begin() + kGuard,
+                       y_storage.end() - static_cast<std::ptrdiff_t>(kGuard),
+                       [](auto b) { return b == 128U; }) &&
+           std::all_of(uv_storage.begin() + kGuard,
+                       uv_storage.end() - static_cast<std::ptrdiff_t>(kGuard),
+                       [](auto b) { return b == 128U; });
   }
 };
 
@@ -83,7 +105,8 @@ TextRasterizer Font() {
   return std::move(font).value();
 }
 
-OsdCompositor Make(const CameraOsdConfig& config, TextRasterizer& font, int w = 1920, int h = 1080) {
+OsdCompositor Make(const CameraOsdConfig& config, TextRasterizer& font,
+                   int w = 1920, int h = 1080) {
   auto compositor = OsdCompositor::Create(config, "imx708-main", w, h, font);
   EXPECT_TRUE(compositor.ok()) << compositor.error().message;
   return std::move(compositor).value();
@@ -103,7 +126,8 @@ std::time_t At(int hour, int minute, int second) {
 
 TEST(OsdCompositorTest, LeavesTheFrameUntouchedWhileDisabled) {
   auto font = Font();
-  auto compositor = Make(Config({{"custom_text", "Front door", "top_left"}}, false), font);
+  auto compositor =
+      Make(Config({{"custom_text", "Front door", "top_left"}}, false), font);
   Frame frame(1920, 1080);
   compositor.Stamp(frame.view(), At(14, 30, 7));
   EXPECT_TRUE(frame.Untouched());
@@ -112,7 +136,8 @@ TEST(OsdCompositorTest, LeavesTheFrameUntouchedWhileDisabled) {
 
 TEST(OsdCompositorTest, DarkensTheBoxAndBrightensTheTextAtTheTopLeftInset) {
   auto font = Font();
-  auto compositor = Make(Config({{"custom_text", "Front door", "top_left"}}), font);
+  auto compositor =
+      Make(Config({{"custom_text", "Front door", "top_left"}}), font);
   Frame frame(1920, 1080);
   compositor.Stamp(frame.view(), At(14, 30, 7));
 
@@ -123,7 +148,8 @@ TEST(OsdCompositorTest, DarkensTheBoxAndBrightensTheTextAtTheTopLeftInset) {
   EXPECT_EQ(rects[0].y, m.inset_px);
   EXPECT_EQ(rects[0].height, m.box_height());
   EXPECT_GT(rects[0].width, 2 * m.pad_x);
-  // Box corner pixel: 45% toward Y=16, rounded -> (128*55 + 16*45 + 50)/100 = 78.
+  // Box corner pixel: 45% toward Y=16, rounded -> (128*55 + 16*45 + 50)/100
+  // = 78.
   EXPECT_EQ(frame.Y(rects[0].x, rects[0].y), 78);
   EXPECT_EQ(frame.U(rects[0].x, rects[0].y), 128);
   // Just outside the box nothing changed.
@@ -143,10 +169,11 @@ TEST(OsdCompositorTest, DarkensTheBoxAndBrightensTheTextAtTheTopLeftInset) {
 TEST(OsdCompositorTest, RightAlignsRightCornersAndStacksBottomCornersUpward) {
   auto font = Font();
   auto compositor = Make(Config({
-      {"custom_text", "one", "top_right"},
-      {"custom_text", "first", "bottom_left"},
-      {"custom_text", "second", "bottom_left"},
-  }), font);
+                             {"custom_text", "one", "top_right"},
+                             {"custom_text", "first", "bottom_left"},
+                             {"custom_text", "second", "bottom_left"},
+                         }),
+                         font);
   Frame frame(1920, 1080);
   compositor.Stamp(frame.view(), At(14, 30, 7));
   const auto rects = compositor.SpriteRects();
@@ -164,9 +191,10 @@ TEST(OsdCompositorTest, RightAlignsRightCornersAndStacksBottomCornersUpward) {
 TEST(OsdCompositorTest, StacksTopCornerItemsDownwardFromTheInset) {
   auto font = Font();
   auto compositor = Make(Config({
-      {"custom_text", "first", "top_right"},
-      {"custom_text", "second", "top_right"},
-  }), font);
+                             {"custom_text", "first", "top_right"},
+                             {"custom_text", "second", "top_right"},
+                         }),
+                         font);
   const auto rects = compositor.SpriteRects();
   ASSERT_EQ(rects.size(), 2U);
   const auto m = OsdLayoutMetrics::For(1920, 1080);
@@ -176,7 +204,8 @@ TEST(OsdCompositorTest, StacksTopCornerItemsDownwardFromTheInset) {
   EXPECT_EQ(rects[1].x + rects[1].width, 1920 - m.inset_px);
 }
 
-TEST(OsdCompositorTest, PullsChromaAboveNeutralDownToExactlyNeutralUnderFullText) {
+TEST(OsdCompositorTest,
+     PullsChromaAboveNeutralDownToExactlyNeutralUnderFullText) {
   auto font = Font();
   auto compositor = Make(Config({{"custom_text", "WWWW", "top_left"}}), font);
   Frame frame(1920, 1080);
@@ -195,7 +224,8 @@ TEST(OsdCompositorTest, PullsChromaAboveNeutralDownToExactlyNeutralUnderFullText
     }
   }
   // Fully covered glyph interiors land exactly on neutral (symmetric rounding),
-  // never below it, and nothing inside the box stays brighter than the box tint.
+  // never below it, and nothing inside the box stays brighter than the box
+  // tint.
   EXPECT_EQ(lowest, 128);
   EXPECT_LE(highest, 168);
   EXPECT_TRUE(frame.GuardsIntact());
@@ -203,11 +233,15 @@ TEST(OsdCompositorTest, PullsChromaAboveNeutralDownToExactlyNeutralUnderFullText
 
 TEST(OsdCompositorTest, RendersTheCameraIdForCameraNameItems) {
   auto font = Font();
-  auto short_id = OsdCompositor::Create(Config({{"camera_name", "", "top_left"}}), "ab", 1920, 1080, font);
-  auto long_id = OsdCompositor::Create(Config({{"camera_name", "", "top_left"}}), "imx708-main-long-name", 1920, 1080, font);
+  auto short_id = OsdCompositor::Create(
+      Config({{"camera_name", "", "top_left"}}), "ab", 1920, 1080, font);
+  auto long_id =
+      OsdCompositor::Create(Config({{"camera_name", "", "top_left"}}),
+                            "imx708-main-long-name", 1920, 1080, font);
   ASSERT_TRUE(short_id.ok());
   ASSERT_TRUE(long_id.ok());
-  EXPECT_LT(short_id.value().SpriteRects()[0].width, long_id.value().SpriteRects()[0].width);
+  EXPECT_LT(short_id.value().SpriteRects()[0].width,
+            long_id.value().SpriteRects()[0].width);
 }
 
 TEST(OsdCompositorTest, RebuildsTimestampSpritesOnlyWhenTheSecondChanges) {
@@ -226,7 +260,8 @@ TEST(OsdCompositorTest, RebuildsTimestampSpritesOnlyWhenTheSecondChanges) {
 TEST(OsdCompositorTest, ClipsLongTextToTheColumnWidth) {
   auto font = Font();
   const std::string sixty_four(64, 'W');
-  auto compositor = Make(Config({{"custom_text", sixty_four, "top_left"}}), font);
+  auto compositor =
+      Make(Config({{"custom_text", sixty_four, "top_left"}}), font);
   const auto m = OsdLayoutMetrics::For(1920, 1080);
   EXPECT_EQ(compositor.SpriteRects()[0].width, m.column_px);
   Frame frame(1920, 1080);
@@ -237,9 +272,12 @@ TEST(OsdCompositorTest, ClipsLongTextToTheColumnWidth) {
 TEST(OsdCompositorTest, StaysInBoundsWithEightItemsOnATinyFrame) {
   auto font = Font();
   std::vector<CameraOsdItem> items;
-  const char* positions[] = {"top_left", "top_right", "bottom_left", "bottom_right"};
+  const char* positions[] = {"top_left", "top_right", "bottom_left",
+                             "bottom_right"};
   for (int i = 0; i < 8; ++i) {
-    items.push_back({"custom_text", "\xea\xb0\x80\xeb\x82\x98\xeb\x8b\xa4 WWWWWWWW", positions[i % 4]});
+    items.push_back({"custom_text",
+                     "\xea\xb0\x80\xeb\x82\x98\xeb\x8b\xa4 WWWWWWWW",
+                     positions[i % 4]});
   }
   auto compositor = Make(Config(items), font, 320, 180);
   Frame frame(320, 180);
@@ -250,7 +288,8 @@ TEST(OsdCompositorTest, StaysInBoundsWithEightItemsOnATinyFrame) {
 
 TEST(OsdCompositorTest, HandlesOddFrameGeometryWithoutTouchingGuards) {
   auto font = Font();
-  auto compositor = Make(Config({{"custom_text", "odd", "bottom_right"}}), font, 321, 181);
+  auto compositor =
+      Make(Config({{"custom_text", "odd", "bottom_right"}}), font, 321, 181);
   Frame frame(321, 181);
   compositor.Stamp(frame.view(), At(14, 30, 7));
   EXPECT_TRUE(frame.GuardsIntact());
@@ -258,7 +297,8 @@ TEST(OsdCompositorTest, HandlesOddFrameGeometryWithoutTouchingGuards) {
 
 TEST(OsdCompositorTest, IgnoresAFrameWhoseGeometryDiffersFromItsOwn) {
   auto font = Font();
-  auto compositor = Make(Config({{"custom_text", "Front door", "top_left"}}), font, 640, 360);
+  auto compositor =
+      Make(Config({{"custom_text", "Front door", "top_left"}}), font, 640, 360);
   Frame frame(1920, 1080);
   compositor.Stamp(frame.view(), At(14, 30, 7));
   EXPECT_TRUE(frame.Untouched());
@@ -268,13 +308,16 @@ TEST(OsdCompositorTest, IgnoresAFrameWhoseGeometryDiffersFromItsOwn) {
 TEST(OsdCompositorTest, HonoursALumaStrideWiderThanTheFrame) {
   auto font = Font();
   auto compositor = Make(Config({{"custom_text", "Front door", "top_left"},
-                                 {"custom_text", "Back door", "bottom_right"}}), font);
+                                 {"custom_text", "Back door", "bottom_right"}}),
+                         font);
   Frame frame(1920, 1080, 2048);
   compositor.Stamp(frame.view(), At(14, 30, 7));
   const auto rects = compositor.SpriteRects();
   ASSERT_EQ(rects.size(), 2U);
   EXPECT_EQ(frame.Y(rects[0].x, rects[0].y), 78);
-  EXPECT_EQ(frame.Y(rects[1].x + rects[1].width - 1, rects[1].y + rects[1].height - 1), 78);
+  EXPECT_EQ(frame.Y(rects[1].x + rects[1].width - 1,
+                    rects[1].y + rects[1].height - 1),
+            78);
   EXPECT_EQ(frame.Y(rects[0].x + rects[0].width, rects[0].y), 128);
   EXPECT_TRUE(frame.GuardsIntact());
 }

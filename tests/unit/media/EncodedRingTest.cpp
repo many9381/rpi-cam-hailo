@@ -13,8 +13,8 @@ camera_firmware::media::EncodedAccessUnit MakeAu(
     std::uint64_t sequence, std::vector<std::uint8_t> payload) {
   camera_firmware::media::EncodedAccessUnit au;
   au.sequence = sequence;
-  au.bytes = std::make_shared<const std::vector<std::uint8_t>>(
-      std::move(payload));
+  au.bytes =
+      std::make_shared<const std::vector<std::uint8_t>>(std::move(payload));
   return au;
 }
 

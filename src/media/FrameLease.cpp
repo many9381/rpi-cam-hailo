@@ -21,8 +21,8 @@ struct FrameLease::SharedState {
 };
 
 FrameLease::FrameLease(FrameHandle handle, ReleaseCallback release_callback)
-    : shared_state_(std::make_shared<SharedState>(std::move(handle),
-                                                  std::move(release_callback))) {}
+    : shared_state_(std::make_shared<SharedState>(
+          std::move(handle), std::move(release_callback))) {}
 
 FrameLease::FrameLease(std::shared_ptr<SharedState> shared_state)
     : shared_state_(std::move(shared_state)) {}
@@ -31,7 +31,9 @@ FrameLease FrameLease::CloneRef() const {
   return FrameLease(shared_state_);
 }
 
-bool FrameLease::valid() const noexcept { return static_cast<bool>(shared_state_); }
+bool FrameLease::valid() const noexcept {
+  return static_cast<bool>(shared_state_);
+}
 
 const FrameHandle& FrameLease::handle() const {
   if (!valid()) {
@@ -40,8 +42,12 @@ const FrameHandle& FrameLease::handle() const {
   return shared_state_->handle;
 }
 
-const FrameHandle* FrameLease::operator->() const { return &handle(); }
+const FrameHandle* FrameLease::operator->() const {
+  return &handle();
+}
 
-const FrameHandle& FrameLease::operator*() const { return handle(); }
+const FrameHandle& FrameLease::operator*() const {
+  return handle();
+}
 
 }  // namespace camera_firmware::media

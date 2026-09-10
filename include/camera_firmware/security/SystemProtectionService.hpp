@@ -63,18 +63,14 @@ struct ProtectionAuditRecord {
 };
 
 std::string ProtectionAuditSubjectType(const ProtectionAuditRecord& record);
-std::string ProtectionAuditSubjectIdentity(
-    const ProtectionAuditRecord& record);
+std::string ProtectionAuditSubjectIdentity(const ProtectionAuditRecord& record);
 
-using ProtectionSystemAuditCallback =
-    std::function<common::Result<void>(std::string_view event_type,
-                                       std::string_view outcome,
-                                       std::string_view detail_code)>;
-using ProtectionAdministratorAuditCallback =
-    std::function<common::Result<void>(const ProtectionActor& actor,
-                                       std::string_view event_type,
-                                       std::string_view outcome,
-                                       std::string_view detail_code)>;
+using ProtectionSystemAuditCallback = std::function<common::Result<void>(
+    std::string_view event_type, std::string_view outcome,
+    std::string_view detail_code)>;
+using ProtectionAdministratorAuditCallback = std::function<common::Result<void>(
+    const ProtectionActor& actor, std::string_view event_type,
+    std::string_view outcome, std::string_view detail_code)>;
 using ProtectionSystemAuditRecordCallback =
     std::function<common::Result<void>(const ProtectionAuditRecord& record)>;
 using ProtectionAdministratorAuditRecordCallback =
@@ -88,8 +84,7 @@ struct SystemProtectionDependencies {
   ProtectionSystemAuditCallback append_system_audit;
   ProtectionAdministratorAuditCallback append_administrator_audit;
   ProtectionSystemAuditRecordCallback append_system_audit_record;
-  ProtectionAdministratorAuditRecordCallback
-      append_administrator_audit_record;
+  ProtectionAdministratorAuditRecordCallback append_administrator_audit_record;
   std::function<common::Result<DeviceState>()> read_device_state;
   std::function<std::chrono::system_clock::time_point()> wall_now;
   std::function<std::chrono::steady_clock::time_point()> steady_now;

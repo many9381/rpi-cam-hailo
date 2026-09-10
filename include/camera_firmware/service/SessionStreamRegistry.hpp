@@ -1,7 +1,7 @@
 #pragma once
 
-#include <functional>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 
@@ -26,7 +26,7 @@ class SessionStreamRegistry;
 class SessionStreamLease {
  public:
   void SetRevocationHandler(StreamRevocationHandler handler);
- [[nodiscard]] bool revoked() const noexcept;
+  [[nodiscard]] bool revoked() const noexcept;
 
  private:
   friend class SessionStreamRegistry;
@@ -52,15 +52,16 @@ class SessionStreamRevocationScope {
 
   explicit SessionStreamRevocationScope(
       const std::shared_ptr<SessionStreamLease>& lease) noexcept;
-  SessionStreamRevocationScope(
-      const std::shared_ptr<SessionStreamLease>& lease,
-      Origin origin) noexcept;
+  SessionStreamRevocationScope(const std::shared_ptr<SessionStreamLease>& lease,
+                               Origin origin) noexcept;
   ~SessionStreamRevocationScope();
 
+ public:
   SessionStreamRevocationScope(const SessionStreamRevocationScope&) = delete;
-  SessionStreamRevocationScope& operator=(
-      const SessionStreamRevocationScope&) = delete;
+  SessionStreamRevocationScope& operator=(const SessionStreamRevocationScope&) =
+      delete;
 
+ private:
   [[nodiscard]] static bool HandlerOriginatesFromSend() noexcept;
   [[nodiscard]] static bool HandlerOriginatesFromRead(
       const std::shared_ptr<SessionStreamLease>& lease) noexcept;

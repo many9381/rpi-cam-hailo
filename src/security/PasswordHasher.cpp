@@ -41,6 +41,7 @@ class AuditedScratch {
     try {
       (*audit_)({after.count - before.count, after.last_verified});
     } catch (...) {
+      // swallowed: audit observer errors must not escape this noexcept probe
     }
   }
 
@@ -77,10 +78,8 @@ struct KdfContextDeleter {
 };
 
 common::Result<common::SecureBytes> DefaultDerive(
-    const common::SecureBytes& password,
-    std::span<const unsigned char> salt,
-    std::uint32_t iterations,
-    std::size_t output_size) {
+    const common::SecureBytes& password, std::span<const unsigned char> salt,
+    std::uint32_t iterations, std::size_t output_size) {
   std::unique_ptr<EVP_KDF, KdfDeleter> kdf(
       EVP_KDF_fetch(nullptr, "PBKDF2", nullptr));
   if (!kdf) {
@@ -105,11 +104,11 @@ common::Result<common::SecureBytes> DefaultDerive(
   char digest[] = "SHA256";
   std::array<OSSL_PARAM, 5> parameters = {
       OSSL_PARAM_construct_octet_string(
-          OSSL_KDF_PARAM_PASSWORD,
-          const_cast<unsigned char*>(password.data()), password.size()),
-      OSSL_PARAM_construct_octet_string(
-          OSSL_KDF_PARAM_SALT, const_cast<unsigned char*>(salt.data()),
-          salt.size()),
+          OSSL_KDF_PARAM_PASSWORD, const_cast<unsigned char*>(password.data()),
+          password.size()),
+      OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT,
+                                        const_cast<unsigned char*>(salt.data()),
+                                        salt.size()),
       OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER, &iterations),
       OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, digest, 0U),
       OSSL_PARAM_construct_end()};
@@ -139,10 +138,9 @@ common::Result<PasswordRecord> DerivePassword(
   try {
     auto random = dependencies.random_bytes
                       ? dependencies.random_bytes(kPasswordSaltBytes)
-                      : dependencies.provider
-                            ? dependencies.provider->RandomBytes(
-                                  kPasswordSaltBytes)
-                            : DefaultRandom(kPasswordSaltBytes);
+                  : dependencies.provider
+                      ? dependencies.provider->RandomBytes(kPasswordSaltBytes)
+                      : DefaultRandom(kPasswordSaltBytes);
     if (!random.ok()) {
       return HasherError<PasswordRecord>("E_PASSWORD_RANDOM",
                                          "password salt generation failed");
@@ -154,18 +152,16 @@ common::Result<PasswordRecord> DerivePassword(
     }
 
     const std::span<const unsigned char> salt(salt_scratch.bytes.data(),
-                                               salt_scratch.bytes.size());
-    auto derived = dependencies.derive_bytes
-                       ? dependencies.derive_bytes(
-                             password, salt, kPasswordKdfIterations,
-                             kPasswordDerivedBytes)
-                       : dependencies.provider
-                             ? dependencies.provider->DeriveKeyPbkdf2(
-                                   password, salt, kPasswordKdfIterations,
-                                   kPasswordDerivedBytes)
-                             : DefaultDerive(password, salt,
-                                             kPasswordKdfIterations,
-                                             kPasswordDerivedBytes);
+                                              salt_scratch.bytes.size());
+    auto derived =
+        dependencies.derive_bytes
+            ? dependencies.derive_bytes(password, salt, kPasswordKdfIterations,
+                                        kPasswordDerivedBytes)
+        : dependencies.provider
+            ? dependencies.provider->DeriveKeyPbkdf2(
+                  password, salt, kPasswordKdfIterations, kPasswordDerivedBytes)
+            : DefaultDerive(password, salt, kPasswordKdfIterations,
+                            kPasswordDerivedBytes);
     if (!derived.ok()) {
       return HasherError<PasswordRecord>("E_PASSWORD_HASH",
                                          "password derivation failed");
@@ -187,9 +183,8 @@ common::Result<PasswordRecord> DerivePassword(
   }
 }
 
-common::Result<bool> VerifyPassword(
-    const common::SecureBytes& password,
-    const PasswordRecord& record) {
+common::Result<bool> VerifyPassword(const common::SecureBytes& password,
+                                    const PasswordRecord& record) {
   if (!IsValidRecord(record)) {
     return HasherError<bool>("E_PASSWORD_RECORD",
                              "stored password record is invalid");
@@ -197,9 +192,9 @@ common::Result<bool> VerifyPassword(
 
   AuditedScratch candidate(nullptr);
   try {
-    auto derived = DefaultDerive(password,
-                                 {record.salt.data(), record.salt.size()},
-                                 record.iterations, kPasswordDerivedBytes);
+    auto derived =
+        DefaultDerive(password, {record.salt.data(), record.salt.size()},
+                      record.iterations, kPasswordDerivedBytes);
     if (!derived.ok()) {
       return HasherError<bool>("E_PASSWORD_HASH",
                                "password verification failed");
@@ -209,12 +204,11 @@ common::Result<bool> VerifyPassword(
       return HasherError<bool>("E_PASSWORD_HASH",
                                "password verification failed");
     }
-    return common::Result<bool>::Ok(
-        CRYPTO_memcmp(candidate.bytes.data(), record.derived.data(),
-                      kPasswordDerivedBytes) == 0);
+    return common::Result<bool>::Ok(CRYPTO_memcmp(candidate.bytes.data(),
+                                                  record.derived.data(),
+                                                  kPasswordDerivedBytes) == 0);
   } catch (...) {
-    return HasherError<bool>("E_PASSWORD_HASH",
-                             "password verification failed");
+    return HasherError<bool>("E_PASSWORD_HASH", "password verification failed");
   }
 }
 

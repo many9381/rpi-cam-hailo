@@ -27,7 +27,7 @@ struct FragmentedMp4Chunk {
 
 struct FragmentRingLimits {
   std::size_t max_fragments{8U};
-  std::size_t max_bytes{32U * 1024U * 1024U};
+  std::size_t max_bytes{std::size_t{32} * 1024U * 1024U};
   std::size_t max_readers{4U};
 };
 
@@ -61,8 +61,7 @@ class FragmentRing {
   [[nodiscard]] common::Result<std::uint64_t> BeginGeneration(
       std::vector<std::uint8_t> initialization_segment);
   [[nodiscard]] common::Result<void> Publish(
-      std::vector<std::uint8_t> media_fragment,
-      bool random_access);
+      std::vector<std::uint8_t> media_fragment, bool random_access);
   void Invalidate() noexcept;
   [[nodiscard]] common::Result<Reader> OpenReader();
   [[nodiscard]] common::Result<Reader> OpenReader(

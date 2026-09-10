@@ -16,6 +16,8 @@ set(_cf_drogon_async_patch
     "${CMAKE_CURRENT_LIST_DIR}/../patches/drogon-1.9.0-async-stream-response.patch")
 set(_cf_trantor_async_patch
     "${CMAKE_CURRENT_LIST_DIR}/../patches/trantor-1.5.20-bounded-async-stream.patch")
+set(_cf_drogon_crlf_patch
+    "${CMAKE_CURRENT_LIST_DIR}/../patches/drogon-1.9.0-strip-crlf-in-headers.patch")
 
 function(_cf_drogon_tree_digest root output_variable)
   file(GLOB_RECURSE _cf_tree_files
@@ -160,8 +162,9 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
   file(SHA256 "${_cf_drogon_patch}" _cf_drogon_patch_sha256)
   file(SHA256 "${_cf_drogon_async_patch}" _cf_drogon_async_patch_sha256)
   file(SHA256 "${_cf_trantor_async_patch}" _cf_trantor_async_patch_sha256)
+  file(SHA256 "${_cf_drogon_crlf_patch}" _cf_drogon_crlf_patch_sha256)
   set(_cf_drogon_copy_identity
-      "format=4\nresolved_source=${_cf_drogon_source}\ncommit=${_cf_drogon_commit}\ntree=${_cf_drogon_tree}\ntrantor_source=${_cf_trantor_source}\ntrantor_commit=${_cf_trantor_commit}\ntrantor_tree=${_cf_trantor_tree}\npatch_sha256=${_cf_drogon_patch_sha256}\nasync_patch_sha256=${_cf_drogon_async_patch_sha256}\ntrantor_async_patch_sha256=${_cf_trantor_async_patch_sha256}\n")
+      "format=5\nresolved_source=${_cf_drogon_source}\ncommit=${_cf_drogon_commit}\ntree=${_cf_drogon_tree}\ntrantor_source=${_cf_trantor_source}\ntrantor_commit=${_cf_trantor_commit}\ntrantor_tree=${_cf_trantor_tree}\npatch_sha256=${_cf_drogon_patch_sha256}\nasync_patch_sha256=${_cf_drogon_async_patch_sha256}\ntrantor_async_patch_sha256=${_cf_trantor_async_patch_sha256}\ncrlf_patch_sha256=${_cf_drogon_crlf_patch_sha256}\n")
   set(_cf_drogon_stamp "${_cf_drogon_copy}/.camera-firmware-patch")
   set(_cf_drogon_copy_valid false)
   if(EXISTS "${_cf_drogon_stamp}")
@@ -262,6 +265,17 @@ if(CAMERA_FIRMWARE_DROGON_SOURCE_DIR AND
     if(NOT _cf_drogon_async_patch_result EQUAL 0)
       message(FATAL_ERROR
           "Failed to apply the async stream Drogon 1.9.0 patch:\n${_cf_drogon_async_patch_stdout}${_cf_drogon_async_patch_stderr}")
+    endif()
+    execute_process(
+        COMMAND "${_cf_patch_executable}" --batch --forward -p1
+                --input "${_cf_drogon_crlf_patch}"
+        WORKING_DIRECTORY "${_cf_drogon_copy}"
+        RESULT_VARIABLE _cf_drogon_crlf_patch_result
+        OUTPUT_VARIABLE _cf_drogon_crlf_patch_stdout
+        ERROR_VARIABLE _cf_drogon_crlf_patch_stderr)
+    if(NOT _cf_drogon_crlf_patch_result EQUAL 0)
+      message(FATAL_ERROR
+          "Failed to apply the header CR/LF hardening Drogon 1.9.0 patch:\n${_cf_drogon_crlf_patch_stdout}${_cf_drogon_crlf_patch_stderr}")
     endif()
     _cf_drogon_tree_digest("${_cf_drogon_copy}"
         _cf_drogon_patched_copy_digest)

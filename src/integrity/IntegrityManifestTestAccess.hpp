@@ -4,7 +4,6 @@
 
 namespace camera_firmware::integrity::testing {
 
-[[nodiscard]] bool RestrictedYamlPreflightAcceptsForTest(
-    std::string_view yaml);
+[[nodiscard]] bool RestrictedYamlPreflightAcceptsForTest(std::string_view yaml);
 
 }  // namespace camera_firmware::integrity::testing

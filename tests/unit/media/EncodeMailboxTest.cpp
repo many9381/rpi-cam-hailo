@@ -24,8 +24,9 @@ const libcamera::FrameBuffer* FakeBuffer(std::uintptr_t value) {
 
 EncodeJob MakeJob(std::uintptr_t buffer_value, int& release_counter) {
   FrameHandle handle;
-  return EncodeJob{FakeBuffer(buffer_value),
-                   FrameLease(handle, [&release_counter] { ++release_counter; })};
+  return EncodeJob{
+      FakeBuffer(buffer_value),
+      FrameLease(handle, [&release_counter] { ++release_counter; })};
 }
 
 TEST(EncodeMailboxTest, TakeReturnsThePublishedJob) {

@@ -112,48 +112,51 @@ TEST(RuntimeSettingsTest, ValidateRejectsBadSubStreamWhenEnabled) {
 
   auto bad_fps = ok;
   bad_fps.sub_stream.fps = 60U;
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(bad_fps, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(bad_fps, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_FPS");
 
   auto bad_bitrate = ok;
   bad_bitrate.sub_stream.bitrate_kbps = 100U;
-  validated = camera_firmware::settings::ValidateRuntimeSettings(
-      bad_bitrate, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(bad_bitrate,
+                                                                 base, catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_BITRATE");
 
   auto disabled = ok;
   disabled.sub_stream = {false, 1U, 1U, 1U, 1U};
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  disabled, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(disabled, base,
+                                                                 catalog)
                   .ok());
 }
 
-TEST(RuntimeSettingsTest, ValidateRejectsZeroSubStreamGeometryRegardlessOfEnabled) {
+TEST(RuntimeSettingsTest,
+     ValidateRejectsZeroSubStreamGeometryRegardlessOfEnabled) {
   const auto base = MakeBaseConfig();
   const auto catalog = CameraProfileCatalog::Rpi5Imx708();
 
-  // A DISABLED sub-stream with any zero geometry field must be rejected: the web
-  // client rejects zero geometry unconditionally, so a persisted zero would brick
-  // the settings UI. This must hold with enabled=false (the DoS vector).
-  for (const auto zeroed : std::vector<camera_firmware::settings::SubStreamRuntimeSettings>{
+  // A DISABLED sub-stream with any zero geometry field must be rejected: the
+  // web client rejects zero geometry unconditionally, so a persisted zero would
+  // brick the settings UI. This must hold with enabled=false (the DoS vector).
+  for (const auto zeroed :
+       std::vector<camera_firmware::settings::SubStreamRuntimeSettings>{
            {false, 0U, 360U, 15U, 1000U},
            {false, 640U, 0U, 15U, 1000U},
            {false, 640U, 360U, 0U, 1000U},
            {false, 640U, 360U, 15U, 0U}}) {
     auto settings = MakeRuntimeSettings();
     settings.sub_stream = zeroed;
-    const auto validated =
-        camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+    const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+        settings, base, catalog);
     ASSERT_FALSE(validated.ok())
         << "zero field: " << zeroed.width << "x" << zeroed.height << "@"
         << zeroed.fps << " " << zeroed.bitrate_kbps;
     EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_GEOMETRY");
   }
 
-  // Enabled + zero must also be rejected as geometry (before the allowlist check).
+  // Enabled + zero must also be rejected as geometry (before the allowlist
+  // check).
   auto enabled_zero = MakeRuntimeSettings();
   enabled_zero.sub_stream = {true, 0U, 0U, 0U, 0U};
   const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
@@ -162,17 +165,18 @@ TEST(RuntimeSettingsTest, ValidateRejectsZeroSubStreamGeometryRegardlessOfEnable
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_GEOMETRY");
 }
 
-TEST(RuntimeSettingsTest, ValidateBypassesAllowlistForDisabledNonZeroSubStream) {
+TEST(RuntimeSettingsTest,
+     ValidateBypassesAllowlistForDisabledNonZeroSubStream) {
   const auto base = MakeBaseConfig();
   const auto catalog = CameraProfileCatalog::Rpi5Imx708();
   auto settings = MakeRuntimeSettings();
 
-  // Disabled + non-zero but off-allowlist geometry still passes: the allowlist /
-  // fps-range / bitrate-range checks remain enabled-only. Only the non-zero
+  // Disabled + non-zero but off-allowlist geometry still passes: the allowlist
+  // / fps-range / bitrate-range checks remain enabled-only. Only the non-zero
   // invariant is enforced regardless of `enabled`.
   settings.sub_stream = {false, 800U, 600U, 20U, 1200U};
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 }
 
@@ -182,13 +186,13 @@ TEST(RuntimeSettingsTest, ValidateAcceptsSubStreamFpsInclusiveBoundaries) {
   auto settings = MakeRuntimeSettings();
   settings.sub_stream = {true, 640U, 360U, 5U, 1000U};
 
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.sub_stream.fps = 30U;
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 }
 
@@ -204,8 +208,8 @@ TEST(RuntimeSettingsTest, ValidateRejectsSubStreamFpsJustOutsideBoundaries) {
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_FPS");
 
   settings.sub_stream.fps = 31U;
-  validated = camera_firmware::settings::ValidateRuntimeSettings(
-      settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_FPS");
 }
@@ -216,13 +220,13 @@ TEST(RuntimeSettingsTest, ValidateAcceptsSubStreamBitrateInclusiveBoundaries) {
   auto settings = MakeRuntimeSettings();
   settings.sub_stream = {true, 640U, 360U, 15U, 500U};
 
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.sub_stream.bitrate_kbps = 20000U;
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 }
 
@@ -239,8 +243,8 @@ TEST(RuntimeSettingsTest,
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_BITRATE");
 
   settings.sub_stream.bitrate_kbps = 20001U;
-  validated = camera_firmware::settings::ValidateRuntimeSettings(
-      settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_BITRATE");
 }
@@ -251,18 +255,18 @@ TEST(RuntimeSettingsTest, ValidateAcceptsAllAllowlistedSubStreamResolutions) {
   auto settings = MakeRuntimeSettings();
 
   settings.sub_stream = {true, 640U, 360U, 15U, 1000U};
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.sub_stream = {true, 854U, 480U, 15U, 1000U};
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.sub_stream = {true, 1280U, 720U, 15U, 1000U};
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 }
 
@@ -278,8 +282,8 @@ TEST(RuntimeSettingsTest, ValidateRejectsNearMissSubStreamResolutions) {
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_RESOLUTION");
 
   settings.sub_stream = {true, 641U, 360U, 15U, 1000U};
-  validated = camera_firmware::settings::ValidateRuntimeSettings(
-      settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_SUB_RESOLUTION");
 }
@@ -291,8 +295,8 @@ TEST(RuntimeSettingsTest, ValidateAcceptsDefaultEmptyOsd) {
 
   // MakeRuntimeSettings() never touches `.osd`, so it is left at the struct
   // default (disabled, no items). That default must validate.
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 }
 
@@ -304,8 +308,8 @@ TEST(RuntimeSettingsTest, ValidateAcceptsEightOsdItemsRejectsNine) {
 
   settings.osd.items = std::vector<OsdItemRuntimeSettings>(
       8U, OsdItemRuntimeSettings{"timestamp", "", "top_left"});
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.osd.items.push_back({"timestamp", "", "top_left"});
@@ -362,8 +366,8 @@ TEST(RuntimeSettingsTest, ValidateAcceptsOsdTextAtByteLimitRejectsOverLimit) {
   settings.osd.enabled = true;
   settings.osd.items = {{"custom_text", std::string(64U, 'a'), "top_left"}};
 
-  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(
-                  settings, base, catalog)
+  EXPECT_TRUE(camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog)
                   .ok());
 
   settings.osd.items[0].text = std::string(65U, 'a');
@@ -425,8 +429,8 @@ TEST(RuntimeSettingsTest, CatalogExposesApprovedRpi5Imx708Profiles) {
 
 TEST(RuntimeSettingsTest, DerivesManagedSettingsFromMatchingBaseConfig) {
   const auto catalog = CameraProfileCatalog::Rpi5Imx708();
-  const auto settings =
-      camera_firmware::settings::DeriveRuntimeSettings(MakeBaseConfig(), catalog);
+  const auto settings = camera_firmware::settings::DeriveRuntimeSettings(
+      MakeBaseConfig(), catalog);
 
   ASSERT_TRUE(settings.ok()) << settings.error().message;
   EXPECT_EQ(settings.value().camera.profile_id, "imx708-1080p50");
@@ -459,27 +463,27 @@ TEST(RuntimeSettingsTest, RejectsCameraValuesOutsideApprovedRanges) {
   auto settings = MakeRuntimeSettings();
 
   settings.camera.bitrate_kbps = 499U;
-  auto validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_BITRATE");
 
   settings.camera.bitrate_kbps = 20001U;
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_BITRATE");
 
   settings.camera.bitrate_kbps = 8000U;
   settings.camera.gop = 0U;
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_GOP");
 
   settings.camera.gop = 301U;
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_GOP");
 }
@@ -490,22 +494,22 @@ TEST(RuntimeSettingsTest, RejectsDuplicateMissingAndUnknownModelIds) {
   auto settings = MakeRuntimeSettings();
 
   settings.models[1].id = "objects";
-  auto validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_DUPLICATE");
 
   settings = MakeRuntimeSettings();
   settings.models.pop_back();
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_MISSING");
 
   settings = MakeRuntimeSettings();
   settings.models[1].id = "unknown";
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_UNKNOWN");
 }
@@ -516,8 +520,8 @@ TEST(RuntimeSettingsTest, RejectsModelsOutsideBaseYamlOrder) {
   auto settings = MakeRuntimeSettings();
 
   std::swap(settings.models[0], settings.models[1]);
-  const auto validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  const auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
 
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_ORDER");
@@ -542,14 +546,14 @@ TEST(RuntimeSettingsTest, RejectsNonFiniteAndOutOfRangeConfidenceThresholds) {
 
   settings.models[0].confidence_threshold =
       std::numeric_limits<float>::quiet_NaN();
-  auto validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  auto validated = camera_firmware::settings::ValidateRuntimeSettings(
+      settings, base, catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_THRESHOLD");
 
   settings.models[0].confidence_threshold = 1.01F;
-  validated =
-      camera_firmware::settings::ValidateRuntimeSettings(settings, base, catalog);
+  validated = camera_firmware::settings::ValidateRuntimeSettings(settings, base,
+                                                                 catalog);
   ASSERT_FALSE(validated.ok());
   EXPECT_EQ(validated.error().code, "E_RUNTIME_SETTINGS_MODEL_THRESHOLD");
 }
@@ -599,16 +603,19 @@ TEST(RuntimeSettingsTest, BuildsEffectiveConfigWithoutChangingUnmanagedFields) {
   EXPECT_FLOAT_EQ(effective.value().ai.models[1].confidence_threshold, 0.25F);
   EXPECT_EQ(effective.value().platform.target, base.platform.target);
   EXPECT_EQ(effective.value().camera.id, base.camera.id);
-  EXPECT_EQ(effective.value().camera.source.backend, base.camera.source.backend);
+  EXPECT_EQ(effective.value().camera.source.backend,
+            base.camera.source.backend);
   EXPECT_EQ(effective.value().camera.source.camera_index,
             base.camera.source.camera_index);
   EXPECT_EQ(effective.value().camera.video.format, base.camera.video.format);
   EXPECT_EQ(effective.value().camera.encoder.backend,
             base.camera.encoder.backend);
-  EXPECT_EQ(effective.value().camera.encoder.preset, base.camera.encoder.preset);
+  EXPECT_EQ(effective.value().camera.encoder.preset,
+            base.camera.encoder.preset);
   EXPECT_EQ(effective.value().http.bind_ip, base.http.bind_ip);
   EXPECT_EQ(effective.value().secure_rtsp.mount, base.secure_rtsp.mount);
-  EXPECT_EQ(effective.value().ai.models[0].hef_path, base.ai.models[0].hef_path);
+  EXPECT_EQ(effective.value().ai.models[0].hef_path,
+            base.ai.models[0].hef_path);
   EXPECT_EQ(effective.value().ai.models[1].kind, base.ai.models[1].kind);
 }
 

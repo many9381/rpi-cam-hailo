@@ -71,7 +71,8 @@ TEST(DetectionEventStoreTest, KeepsDistinctCameraModelEvents) {
   EXPECT_EQ(snapshot[2].model_id, "objects");
 }
 
-TEST(DetectionEventStoreTest, SnapshotProviderReturnsEmptyAfterStoreDestruction) {
+TEST(DetectionEventStoreTest,
+     SnapshotProviderReturnsEmptyAfterStoreDestruction) {
   camera_firmware::ai::DetectionBus bus;
   std::function<std::vector<camera_firmware::ai::DetectionEvent>()> provider;
   {

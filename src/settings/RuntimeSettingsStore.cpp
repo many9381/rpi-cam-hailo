@@ -27,8 +27,8 @@
 
 extern "C" ssize_t camera_firmware_settings_write(int, const void*, size_t);
 extern "C" int camera_firmware_settings_fdatasync(int);
-extern "C" int camera_firmware_settings_renameat(
-    int, const char*, int, const char*);
+extern "C" int camera_firmware_settings_renameat(int, const char*, int,
+                                                 const char*);
 extern "C" int camera_firmware_settings_unlinkat(int, const char*, int);
 extern "C" int camera_firmware_settings_fsync(int);
 
@@ -41,15 +41,13 @@ static_assert(std::is_nothrow_move_assignable_v<RuntimeSettingsDocument>);
 constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kSettingsFileMode = 0600;
 constexpr mode_t kPermissionAndSpecialModeMask = 07777;
-constexpr std::size_t kMaximumDocumentBytes = 16U * 1024U;
+constexpr std::size_t kMaximumDocumentBytes = std::size_t{16} * 1024U;
 constexpr std::size_t kMaximumInterruptedRetries = 128U;
 constexpr std::size_t kMaximumTemporaryNameAttempts = 128U;
 constexpr std::string_view kSettingsName = "runtime-settings.json";
 constexpr std::string_view kTemporaryPrefix = ".runtime-settings.json.tmp-";
-constexpr std::string_view kRollbackName =
-    ".runtime-settings.json.rollback";
-constexpr std::string_view kPreviousName =
-    ".runtime-settings.json.previous";
+constexpr std::string_view kRollbackName = ".runtime-settings.json.rollback";
+constexpr std::string_view kPreviousName = ".runtime-settings.json.previous";
 
 enum class DurableMarkerState { kNone, kRollback, kPrevious };
 
@@ -166,8 +164,8 @@ bool SameObject(const struct stat& first, const struct stat& second) noexcept {
 int OpenDirectoryAtNoFollow(int parent, const char* name) noexcept {
   int descriptor;
   do {
-    descriptor = ::openat(parent, name,
-                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    descriptor =
+        ::openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   } while (descriptor < 0 && errno == EINTR);
   return descriptor;
 }
@@ -194,8 +192,7 @@ common::Result<DirectoryAnchor> OpenDirectoryPathNoSymlinks(
     if (name.empty()) {
       continue;
     }
-    if (name == "." || name == ".." ||
-        name.find('/') != std::string::npos ||
+    if (name == "." || name == ".." || name.find('/') != std::string::npos ||
         name.find('\0') != std::string::npos) {
       return Error<DirectoryAnchor>(
           "E_RUNTIME_SETTINGS_PATH",
@@ -221,8 +218,7 @@ common::Result<struct stat> ValidateStateDirectory(int descriptor,
     return Error<struct stat>("E_RUNTIME_SETTINGS_PATH",
                               "runtime settings state directory is invalid");
   }
-  if ((status.st_mode & kPermissionAndSpecialModeMask) !=
-      kStateDirectoryMode) {
+  if ((status.st_mode & kPermissionAndSpecialModeMask) != kStateDirectoryMode) {
     return Error<struct stat>(
         "E_RUNTIME_SETTINGS_STATE_MODE",
         "runtime settings state directory must have mode 0700");
@@ -235,9 +231,9 @@ common::Result<struct stat> ValidateStateDirectory(int descriptor,
   return common::Result<struct stat>::Ok(status);
 }
 
-common::Result<void> VerifyDirectoryAnchor(
-    const std::filesystem::path& path, const DirectoryAnchor& anchored,
-    uid_t expected_owner) {
+common::Result<void> VerifyDirectoryAnchor(const std::filesystem::path& path,
+                                           const DirectoryAnchor& anchored,
+                                           uid_t expected_owner) {
   auto current = OpenDirectoryPathNoSymlinks(path);
   if (!current.ok()) {
     return Error(current.error().code, current.error().message);
@@ -256,9 +252,8 @@ common::Result<void> VerifyDirectoryAnchor(
                    "runtime settings directory chain changed");
     }
   }
-  auto current_status =
-      ValidateStateDirectory(current.value().state_directory_descriptor(),
-                             expected_owner);
+  auto current_status = ValidateStateDirectory(
+      current.value().state_directory_descriptor(), expected_owner);
   if (!current_status.ok()) {
     return Error(current_status.error().code, current_status.error().message);
   }
@@ -318,8 +313,7 @@ common::Result<std::optional<std::string>> ReadDocument(
       kMaximumDocumentBytes + 1U));
   std::array<char, 4096U> buffer{};
   while (content.size() <= kMaximumDocumentBytes) {
-    const std::size_t remaining =
-        kMaximumDocumentBytes + 1U - content.size();
+    const std::size_t remaining = kMaximumDocumentBytes + 1U - content.size();
     const ssize_t count = ::read(descriptor.get(), buffer.data(),
                                  std::min(buffer.size(), remaining));
     if (count < 0 && errno == EINTR) {
@@ -359,10 +353,10 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
     std::string name = NextTemporaryName();
     int raw_descriptor;
     do {
-      raw_descriptor = ::openat(directory_descriptor, name.c_str(),
-                                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
-                                    O_CLOEXEC,
-                                kSettingsFileMode);
+      raw_descriptor =
+          ::openat(directory_descriptor, name.c_str(),
+                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                   kSettingsFileMode);
     } while (raw_descriptor < 0 && errno == EINTR);
     if (raw_descriptor < 0 && errno == EEXIST) {
       continue;
@@ -380,10 +374,9 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
       return DurableStoreError<std::pair<UniqueFd, std::string>>();
     }
     struct stat status {};
-    if (::fstat(descriptor.get(), &status) != 0 ||
-        !S_ISREG(status.st_mode) || status.st_uid != expected_owner ||
-        (status.st_mode & kPermissionAndSpecialModeMask) !=
-            kSettingsFileMode) {
+    if (::fstat(descriptor.get(), &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_uid != expected_owner ||
+        (status.st_mode & kPermissionAndSpecialModeMask) != kSettingsFileMode) {
       int result;
       do {
         result = ::unlinkat(directory_descriptor, name.c_str(), 0);
@@ -493,10 +486,8 @@ struct RuntimeSettingsStore::Impl {
   Impl(std::filesystem::path state_directory_value,
        DirectoryAnchor directory_anchor_value,
        RuntimeSettingsDocument snapshot_value,
-       config::AppConfig base_config_value,
-       CameraProfileCatalog profiles_value,
-       uid_t effective_user_value,
-       DurableMarkerState marker_state_value,
+       config::AppConfig base_config_value, CameraProfileCatalog profiles_value,
+       uid_t effective_user_value, DurableMarkerState marker_state_value,
        bool has_previous_marker_value)
       : state_directory(std::move(state_directory_value)),
         directory_anchor(std::move(directory_anchor_value)),
@@ -514,8 +505,8 @@ struct RuntimeSettingsStore::Impl {
     const int directory_descriptor =
         directory_anchor.state_directory_descriptor();
     if (!RetryInterrupted([&] {
-          return camera_firmware_settings_unlinkat(
-              directory_descriptor, kPreviousName.data(), 0);
+          return camera_firmware_settings_unlinkat(directory_descriptor,
+                                                   kPreviousName.data(), 0);
         })) {
       return DurableStoreError<void>();
     }
@@ -617,9 +608,8 @@ struct RuntimeSettingsStore::Impl {
     marker_state = previous_remains ? DurableMarkerState::kPrevious
                                     : DurableMarkerState::kNone;
     has_previous_marker = previous_remains;
-    return RetryInterrupted([&] {
-      return camera_firmware_settings_fsync(directory_descriptor);
-    });
+    return RetryInterrupted(
+        [&] { return camera_firmware_settings_fsync(directory_descriptor); });
   }
 
   bool CommitProtectedMutation() noexcept {
@@ -640,8 +630,8 @@ struct RuntimeSettingsStore::Impl {
       has_previous_marker = true;
     }
     if (!RetryInterrupted([&] {
-          return camera_firmware_settings_unlinkat(
-              directory_descriptor, kRollbackName.data(), 0);
+          return camera_firmware_settings_unlinkat(directory_descriptor,
+                                                   kRollbackName.data(), 0);
         })) {
       return false;
     }
@@ -728,14 +718,12 @@ struct RuntimeSettingsStore::Impl {
       }
       previous_document = std::move(preserved).value();
     }
-    if (previous_document != nullptr &&
-        !RetryInterrupted([&] {
+    if (previous_document != nullptr && !RetryInterrupted([&] {
           return camera_firmware_settings_fsync(directory_descriptor);
         })) {
       (void)previous_document->Remove();
-      (void)RetryInterrupted([&] {
-        return camera_firmware_settings_fsync(directory_descriptor);
-      });
+      (void)RetryInterrupted(
+          [&] { return camera_firmware_settings_fsync(directory_descriptor); });
       return DurableStoreError<void>();
     }
     if (!RetryInterrupted([&] {
@@ -765,16 +753,15 @@ struct RuntimeSettingsStore::Impl {
         }
       } else {
         restored = RetryInterrupted([&] {
-          return camera_firmware_settings_unlinkat(
-              directory_descriptor, kSettingsName.data(), 0);
+          return camera_firmware_settings_unlinkat(directory_descriptor,
+                                                   kSettingsName.data(), 0);
         });
       }
       const bool rollback_synced =
           uses_durable_marker
               ? restored
               : restored && RetryInterrupted([&] {
-                  return camera_firmware_settings_fsync(
-                      directory_descriptor);
+                  return camera_firmware_settings_fsync(directory_descriptor);
                 });
       if (!rollback_synced) {
         poisoned = true;
@@ -794,9 +781,8 @@ struct RuntimeSettingsStore::Impl {
       return DurableStoreError<void>();
     }
     if (previous_document != nullptr && previous_document->Remove()) {
-      (void)RetryInterrupted([&] {
-        return camera_firmware_settings_fsync(directory_descriptor);
-      });
+      (void)RetryInterrupted(
+          [&] { return camera_firmware_settings_fsync(directory_descriptor); });
     }
     return common::Result<void>::Ok();
   }
@@ -832,7 +818,7 @@ struct RuntimeSettingsStore::Impl {
     auto mutated = mutation(candidate);
     if (!mutated.ok()) {
       return Error<RuntimeSettingsDocument>(mutated.error().code,
-                                             mutated.error().message);
+                                            mutated.error().message);
     }
     ++candidate.revision;
     candidate.recovery_required = false;
@@ -846,7 +832,7 @@ struct RuntimeSettingsStore::Impl {
     auto persisted = Persist(candidate, protect_active);
     if (!persisted.ok()) {
       return Error<RuntimeSettingsDocument>(persisted.error().code,
-                                             persisted.error().message);
+                                            persisted.error().message);
     }
     snapshot = std::move(candidate);
     return common::Result<RuntimeSettingsDocument>::Ok(
@@ -870,10 +856,11 @@ RuntimeSettingsStore::RuntimeSettingsStore(std::unique_ptr<Impl> impl) noexcept
 
 RuntimeSettingsStore::~RuntimeSettingsStore() = default;
 
-common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open(
-    const std::filesystem::path& state_directory, RuntimeSettings base_active,
-    const config::AppConfig& base_config,
-    const CameraProfileCatalog& profiles) {
+common::Result<std::unique_ptr<RuntimeSettingsStore>>
+RuntimeSettingsStore::Open(const std::filesystem::path& state_directory,
+                           RuntimeSettings base_active,
+                           const config::AppConfig& base_config,
+                           const CameraProfileCatalog& profiles) {
   try {
     if (!ValidateRuntimeSettings(base_active, base_config, profiles).ok() ||
         state_directory.empty() ||
@@ -897,10 +884,8 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
           opened_directory.error().code, opened_directory.error().message);
     }
     const uid_t effective_user = ::geteuid();
-    auto directory_status =
-        ValidateStateDirectory(
-            opened_directory.value().state_directory_descriptor(),
-            effective_user);
+    auto directory_status = ValidateStateDirectory(
+        opened_directory.value().state_directory_descriptor(), effective_user);
     if (!directory_status.ok()) {
       return Error<std::unique_ptr<RuntimeSettingsStore>>(
           directory_status.error().code, directory_status.error().message);
@@ -941,12 +926,15 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
 
     RuntimeSettingsDocument snapshot;
     DurableMarkerState marker_state = DurableMarkerState::kNone;
-    const bool has_previous_marker = previous_text.value().has_value();
-    if (rollback_text.value().has_value()) {
+    const std::optional<std::string>& document_marker = document_text.value();
+    const std::optional<std::string>& rollback_marker = rollback_text.value();
+    const std::optional<std::string>& previous_marker = previous_text.value();
+    const bool has_previous_marker = previous_marker.has_value();
+    if (rollback_marker.has_value()) {
       marker_state = DurableMarkerState::kRollback;
-      if (!rollback_text.value()->empty()) {
+      if (!rollback_marker->empty()) {
         auto decoded = internal::DecodeRuntimeSettingsDocument(
-            *rollback_text.value(), base_config, profiles);
+            *rollback_marker, base_config, profiles);
         if (decoded.ok()) {
           snapshot = std::move(decoded).value();
         } else {
@@ -956,17 +944,15 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
         snapshot.active = base_active;
       }
       snapshot.recovery_required = true;
-      snapshot.recovery_code =
-          "E_RUNTIME_SETTINGS_STORE_INDETERMINATE";
+      snapshot.recovery_code = "E_RUNTIME_SETTINGS_STORE_INDETERMINATE";
     } else {
-      marker_state = previous_text.value().has_value()
-                         ? DurableMarkerState::kPrevious
-                         : DurableMarkerState::kNone;
-      if (!document_text.value().has_value()) {
+      marker_state = previous_marker.has_value() ? DurableMarkerState::kPrevious
+                                                 : DurableMarkerState::kNone;
+      if (!document_marker.has_value()) {
         snapshot.active = std::move(base_active);
       } else {
         auto decoded = internal::DecodeRuntimeSettingsDocument(
-            *document_text.value(), base_config, profiles);
+            *document_marker, base_config, profiles);
         if (decoded.ok()) {
           snapshot = std::move(decoded).value();
         } else {
@@ -993,8 +979,7 @@ common::Result<std::unique_ptr<RuntimeSettingsStore>> RuntimeSettingsStore::Open
 RuntimeSettingsDocument RuntimeSettingsStore::Snapshot() const {
   std::lock_guard lock(impl_->mutex);
   RuntimeSettingsDocument snapshot = impl_->snapshot;
-  if (impl_->poisoned ||
-      impl_->marker_state == DurableMarkerState::kRollback) {
+  if (impl_->poisoned || impl_->marker_state == DurableMarkerState::kRollback) {
     snapshot.recovery_required = true;
     snapshot.recovery_code = "E_RUNTIME_SETTINGS_STORE_INDETERMINATE";
   }
@@ -1003,8 +988,7 @@ RuntimeSettingsDocument RuntimeSettingsStore::Snapshot() const {
 
 common::Result<RuntimeSettingsDocument> RuntimeSettingsStore::SavePending(
     std::uint64_t expected_revision, RuntimeSettings pending) {
-  return impl_->Mutate(expected_revision, true,
-                       false,
+  return impl_->Mutate(expected_revision, true, false,
                        [pending = std::move(pending)](
                            RuntimeSettingsDocument& candidate) mutable {
                          candidate.pending = std::move(pending);
@@ -1014,43 +998,40 @@ common::Result<RuntimeSettingsDocument> RuntimeSettingsStore::SavePending(
 
 common::Result<RuntimeSettingsDocument> RuntimeSettingsStore::DiscardPending(
     std::uint64_t expected_revision) {
-  return impl_->Mutate(expected_revision, false,
-                       false,
-                       [](RuntimeSettingsDocument& candidate) {
-                         if (!candidate.pending.has_value()) {
-                           return Error("E_RUNTIME_SETTINGS_NO_PENDING",
-                                        "runtime settings have no pending state");
-                         }
-                         candidate.pending.reset();
-                         return common::Result<void>::Ok();
-                       });
+  return impl_->Mutate(
+      expected_revision, false, false, [](RuntimeSettingsDocument& candidate) {
+        if (!candidate.pending.has_value()) {
+          return Error("E_RUNTIME_SETTINGS_NO_PENDING",
+                       "runtime settings have no pending state");
+        }
+        candidate.pending.reset();
+        return common::Result<void>::Ok();
+      });
 }
 
 common::Result<RuntimeSettingsDocument> RuntimeSettingsStore::PromotePending(
     std::uint64_t expected_revision) {
-  return impl_->Mutate(expected_revision, false,
-                       true,
-                       [](RuntimeSettingsDocument& candidate) {
-                         if (!candidate.pending.has_value()) {
-                           return Error("E_RUNTIME_SETTINGS_NO_PENDING",
-                                        "runtime settings have no pending state");
-                         }
-                         candidate.active = std::move(*candidate.pending);
-                         candidate.pending.reset();
-                         candidate.last_apply = {ApplyStatus::kSuccess, "", false};
-                         return common::Result<void>::Ok();
-                       });
+  return impl_->Mutate(
+      expected_revision, false, true, [](RuntimeSettingsDocument& candidate) {
+        if (!candidate.pending.has_value()) {
+          return Error("E_RUNTIME_SETTINGS_NO_PENDING",
+                       "runtime settings have no pending state");
+        }
+        candidate.active = std::move(*candidate.pending);
+        candidate.pending.reset();
+        candidate.last_apply = {ApplyStatus::kSuccess, "", false};
+        return common::Result<void>::Ok();
+      });
 }
 
 common::Result<RuntimeSettingsDocument>
 RuntimeSettingsStore::RecordApplyFailure(std::uint64_t expected_revision,
                                          std::string code, bool restored) {
-  return impl_->Mutate(expected_revision, false,
-                       false,
-                       [code = std::move(code), restored](
-                           RuntimeSettingsDocument& candidate) mutable {
-                         candidate.last_apply = {
-                             ApplyStatus::kFailed, std::move(code), restored};
+  return impl_->Mutate(expected_revision, false, false,
+                       [code = std::move(code),
+                        restored](RuntimeSettingsDocument& candidate) mutable {
+                         candidate.last_apply = {ApplyStatus::kFailed,
+                                                 std::move(code), restored};
                          return common::Result<void>::Ok();
                        });
 }

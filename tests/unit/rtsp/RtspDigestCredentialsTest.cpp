@@ -166,8 +166,7 @@ std::string HexForTest(const SecureBytes& bytes) {
 }
 
 std::string Record(std::string_view username, std::string_view realm,
-                   RtspDigestAlgorithm algorithm,
-                   std::string_view password) {
+                   RtspDigestAlgorithm algorithm, std::string_view password) {
   auto ha1 = ComputeRtspDigestHa1(algorithm, username, realm, Bytes(password));
   if (!ha1.ok()) {
     throw std::runtime_error("failed to compute test HA1");
@@ -232,8 +231,8 @@ TEST(RtspDigestCredentialsTest, LoadsStrictVersionedSha256File) {
 
   auto reloaded = store->Reload(path);
   auto lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
-  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256,
-                                       "operator", kRealm, Bytes("secret"));
+  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, "operator",
+                                       kRealm, Bytes("secret"));
 
   ASSERT_TRUE(reloaded.ok()) << reloaded.error().message;
   ASSERT_TRUE(lookup.ok()) << lookup.error().message;
@@ -287,8 +286,8 @@ TEST(RtspDigestCredentialsTest, RejectsSymlinkAndGroupReadableFile) {
   const auto target = directory.File("target");
   const auto symlink = directory.File("symlink");
   const auto group_readable = directory.File("group-readable");
-  const auto valid = CredentialFile({Record(
-      "operator", kRealm, RtspDigestAlgorithm::kSha256, "secret")});
+  const auto valid = CredentialFile(
+      {Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret")});
   WriteFile(target, valid);
   std::filesystem::create_symlink(target, symlink);
   WriteFile(group_readable, valid, 0640);
@@ -305,8 +304,7 @@ TEST(RtspDigestCredentialsTest, RejectsSymlinkAndGroupReadableFile) {
             "credential file permissions are invalid");
 }
 
-TEST(RtspDigestCredentialsTest,
-     RejectsWrongRealmUppercaseHexAndBlankLine) {
+TEST(RtspDigestCredentialsTest, RejectsWrongRealmUppercaseHexAndBlankLine) {
   TemporaryDirectory directory;
   const auto wrong_realm = directory.File("wrong-realm");
   const auto uppercase = directory.File("uppercase");
@@ -318,8 +316,8 @@ TEST(RtspDigestCredentialsTest,
       Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret");
   const auto digest = uppercase_record.rfind(':') + 1U;
   std::transform(uppercase_record.begin() + static_cast<std::ptrdiff_t>(digest),
-                 uppercase_record.end(), uppercase_record.begin() +
-                                                    static_cast<std::ptrdiff_t>(digest),
+                 uppercase_record.end(),
+                 uppercase_record.begin() + static_cast<std::ptrdiff_t>(digest),
                  [](unsigned char value) {
                    return static_cast<char>(value >= 'a' && value <= 'f'
                                                 ? value - ('a' - 'A')
@@ -343,16 +341,15 @@ TEST(RtspDigestCredentialsTest,
             "credential file format is invalid");
   EXPECT_EQ(uppercase_result.error().message,
             "credential file format is invalid");
-  EXPECT_EQ(blank_result.error().message,
-            "credential file format is invalid");
+  EXPECT_EQ(blank_result.error().message, "credential file format is invalid");
 }
 
 TEST(RtspDigestCredentialsTest, RejectsDuplicateRecordAndMoreThan64Users) {
   TemporaryDirectory directory;
   const auto duplicate = directory.File("duplicate");
   const auto too_many_users = directory.File("too-many-users");
-  const std::string repeated = Record(
-      "operator", kRealm, RtspDigestAlgorithm::kSha256, "secret");
+  const std::string repeated =
+      Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret");
   WriteFile(duplicate, CredentialFile({repeated, repeated}));
   std::vector<std::string> records;
   for (std::size_t index = 0U; index < 65U; ++index) {
@@ -377,8 +374,8 @@ TEST(RtspDigestCredentialsTest, AcceptsSixtyFourUsersAnd128Records) {
   std::vector<std::string> records;
   for (std::size_t index = 0U; index < 64U; ++index) {
     const std::string username = "user" + std::to_string(index);
-    records.push_back(Record(username, kRealm,
-                             RtspDigestAlgorithm::kSha256, "secret"));
+    records.push_back(
+        Record(username, kRealm, RtspDigestAlgorithm::kSha256, "secret"));
     records.push_back(
         Record(username, kRealm, RtspDigestAlgorithm::kMd5, "secret"));
   }
@@ -393,15 +390,14 @@ TEST(RtspDigestCredentialsTest, AcceptsSixtyFourUsersAnd128Records) {
   EXPECT_TRUE(lookup.value().matched);
 }
 
-TEST(RtspDigestCredentialsTest,
-     RejectsMd5RecordWhenCompatibilityIsDisabled) {
+TEST(RtspDigestCredentialsTest, RejectsMd5RecordWhenCompatibilityIsDisabled) {
   TemporaryDirectory directory;
   const auto path = directory.File("credentials");
-  WriteFile(path,
-            CredentialFile({Record("operator", kRealm,
-                                   RtspDigestAlgorithm::kSha256, "secret"),
-                            Record("operator", kRealm,
-                                   RtspDigestAlgorithm::kMd5, "secret")}));
+  WriteFile(
+      path,
+      CredentialFile(
+          {Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret"),
+           Record("operator", kRealm, RtspDigestAlgorithm::kMd5, "secret")}));
   auto store = CreateStore();
 
   auto result = store->Reload(path);
@@ -414,9 +410,9 @@ TEST(RtspDigestCredentialsTest,
      RejectsMd5OnlyFileEvenWhenCompatibilityIsEnabled) {
   TemporaryDirectory directory;
   const auto path = directory.File("md5-only");
-  WriteFile(path, CredentialFile({Record("operator", kRealm,
-                                        RtspDigestAlgorithm::kMd5,
-                                        "secret")}));
+  WriteFile(path,
+            CredentialFile({Record("operator", kRealm,
+                                   RtspDigestAlgorithm::kMd5, "secret")}));
   auto store = CreateStore(CompatibilityPolicy());
 
   auto result = store->Reload(path);
@@ -438,8 +434,8 @@ TEST(RtspDigestCredentialsTest, FailedReloadKeepsPreviousCredentials) {
 
   auto failed = store->Reload(invalid);
   auto lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
-  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256,
-                                       "operator", kRealm, Bytes("first"));
+  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, "operator",
+                                       kRealm, Bytes("first"));
 
   ASSERT_FALSE(failed.ok());
   ASSERT_TRUE(lookup.ok()) << lookup.error().message;
@@ -450,8 +446,7 @@ TEST(RtspDigestCredentialsTest, FailedReloadKeepsPreviousCredentials) {
       {expected.value().data(), expected.value().size()}));
 }
 
-TEST(RtspDigestCredentialsTest,
-     SuccessfulReloadZeroizesRetiredCredentials) {
+TEST(RtspDigestCredentialsTest, SuccessfulReloadZeroizesRetiredCredentials) {
   TemporaryDirectory directory;
   const auto first = directory.File("first");
   const auto second = directory.File("second");
@@ -505,8 +500,7 @@ TEST(RtspDigestCredentialsTest,
   std::thread reader([&] {
     reader_ready.store(true);
     while (!stop.load()) {
-      auto lookup =
-          store->Lookup("operator", RtspDigestAlgorithm::kSha256);
+      auto lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
       const bool valid =
           lookup.ok() && lookup.value().matched &&
           (RtspDigestConstantTimeEqual(
@@ -545,11 +539,11 @@ TEST(RtspDigestCredentialsTest,
      ClearTerminallyCleansesActiveAndDummyHa1Values) {
   TemporaryDirectory directory;
   const auto path = directory.File("credentials");
-  WriteFile(path,
-            CredentialFile({Record("operator", kRealm,
-                                   RtspDigestAlgorithm::kSha256, "secret"),
-                            Record("operator", kRealm,
-                                   RtspDigestAlgorithm::kMd5, "secret")}));
+  WriteFile(
+      path,
+      CredentialFile(
+          {Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret"),
+           Record("operator", kRealm, RtspDigestAlgorithm::kMd5, "secret")}));
   auto store = CreateStore(CompatibilityPolicy());
   ASSERT_TRUE(store->Reload(path).ok());
   const auto before = store->zeroize_audit();
@@ -559,8 +553,7 @@ TEST(RtspDigestCredentialsTest,
   const auto after = store->zeroize_audit();
   EXPECT_EQ(after.count - before.count, 4U);
   EXPECT_TRUE(after.last_verified);
-  auto sha_lookup =
-      store->Lookup("operator", RtspDigestAlgorithm::kSha256);
+  auto sha_lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
   auto md5_lookup = store->Lookup("operator", RtspDigestAlgorithm::kMd5);
   ASSERT_FALSE(sha_lookup.ok());
   ASSERT_FALSE(md5_lookup.ok());
@@ -594,8 +587,8 @@ TEST(RtspDigestCredentialsTest, ProvisionWritesMode0600AndReplacesAtomically) {
   auto store = CreateStore();
   ASSERT_TRUE(store->Reload(path).ok());
   auto lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
-  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256,
-                                       "operator", kRealm, Bytes("second"));
+  auto expected = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, "operator",
+                                       kRealm, Bytes("second"));
   ASSERT_TRUE(lookup.ok()) << lookup.error().message;
   ASSERT_TRUE(expected.ok()) << expected.error().message;
   EXPECT_TRUE(lookup.value().matched);
@@ -612,12 +605,10 @@ TEST(RtspDigestCredentialsTest,
                                      RtspDigestAlgorithm::kSha256, false};
   ASSERT_TRUE(
       ProvisionRtspDigestCredential(request, Bytes("old-password")).ok());
-  const std::string old_content =
-      CredentialFile({Record("operator", kRealm,
-                             RtspDigestAlgorithm::kSha256, "old-password")});
-  const std::string new_content =
-      CredentialFile({Record("operator", kRealm,
-                             RtspDigestAlgorithm::kSha256, "new-password")});
+  const std::string old_content = CredentialFile({Record(
+      "operator", kRealm, RtspDigestAlgorithm::kSha256, "old-password")});
+  const std::string new_content = CredentialFile({Record(
+      "operator", kRealm, RtspDigestAlgorithm::kSha256, "new-password")});
 
   std::atomic<bool> reader_ready{false};
   std::atomic<bool> stop{false};
@@ -667,19 +658,15 @@ TEST(RtspDigestCredentialsTest, ProvisionRequiresSha256BeforeMd5) {
   ExpectCredentialError(missing_sha.error());
   EXPECT_FALSE(std::filesystem::exists(path));
 
-  RtspDigestProvisionRequest sha_request{
-      path, "operator", std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, true};
-  ASSERT_TRUE(
-      ProvisionRtspDigestCredential(sha_request, Bytes("secret")).ok());
-  auto added_md5 =
-      ProvisionRtspDigestCredential(md5_request, Bytes("secret"));
+  RtspDigestProvisionRequest sha_request{path, "operator", std::string(kRealm),
+                                         RtspDigestAlgorithm::kSha256, true};
+  ASSERT_TRUE(ProvisionRtspDigestCredential(sha_request, Bytes("secret")).ok());
+  auto added_md5 = ProvisionRtspDigestCredential(md5_request, Bytes("secret"));
 
   ASSERT_TRUE(added_md5.ok()) << added_md5.error().message;
   auto store = CreateStore(CompatibilityPolicy());
   ASSERT_TRUE(store->Reload(path).ok());
-  auto sha_lookup =
-      store->Lookup("operator", RtspDigestAlgorithm::kSha256);
+  auto sha_lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
   auto md5_lookup = store->Lookup("operator", RtspDigestAlgorithm::kMd5);
   ASSERT_TRUE(sha_lookup.ok());
   ASSERT_TRUE(md5_lookup.ok());
@@ -691,9 +678,8 @@ TEST(RtspDigestCredentialsTest,
      Sha256RotationPreservesExistingMd5WithoutAllowMd5) {
   TemporaryDirectory directory;
   const auto path = directory.File("credentials");
-  RtspDigestProvisionRequest sha_request{
-      path, "operator", std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, false};
+  RtspDigestProvisionRequest sha_request{path, "operator", std::string(kRealm),
+                                         RtspDigestAlgorithm::kSha256, false};
   RtspDigestProvisionRequest md5_request{path, "operator", std::string(kRealm),
                                          RtspDigestAlgorithm::kMd5, true};
   ASSERT_TRUE(
@@ -707,12 +693,10 @@ TEST(RtspDigestCredentialsTest,
   ASSERT_TRUE(rotated.ok()) << rotated.error().message;
   auto store = CreateStore(CompatibilityPolicy());
   ASSERT_TRUE(store->Reload(path).ok());
-  auto sha_lookup =
-      store->Lookup("operator", RtspDigestAlgorithm::kSha256);
+  auto sha_lookup = store->Lookup("operator", RtspDigestAlgorithm::kSha256);
   auto md5_lookup = store->Lookup("operator", RtspDigestAlgorithm::kMd5);
   auto expected_sha = ComputeRtspDigestHa1(
-      RtspDigestAlgorithm::kSha256, "operator", kRealm,
-      Bytes("new-password"));
+      RtspDigestAlgorithm::kSha256, "operator", kRealm, Bytes("new-password"));
   auto expected_md5 = ComputeRtspDigestHa1(
       RtspDigestAlgorithm::kMd5, "operator", kRealm, Bytes("old-password"));
   ASSERT_TRUE(sha_lookup.ok());
@@ -733,16 +717,14 @@ TEST(RtspDigestCredentialsTest,
      AnotherUsersSha256DoesNotAuthorizeMd5Provisioning) {
   TemporaryDirectory directory;
   const auto path = directory.File("credentials");
-  RtspDigestProvisionRequest alice_sha{
-      path, "alice", std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, true};
+  RtspDigestProvisionRequest alice_sha{path, "alice", std::string(kRealm),
+                                       RtspDigestAlgorithm::kSha256, true};
   RtspDigestProvisionRequest bob_md5{path, "bob", std::string(kRealm),
                                      RtspDigestAlgorithm::kMd5, true};
   ASSERT_TRUE(
       ProvisionRtspDigestCredential(alice_sha, Bytes("alice-pass")).ok());
 
-  auto result =
-      ProvisionRtspDigestCredential(bob_md5, Bytes("bob-pass"));
+  auto result = ProvisionRtspDigestCredential(bob_md5, Bytes("bob-pass"));
 
   ASSERT_FALSE(result.ok());
   ExpectCredentialError(result.error());
@@ -761,15 +743,14 @@ TEST(RtspDigestCredentialsTest, RejectsInvalidPoliciesAndLookupAlgorithms) {
   std::vector<RtspDigestCredentialPolicy> policies;
   policies.push_back({"", {RtspDigestAlgorithm::kSha256}});
   policies.push_back({"bad:realm", {RtspDigestAlgorithm::kSha256}});
-  policies.push_back({std::string(129U, 'r'),
-                      {RtspDigestAlgorithm::kSha256}});
+  policies.push_back({std::string(129U, 'r'), {RtspDigestAlgorithm::kSha256}});
   policies.push_back({std::string(kRealm), {}});
   policies.push_back({std::string(kRealm), {RtspDigestAlgorithm::kMd5}});
-  policies.push_back({std::string(kRealm),
-                      {RtspDigestAlgorithm::kSha256,
-                       RtspDigestAlgorithm::kSha256}});
-  policies.push_back({std::string(kRealm),
-                      {RtspDigestAlgorithm::kSha256, invalid}});
+  policies.push_back(
+      {std::string(kRealm),
+       {RtspDigestAlgorithm::kSha256, RtspDigestAlgorithm::kSha256}});
+  policies.push_back(
+      {std::string(kRealm), {RtspDigestAlgorithm::kSha256, invalid}});
 
   for (auto& policy : policies) {
     auto created = RtspDigestCredentialStore::Create(std::move(policy));
@@ -830,11 +811,11 @@ TEST(RtspDigestCredentialsTest, AppliesInclusiveCredentialFileSizeBounds) {
 TEST(RtspDigestCredentialsTest, RejectsMalformedLineBoundariesAndFields) {
   TemporaryDirectory directory;
   const std::vector<std::pair<std::string, std::string>> invalid_files = {
-      {"wrong-header", "cfdigest1\n" +
-                           Record("operator", kRealm,
-                                  RtspDigestAlgorithm::kSha256, "secret")},
-      {"no-final-lf", "CFDIGEST1\noperator:rpi-camera:sha-256:" +
-                          std::string(64U, '0')},
+      {"wrong-header",
+       "cfdigest1\n" +
+           Record("operator", kRealm, RtspDigestAlgorithm::kSha256, "secret")},
+      {"no-final-lf",
+       "CFDIGEST1\noperator:rpi-camera:sha-256:" + std::string(64U, '0')},
       {"crlf", "CFDIGEST1\r\noperator:rpi-camera:sha-256:" +
                    std::string(64U, '0') + "\r\n"},
       {"comment", "CFDIGEST1\n#comment\n"},
@@ -846,11 +827,11 @@ TEST(RtspDigestCredentialsTest, RejectsMalformedLineBoundariesAndFields) {
       {"space-username", "CFDIGEST1\nbad user:rpi-camera:sha-256:" +
                              std::string(64U, '0') + "\n"},
       {"long-username", "CFDIGEST1\n" + std::string(65U, 'u') +
-                            ":rpi-camera:sha-256:" +
-                            std::string(64U, '0') + "\n"},
-      {"nul-username", std::string("CFDIGEST1\nbad\0user:rpi-camera:sha-256:",
-                                    38U) +
-                           std::string(64U, '0') + "\n"},
+                            ":rpi-camera:sha-256:" + std::string(64U, '0') +
+                            "\n"},
+      {"nul-username",
+       std::string("CFDIGEST1\nbad\0user:rpi-camera:sha-256:", 38U) +
+           std::string(64U, '0') + "\n"},
   };
   auto store = CreateStore();
 
@@ -867,9 +848,9 @@ TEST(RtspDigestCredentialsTest, AcceptsMaximumLengthVisibleUsername) {
   TemporaryDirectory directory;
   const auto path = directory.File("maximum-username");
   const std::string username(64U, 'u');
-  WriteFile(path, CredentialFile({Record(username, kRealm,
-                                        RtspDigestAlgorithm::kSha256,
-                                        "secret")}));
+  WriteFile(path,
+            CredentialFile({Record(username, kRealm,
+                                   RtspDigestAlgorithm::kSha256, "secret")}));
   auto store = CreateStore();
 
   auto reloaded = store->Reload(path);
@@ -884,9 +865,9 @@ TEST(RtspDigestCredentialsTest, AcceptsMaximumLengthVisibleRealm) {
   TemporaryDirectory directory;
   const auto path = directory.File("maximum-realm");
   const std::string realm(128U, 'r');
-  WriteFile(path, CredentialFile({Record("operator", realm,
-                                        RtspDigestAlgorithm::kSha256,
-                                        "secret")}));
+  WriteFile(path,
+            CredentialFile({Record("operator", realm,
+                                   RtspDigestAlgorithm::kSha256, "secret")}));
   auto store = CreateStore(Sha256Policy(realm));
 
   auto reloaded = store->Reload(path);
@@ -897,8 +878,7 @@ TEST(RtspDigestCredentialsTest, AcceptsMaximumLengthVisibleRealm) {
   EXPECT_TRUE(lookup.value().matched);
 }
 
-TEST(RtspDigestCredentialsTest,
-     CredentialErrorsDoNotExposeSensitiveInputs) {
+TEST(RtspDigestCredentialsTest, CredentialErrorsDoNotExposeSensitiveInputs) {
   TemporaryDirectory directory;
   const auto path = directory.File("secret-path-fragment");
   WriteFile(path,
@@ -920,11 +900,10 @@ TEST(RtspDigestCredentialsTest,
   const auto path = directory.File("credentials");
   RtspDigestProvisionRequest bob{path, "bob", std::string(kRealm),
                                  RtspDigestAlgorithm::kSha256, true};
-  RtspDigestProvisionRequest alice_sha{
-      path, "alice", std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, true};
-  RtspDigestProvisionRequest alice_md5{
-      path, "alice", std::string(kRealm), RtspDigestAlgorithm::kMd5, true};
+  RtspDigestProvisionRequest alice_sha{path, "alice", std::string(kRealm),
+                                       RtspDigestAlgorithm::kSha256, true};
+  RtspDigestProvisionRequest alice_md5{path, "alice", std::string(kRealm),
+                                       RtspDigestAlgorithm::kMd5, true};
 
   ASSERT_TRUE(ProvisionRtspDigestCredential(bob, Bytes("bob-pass")).ok());
   ASSERT_TRUE(
@@ -932,13 +911,10 @@ TEST(RtspDigestCredentialsTest,
   ASSERT_TRUE(
       ProvisionRtspDigestCredential(alice_md5, Bytes("alice-pass")).ok());
 
-  const std::string expected =
-      CredentialFile({Record("alice", kRealm, RtspDigestAlgorithm::kSha256,
-                             "alice-pass"),
-                      Record("alice", kRealm, RtspDigestAlgorithm::kMd5,
-                             "alice-pass"),
-                      Record("bob", kRealm, RtspDigestAlgorithm::kSha256,
-                             "bob-pass")});
+  const std::string expected = CredentialFile(
+      {Record("alice", kRealm, RtspDigestAlgorithm::kSha256, "alice-pass"),
+       Record("alice", kRealm, RtspDigestAlgorithm::kMd5, "alice-pass"),
+       Record("bob", kRealm, RtspDigestAlgorithm::kSha256, "bob-pass")});
   EXPECT_EQ(ReadFileForTest(path), expected);
 }
 
@@ -967,13 +943,12 @@ TEST(RtspDigestCredentialsTest, ProvisionRejectsInvalidRequests) {
       {path, "", std::string(kRealm), RtspDigestAlgorithm::kSha256, false},
       {path, std::string(65U, 'u'), std::string(kRealm),
        RtspDigestAlgorithm::kSha256, false},
-      {path, "bad user", std::string(kRealm),
-       RtspDigestAlgorithm::kSha256, false},
+      {path, "bad user", std::string(kRealm), RtspDigestAlgorithm::kSha256,
+       false},
       {path, "operator", "", RtspDigestAlgorithm::kSha256, false},
       {path, "operator", "bad:realm", RtspDigestAlgorithm::kSha256, false},
       {path, "operator", std::string(kRealm), invalid, false},
-      {path, "operator", std::string(kRealm), RtspDigestAlgorithm::kMd5,
-       false},
+      {path, "operator", std::string(kRealm), RtspDigestAlgorithm::kMd5, false},
   };
 
   for (const auto& request : requests) {
@@ -988,9 +963,9 @@ TEST(RtspDigestCredentialsTest,
      ProvisionFailureBeforeRenameLeavesNoTemporaryFile) {
   TemporaryDirectory directory;
   const auto missing_parent = directory.File("missing") / "credentials";
-  RtspDigestProvisionRequest request{
-      missing_parent, "operator", std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, false};
+  RtspDigestProvisionRequest request{missing_parent, "operator",
+                                     std::string(kRealm),
+                                     RtspDigestAlgorithm::kSha256, false};
 
   auto result = ProvisionRtspDigestCredential(request, Bytes("secret"));
 
@@ -1005,8 +980,7 @@ TEST(RtspDigestCredentialsTest,
   const auto path = directory.File("credentials");
   struct rlimit current_limit {};
   ASSERT_EQ(::getrlimit(RLIMIT_FSIZE, &current_limit), 0);
-  if (current_limit.rlim_max != RLIM_INFINITY &&
-      current_limit.rlim_max < 1U) {
+  if (current_limit.rlim_max != RLIM_INFINITY && current_limit.rlim_max < 1U) {
     GTEST_SKIP() << "RLIMIT_FSIZE hard limit cannot support this test";
   }
   RtspDigestProvisionRequest request{path, "operator", std::string(kRealm),

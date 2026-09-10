@@ -16,8 +16,9 @@ struct GlyphBitmap {
   int width{0};
   int height{0};
   int bearing_x{0};  // left edge of the bitmap relative to the pen position
-  int bearing_y{0};  // top edge of the bitmap relative to the baseline (negative = above)
-  int advance{0};    // horizontal pen advance in pixels
+  int bearing_y{
+      0};  // top edge of the bitmap relative to the baseline (negative = above)
+  int advance{0};                   // horizontal pen advance in pixels
   std::vector<std::uint8_t> alpha;  // width * height coverage values, row-major
 };
 
@@ -50,7 +51,8 @@ class TextRasterizer {
   [[nodiscard]] bool HasGlyph(char32_t codepoint) const;
   // Cached per (codepoint, pixel_height); the reference stays valid for the
   // rasterizer's lifetime. Unknown codepoints render the .notdef glyph.
-  [[nodiscard]] const GlyphBitmap& GetGlyph(char32_t codepoint, int pixel_height);
+  [[nodiscard]] const GlyphBitmap& GetGlyph(char32_t codepoint,
+                                            int pixel_height);
   // Lays out UTF-8 text left to right with kerning. Malformed UTF-8 bytes
   // decode to U+FFFD.
   [[nodiscard]] TextRun Shape(std::string_view utf8, int pixel_height);

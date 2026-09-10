@@ -25,7 +25,9 @@ AiFramePump::AiFramePump(AiFrameTap& frame_tap, AiRuntime& runtime,
       minimum_interval_(minimum_interval),
       state_(std::make_shared<SharedState>()) {}
 
-AiFramePump::~AiFramePump() { Stop(); }
+AiFramePump::~AiFramePump() {
+  Stop();
+}
 
 common::Result<void> AiFramePump::Start() {
   {
@@ -49,17 +51,15 @@ common::Result<void> AiFramePump::Start() {
   // Pull-on-ready: re-arm the tap's demand each time the runtime finishes
   // an inference, so the capture side leases a lores buffer only when the
   // runner is actually ready for the next frame.
-  runtime_.SetReadyCallback([&frame_tap = frame_tap_] {
-    frame_tap.RequestNext();
-  });
+  runtime_.SetReadyCallback(
+      [&frame_tap = frame_tap_] { frame_tap.RequestNext(); });
 
   std::weak_ptr<SharedState> weak_state = state_;
-  subscription_ = frame_tap_.Subscribe(
-      [weak_state](media::FrameLease frame) {
-        if (auto state = weak_state.lock()) {
-          QueueFrame(state, std::move(frame));
-        }
-      });
+  subscription_ = frame_tap_.Subscribe([weak_state](media::FrameLease frame) {
+    if (auto state = weak_state.lock()) {
+      QueueFrame(state, std::move(frame));
+    }
+  });
 
   return common::Result<void>::Ok();
 }

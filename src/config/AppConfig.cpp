@@ -31,16 +31,18 @@ common::Error SessionKeyError() {
 }
 
 common::Error TlsCertificateError() {
-  return {"E_CONFIG_TLS_CERT",
-          "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
-          "when control_tls is enabled unless "
-          "allow_development_self_signed_tls is true"};
+  return {
+      "E_CONFIG_TLS_CERT",
+      "secure_rtsp.tls_certificate_path and tls_private_key_path are required "
+      "when control_tls is enabled unless "
+      "allow_development_self_signed_tls is true"};
 }
 
 common::Error HttpTlsError() {
-  return {"E_CONFIG_HTTP_TLS",
-          "http.tls.certificate_path and private_key_path are required together "
-          "when http.tls.enabled is true"};
+  return {
+      "E_CONFIG_HTTP_TLS",
+      "http.tls.certificate_path and private_key_path are required together "
+      "when http.tls.enabled is true"};
 }
 
 std::vector<std::string> ReadStringList(const YAML::Node& node) {
@@ -72,8 +74,8 @@ bool IsLexicallyBeneath(const std::filesystem::path& path,
 
   auto path_component = normalized_path.begin();
   for (auto directory_component = normalized_directory.begin();
-       directory_component != normalized_directory.end(); ++directory_component,
-            ++path_component) {
+       directory_component != normalized_directory.end();
+       ++directory_component, ++path_component) {
     if (path_component == normalized_path.end() ||
         *path_component != *directory_component) {
       return false;
@@ -97,8 +99,7 @@ bool IsAbsoluteNormalizedPath(const std::string& value) {
 }  // namespace
 
 common::Result<void> ValidateAiConfigSemantics(
-    const AiConfig& ai_config,
-    const CameraConfig& camera_config) {
+    const AiConfig& ai_config, const CameraConfig& camera_config) {
   if (!ai_config.enabled) {
     if (camera_config.ai.enabled) {
       return common::Result<void>::Err(
@@ -166,9 +167,9 @@ common::Result<void> ValidateAiConfigSemantics(
 
   if (camera_config.ai.enabled) {
     if (camera_config.ai.model_ids.empty()) {
-      return common::Result<void>::Err(
-          {"E_CONFIG_AI_CAMERA_MODEL",
-           "camera.ai.model_ids must not be empty when camera.ai.enabled=true"});
+      return common::Result<void>::Err({"E_CONFIG_AI_CAMERA_MODEL",
+                                        "camera.ai.model_ids must not be empty "
+                                        "when camera.ai.enabled=true"});
     }
     std::unordered_set<std::string> camera_model_ids;
     for (const auto& model_id : camera_config.ai.model_ids) {
@@ -186,8 +187,7 @@ common::Result<void> ValidateAiConfigSemantics(
     constexpr unsigned int kMaximumCameraAiMaxFps = 120U;
     if (camera_config.ai.max_fps > kMaximumCameraAiMaxFps) {
       return common::Result<void>::Err(
-          {"E_CONFIG_AI_MAX_FPS",
-           "camera.ai.max_fps must be 120 or less"});
+          {"E_CONFIG_AI_MAX_FPS", "camera.ai.max_fps must be 120 or less"});
     }
   }
 
@@ -258,8 +258,7 @@ common::Result<void> ValidateSecureRtspSemantics(
 
 common::Result<void> ValidateHttpSnapshotSemantics(
     const HttpSnapshotConfig& config) {
-  if (config.stale_timeout_ms < 500U ||
-      config.stale_timeout_ms > 10000U) {
+  if (config.stale_timeout_ms < 500U || config.stale_timeout_ms > 10000U) {
     return common::Result<void>::Err(
         {"E_CONFIG_HTTP_SNAPSHOT", "http.snapshot configuration is invalid"});
   }
@@ -283,11 +282,11 @@ common::Result<void> ValidateHttpLiveSemantics(const HttpLiveConfig& config) {
 
 common::Result<void> ValidateCameraSubStreamSemantics(
     const CameraSubStreamConfig& config) {
-  // Non-zero geometry is enforced regardless of `enabled`: the web client rejects
-  // zero geometry unconditionally, so a zeroed YAML field (or a zero derived from
-  // it) would brick the settings UI. DeriveRuntimeSettings does not call
-  // ValidateRuntimeSettings, so this config gate is the only stop for a zeroed
-  // YAML producing a zero derived active.
+  // Non-zero geometry is enforced regardless of `enabled`: the web client
+  // rejects zero geometry unconditionally, so a zeroed YAML field (or a zero
+  // derived from it) would brick the settings UI. DeriveRuntimeSettings does
+  // not call ValidateRuntimeSettings, so this config gate is the only stop for
+  // a zeroed YAML producing a zero derived active.
   if (config.width == 0U || config.height == 0U || config.fps == 0U ||
       config.bitrate_kbps == 0U) {
     return common::Result<void>::Err(
@@ -356,8 +355,7 @@ common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
         config.secure_rtsp.client_auth.algorithms.begin(),
         config.secure_rtsp.client_auth.algorithms.end());
     if (!config.secure_rtsp.client_auth.enabled ||
-        !auth_algorithms.contains("sha-256") ||
-        auth_algorithms.size() > 2U ||
+        !auth_algorithms.contains("sha-256") || auth_algorithms.size() > 2U ||
         (auth_algorithms.size() == 2U && !auth_algorithms.contains("md5"))) {
       return common::Result<void>::Err(
           {"E_SECURITY_RTSP_AUTH",
@@ -367,9 +365,9 @@ common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
   }
   if (!IsLexicallyBeneath(config.secure_rtsp.client_auth.credential_file,
                           config.security.state_directory)) {
-    return common::Result<void>::Err(
-        {"E_SECURITY_CREDENTIAL_PATH",
-         "RTSP credentials must be located beneath the security state directory"});
+    return common::Result<void>::Err({"E_SECURITY_CREDENTIAL_PATH",
+                                      "RTSP credentials must be located "
+                                      "beneath the security state directory"});
   }
 
   return common::Result<void>::Ok();
@@ -392,8 +390,7 @@ common::Result<void> ValidateAppConfigSemantics(const AppConfig& config) {
     return common::Result<void>::Err(osd_semantics.error());
   }
 
-  const auto ai_semantics =
-      ValidateAiConfigSemantics(config.ai, config.camera);
+  const auto ai_semantics = ValidateAiConfigSemantics(config.ai, config.camera);
   if (!ai_semantics.ok()) {
     return common::Result<void>::Err(ai_semantics.error());
   }
@@ -485,7 +482,8 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
       }
       const YAML::Node sub_stream = camera["sub_stream"];
       if (sub_stream) {
-        AssignIfPresent(sub_stream, "enabled", config.camera.sub_stream.enabled);
+        AssignIfPresent(sub_stream, "enabled",
+                        config.camera.sub_stream.enabled);
         AssignIfPresent(sub_stream, "width", config.camera.sub_stream.width);
         AssignIfPresent(sub_stream, "height", config.camera.sub_stream.height);
         AssignIfPresent(sub_stream, "fps", config.camera.sub_stream.fps);
@@ -596,20 +594,18 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     const YAML::Node secure_rtsp = root["secure_rtsp"];
     if (secure_rtsp) {
       AssignIfPresent(secure_rtsp, "enabled", config.secure_rtsp.enabled);
-      AssignIfPresent(secure_rtsp, "control_tls", config.secure_rtsp.control_tls);
+      AssignIfPresent(secure_rtsp, "control_tls",
+                      config.secure_rtsp.control_tls);
       AssignIfPresent(secure_rtsp, "media_srtp", config.secure_rtsp.media_srtp);
       AssignIfPresent(secure_rtsp, "keying", config.secure_rtsp.keying);
-      AssignIfPresent(secure_rtsp,
-                      "allow_development_self_signed_tls",
+      AssignIfPresent(secure_rtsp, "allow_development_self_signed_tls",
                       config.secure_rtsp.allow_development_self_signed_tls);
       AssignIfPresent(secure_rtsp, "bind_ip", config.secure_rtsp.bind_ip);
       AssignIfPresent(secure_rtsp, "port", config.secure_rtsp.port);
       AssignIfPresent(secure_rtsp, "mount", config.secure_rtsp.mount);
-      AssignIfPresent(secure_rtsp,
-                      "tls_certificate_path",
+      AssignIfPresent(secure_rtsp, "tls_certificate_path",
                       config.secure_rtsp.tls_certificate_path);
-      AssignIfPresent(secure_rtsp,
-                      "tls_private_key_path",
+      AssignIfPresent(secure_rtsp, "tls_private_key_path",
                       config.secure_rtsp.tls_private_key_path);
 
       const YAML::Node client_auth = secure_rtsp["client_auth"];
@@ -631,8 +627,10 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
 
       const YAML::Node session_key = secure_rtsp["session_key"];
       if (session_key) {
-        AssignIfPresent(session_key, "source", config.secure_rtsp.session_key.source);
-        AssignIfPresent(session_key, "path", config.secure_rtsp.session_key.path);
+        AssignIfPresent(session_key, "source",
+                        config.secure_rtsp.session_key.source);
+        AssignIfPresent(session_key, "path",
+                        config.secure_rtsp.session_key.path);
         AssignIfPresent(session_key, "encoding",
                         config.secure_rtsp.session_key.encoding);
         AssignIfPresent(session_key, "zeroize_on_reload",
@@ -648,13 +646,16 @@ common::Result<AppConfig> LoadConfigFile(const std::string& path) {
     return common::Result<AppConfig>::Ok(std::move(config));
   } catch (const YAML::BadFile& ex) {
     return common::Result<AppConfig>::Err(
-        {"E_CONFIG_IO", std::string("failed to read config file: ") + ex.what()});
+        {"E_CONFIG_IO",
+         std::string("failed to read config file: ") + ex.what()});
   } catch (const YAML::Exception& ex) {
     return common::Result<AppConfig>::Err(
-        {"E_CONFIG_PARSE", std::string("failed to parse config file: ") + ex.what()});
+        {"E_CONFIG_PARSE",
+         std::string("failed to parse config file: ") + ex.what()});
   } catch (const std::exception& ex) {
     return common::Result<AppConfig>::Err(
-        {"E_CONFIG_PARSE", std::string("failed to load config file: ") + ex.what()});
+        {"E_CONFIG_PARSE",
+         std::string("failed to load config file: ") + ex.what()});
   }
 }
 

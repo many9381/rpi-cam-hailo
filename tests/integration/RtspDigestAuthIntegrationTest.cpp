@@ -7,6 +7,11 @@
 #include "camera_firmware/rtsp/SecureRtspServer.hpp"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -14,18 +19,13 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fcntl.h>
 #include <memory>
-#include <netinet/in.h>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
-#include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -181,9 +181,8 @@ std::optional<std::string> DigestParameter(std::string_view value,
   }
   value.remove_prefix(7U);
   while (!value.empty()) {
-    while (!value.empty() &&
-           (value.front() == ' ' || value.front() == '\t' ||
-            value.front() == ',')) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t' ||
+                              value.front() == ',')) {
       value.remove_prefix(1U);
     }
     const std::size_t equals = value.find('=');
@@ -205,17 +204,15 @@ std::optional<std::string> DigestParameter(std::string_view value,
     } else {
       const std::size_t comma = value.find(',');
       parsed = Trim(value.substr(0U, comma));
-      value = comma == std::string_view::npos
-                  ? std::string_view{}
-                  : value.substr(comma);
+      value = comma == std::string_view::npos ? std::string_view{}
+                                              : value.substr(comma);
     }
     if (key == Lower(name)) {
       return parsed;
     }
     const std::size_t comma = value.find(',');
-    value = comma == std::string_view::npos
-                ? std::string_view{}
-                : value.substr(comma + 1U);
+    value = comma == std::string_view::npos ? std::string_view{}
+                                            : value.substr(comma + 1U);
   }
   return std::nullopt;
 }
@@ -243,7 +240,8 @@ std::span<const unsigned char> Bytes(std::string_view value) {
 }
 
 std::string SecureText(SecureBytes* bytes) {
-  std::string value(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+  std::string value(reinterpret_cast<const char*>(bytes->data()),
+                    bytes->size());
   bytes->clear();
   return value;
 }
@@ -251,22 +249,15 @@ std::string SecureText(SecureBytes* bytes) {
 std::string BuildAuthorization(RtspDigestAlgorithm algorithm,
                                std::string_view username,
                                std::string_view password,
-                               std::string_view realm,
-                               std::string_view method,
-                               std::string_view uri,
-                               std::string_view nonce) {
+                               std::string_view realm, std::string_view method,
+                               std::string_view uri, std::string_view nonce) {
   auto ha1 = ComputeRtspDigestHa1(algorithm, username, realm, Bytes(password));
   if (!ha1.ok()) {
     throw std::runtime_error("failed to calculate test HA1");
   }
   auto response = ComputeRtspDigestResponse(
-      algorithm,
-      {ha1.value().data(), ha1.value().size()},
-      method,
-      uri,
-      nonce,
-      kNonceCount,
-      kCnonce);
+      algorithm, {ha1.value().data(), ha1.value().size()}, method, uri, nonce,
+      kNonceCount, kCnonce);
   ha1.value().clear();
   if (!response.ok()) {
     throw std::runtime_error("failed to calculate test Digest response");
@@ -280,8 +271,8 @@ std::string BuildAuthorization(RtspDigestAlgorithm algorithm,
   const std::string response_text = SecureText(&encoded.value());
   return "Digest username=\"" + std::string(username) + "\", realm=\"" +
          std::string(realm) + "\", nonce=\"" + std::string(nonce) +
-         "\", uri=\"" + std::string(uri) + "\", response=\"" +
-         response_text + "\", algorithm=" +
+         "\", uri=\"" + std::string(uri) + "\", response=\"" + response_text +
+         "\", algorithm=" +
          std::string(camera_firmware::rtsp::RtspDigestProtocolName(algorithm)) +
          ", qop=auth, nc=" + std::string(kNonceCount) + ", cnonce=\"" +
          std::string(kCnonce) + "\"";
@@ -296,15 +287,9 @@ class TlsRtspTestClient {
         return nullptr;
       }
       const timeval timeout{5, 0};
-      if (setsockopt(socket_fd.get(),
-                     SOL_SOCKET,
-                     SO_RCVTIMEO,
-                     &timeout,
+      if (setsockopt(socket_fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout,
                      sizeof(timeout)) != 0 ||
-          setsockopt(socket_fd.get(),
-                     SOL_SOCKET,
-                     SO_SNDTIMEO,
-                     &timeout,
+          setsockopt(socket_fd.get(), SOL_SOCKET, SO_SNDTIMEO, &timeout,
                      sizeof(timeout)) != 0) {
         return nullptr;
       }
@@ -312,8 +297,7 @@ class TlsRtspTestClient {
       address.sin_family = AF_INET;
       address.sin_port = htons(static_cast<std::uint16_t>(port));
       address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      if (connect(socket_fd.get(),
-                  reinterpret_cast<sockaddr*>(&address),
+      if (connect(socket_fd.get(), reinterpret_cast<sockaddr*>(&address),
                   sizeof(address)) != 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
@@ -329,10 +313,8 @@ class TlsRtspTestClient {
           SSL_connect(ssl.get()) != 1) {
         return nullptr;
       }
-      return std::unique_ptr<TlsRtspTestClient>(
-          new TlsRtspTestClient(std::move(socket_fd),
-                                std::move(context),
-                                std::move(ssl)));
+      return std::unique_ptr<TlsRtspTestClient>(new TlsRtspTestClient(
+          std::move(socket_fd), std::move(context), std::move(ssl)));
     }
     return nullptr;
   }
@@ -346,8 +328,7 @@ class TlsRtspTestClient {
   TlsRtspTestClient(const TlsRtspTestClient&) = delete;
   TlsRtspTestClient& operator=(const TlsRtspTestClient&) = delete;
 
-  RtspTestResponse Request(std::string_view method,
-                           std::string_view uri,
+  RtspTestResponse Request(std::string_view method, std::string_view uri,
                            std::string_view authorization = {}) {
     std::string request;
     request.reserve(method.size() + uri.size() + authorization.size() + 160U);
@@ -372,9 +353,8 @@ class TlsRtspTestClient {
   RtspTestResponse Send(std::string_view request) {
     std::size_t sent = 0U;
     while (sent < request.size()) {
-      const int result = SSL_write(
-          ssl_.get(), request.data() + sent,
-          static_cast<int>(request.size() - sent));
+      const int result = SSL_write(ssl_.get(), request.data() + sent,
+                                   static_cast<int>(request.size() - sent));
       if (result <= 0) {
         throw std::runtime_error("TLS RTSP request write failed");
       }
@@ -395,10 +375,8 @@ class TlsRtspTestClient {
     RtspTestResponse response;
     std::size_t line_start = 0U;
     const std::size_t status_end = header_block.find("\r\n");
-    const std::string status_line =
-        header_block.substr(0U, status_end == std::string::npos
-                                    ? header_block.size()
-                                    : status_end);
+    const std::string status_line = header_block.substr(
+        0U, status_end == std::string::npos ? header_block.size() : status_end);
     if (!status_line.starts_with("RTSP/1.0 ") || status_line.size() < 13U ||
         status_line[12U] != ' ') {
       throw std::runtime_error("RTSP response status line is invalid");
@@ -408,9 +386,8 @@ class TlsRtspTestClient {
       throw std::runtime_error("RTSP response status code is invalid");
     }
     response.status_code = std::stoi(code_text);
-    line_start = status_end == std::string::npos
-                     ? header_block.size()
-                     : status_end + 2U;
+    line_start =
+        status_end == std::string::npos ? header_block.size() : status_end + 2U;
 
     std::size_t content_length = 0U;
     bool has_content_length = false;
@@ -455,9 +432,7 @@ class TlsRtspTestClient {
   }
 
  private:
-  TlsRtspTestClient(UniqueFd socket_fd,
-                    SslContextPtr context,
-                    SslPtr ssl)
+  TlsRtspTestClient(UniqueFd socket_fd, SslContextPtr context, SslPtr ssl)
       : socket_(std::move(socket_fd)),
         context_(std::move(context)),
         ssl_(std::move(ssl)) {}
@@ -551,13 +526,8 @@ class TestTlsMaterial {
     X509_NAME* subject = X509_get_subject_name(certificate.get());
     static constexpr unsigned char kCommonName[] = "cf-rtsp-live-test";
     if (subject == nullptr ||
-        X509_NAME_add_entry_by_txt(subject,
-                                   "CN",
-                                   MBSTRING_ASC,
-                                   kCommonName,
-                                   -1,
-                                   -1,
-                                   0) != 1 ||
+        X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, kCommonName, -1,
+                                   -1, 0) != 1 ||
         X509_set_issuer_name(certificate.get(), subject) != 1 ||
         X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
       throw std::runtime_error("failed to sign test TLS certificate");
@@ -566,8 +536,8 @@ class TestTlsMaterial {
     std::unique_ptr<BIO, decltype(&BIO_free)> bio(BIO_new(BIO_s_mem()),
                                                   BIO_free);
     if (!bio || PEM_write_bio_X509(bio.get(), certificate.get()) != 1 ||
-        PEM_write_bio_PrivateKey(
-            bio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+        PEM_write_bio_PrivateKey(bio.get(), key.get(), nullptr, nullptr, 0,
+                                 nullptr, nullptr) != 1) {
       throw std::runtime_error("failed to serialize test TLS certificate");
     }
     BUF_MEM* memory = nullptr;
@@ -580,11 +550,9 @@ class TestTlsMaterial {
     pem.assign(reinterpret_cast<const unsigned char*>(memory->data),
                memory->length);
     OPENSSL_cleanse(memory->data, memory->length);
-    UniqueFd output(open(pem_path_.c_str(),
-                         O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
-                         0600));
-    if (output.get() < 0 ||
-        !WriteAll(output.get(), {pem.data(), pem.size()}) ||
+    UniqueFd output(
+        open(pem_path_.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
+    if (output.get() < 0 || !WriteAll(output.get(), {pem.data(), pem.size()}) ||
         fsync(output.get()) != 0) {
       pem.clear();
       throw std::runtime_error("failed to write test TLS PEM");
@@ -592,8 +560,7 @@ class TestTlsMaterial {
     GError* error = nullptr;
     certificate_ = g_tls_certificate_new_from_pem(
         reinterpret_cast<const gchar*>(pem.data()),
-        static_cast<gssize>(pem.size()),
-        &error);
+        static_cast<gssize>(pem.size()), &error);
     pem.clear();
     if (certificate_ == nullptr) {
       if (error != nullptr) {
@@ -652,9 +619,10 @@ void WriteSessionKey(const std::filesystem::path& path) {
   SecureBytes encoded;
   encoded.resize(60U);
   std::memset(encoded.data(), '4', encoded.size());
-  const bool written = output.get() >= 0 &&
-                       WriteAll(output.get(), {encoded.data(), encoded.size()}) &&
-                       fsync(output.get()) == 0;
+  const bool written =
+      output.get() >= 0 &&
+      WriteAll(output.get(), {encoded.data(), encoded.size()}) &&
+      fsync(output.get()) == 0;
   encoded.clear();
   if (!written) {
     throw std::runtime_error("failed to write test SRTP key");
@@ -662,17 +630,17 @@ void WriteSessionKey(const std::filesystem::path& path) {
 }
 
 void ProvisionCredentials(const std::filesystem::path& path, bool allow_md5) {
-  RtspDigestProvisionRequest sha{
-      path, std::string(kUsername), std::string(kRealm),
-      RtspDigestAlgorithm::kSha256, allow_md5};
+  RtspDigestProvisionRequest sha{path, std::string(kUsername),
+                                 std::string(kRealm),
+                                 RtspDigestAlgorithm::kSha256, allow_md5};
   auto provisioned = ProvisionRtspDigestCredential(sha, Bytes(kPassword));
   if (!provisioned.ok()) {
     throw std::runtime_error("failed to provision SHA-256 test credential");
   }
   if (allow_md5) {
-    RtspDigestProvisionRequest md5{
-        path, std::string(kUsername), std::string(kRealm),
-        RtspDigestAlgorithm::kMd5, true};
+    RtspDigestProvisionRequest md5{path, std::string(kUsername),
+                                   std::string(kRealm),
+                                   RtspDigestAlgorithm::kMd5, true};
     provisioned = ProvisionRtspDigestCredential(md5, Bytes(kPassword));
     if (!provisioned.ok()) {
       throw std::runtime_error("failed to provision MD5 test credential");
@@ -733,8 +701,7 @@ std::vector<std::uint8_t> EncodeTestKeyFrame() {
   if (encoded > 0 && nals != nullptr) {
     access_unit.reserve(static_cast<std::size_t>(encoded));
     for (int index = 0; index < nal_count; ++index) {
-      access_unit.insert(access_unit.end(),
-                         nals[index].p_payload,
+      access_unit.insert(access_unit.end(), nals[index].p_payload,
                          nals[index].p_payload + nals[index].i_payload);
     }
   }
@@ -791,22 +758,21 @@ class LiveSecureServer {
                                start_error);
     }
     url_ = "rtsps://127.0.0.1:" + std::to_string(port_) + config_.mount;
-    producer_ = std::thread([this,
-                             key_frame = std::make_shared<
-                                 const std::vector<std::uint8_t>>(
-                                 EncodeTestKeyFrame())] {
-      std::uint64_t sequence = 0U;
-      while (!stop_producer_.load(std::memory_order_acquire)) {
-        camera_firmware::media::EncodedAccessUnit access_unit;
-        access_unit.sequence = sequence;
-        access_unit.timestamp = std::chrono::milliseconds(sequence * 33U);
-        access_unit.is_key_frame = true;
-        access_unit.bytes = key_frame;
-        ring_.Publish(std::move(access_unit));
-        ++sequence;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-    });
+    producer_ = std::thread(
+        [this, key_frame = std::make_shared<const std::vector<std::uint8_t>>(
+                   EncodeTestKeyFrame())] {
+          std::uint64_t sequence = 0U;
+          while (!stop_producer_.load(std::memory_order_acquire)) {
+            camera_firmware::media::EncodedAccessUnit access_unit;
+            access_unit.sequence = sequence;
+            access_unit.timestamp = std::chrono::milliseconds(sequence * 33U);
+            access_unit.is_key_frame = true;
+            access_unit.bytes = key_frame;
+            ring_.Publish(std::move(access_unit));
+            ++sequence;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        });
   }
 
   ~LiveSecureServer() { Stop(); }
@@ -846,8 +812,8 @@ std::string AuthorizationFromChallenge(const std::string& challenge,
   if (!nonce.has_value() || !realm.has_value()) {
     throw std::runtime_error("Digest challenge is missing nonce or realm");
   }
-  return BuildAuthorization(
-      algorithm, username, password, *realm, "DESCRIBE", uri, *nonce);
+  return BuildAuthorization(algorithm, username, password, *realm, "DESCRIBE",
+                            uri, *nonce);
 }
 
 class InjectedClockTlsServer {
@@ -875,8 +841,7 @@ class InjectedClockTlsServer {
     }
     auth_ = created.value();
     gst_rtsp_auth_set_tls_certificate(auth_, tls_.certificate());
-    gst_rtsp_auth_set_tls_authentication_mode(auth_,
-                                              G_TLS_AUTHENTICATION_NONE);
+    gst_rtsp_auth_set_tls_authentication_mode(auth_, G_TLS_AUTHENTICATION_NONE);
 
     server_ = gst_rtsp_server_new();
     gst_rtsp_server_set_address(server_, "127.0.0.1");
@@ -889,15 +854,9 @@ class InjectedClockTlsServer {
         "! h264parse ! rtph264pay name=pay0 pt=96 )");
     GstRTSPPermissions* permissions = gst_rtsp_permissions_new();
     gst_rtsp_permissions_add_role(
-        permissions,
-        "viewer",
-        GST_RTSP_PERM_MEDIA_FACTORY_ACCESS,
-        G_TYPE_BOOLEAN,
-        TRUE,
-        GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT,
-        G_TYPE_BOOLEAN,
-        TRUE,
-        nullptr);
+        permissions, "viewer", GST_RTSP_PERM_MEDIA_FACTORY_ACCESS,
+        G_TYPE_BOOLEAN, TRUE, GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT,
+        G_TYPE_BOOLEAN, TRUE, nullptr);
     gst_rtsp_media_factory_set_permissions(factory, permissions);
     gst_rtsp_permissions_unref(permissions);
     gst_rtsp_mount_points_add_factory(mounts_, "/test/stale", factory);
@@ -932,8 +891,7 @@ class InjectedClockTlsServer {
       thread_.join();
     }
     if (source_id_ != 0U && context_ != nullptr) {
-      GSource* source =
-          g_main_context_find_source_by_id(context_, source_id_);
+      GSource* source = g_main_context_find_source_by_id(context_, source_id_);
       if (source != nullptr) {
         g_source_destroy(source);
       }
@@ -1005,17 +963,16 @@ TEST(RtspDigestAuthIntegrationTest,
   EXPECT_FALSE(DigestParameter(challenges.front(), "stale").has_value());
 }
 
-TEST(RtspDigestAuthIntegrationTest,
-     CorrectSha256DescribeReturnsSecureSdp) {
+TEST(RtspDigestAuthIntegrationTest, CorrectSha256DescribeReturnsSecureSdp) {
   LiveSecureServer server;
   auto client = TlsRtspTestClient::Connect(server.port());
   ASSERT_NE(client, nullptr);
   const auto challenged = client->Request("DESCRIBE", server.url());
   const std::string challenge = ChallengeFor(challenged, "SHA-256");
   ASSERT_FALSE(challenge.empty());
-  const std::string authorization = AuthorizationFromChallenge(
-      challenge, RtspDigestAlgorithm::kSha256, kUsername, kPassword,
-      server.url());
+  const std::string authorization =
+      AuthorizationFromChallenge(challenge, RtspDigestAlgorithm::kSha256,
+                                 kUsername, kPassword, server.url());
 
   const auto response =
       client->Request("DESCRIBE", server.url(), authorization);
@@ -1037,18 +994,18 @@ TEST(RtspDigestAuthIntegrationTest, ReplayedAuthorizationReturns401) {
   const auto challenged = client->Request("DESCRIBE", server.url());
   const std::string challenge = ChallengeFor(challenged, "SHA-256");
   ASSERT_FALSE(challenge.empty());
-  const std::string authorization = AuthorizationFromChallenge(
-      challenge, RtspDigestAlgorithm::kSha256, kUsername, kPassword,
-      server.url());
-  ASSERT_EQ(client->Request("DESCRIBE", server.url(), authorization).status_code,
-            200);
+  const std::string authorization =
+      AuthorizationFromChallenge(challenge, RtspDigestAlgorithm::kSha256,
+                                 kUsername, kPassword, server.url());
+  ASSERT_EQ(
+      client->Request("DESCRIBE", server.url(), authorization).status_code,
+      200);
   const std::size_t allocations_before =
       server.server().PerMediaKeyAllocationCount();
   const std::size_t zeroizations_before =
       server.server().PerMediaKeyZeroizeCount();
 
-  const auto replay =
-      client->Request("DESCRIBE", server.url(), authorization);
+  const auto replay = client->Request("DESCRIBE", server.url(), authorization);
 
   ExpectOrdinarySha256Unauthorized(replay);
   EXPECT_EQ(server.server().PerMediaKeyAllocationCount(), allocations_before);
@@ -1062,27 +1019,20 @@ TEST(RtspDigestAuthIntegrationTest,
   auto unknown_client = TlsRtspTestClient::Connect(server.port());
   ASSERT_NE(wrong_client, nullptr);
   ASSERT_NE(unknown_client, nullptr);
-  const auto wrong_challenge =
-      wrong_client->Request("DESCRIBE", server.url());
+  const auto wrong_challenge = wrong_client->Request("DESCRIBE", server.url());
   const auto unknown_challenge =
       unknown_client->Request("DESCRIBE", server.url());
   const std::string wrong_authorization = AuthorizationFromChallenge(
-      ChallengeFor(wrong_challenge, "SHA-256"),
-      RtspDigestAlgorithm::kSha256,
-      kUsername,
-      "wrong-password",
-      server.url());
+      ChallengeFor(wrong_challenge, "SHA-256"), RtspDigestAlgorithm::kSha256,
+      kUsername, "wrong-password", server.url());
   const std::string unknown_authorization = AuthorizationFromChallenge(
-      ChallengeFor(unknown_challenge, "SHA-256"),
-      RtspDigestAlgorithm::kSha256,
-      "unknown",
-      kPassword,
-      server.url());
+      ChallengeFor(unknown_challenge, "SHA-256"), RtspDigestAlgorithm::kSha256,
+      "unknown", kPassword, server.url());
 
   const auto wrong =
       wrong_client->Request("DESCRIBE", server.url(), wrong_authorization);
-  const auto unknown = unknown_client->Request(
-      "DESCRIBE", server.url(), unknown_authorization);
+  const auto unknown =
+      unknown_client->Request("DESCRIBE", server.url(), unknown_authorization);
 
   ExpectOrdinarySha256Unauthorized(wrong);
   ExpectOrdinarySha256Unauthorized(unknown);
@@ -1108,14 +1058,9 @@ TEST(RtspDigestAuthIntegrationTest, BasicAndDefaultMd5AreRejected) {
   ASSERT_FALSE(sha_challenge.empty());
   const auto nonce = DigestParameter(sha_challenge, "nonce");
   ASSERT_TRUE(nonce.has_value());
-  const std::string md5_authorization = BuildAuthorization(
-      RtspDigestAlgorithm::kMd5,
-      kUsername,
-      kPassword,
-      kRealm,
-      "DESCRIBE",
-      server.url(),
-      *nonce);
+  const std::string md5_authorization =
+      BuildAuthorization(RtspDigestAlgorithm::kMd5, kUsername, kPassword,
+                         kRealm, "DESCRIBE", server.url(), *nonce);
 
   const auto md5 =
       md5_client->Request("DESCRIBE", server.url(), md5_authorization);
@@ -1128,8 +1073,7 @@ TEST(RtspDigestAuthIntegrationTest, BasicAndDefaultMd5AreRejected) {
   EXPECT_EQ(server.server().PerMediaKeyZeroizeCount(), 0U);
 }
 
-TEST(RtspDigestAuthIntegrationTest,
-     ExplicitMd5CompatibilityAuthenticates) {
+TEST(RtspDigestAuthIntegrationTest, ExplicitMd5CompatibilityAuthenticates) {
   LiveSecureServer server(true);
   auto client = TlsRtspTestClient::Connect(server.port());
   ASSERT_NE(client, nullptr);
@@ -1137,8 +1081,7 @@ TEST(RtspDigestAuthIntegrationTest,
   const std::string challenge = ChallengeFor(challenged, "MD5");
   ASSERT_FALSE(challenge.empty());
   const std::string authorization = AuthorizationFromChallenge(
-      challenge, RtspDigestAlgorithm::kMd5, kUsername, kPassword,
-      server.url());
+      challenge, RtspDigestAlgorithm::kMd5, kUsername, kPassword, server.url());
 
   const auto response =
       client->Request("DESCRIBE", server.url(), authorization);
@@ -1146,17 +1089,16 @@ TEST(RtspDigestAuthIntegrationTest,
   EXPECT_EQ(response.status_code, 200);
 }
 
-TEST(RtspDigestAuthIntegrationTest,
-     CorrectExpiredDigestGetsStaleChallenge) {
+TEST(RtspDigestAuthIntegrationTest, CorrectExpiredDigestGetsStaleChallenge) {
   InjectedClockTlsServer server;
   auto client = TlsRtspTestClient::Connect(server.port());
   ASSERT_NE(client, nullptr);
   const auto challenged = client->Request("DESCRIBE", server.url());
   const std::string challenge = ChallengeFor(challenged, "SHA-256");
   ASSERT_FALSE(challenge.empty());
-  const std::string authorization = AuthorizationFromChallenge(
-      challenge, RtspDigestAlgorithm::kSha256, kUsername, kPassword,
-      server.url());
+  const std::string authorization =
+      AuthorizationFromChallenge(challenge, RtspDigestAlgorithm::kSha256,
+                                 kUsername, kPassword, server.url());
   server.ExpireNonce();
 
   const auto response =
@@ -1177,9 +1119,9 @@ TEST(RtspDigestAuthIntegrationTest, InvalidExpiredDigestDoesNotGetStale) {
   ASSERT_FALSE(challenge.empty());
   const auto nonce = DigestParameter(challenge, "nonce");
   ASSERT_TRUE(nonce.has_value());
-  const std::string authorization = AuthorizationFromChallenge(
-      challenge, RtspDigestAlgorithm::kSha256, kUsername, "wrong-password",
-      server.url());
+  const std::string authorization =
+      AuthorizationFromChallenge(challenge, RtspDigestAlgorithm::kSha256,
+                                 kUsername, "wrong-password", server.url());
   server.ExpireNonce();
 
   const auto response =
@@ -1190,14 +1132,9 @@ TEST(RtspDigestAuthIntegrationTest, InvalidExpiredDigestDoesNotGetStale) {
   std::string forged_nonce = *nonce;
   ASSERT_FALSE(forged_nonce.empty());
   forged_nonce.back() = forged_nonce.back() == 'A' ? 'B' : 'A';
-  const std::string forged_authorization = BuildAuthorization(
-      RtspDigestAlgorithm::kSha256,
-      kUsername,
-      kPassword,
-      kRealm,
-      "DESCRIBE",
-      server.url(),
-      forged_nonce);
+  const std::string forged_authorization =
+      BuildAuthorization(RtspDigestAlgorithm::kSha256, kUsername, kPassword,
+                         kRealm, "DESCRIBE", server.url(), forged_nonce);
   const auto forged =
       client->Request("DESCRIBE", server.url(), forged_authorization);
   ExpectOrdinarySha256Unauthorized(forged);
@@ -1225,9 +1162,9 @@ TEST(RtspDigestAuthIntegrationTest,
     const auto challenged = client->Request("DESCRIBE", server.url());
     const std::string challenge = ChallengeFor(challenged, "SHA-256");
     ASSERT_FALSE(challenge.empty());
-    const std::string authorization = AuthorizationFromChallenge(
-        challenge, RtspDigestAlgorithm::kSha256, kUsername, kPassword,
-        server.url());
+    const std::string authorization =
+        AuthorizationFromChallenge(challenge, RtspDigestAlgorithm::kSha256,
+                                   kUsername, kPassword, server.url());
     ASSERT_EQ(
         client->Request("DESCRIBE", server.url(), authorization).status_code,
         200);

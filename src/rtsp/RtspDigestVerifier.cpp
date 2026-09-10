@@ -195,8 +195,7 @@ class AuthorizationParser {
       if (name.empty() || !FindDirective(name, &directive)) {
         return false;
       }
-      const std::size_t directive_index =
-          static_cast<std::size_t>(directive);
+      const std::size_t directive_index = static_cast<std::size_t>(directive);
       if (seen_[directive_index]) {
         return false;
       }
@@ -255,8 +254,7 @@ class AuthorizationParser {
   }
 
  private:
-  bool ParseValue(Directive directive,
-                  RtspDigestAuthorization* authorization) {
+  bool ParseValue(Directive directive, RtspDigestAuthorization* authorization) {
     switch (directive) {
       case Directive::kUsername:
         return ParseQuoted(&authorization->username, kMaximumUsernameBytes);
@@ -286,8 +284,7 @@ class AuthorizationParser {
       return false;
     }
     while (position_ < header_.size()) {
-      unsigned char value =
-          static_cast<unsigned char>(header_[position_++]);
+      unsigned char value = static_cast<unsigned char>(header_[position_++]);
       if (value == static_cast<unsigned char>('"')) {
         return !output->empty();
       }
@@ -312,8 +309,7 @@ class AuthorizationParser {
     int high_nibble = -1;
     std::size_t encoded_size = 0U;
     while (position_ < header_.size()) {
-      unsigned char value =
-          static_cast<unsigned char>(header_[position_++]);
+      unsigned char value = static_cast<unsigned char>(header_[position_++]);
       if (value == static_cast<unsigned char>('"')) {
         return encoded_size != 0U && high_nibble < 0;
       }
@@ -381,8 +377,8 @@ class AuthorizationParser {
         return false;
       }
       authorization->nonce_count_text[index] = token[index];
-      decoded = static_cast<std::uint32_t>(
-          (decoded << 4U) | static_cast<std::uint32_t>(nibble));
+      decoded = static_cast<std::uint32_t>((decoded << 4U) |
+                                           static_cast<std::uint32_t>(nibble));
     }
     if (decoded == 0U) {
       return false;
@@ -394,8 +390,7 @@ class AuthorizationParser {
   std::string_view ParseToken() noexcept {
     const std::size_t begin = position_;
     while (position_ < header_.size() &&
-           IsTokenCharacter(
-               static_cast<unsigned char>(header_[position_]))) {
+           IsTokenCharacter(static_cast<unsigned char>(header_[position_]))) {
       ++position_;
     }
     return header_.substr(begin, position_ - begin);
@@ -428,8 +423,7 @@ bool AlgorithmEnabled(const std::vector<RtspDigestAlgorithm>& algorithms,
 
 void AccumulateAudit(common::ZeroizeAudit addition,
                      common::ZeroizeAudit* total) noexcept {
-  if (addition.count >
-      std::numeric_limits<std::size_t>::max() - total->count) {
+  if (addition.count > std::numeric_limits<std::size_t>::max() - total->count) {
     total->count = std::numeric_limits<std::size_t>::max();
   } else {
     total->count += addition.count;
@@ -460,6 +454,7 @@ void RecordRequestSecretAudit(common::ZeroizeAudit retired,
     std::lock_guard lock(state->mutex);
     AccumulateAudit(retired, &state->audit);
   } catch (...) {
+    // swallowed: audit accumulation is best effort on this noexcept path
   }
 }
 
@@ -476,8 +471,7 @@ class ParsedResponseRetirement {
   }
 
   ParsedResponseRetirement(const ParsedResponseRetirement&) = delete;
-  ParsedResponseRetirement& operator=(const ParsedResponseRetirement&) =
-      delete;
+  ParsedResponseRetirement& operator=(const ParsedResponseRetirement&) = delete;
 
  private:
   common::SecureBytes* response_;
@@ -514,8 +508,7 @@ common::Result<std::vector<RtspDigestAlgorithm>> ParseConfiguredAlgorithms(
       config.credential_file.empty() || config.algorithms.empty() ||
       config.algorithms.size() > 2U || config.nonce_ttl_seconds < 30U ||
       config.nonce_ttl_seconds > 3600U) {
-    return common::Result<std::vector<RtspDigestAlgorithm>>::Err(
-        ConfigError());
+    return common::Result<std::vector<RtspDigestAlgorithm>>::Err(ConfigError());
   }
 
   bool sha256 = false;
@@ -544,8 +537,7 @@ common::Result<std::vector<RtspDigestAlgorithm>> ParseConfiguredAlgorithms(
     }
   }
   if (!sha256) {
-    return common::Result<std::vector<RtspDigestAlgorithm>>::Err(
-        ConfigError());
+    return common::Result<std::vector<RtspDigestAlgorithm>>::Err(ConfigError());
   }
 
   std::vector<RtspDigestAlgorithm> algorithms;
@@ -580,7 +572,7 @@ common::Result<RtspDigestAuthorization> ParseAuthorization(
   try {
     RtspDigestAuthorization authorization;
     ParsedResponseRetirement response_retirement(&authorization.response,
-                                                  audit);
+                                                 audit);
     AuthorizationParser parser(header);
     if (!parser.Parse(&authorization)) {
       return HeaderFailure<RtspDigestAuthorization>();
@@ -613,7 +605,9 @@ common::Result<RtspDigestAuthorization> ParseRtspDigestAuthorization(
 RtspDigestVerifier::RtspDigestVerifier(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
-RtspDigestVerifier::~RtspDigestVerifier() { Clear(); }
+RtspDigestVerifier::~RtspDigestVerifier() {
+  Clear();
+}
 
 common::Result<std::unique_ptr<RtspDigestVerifier>> RtspDigestVerifier::Create(
     const config::RtspClientAuthConfig& config,
@@ -633,8 +627,7 @@ common::Result<std::unique_ptr<RtspDigestVerifier>> RtspDigestVerifier::Create(
     RtspDigestCredentialPolicy policy;
     policy.realm = config.realm;
     policy.algorithms = algorithms.value();
-    auto credentials =
-        RtspDigestCredentialStore::Create(std::move(policy));
+    auto credentials = RtspDigestCredentialStore::Create(std::move(policy));
     if (!credentials.ok()) {
       return common::Result<std::unique_ptr<RtspDigestVerifier>>::Err(
           credentials.error());
@@ -713,10 +706,9 @@ common::Result<RtspDigestVerifyStatus> RtspDigestVerifier::Verify(
       authorization.nonce_count_text.data(),
       authorization.nonce_count_text.size());
   auto expected = ComputeRtspDigestResponse(
-      authorization.algorithm,
-      {secrets.ha1.data(), secrets.ha1.size()},
-      request.method, authorization.uri, authorization.nonce,
-      nonce_count_text, authorization.cnonce, authorization.has_qop);
+      authorization.algorithm, {secrets.ha1.data(), secrets.ha1.size()},
+      request.method, authorization.uri, authorization.nonce, nonce_count_text,
+      authorization.cnonce, authorization.has_qop);
   if (!expected.ok()) {
     return common::Result<RtspDigestVerifyStatus>::Err(expected.error());
   }
@@ -734,9 +726,9 @@ common::Result<RtspDigestVerifyStatus> RtspDigestVerifier::Verify(
         RtspDigestVerifyStatus::kStale);
   }
 
-  auto committed = impl_->nonces->Commit(
-      authorization.username, validation.value(), authorization.nonce_count,
-      authorization.has_qop);
+  auto committed =
+      impl_->nonces->Commit(authorization.username, validation.value(),
+                            authorization.nonce_count, authorization.has_qop);
   if (!committed.ok()) {
     return common::Result<RtspDigestVerifyStatus>::Err(committed.error());
   }
@@ -745,8 +737,8 @@ common::Result<RtspDigestVerifyStatus> RtspDigestVerifier::Verify(
                         : RtspDigestVerifyStatus::kRejected);
 }
 
-common::Result<std::vector<std::string>>
-RtspDigestVerifier::BuildChallenges(bool stale) {
+common::Result<std::vector<std::string>> RtspDigestVerifier::BuildChallenges(
+    bool stale) {
   auto nonce = impl_->nonces->Issue();
   if (!nonce.ok()) {
     return common::Result<std::vector<std::string>>::Err(nonce.error());
@@ -756,18 +748,16 @@ RtspDigestVerifier::BuildChallenges(bool stale) {
     std::vector<std::string> challenges;
     challenges.reserve(impl_->algorithms.size());
     for (const RtspDigestAlgorithm algorithm : impl_->algorithms) {
-      std::string challenge = "Digest realm=\"" + impl_->realm +
-                              "\", nonce=\"" + nonce.value() +
-                              "\", algorithm=" +
-                              std::string(RtspDigestProtocolName(algorithm)) +
-                              ", qop=\"auth\", charset=UTF-8";
+      std::string challenge =
+          "Digest realm=\"" + impl_->realm + "\", nonce=\"" + nonce.value() +
+          "\", algorithm=" + std::string(RtspDigestProtocolName(algorithm)) +
+          ", qop=\"auth\", charset=UTF-8";
       if (stale) {
         challenge += ", stale=true";
       }
       challenges.push_back(std::move(challenge));
     }
-    return common::Result<std::vector<std::string>>::Ok(
-        std::move(challenges));
+    return common::Result<std::vector<std::string>>::Ok(std::move(challenges));
   } catch (...) {
     return InternalFailure<std::vector<std::string>>();
   }

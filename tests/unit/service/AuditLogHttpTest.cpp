@@ -25,8 +25,8 @@
 #include <gtest/gtest.h>
 #include <trantor/net/EventLoopThread.h>
 
-#include "camera_firmware/security/AuthService.hpp"
 #include "camera_firmware/security/AuditLogService.hpp"
+#include "camera_firmware/security/AuthService.hpp"
 #include "camera_firmware/security/SecurityStore.hpp"
 #include "camera_firmware/service/BoundedWorker.hpp"
 #include "camera_firmware/service/ServiceApp.hpp"
@@ -39,18 +39,13 @@ using AuditHandlerCallbackForTesting =
 void HandleAuthorizedAuditStatusForTesting(
     security::Principal principal,
     std::shared_ptr<security::AuditLogService> service,
-    std::shared_ptr<BoundedWorker> worker,
-    bool shutting_down,
-    trantor::EventLoop* event_loop,
-    AuditHandlerCallbackForTesting callback);
+    std::shared_ptr<BoundedWorker> worker, bool shutting_down,
+    trantor::EventLoop* event_loop, AuditHandlerCallbackForTesting callback);
 void HandleAuthorizedAuditEventsForTesting(
-    security::Principal principal,
-    security::AuditQueryParameters parameters,
+    security::Principal principal, security::AuditQueryParameters parameters,
     std::shared_ptr<security::AuditLogService> service,
-    std::shared_ptr<BoundedWorker> worker,
-    bool shutting_down,
-    trantor::EventLoop* event_loop,
-    AuditHandlerCallbackForTesting callback);
+    std::shared_ptr<BoundedWorker> worker, bool shutting_down,
+    trantor::EventLoop* event_loop, AuditHandlerCallbackForTesting callback);
 void InstallAuditDependenciesForShutdownTesting(
     std::shared_ptr<security::AuditLogService> service,
     std::shared_ptr<BoundedWorker> worker) noexcept;
@@ -219,10 +214,8 @@ std::unique_ptr<SecurityStore> OpenStore(
 }
 
 void InvokeAuthorizedAuditHandler(
-    AuditRoute route,
-    const std::shared_ptr<AuditLogService>& service,
-    const std::shared_ptr<BoundedWorker>& worker,
-    bool shutting_down,
+    AuditRoute route, const std::shared_ptr<AuditLogService>& service,
+    const std::shared_ptr<BoundedWorker>& worker, bool shutting_down,
     trantor::EventLoop* event_loop,
     camera_firmware::service::internal::AuditHandlerCallbackForTesting
         callback) {
@@ -253,8 +246,7 @@ void ExpectSanitizedUnavailable(const ResponseRecorder& recorder) {
 bool WaitForAuditShutdownStart() {
   const auto deadline = std::chrono::steady_clock::now() + 2s;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (camera_firmware::service::internal::
-            AuditShutdownStartedForTesting()) {
+    if (camera_firmware::service::internal::AuditShutdownStartedForTesting()) {
       return true;
     }
     std::this_thread::yield();
@@ -359,15 +351,13 @@ TEST(AuditLogHttpTest, StatusAcceptsOnlyAnEmptyBoundedRawQuery) {
 }
 
 TEST(AuditLogHttpTest, StatusJsonUsesExactKeysAndPairedNulls) {
-  const AuditStatus status{45U, 50U, 90U, true, 7U, std::nullopt,
-                           std::nullopt};
+  const AuditStatus status{45U, 50U, 90U, true, 7U, std::nullopt, std::nullopt};
 
   const auto json = BuildAuditStatusJson(status);
 
   ExpectExactKeys(json, {"current_events", "max_events", "usage_percent",
                          "warning", "rotated_event_count",
-                         "last_rotation_at_seconds",
-                         "last_rotated_sequence"});
+                         "last_rotation_at_seconds", "last_rotated_sequence"});
   EXPECT_EQ(json["current_events"].asUInt64(), 45U);
   EXPECT_EQ(json["max_events"].asUInt64(), 50U);
   EXPECT_EQ(json["usage_percent"].asUInt(), 90U);
@@ -389,15 +379,9 @@ TEST(AuditLogHttpTest, StatusJsonSerializesRotationValuesAsIntegers) {
 
 TEST(AuditLogHttpTest, EventPageJsonUsesExactPublicKeysAndNullCursor) {
   AuditEventPage page;
-  page.events.push_back(AuditEvent{381,
-                                   1784300000,
-                                   "viewer_disabled",
-                                   "success",
-                                   "cameraowner",
-                                   "198.51.100.61",
-                                   "",
-                                   "user",
-                                   "viewer01"});
+  page.events.push_back(AuditEvent{381, 1784300000, "viewer_disabled",
+                                   "success", "cameraowner", "198.51.100.61",
+                                   "", "user", "viewer01"});
 
   const auto json = BuildAuditEventPageJson(page);
 
@@ -405,10 +389,9 @@ TEST(AuditLogHttpTest, EventPageJsonUsesExactPublicKeysAndNullCursor) {
   ASSERT_TRUE(json["events"].isArray());
   ASSERT_EQ(json["events"].size(), 1U);
   const auto& event = json["events"][0U];
-  ExpectExactKeys(event, {"sequence", "server_timestamp_seconds",
-                          "event_type", "outcome", "actor_identity",
-                          "peer_ip", "detail_code", "subject_type",
-                          "subject_identity"});
+  ExpectExactKeys(event, {"sequence", "server_timestamp_seconds", "event_type",
+                          "outcome", "actor_identity", "peer_ip", "detail_code",
+                          "subject_type", "subject_identity"});
   EXPECT_EQ(event["sequence"].asInt64(), 381);
   EXPECT_EQ(event["server_timestamp_seconds"].asInt64(), 1784300000);
   EXPECT_EQ(event["event_type"].asString(), "viewer_disabled");
@@ -441,13 +424,12 @@ TEST(AuditLogHttpTest, ErrorResponsesExposeOnlySanitizedPublicClasses) {
     std::string_view public_message;
   };
   constexpr std::array<ErrorCase, 3> kCases = {{
-      {"E_AUDIT_QUERY_INVALID", drogon::k400BadRequest,
-       "E_AUDIT_QUERY_INVALID", "Audit query is invalid."},
-      {"E_AUDIT_FORBIDDEN", drogon::k403Forbidden,
-       "E_AUTHORIZATION_REQUIRED", "Authorization is required."},
+      {"E_AUDIT_QUERY_INVALID", drogon::k400BadRequest, "E_AUDIT_QUERY_INVALID",
+       "Audit query is invalid."},
+      {"E_AUDIT_FORBIDDEN", drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED",
+       "Authorization is required."},
       {"E_PRIVATE_SQLITE_PATH", drogon::k503ServiceUnavailable,
-       "E_AUDIT_UNAVAILABLE",
-       "Audit records are temporarily unavailable."},
+       "E_AUDIT_UNAVAILABLE", "Audit records are temporarily unavailable."},
   }};
 
   for (const auto& test_case : kCases) {
@@ -474,27 +456,25 @@ TEST(AuditLogHttpTest,
   auto audit_log_service = std::make_shared<AuditLogService>(*store);
   RunningEventLoop event_loop;
 
-  const auto verify = [&](AuditRoute route,
-                          const std::shared_ptr<AuditLogService>& service,
-                          const std::shared_ptr<BoundedWorker>& worker,
-                          bool shutting_down) {
-    ResponseRecorder recorder;
-    InvokeAuthorizedAuditHandler(
-        route, service, worker, shutting_down, event_loop.get(),
-        [&recorder](const drogon::HttpResponsePtr& response) {
-          recorder.Record(response);
-        });
-    EXPECT_TRUE(recorder.WaitForCount(1U));
-    EXPECT_TRUE(event_loop.Drain());
-    ExpectSanitizedUnavailable(recorder);
-  };
+  const auto verify =
+      [&](AuditRoute route, const std::shared_ptr<AuditLogService>& service,
+          const std::shared_ptr<BoundedWorker>& worker, bool shutting_down) {
+        ResponseRecorder recorder;
+        InvokeAuthorizedAuditHandler(
+            route, service, worker, shutting_down, event_loop.get(),
+            [&recorder](const drogon::HttpResponsePtr& response) {
+              recorder.Record(response);
+            });
+        EXPECT_TRUE(recorder.WaitForCount(1U));
+        EXPECT_TRUE(event_loop.Drain());
+        ExpectSanitizedUnavailable(recorder);
+      };
 
   for (const auto route : {AuditRoute::kStatus, AuditRoute::kEvents}) {
     SCOPED_TRACE(route == AuditRoute::kStatus ? "status" : "events");
     verify(route, nullptr, std::make_shared<BoundedWorker>(2U), false);
     verify(route, audit_log_service, nullptr, false);
-    verify(route, audit_log_service, std::make_shared<BoundedWorker>(2U),
-           true);
+    verify(route, audit_log_service, std::make_shared<BoundedWorker>(2U), true);
 
     auto stopped_worker = std::make_shared<BoundedWorker>(2U);
     stopped_worker->Stop();
@@ -556,8 +536,7 @@ TEST(AuditLogHttpTest,
           FailNextTerminalResponseQueueForTesting();
     }
     InvokeAuthorizedAuditHandler(
-        AuditRoute::kStatus, audit_log_service, worker, false,
-        event_loop.get(),
+        AuditRoute::kStatus, audit_log_service, worker, false, event_loop.get(),
         [&recorder](const drogon::HttpResponsePtr& response) {
           recorder.Record(response);
         });

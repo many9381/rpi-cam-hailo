@@ -126,12 +126,10 @@ class SecurityStore {
   common::Result<Transaction> BeginTransaction();
   // Lock order: BootstrapService mutex, connection lease, credential installer.
   common::Result<void> InitializeDevice(
-      BootstrapRecord record,
-      const CredentialInstaller& install_credential);
+      BootstrapRecord record, const CredentialInstaller& install_credential);
   common::Result<DeviceState> State() const;
   common::Result<void> CheckHealth() const;
-  common::Result<bool> IsManagementPeer(
-      std::string_view normalized_peer_ip);
+  common::Result<bool> IsManagementPeer(std::string_view normalized_peer_ip);
   [[nodiscard]] const std::filesystem::path& state_directory() const noexcept;
   [[nodiscard]] const std::filesystem::path& database_path() const noexcept;
 
@@ -249,127 +247,93 @@ class SecurityStore {
       const AuditEventQuery& query) const;
   common::Result<DeviceState> StateUnderConnectionLease() const;
   common::Result<AuthenticationContext> ReadAuthenticationContext(
-      Transaction& transaction,
-      std::string_view canonical_username,
+      Transaction& transaction, std::string_view canonical_username,
       std::string_view normalized_peer_ip) const;
   common::Result<void> SetLoginFailureState(
-      Transaction& transaction,
-      std::int64_t user_id,
+      Transaction& transaction, std::int64_t user_id,
       std::int64_t failed_login_count,
       std::optional<std::int64_t> lock_until_seconds);
   common::Result<void> SetLoginSuccessState(Transaction& transaction,
                                             std::int64_t user_id,
                                             std::int64_t now_seconds);
   common::Result<void> InsertAuditEvent(
-      Transaction& transaction,
-      std::int64_t now_seconds,
-      std::string_view event_type,
-      std::string_view outcome,
+      Transaction& transaction, std::int64_t now_seconds,
+      std::string_view event_type, std::string_view outcome,
       std::optional<std::int64_t> actor_user_id,
-      std::string_view normalized_peer_ip,
-      std::string_view detail_code,
+      std::string_view normalized_peer_ip, std::string_view detail_code,
       std::string_view subject_type = {},
       std::string_view subject_identity = {});
   common::Result<void> CoalesceFirmwareLogOutbox(
-      Transaction& transaction,
-      std::int64_t now_seconds,
-      std::string_view category,
-      std::string_view normalized_peer_ip);
-  common::Result<std::optional<FirmwareLogOutboxEntry>>
-  ClaimFirmwareLogOutbox(std::span<const unsigned char> lease_owner,
-                         std::span<const unsigned char> lease_token,
-                         std::int64_t now_seconds,
-                         std::int64_t lease_expires_at_seconds);
-  common::Result<bool> HasClaimableFirmwareLogOutbox(
-      std::int64_t now_seconds);
-  common::Result<void> AcknowledgeFirmwareLogOutbox(
-      std::int64_t outbox_id,
+      Transaction& transaction, std::int64_t now_seconds,
+      std::string_view category, std::string_view normalized_peer_ip);
+  common::Result<std::optional<FirmwareLogOutboxEntry>> ClaimFirmwareLogOutbox(
       std::span<const unsigned char> lease_owner,
+      std::span<const unsigned char> lease_token, std::int64_t now_seconds,
+      std::int64_t lease_expires_at_seconds);
+  common::Result<bool> HasClaimableFirmwareLogOutbox(std::int64_t now_seconds);
+  common::Result<void> AcknowledgeFirmwareLogOutbox(
+      std::int64_t outbox_id, std::span<const unsigned char> lease_owner,
       std::span<const unsigned char> lease_token);
   common::Result<void> ReleaseFirmwareLogOutbox(
-      std::int64_t outbox_id,
-      std::span<const unsigned char> lease_owner,
+      std::int64_t outbox_id, std::span<const unsigned char> lease_owner,
       std::span<const unsigned char> lease_token);
   common::Result<std::vector<SessionIdentity>> DeleteExpiredSessions(
-      Transaction& transaction,
-      std::int64_t now_seconds);
+      Transaction& transaction, std::int64_t now_seconds);
   common::Result<std::optional<std::int64_t>> ReadNextSessionExpiry(
       Transaction& transaction) const;
   common::Result<std::optional<StoredSession>> ReadSessionByUserId(
-      Transaction& transaction,
-      std::int64_t user_id) const;
+      Transaction& transaction, std::int64_t user_id) const;
   common::Result<std::optional<StoredSession>> ReadSessionByTokenHash(
-      Transaction& transaction,
-      std::span<const unsigned char> token_hash,
-      std::string_view normalized_peer_ip,
-      std::int64_t now_seconds) const;
+      Transaction& transaction, std::span<const unsigned char> token_hash,
+      std::string_view normalized_peer_ip, std::int64_t now_seconds) const;
   common::Result<bool> SessionTokenHashExists(
       Transaction& transaction,
       std::span<const unsigned char> token_hash) const;
   common::Result<void> InsertSession(
-      Transaction& transaction,
-      std::span<const unsigned char> token_hash,
-      std::int64_t user_id,
-      std::string_view role,
-      std::int64_t now_seconds,
-      std::int64_t expires_at_seconds,
-      std::string_view normalized_peer_ip,
+      Transaction& transaction, std::span<const unsigned char> token_hash,
+      std::int64_t user_id, std::string_view role, std::int64_t now_seconds,
+      std::int64_t expires_at_seconds, std::string_view normalized_peer_ip,
       std::int64_t management_expires_at_seconds);
   common::Result<void> RefreshSession(Transaction& transaction,
                                       std::int64_t session_id,
                                       std::int64_t now_seconds,
                                       std::int64_t expires_at_seconds);
   common::Result<void> RefreshManagementDeadline(
-      Transaction& transaction,
-      std::int64_t session_id,
+      Transaction& transaction, std::int64_t session_id,
       std::int64_t management_expires_at_seconds);
   common::Result<std::optional<std::int64_t>> ReadNextManagementExpiry(
       Transaction& transaction) const;
   common::Result<std::size_t> ExpireLapsedManagementAuthority(
-      Transaction& transaction,
-      std::int64_t now_seconds);
+      Transaction& transaction, std::int64_t now_seconds);
   common::Result<void> DeleteSession(Transaction& transaction,
                                      std::int64_t session_id);
   common::Result<std::vector<StoredManagedUser>> ReadManagedUsers() const;
   common::Result<StoredManagedUser> InsertViewer(
-      std::string canonical_username,
-      std::string display_username,
-      PasswordRecord password,
-      std::int64_t now_seconds,
+      std::string canonical_username, std::string display_username,
+      PasswordRecord password, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<CommittedRevocation> SetViewerEnabled(
-      std::int64_t user_id,
-      bool enabled,
-      std::int64_t now_seconds,
+      std::int64_t user_id, bool enabled, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<PasswordMutationSnapshot> ReadPasswordMutationSnapshot(
       std::int64_t user_id) const;
   common::Result<CommittedRevocation> ReplacePasswordIfCurrent(
-      const PasswordMutationSnapshot& expected,
-      PasswordRecord replacement,
-      PasswordMutationKind kind,
-      std::int64_t now_seconds,
+      const PasswordMutationSnapshot& expected, PasswordRecord replacement,
+      PasswordMutationKind kind, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<CommittedRevocation> DeleteViewer(
-      std::int64_t user_id,
-      std::int64_t now_seconds,
+      std::int64_t user_id, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<std::vector<StoredManagementIp>> ReadManagementIps() const;
   common::Result<StoredManagementIp> InsertManagementIp(
-      UserRole role,
-      std::string normalized_ip,
-      std::int64_t now_seconds,
+      UserRole role, std::string normalized_ip, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<CommittedRevocation> UpdateManagementIp(
-      std::int64_t management_ip_id,
-      UserRole role,
-      std::string normalized_replacement,
-      std::int64_t now_seconds,
+      std::int64_t management_ip_id, UserRole role,
+      std::string normalized_replacement, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<CommittedRevocation> DeleteManagementIp(
-      std::int64_t management_ip_id,
-      UserRole role,
-      std::int64_t now_seconds,
+      std::int64_t management_ip_id, UserRole role, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   // Replaces the device's initial account in one transaction. Only valid while
   // the device is in `default` state, where the initial account is the only row
@@ -377,16 +341,13 @@ class SecurityStore {
   // administrator, which cannot exist until setup completes. The account is
   // stored with role 'viewer' so it never occupies the single-administrator
   // slot guarded by users_single_administrator_unique.
-  common::Result<void> ReplaceInitialAccount(
-      std::string canonical_username,
-      std::string display_username,
-      PasswordRecord password,
-      std::int64_t now_seconds);
+  common::Result<void> ReplaceInitialAccount(std::string canonical_username,
+                                             std::string display_username,
+                                             PasswordRecord password,
+                                             std::int64_t now_seconds);
   common::Result<void> InstallBootstrapRtspCredential(
-      const std::filesystem::path& configured_path,
-      std::string_view username,
-      std::string_view realm,
-      std::span<const unsigned char> password) const;
+      const std::filesystem::path& configured_path, std::string_view username,
+      std::string_view realm, std::span<const unsigned char> password) const;
 
   std::shared_ptr<Impl> impl_;
 };

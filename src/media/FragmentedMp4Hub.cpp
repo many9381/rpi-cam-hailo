@@ -35,8 +35,10 @@ Result<void> ValidateConfig(const FragmentedMp4HubConfig& config) {
   if (config.width == 0U || config.height == 0U || config.fps == 0U ||
       config.fragment_duration_ms == 0U ||
       config.stale_timeout_ms < config.fragment_duration_ms * 2ULL ||
-      config.width > static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
-      config.height > static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
+      config.width >
+          static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
+      config.height >
+          static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
       config.fps > static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
       config.ring_limits.max_fragments == 0U ||
       config.ring_limits.max_bytes == 0U ||
@@ -68,8 +70,8 @@ struct FragmentedMp4Hub::Impl {
       std::lock_guard lock(mutex);
       if (state == "starting" || state == "running" || state == "stopping" ||
           pipeline != nullptr || worker.joinable()) {
-        return Result<void>::Err(
-            {"E_FMP4_ALREADY_RUNNING", "fragmented MP4 hub is already running"});
+        return Result<void>::Err({"E_FMP4_ALREADY_RUNNING",
+                                  "fragmented MP4 hub is already running"});
       }
       state = "starting";
       config = requested_config;
@@ -86,8 +88,8 @@ struct FragmentedMp4Hub::Impl {
     EnsureGStreamerInitialized();
     auto next_ring =
         std::make_shared<FragmentRing>(requested_config.ring_limits);
-    auto next_assembler = std::make_unique<IsoBmffAssembler>(
-        requested_config.assembler_limits);
+    auto next_assembler =
+        std::make_unique<IsoBmffAssembler>(requested_config.assembler_limits);
     {
       std::lock_guard lock(mutex);
       ring = std::move(next_ring);
@@ -120,8 +122,8 @@ struct FragmentedMp4Hub::Impl {
       std::lock_guard lock(mutex);
       state = "running";
     }
-    worker = std::thread(
-        [this, input_reader = std::move(input_reader)]() mutable {
+    worker =
+        std::thread([this, input_reader = std::move(input_reader)]() mutable {
           common::NameCurrentThread("fmp4-hub");
           WorkerMain(std::move(input_reader));
         });
@@ -219,7 +221,8 @@ struct FragmentedMp4Hub::Impl {
     GstElement* next_pipeline = gst_pipeline_new("camera-firmware-fmp4");
     GstElement* source = gst_element_factory_make("appsrc", "h264-source");
     GstElement* parser = gst_element_factory_make("h264parse", "h264-parser");
-    GstElement* caps_filter = gst_element_factory_make("capsfilter", "avc-caps");
+    GstElement* caps_filter =
+        gst_element_factory_make("capsfilter", "avc-caps");
     GstElement* muxer = gst_element_factory_make("mp4mux", "fragmented-muxer");
     GstElement* sink = gst_element_factory_make("appsink", "fragment-sink");
     if (next_pipeline == nullptr || source == nullptr || parser == nullptr ||
@@ -245,9 +248,9 @@ struct FragmentedMp4Hub::Impl {
         static_cast<int>(config.width), "height", G_TYPE_INT,
         static_cast<int>(config.height), "framerate", GST_TYPE_FRACTION,
         static_cast<int>(config.fps), 1, nullptr);
-    GstCaps* output_caps = gst_caps_new_simple(
-        "video/x-h264", "stream-format", G_TYPE_STRING, "avc", "alignment",
-        G_TYPE_STRING, "au", nullptr);
+    GstCaps* output_caps =
+        gst_caps_new_simple("video/x-h264", "stream-format", G_TYPE_STRING,
+                            "avc", "alignment", G_TYPE_STRING, "au", nullptr);
     g_object_set(appsrc, "caps", input_caps, "is-live", TRUE, "format",
                  GST_FORMAT_TIME, "block", FALSE, "max-bytes",
                  static_cast<guint64>(4U * 1024U * 1024U), nullptr);
@@ -256,9 +259,9 @@ struct FragmentedMp4Hub::Impl {
     g_object_set(caps_filter, "caps", output_caps, nullptr);
     g_object_set(muxer, "fragment-duration", config.fragment_duration_ms,
                  "streamable", TRUE, nullptr);
-    g_object_set(appsink, "emit-signals", FALSE, "sync", FALSE,
-                 "max-buffers", 16U, "drop", FALSE, "wait-on-eos", FALSE,
-                 "enable-last-sample", FALSE, nullptr);
+    g_object_set(appsink, "emit-signals", FALSE, "sync", FALSE, "max-buffers",
+                 16U, "drop", FALSE, "wait-on-eos", FALSE, "enable-last-sample",
+                 FALSE, nullptr);
     gst_caps_unref(input_caps);
     gst_caps_unref(output_caps);
 
@@ -309,7 +312,7 @@ struct FragmentedMp4Hub::Impl {
 
   void WorkerMain(EncodedRing::Reader input_reader) {
     GstBus* bus = pipeline == nullptr ? nullptr : gst_element_get_bus(pipeline);
-    std::optional<std::chrono::nanoseconds> base_timestamp;
+    std::chrono::nanoseconds base_timestamp{0};  // valid once seen_keyframe
     std::optional<GstClockTime> last_pts;
     const GstClockTime frame_duration = GST_SECOND / config.fps;
     bool seen_keyframe = false;
@@ -317,15 +320,16 @@ struct FragmentedMp4Hub::Impl {
     while (!stop_requested.load(std::memory_order_acquire)) {
       if (bus != nullptr) {
         GstMessage* message = gst_bus_pop_filtered(
-            bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR |
-                                             GST_MESSAGE_EOS));
+            bus,
+            static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
         if (message != nullptr) {
           const GstMessageType type = GST_MESSAGE_TYPE(message);
           gst_message_unref(message);
           if (type == GST_MESSAGE_ERROR) {
             Fail("E_FMP4_PIPELINE", "fragmented MP4 pipeline failed");
           } else if (!stop_requested.load(std::memory_order_acquire)) {
-            Fail("E_FMP4_PIPELINE", "fragmented MP4 pipeline ended unexpectedly");
+            Fail("E_FMP4_PIPELINE",
+                 "fragmented MP4 pipeline ended unexpectedly");
           }
           break;
         }
@@ -357,7 +361,7 @@ struct FragmentedMp4Hub::Impl {
       }
 
       GstClockTime pts = 0U;
-      const auto relative = access_unit.timestamp - *base_timestamp;
+      const auto relative = access_unit.timestamp - base_timestamp;
       if (relative.count() > 0) {
         pts = static_cast<GstClockTime>(relative.count());
       }
@@ -369,14 +373,12 @@ struct FragmentedMp4Hub::Impl {
       // Zero-copy handoff: the GstBuffer borrows the refcounted access-unit
       // payload; the destroy-notify drops the reference once GStreamer is
       // done, so the ring may evict the entry without invalidating it.
-      auto* keepalive =
-          new std::shared_ptr<const std::vector<std::uint8_t>>(
-              access_unit.bytes);
+      auto* keepalive = new std::shared_ptr<const std::vector<std::uint8_t>>(
+          access_unit.bytes);
       GstBuffer* buffer = gst_buffer_new_wrapped_full(
           GST_MEMORY_FLAG_READONLY,
-          const_cast<std::uint8_t*>((*keepalive)->data()),
-          (*keepalive)->size(), 0U, (*keepalive)->size(), keepalive,
-          [](gpointer pointer) {
+          const_cast<std::uint8_t*>((*keepalive)->data()), (*keepalive)->size(),
+          0U, (*keepalive)->size(), keepalive, [](gpointer pointer) {
             delete static_cast<
                 std::shared_ptr<const std::vector<std::uint8_t>>*>(pointer);
           });
@@ -545,7 +547,9 @@ Result<void> FragmentedMp4Hub::Start(const FragmentedMp4HubConfig& config) {
   return impl_->Start(config);
 }
 
-void FragmentedMp4Hub::Stop() noexcept { impl_->Stop(); }
+void FragmentedMp4Hub::Stop() noexcept {
+  impl_->Stop();
+}
 
 Result<FragmentRing::Reader> FragmentedMp4Hub::OpenReader() {
   return impl_->OpenReader();

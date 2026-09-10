@@ -24,21 +24,17 @@ struct GstCfRtspDigestAuthState {
   bool closing{false};
 };
 
-struct _GstCfRtspDigestAuth {
+struct GstCfRtspDigestAuth {
   GstRTSPAuth parent;
   GstCfRtspDigestAuthState* state;
   GstRTSPToken* viewer_token;
 };
 
-struct _GstCfRtspDigestAuthClass {
+struct GstCfRtspDigestAuthClass {
   GstRTSPAuthClass parent_class;
 };
 
-using GstCfRtspDigestAuth = struct _GstCfRtspDigestAuth;
-using GstCfRtspDigestAuthClass = struct _GstCfRtspDigestAuthClass;
-
-G_DEFINE_FINAL_TYPE(GstCfRtspDigestAuth,
-                    gst_cf_rtsp_digest_auth,
+G_DEFINE_FINAL_TYPE(GstCfRtspDigestAuth, gst_cf_rtsp_digest_auth,
                     GST_TYPE_RTSP_AUTH)
 
 namespace {
@@ -80,6 +76,8 @@ class ActiveAdapterCallback {
         state_->drained.notify_all();
       }
     } catch (...) {
+      // swallowed: destructors must not throw; the drained signal is best
+      // effort
     }
   }
 
@@ -105,6 +103,7 @@ void LogAdapterFailure(std::string_view code,
     message.append(category);
     Logger::instance().log(Logger::Level::kError, message);
   } catch (...) {
+    // swallowed: logging is best effort inside a GStreamer vfunc
   }
 }
 
@@ -112,8 +111,8 @@ void ClearAuthenticateHeaders(GstRTSPMessage* response) {
   if (response == nullptr) {
     return;
   }
-  while (gst_rtsp_message_remove_header(
-             response, GST_RTSP_HDR_WWW_AUTHENTICATE, 0) == GST_RTSP_OK) {
+  while (gst_rtsp_message_remove_header(response, GST_RTSP_HDR_WWW_AUTHENTICATE,
+                                        0) == GST_RTSP_OK) {
   }
 }
 
@@ -123,8 +122,7 @@ void ClearContextToken(GstRTSPContext* context) {
   }
 }
 
-void AddDigestChallenges(RtspDigestVerifier* verifier,
-                         GstRTSPContext* context,
+void AddDigestChallenges(RtspDigestVerifier* verifier, GstRTSPContext* context,
                          bool stale) {
   if (context == nullptr || context->response == nullptr) {
     LogAdapterFailure("E_RTSP_AUTH_RESPONSE", "adapter-state");
@@ -163,26 +161,21 @@ RtspDigestVerifyStatus VerifyContextRequest(RtspDigestVerifier* verifier,
   }
 
   gchar* authorization = nullptr;
-  if (gst_rtsp_message_get_header(context->request,
-                                  GST_RTSP_HDR_AUTHORIZATION,
-                                  &authorization,
-                                  0) != GST_RTSP_OK ||
+  if (gst_rtsp_message_get_header(context->request, GST_RTSP_HDR_AUTHORIZATION,
+                                  &authorization, 0) != GST_RTSP_OK ||
       authorization == nullptr) {
     return RtspDigestVerifyStatus::kRejected;
   }
   gchar* extra_authorization = nullptr;
-  if (gst_rtsp_message_get_header(context->request,
-                                  GST_RTSP_HDR_AUTHORIZATION,
-                                  &extra_authorization,
-                                  1) == GST_RTSP_OK) {
+  if (gst_rtsp_message_get_header(context->request, GST_RTSP_HDR_AUTHORIZATION,
+                                  &extra_authorization, 1) == GST_RTSP_OK) {
     return RtspDigestVerifyStatus::kRejected;
   }
 
   GstRTSPMethod request_method = GST_RTSP_INVALID;
   const gchar* request_target = nullptr;
   GstRTSPVersion version = GST_RTSP_VERSION_INVALID;
-  if (gst_rtsp_message_parse_request(context->request,
-                                     &request_method,
+  if (gst_rtsp_message_parse_request(context->request, &request_method,
                                      &request_target,
                                      &version) != GST_RTSP_OK ||
       request_target == nullptr) {
@@ -202,8 +195,7 @@ RtspDigestVerifyStatus VerifyContextRequest(RtspDigestVerifier* verifier,
   return verified.value();
 }
 
-void SendUnauthorized(RtspDigestVerifier* verifier,
-                      GstRTSPContext* context,
+void SendUnauthorized(RtspDigestVerifier* verifier, GstRTSPContext* context,
                       bool stale) {
   if (context == nullptr || context->request == nullptr ||
       context->response == nullptr || context->client == nullptr) {
@@ -212,17 +204,15 @@ void SendUnauthorized(RtspDigestVerifier* verifier,
   }
 
   (void)gst_rtsp_message_unset(context->response);
-  if (gst_rtsp_message_init_response(context->response,
-                                     GST_RTSP_STS_UNAUTHORIZED,
-                                     gst_rtsp_status_as_text(
-                                         GST_RTSP_STS_UNAUTHORIZED),
-                                     context->request) != GST_RTSP_OK) {
+  if (gst_rtsp_message_init_response(
+          context->response, GST_RTSP_STS_UNAUTHORIZED,
+          gst_rtsp_status_as_text(GST_RTSP_STS_UNAUTHORIZED),
+          context->request) != GST_RTSP_OK) {
     LogAdapterFailure("E_RTSP_AUTH_RESPONSE", "gstreamer-init");
     return;
   }
   AddDigestChallenges(verifier, context, stale);
-  if (gst_rtsp_client_send_message(context->client,
-                                   context->session,
+  if (gst_rtsp_client_send_message(context->client, context->session,
                                    context->response) != GST_RTSP_OK) {
     LogAdapterFailure("E_RTSP_AUTH_RESPONSE", "gstreamer-send");
   }
@@ -244,23 +234,19 @@ gboolean Authenticate(GstRTSPAuth* auth, GstRTSPContext* context) {
   return TRUE;
 }
 
-gboolean ParentCheck(GstRTSPAuth* auth,
-                     GstRTSPContext* context,
+gboolean ParentCheck(GstRTSPAuth* auth, GstRTSPContext* context,
                      const gchar* check) {
-  auto* parent =
-      GST_RTSP_AUTH_CLASS(gst_cf_rtsp_digest_auth_parent_class);
+  auto* parent = GST_RTSP_AUTH_CLASS(gst_cf_rtsp_digest_auth_parent_class);
   return parent->check != nullptr ? parent->check(auth, context, check) : FALSE;
 }
 
-gboolean Check(GstRTSPAuth* auth,
-               GstRTSPContext* context,
-               const gchar* check) {
+gboolean Check(GstRTSPAuth* auth, GstRTSPContext* context, const gchar* check) {
   auto* self = reinterpret_cast<GstCfRtspDigestAuth*>(auth);
   if (g_strcmp0(check, GST_RTSP_AUTH_CHECK_CONNECT) == 0) {
     return ParentCheck(auth, context, check);
   }
-  if (g_strcmp0(check, GST_RTSP_AUTH_CHECK_URL) == 0 &&
-      context != nullptr && context->method == GST_RTSP_OPTIONS) {
+  if (g_strcmp0(check, GST_RTSP_AUTH_CHECK_URL) == 0 && context != nullptr &&
+      context->method == GST_RTSP_OPTIONS) {
     ClearContextToken(context);
     return TRUE;
   }
@@ -283,8 +269,7 @@ gboolean Check(GstRTSPAuth* auth,
   return ParentCheck(auth, context, check);
 }
 
-void GenerateAuthenticateHeader(GstRTSPAuth* auth,
-                                GstRTSPContext* context) {
+void GenerateAuthenticateHeader(GstRTSPAuth* auth, GstRTSPContext* context) {
   auto* self = reinterpret_cast<GstCfRtspDigestAuth*>(auth);
   ActiveAdapterCallback callback(self);
   AddDigestChallenges(callback.verifier(), context, false);
@@ -344,10 +329,9 @@ void gst_cf_rtsp_digest_auth_class_init(GstCfRtspDigestAuthClass* klass) {
 
 void gst_cf_rtsp_digest_auth_init(GstCfRtspDigestAuth* self) {
   self->state = nullptr;
-  self->viewer_token = gst_rtsp_token_new(GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE,
-                                           G_TYPE_STRING,
-                                           kViewerRole.data(),
-                                           nullptr);
+  self->viewer_token =
+      gst_rtsp_token_new(GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE, G_TYPE_STRING,
+                         kViewerRole.data(), nullptr);
   gst_rtsp_auth_set_supported_methods(GST_RTSP_AUTH(self),
                                       GST_RTSP_AUTH_DIGEST);
 }
@@ -355,8 +339,7 @@ void gst_cf_rtsp_digest_auth_init(GstCfRtspDigestAuth* self) {
 common::Result<GstRTSPAuth*> NewGstCfRtspDigestAuth(
     const config::RtspClientAuthConfig& config,
     RtspDigestVerifierDependencies dependencies) {
-  auto verifier =
-      RtspDigestVerifier::Create(config, std::move(dependencies));
+  auto verifier = RtspDigestVerifier::Create(config, std::move(dependencies));
   if (!verifier.ok()) {
     return common::Result<GstRTSPAuth*>::Err(verifier.error());
   }
@@ -383,7 +366,8 @@ common::Result<GstRTSPAuth*> NewGstCfRtspDigestAuth(
 common::Result<void> ReloadGstCfRtspDigestCredentials(GstRTSPAuth* auth) {
   if (!IsGstCfRtspDigestAuth(auth)) {
     return common::Result<void>::Err(
-        {"E_RTSP_AUTH_TYPE", "RTSP auth object does not support credential reload"});
+        {"E_RTSP_AUTH_TYPE",
+         "RTSP auth object does not support credential reload"});
   }
   auto* self = reinterpret_cast<GstCfRtspDigestAuth*>(auth);
   ActiveAdapterCallback callback(self);
@@ -403,8 +387,8 @@ common::Result<void> ShutdownGstCfRtspDigestAuth(GstRTSPAuth* auth) {
 }
 
 bool IsGstCfRtspDigestAuth(GstRTSPAuth* auth) noexcept {
-  return auth != nullptr && G_TYPE_CHECK_INSTANCE_TYPE(
-                                auth, gst_cf_rtsp_digest_auth_get_type());
+  return auth != nullptr &&
+         G_TYPE_CHECK_INSTANCE_TYPE(auth, gst_cf_rtsp_digest_auth_get_type());
 }
 
 }  // namespace camera_firmware::rtsp

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <iostream>
 #include <initializer_list>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -14,10 +14,9 @@
 
 namespace camera_firmware::service::internal {
 
-using UserManagementSecretCleanupObserverForTesting = void (*)(
-    std::string_view label,
-    common::ZeroizeAudit before,
-    common::ZeroizeAudit after) noexcept;
+using UserManagementSecretCleanupObserverForTesting =
+    void (*)(std::string_view label, common::ZeroizeAudit before,
+             common::ZeroizeAudit after) noexcept;
 
 void SetUserManagementSecretCleanupObserverForTesting(
     UserManagementSecretCleanupObserverForTesting observer) noexcept;
@@ -58,16 +57,15 @@ struct CleanupEvents {
 
 thread_local CleanupEvents* active_cleanup_events = nullptr;
 
-void RecordCleanupEvent(
-    std::string_view label,
-    camera_firmware::common::ZeroizeAudit before,
-    camera_firmware::common::ZeroizeAudit after) noexcept {
+void RecordCleanupEvent(std::string_view label,
+                        camera_firmware::common::ZeroizeAudit before,
+                        camera_firmware::common::ZeroizeAudit after) noexcept {
   if (active_cleanup_events == nullptr ||
       active_cleanup_events->size >= active_cleanup_events->entries.size()) {
     return;
   }
-  active_cleanup_events->entries[active_cleanup_events->size++] =
-      {label, before, after};
+  active_cleanup_events->entries[active_cleanup_events->size++] = {
+      label, before, after};
 }
 
 class CleanupObserverScope {
@@ -224,13 +222,11 @@ TEST(UserManagementHttpTest,
   auto reset_owner = std::move(reset).value();
   SecureBytes reset_password = std::move(reset_owner.password);
 
-  auto own =
-      ParseOwnPasswordJson(OwnPasswordBody(1U, 1U), "application/json");
+  auto own = ParseOwnPasswordJson(OwnPasswordBody(1U, 1U), "application/json");
   ASSERT_TRUE(own.ok()) << "own-password parser rejected valid fixture";
   auto own_owner = std::move(own).value();
   SecureBytes current_password = std::move(own_owner.current_password);
-  SecureBytes replacement_password =
-      std::move(own_owner.replacement_password);
+  SecureBytes replacement_password = std::move(own_owner.replacement_password);
 
   EXPECT_EQ(CleanupEventCount(events, "create.request_body"), 1U);
   EXPECT_EQ(CleanupEventCount(events, "reset.request_body"), 1U);
@@ -253,8 +249,7 @@ TEST(UserManagementHttpTest,
   CleanupObserverScope observer(events);
 
   auto create = ParseCreateViewerJson(
-      SecureBody(R"({"password":"P","extra":"x"})"),
-      "application/json");
+      SecureBody(R"({"password":"P","extra":"x"})"), "application/json");
   EXPECT_FALSE(create.ok());
 
   auto own = ParseOwnPasswordJson(
@@ -278,22 +273,18 @@ TEST(UserManagementHttpTest, SecretJsonParsersRejectMalformedBodies) {
   };
   constexpr std::array<NamedBody, 6> kInvalidCreateBodies = {{
       {"missing-password", R"({"username":"viewer"})"},
-      {"unknown-field",
-       R"({"username":"viewer","password":"P","extra":"x"})"},
+      {"unknown-field", R"({"username":"viewer","password":"P","extra":"x"})"},
       {"duplicate-username",
        R"({"username":"viewer","username":"other","password":"P"})"},
-      {"escaped-username-key",
-       R"({"user\u006eame":"viewer","password":"P"})"},
-      {"escaped-password-key",
-       R"({"username":"viewer","pass\u0077ord":"P"})"},
-      {"trailing-input",
-       R"({"username":"viewer","password":"P"} trailing)"},
+      {"escaped-username-key", R"({"user\u006eame":"viewer","password":"P"})"},
+      {"escaped-password-key", R"({"username":"viewer","pass\u0077ord":"P"})"},
+      {"trailing-input", R"({"username":"viewer","password":"P"} trailing)"},
   }};
   for (const auto& test_case : kInvalidCreateBodies) {
     SCOPED_TRACE(test_case.name);
-    EXPECT_FALSE(ParseCreateViewerJson(SecureBody(test_case.body),
-                                       "application/json")
-                     .ok());
+    EXPECT_FALSE(
+        ParseCreateViewerJson(SecureBody(test_case.body), "application/json")
+            .ok());
   }
 
   constexpr std::array<NamedBody, 7> kInvalidResetBodies = {{
@@ -307,9 +298,9 @@ TEST(UserManagementHttpTest, SecretJsonParsersRejectMalformedBodies) {
   }};
   for (const auto& test_case : kInvalidResetBodies) {
     SCOPED_TRACE(test_case.name);
-    EXPECT_FALSE(ParsePasswordResetJson(SecureBody(test_case.body),
-                                        "application/json")
-                     .ok());
+    EXPECT_FALSE(
+        ParsePasswordResetJson(SecureBody(test_case.body), "application/json")
+            .ok());
   }
 }
 
@@ -332,8 +323,7 @@ TEST(UserManagementHttpTest, PasswordLengthBoundariesAreExact) {
 
 TEST(UserManagementHttpTest, EscapedValuesAndSurrogatePairsAreAccepted) {
   auto parsed = ParseCreateViewerJson(
-      SecureBody(
-          R"({"username":"view\u0065r","password":"\uD83D\uDE00"})"),
+      SecureBody(R"({"username":"view\u0065r","password":"\uD83D\uDE00"})"),
       "application/json");
   ASSERT_TRUE(parsed.ok()) << "valid escaped values were rejected";
   EXPECT_EQ(parsed.value().username, "viewer");
@@ -370,25 +360,23 @@ TEST(UserManagementHttpTest, OwnPasswordParserRejectsMalformedPaths) {
   }};
   for (const auto& test_case : kCases) {
     SCOPED_TRACE(test_case.name);
-    EXPECT_FALSE(ParseOwnPasswordJson(SecureBody(test_case.body),
-                                      "application/json")
-                     .ok());
+    EXPECT_FALSE(
+        ParseOwnPasswordJson(SecureBody(test_case.body), "application/json")
+            .ok());
   }
 }
 
 TEST(UserManagementHttpTest, PublicJsonParsersRejectMalformedBodies) {
-  for (const auto& body : {R"({"enabled":true,"enabled":false})",
-                           R"({"en\u0061bled":true})",
-                           R"({"enabled":1})",
-                           R"({"enabled":true} trailing)"}) {
+  for (const auto& body :
+       {R"({"enabled":true,"enabled":false})", R"({"en\u0061bled":true})",
+        R"({"enabled":1})", R"({"enabled":true} trailing)"}) {
     EXPECT_FALSE(ParseSetViewerEnabledJson(body, "application/json").ok())
         << body;
   }
-  for (const auto& body : {R"({"address":"192.0.2.10","extra":"x"})",
-                           R"({"addr\u0065ss":"192.0.2.10"})",
-                           R"({"address":7})"}) {
-    EXPECT_FALSE(ParseManagementIpJson(body, "application/json").ok())
-        << body;
+  for (const auto& body :
+       {R"({"address":"192.0.2.10","extra":"x"})",
+        R"({"addr\u0065ss":"192.0.2.10"})", R"({"address":7})"}) {
+    EXPECT_FALSE(ParseManagementIpJson(body, "application/json").ok()) << body;
   }
 }
 
@@ -402,9 +390,8 @@ TEST(UserManagementHttpTest, JsonParsersEnforceEncodingNulAndBodyLimits) {
   std::string invalid_utf8 = R"({"username":"viewer","password":")";
   invalid_utf8.push_back(static_cast<char>(0xff));
   invalid_utf8 += R"("})";
-  EXPECT_FALSE(ParseCreateViewerJson(SecureBody(invalid_utf8),
-                                     "application/json")
-                   .ok());
+  EXPECT_FALSE(
+      ParseCreateViewerJson(SecureBody(invalid_utf8), "application/json").ok());
 
   std::string nul_body = R"({"enabled":true})";
   nul_body.insert(2U, 1U, '\0');
@@ -435,23 +422,22 @@ TEST(UserManagementHttpTest, PublicJsonParsersRequireExactTypesAndContentType) {
   ASSERT_TRUE(enabled.ok()) << enabled.error().message;
   EXPECT_FALSE(enabled.value().enabled);
 
-  auto address = ParseManagementIpJson(R"({"address":"2001:db8::1"})",
-                                       "application/json");
+  auto address =
+      ParseManagementIpJson(R"({"address":"2001:db8::1"})", "application/json");
   ASSERT_TRUE(address.ok()) << address.error().message;
   EXPECT_EQ(address.value().address, "2001:db8::1");
 
-  EXPECT_FALSE(ParseSetViewerEnabledJson(R"({"enabled":true})", "text/plain")
-                   .ok());
+  EXPECT_FALSE(
+      ParseSetViewerEnabledJson(R"({"enabled":true})", "text/plain").ok());
   EXPECT_TRUE(ValidateEmptyRequestBody("").ok());
   EXPECT_FALSE(ValidateEmptyRequestBody("{}").ok());
 }
 
 TEST(UserManagementHttpTest, ResourceIdsAndRolesAreExact) {
   EXPECT_EQ(ParseManagedResourceId("1").value(), 1);
-  EXPECT_EQ(ParseManagedResourceId("9223372036854775807").value(),
-            INT64_MAX);
-  for (const auto value : {"", "0", "01", "+1", "-1", " 1", "1 ",
-                           "1x", "9223372036854775808"}) {
+  EXPECT_EQ(ParseManagedResourceId("9223372036854775807").value(), INT64_MAX);
+  for (const auto value :
+       {"", "0", "01", "+1", "-1", " 1", "1 ", "1x", "9223372036854775808"}) {
     EXPECT_FALSE(ParseManagedResourceId(value).ok()) << value;
   }
 
@@ -472,10 +458,10 @@ TEST(UserManagementHttpTest, PublicSerializersExposeExactManagedFields) {
   user.created_at_seconds = 11;
   user.password_changed_at_seconds = 12;
   const auto user_json = BuildManagedUserJson(user);
-  ExpectExactKeys(user_json, {"id", "username", "role", "enabled",
-                              "lock_until_seconds", "created_at_seconds",
-                              "password_changed_at_seconds",
-                              "last_login_at_seconds"});
+  ExpectExactKeys(user_json,
+                  {"id", "username", "role", "enabled", "lock_until_seconds",
+                   "created_at_seconds", "password_changed_at_seconds",
+                   "last_login_at_seconds"});
   EXPECT_TRUE(user_json["lock_until_seconds"].isNull());
   EXPECT_TRUE(user_json["last_login_at_seconds"].isNull());
   EXPECT_EQ(user_json["role"].asString(), "viewer");
@@ -552,8 +538,8 @@ TEST(UserManagementHttpTest, ErrorResponsesUseSanitizedPublicAllowlist) {
   constexpr std::array<ResponseCase, 10> kCases = {{
       {"E_INVALID_REQUEST", drogon::k400BadRequest, "E_INVALID_REQUEST",
        "request could not be processed"},
-      {"E_USER_FORBIDDEN", drogon::k403Forbidden,
-       "E_AUTHORIZATION_REQUIRED", "authorization required"},
+      {"E_USER_FORBIDDEN", drogon::k403Forbidden, "E_AUTHORIZATION_REQUIRED",
+       "authorization required"},
       {"E_MANAGEMENT_IP_FORBIDDEN", drogon::k403Forbidden,
        "E_AUTHORIZATION_REQUIRED", "authorization required"},
       {"E_USER_NOT_FOUND", drogon::k404NotFound, "E_USER_NOT_FOUND",

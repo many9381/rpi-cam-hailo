@@ -77,6 +77,8 @@ void PauseAfterLiveMp4StartPublicationForTesting() noexcept {
     try {
       published->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
   if (release_publication.valid()) {
@@ -114,13 +116,11 @@ std::atomic_bool force_next_login_role_invalid{false};
 std::atomic_bool fail_next_user_management_pre_submit{false};
 std::atomic_bool fail_next_authorization_dispatch_queue{false};
 std::atomic_bool fail_next_terminal_response_queue{false};
-using UserManagementRequestBodyCleanupObserverForTesting = void (*)(
-    std::size_t,
-    bool,
-    bool) noexcept;
+using UserManagementRequestBodyCleanupObserverForTesting =
+    void (*)(std::size_t, bool, bool) noexcept;
 std::atomic<UserManagementRequestBodyCleanupObserverForTesting>
     user_management_request_body_cleanup_observer{nullptr};
-}
+}  // namespace
 
 void FailNextDetectionSseEventMergeForTesting() noexcept {
   fail_next_detection_sse_event_merge.store(true, std::memory_order_release);
@@ -132,8 +132,8 @@ bool ConsumeDetectionSseEventMergeFailureForTesting() noexcept {
 }
 
 void FailNextRuntimeCallbackLeaseAllocationForTesting() noexcept {
-  fail_next_runtime_callback_lease_allocation.store(
-      true, std::memory_order_release);
+  fail_next_runtime_callback_lease_allocation.store(true,
+                                                    std::memory_order_release);
 }
 
 bool ConsumeRuntimeCallbackLeaseAllocationFailureForTesting() noexcept {
@@ -146,8 +146,8 @@ void FailNextLiveMp4PumpAllocationForTesting() noexcept {
 }
 
 bool ConsumeLiveMp4PumpAllocationFailureForTesting() noexcept {
-  return fail_next_live_mp4_pump_allocation.exchange(
-      false, std::memory_order_acq_rel);
+  return fail_next_live_mp4_pump_allocation.exchange(false,
+                                                     std::memory_order_acq_rel);
 }
 
 void ForceNextLoginRoleInvalidForTesting() noexcept {
@@ -156,7 +156,7 @@ void ForceNextLoginRoleInvalidForTesting() noexcept {
 
 bool ConsumeForcedInvalidLoginRoleForTesting() noexcept {
   return force_next_login_role_invalid.exchange(false,
-                                                  std::memory_order_acq_rel);
+                                                std::memory_order_acq_rel);
 }
 
 void FailNextUserManagementPreSubmitForTesting() noexcept {
@@ -173,13 +173,12 @@ bool ConsumeUserManagementPreSubmitFailureForTesting() noexcept {
 }
 
 void FailNextAuthorizationDispatchQueueForTesting() noexcept {
-  fail_next_authorization_dispatch_queue.store(true,
-                                                std::memory_order_release);
+  fail_next_authorization_dispatch_queue.store(true, std::memory_order_release);
 }
 
 void ResetAuthorizationDispatchQueueFailureForTesting() noexcept {
   fail_next_authorization_dispatch_queue.store(false,
-                                                std::memory_order_release);
+                                               std::memory_order_release);
 }
 
 bool ConsumeAuthorizationDispatchQueueFailureForTesting() noexcept {
@@ -197,7 +196,7 @@ void ResetTerminalResponseQueueFailureForTesting() noexcept {
 
 bool ConsumeTerminalResponseQueueFailureForTesting() noexcept {
   return fail_next_terminal_response_queue.exchange(false,
-                                                      std::memory_order_acq_rel);
+                                                    std::memory_order_acq_rel);
 }
 
 void SetUserManagementRequestBodyCleanupObserverForTesting(
@@ -212,8 +211,7 @@ void ResetUserManagementRequestBodyCleanupObserverForTesting() noexcept {
 }
 
 void NotifyUserManagementRequestBodyCleanupForTesting(
-    std::size_t source_size,
-    bool source_cleansed,
+    std::size_t source_size, bool source_cleansed,
     bool copied_to_secure_owner) noexcept {
   const auto observer = user_management_request_body_cleanup_observer.load(
       std::memory_order_acquire);
@@ -223,6 +221,7 @@ void NotifyUserManagementRequestBodyCleanupForTesting(
   try {
     observer(source_size, source_cleansed, copied_to_secure_owner);
   } catch (...) {
+    // swallowed: test observer errors must not escape this noexcept notifier
   }
 }
 #else
@@ -260,10 +259,8 @@ bool ConsumeTerminalResponseQueueFailureForTesting() noexcept {
   return false;
 }
 
-void NotifyUserManagementRequestBodyCleanupForTesting(
-    std::size_t,
-    bool,
-    bool) noexcept {}
+void NotifyUserManagementRequestBodyCleanupForTesting(std::size_t, bool,
+                                                      bool) noexcept {}
 
 }  // namespace
 #endif
@@ -275,9 +272,7 @@ class RuntimeCallbackLifecycle final
 
   class CallbackScope final {
    public:
-    ~CallbackScope() {
-      active_callback_ = previous_;
-    }
+    ~CallbackScope() { active_callback_ = previous_; }
 
     CallbackScope(const CallbackScope&) = delete;
     CallbackScope& operator=(const CallbackScope&) = delete;
@@ -315,9 +310,7 @@ class RuntimeCallbackLifecycle final
     explicit Lease(std::shared_ptr<RuntimeCallbackLifecycle> owner)
         : owner_(std::move(owner)) {}
 
-    void Arm() noexcept {
-      armed_ = true;
-    }
+    void Arm() noexcept { armed_ = true; }
 
     std::shared_ptr<RuntimeCallbackLifecycle> owner_;
     bool armed_{false};
@@ -416,8 +409,9 @@ void ResetLiveMp4BackpressureTimingForTesting() noexcept {
 
 std::chrono::milliseconds LiveMp4BackpressureRetryDelay() noexcept {
 #if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
-  const auto override_ms = LiveMp4BackpressureTimingOverrideForTesting()
-                               .retry_delay_ms.load(std::memory_order_relaxed);
+  const auto override_ms =
+      LiveMp4BackpressureTimingOverrideForTesting().retry_delay_ms.load(
+          std::memory_order_relaxed);
   if (override_ms >= 0) {
     return std::chrono::milliseconds{override_ms};
   }
@@ -441,8 +435,7 @@ std::chrono::milliseconds LiveMp4BackpressureGiveUpAfter() noexcept {
 class LiveMp4PumpState final {
  public:
   static std::shared_ptr<LiveMp4PumpState> Create(
-      LiveMp4StreamHandle stream,
-      std::size_t maximum_response_bytes,
+      LiveMp4StreamHandle stream, std::size_t maximum_response_bytes,
       std::shared_ptr<SessionStreamLease> stream_lease) {
     struct OpenedStreamGuard {
       ~OpenedStreamGuard() {
@@ -452,6 +445,8 @@ class LiveMp4PumpState final {
         try {
           stream.cancel();
         } catch (...) {
+          // swallowed: cancel is best effort on a stream that is already being
+          // discarded
         }
       }
 
@@ -461,8 +456,8 @@ class LiveMp4PumpState final {
     if (ConsumeLiveMp4PumpAllocationFailureForTesting()) {
       throw std::bad_alloc();
     }
-    auto* raw_pump = new LiveMp4PumpState(
-        std::move(stream), maximum_response_bytes, stream_lease);
+    auto* raw_pump = new LiveMp4PumpState(std::move(stream),
+                                          maximum_response_bytes, stream_lease);
     guard.armed = false;
     auto pump = std::shared_ptr<LiveMp4PumpState>(raw_pump);
     if (stream_lease) {
@@ -476,13 +471,11 @@ class LiveMp4PumpState final {
     return pump;
   }
 
-  ~LiveMp4PumpState() {
-    CancelAndClose();
-  }
+  ~LiveMp4PumpState() { CancelAndClose(); }
 
   bool AttachOutput(trantor::AsyncStreamPtr output) {
-    auto shared_output = std::shared_ptr<trantor::AsyncStream>(
-        std::move(output));
+    auto shared_output =
+        std::shared_ptr<trantor::AsyncStream>(std::move(output));
     std::shared_ptr<trantor::AsyncStream> close_immediately;
     bool start = false;
     {
@@ -500,7 +493,7 @@ class LiveMp4PumpState final {
   }
 
   void Pump() noexcept {
-    std::array<char, 16U * 1024U> buffer{};
+    std::array<char, std::size_t{16} * 1024U> buffer{};
     std::size_t sent_bytes = 0U;
     const bool unbounded = maximum_response_bytes_ == 0U;
     try {
@@ -511,9 +504,9 @@ class LiveMp4PumpState final {
           break;
         }
         const auto capacity =
-            unbounded ? buffer.size()
-                      : std::min(buffer.size(),
-                                 maximum_response_bytes_ - sent_bytes);
+            unbounded
+                ? buffer.size()
+                : std::min(buffer.size(), maximum_response_bytes_ - sent_bytes);
         std::size_t size = 0U;
         {
           SessionStreamRevocationScope revocation_scope(
@@ -547,6 +540,8 @@ class LiveMp4PumpState final {
         sent_bytes += size;
       }
     } catch (...) {
+      // swallowed: a failed send ends the pump; CancelAndClose() below tears
+      // the stream down
     }
     CancelAndClose();
   }
@@ -596,6 +591,8 @@ class LiveMp4PumpState final {
         MediaCallbackScope callback_scope(owner_manager);
         cancel();
       } catch (...) {
+        // swallowed: cancel is best effort; the stream is already being torn
+        // down
       }
     }
     stream_lease.reset();
@@ -641,17 +638,16 @@ class LiveMp4PumpState final {
     return active_media_callback_manager_;
   }
 
-  bool ActiveBeforeRead(
-      std::shared_ptr<SessionStreamLease>& callback_lease,
-      LiveMp4PumpManager*& owner_manager) {
+  bool ActiveBeforeRead(std::shared_ptr<SessionStreamLease>& callback_lease,
+                        LiveMp4PumpManager*& owner_manager) {
     if (terminal_requested_.load(std::memory_order_acquire)) {
       return false;
     }
     std::lock_guard lock(mutex_);
-    const bool active =
-        !terminal_requested_.load(std::memory_order_relaxed) && !terminal_ &&
-        (!stream_lease_ || !stream_lease_->revoked()) &&
-        static_cast<bool>(stream_.read);
+    const bool active = !terminal_requested_.load(std::memory_order_relaxed) &&
+                        !terminal_ &&
+                        (!stream_lease_ || !stream_lease_->revoked()) &&
+                        static_cast<bool>(stream_.read);
     if (active) {
       callback_lease = stream_lease_;
       owner_manager = owner_manager_;
@@ -713,6 +709,7 @@ class LiveMp4PumpState final {
     try {
       output->close();
     } catch (...) {
+      // swallowed: close is best effort on a stream that is already going away
     }
   }
 
@@ -739,15 +736,12 @@ class LiveMp4PumpManager final {
  public:
   explicit LiveMp4PumpManager(
       std::size_t maximum_pumps = kMaximumServiceConnections)
-      : maximum_pumps_(
-            std::min(maximum_pumps, kMaximumServiceConnections)) {
+      : maximum_pumps_(std::min(maximum_pumps, kMaximumServiceConnections)) {
     entries_.reserve(maximum_pumps_);
     pump_thread_ids_.reserve(maximum_pumps_);
   }
 
-  ~LiveMp4PumpManager() {
-    Stop();
-  }
+  ~LiveMp4PumpManager() { Stop(); }
 
   void Start(const std::shared_ptr<LiveMp4PumpState>& pump,
              trantor::AsyncStreamPtr output) {
@@ -817,8 +811,7 @@ class LiveMp4PumpManager final {
 
   void Stop() noexcept {
     std::vector<Entry> entries;
-    std::array<std::shared_ptr<LiveMp4PumpState>,
-               kMaximumServiceConnections>
+    std::array<std::shared_ptr<LiveMp4PumpState>, kMaximumServiceConnections>
         pump_thread_cancellations;
     std::size_t pump_thread_cancellation_count = 0U;
     bool called_from_pump_thread = false;
@@ -850,14 +843,14 @@ class LiveMp4PumpManager final {
           return;
         }
         stop_owner_active_ = true;
-        lifecycle_changed_.wait(
-            lock, [this] { return starts_in_progress_ == 0U; });
+        lifecycle_changed_.wait(lock,
+                                [this] { return starts_in_progress_ == 0U; });
         entries.swap(entries_);
       }
     }
     if (called_from_pump_thread) {
-      for (std::size_t index = 0U;
-           index < pump_thread_cancellation_count; ++index) {
+      for (std::size_t index = 0U; index < pump_thread_cancellation_count;
+           ++index) {
         pump_thread_cancellations[index]->CancelAndClose();
       }
       return;
@@ -969,9 +962,8 @@ struct ServiceState {
   bool shutting_down{false};
 };
 
-constexpr std::size_t kMaximumTransportBodyBytes = 64U * 1024U;
-static_assert(kMaximumTransportBodyBytes >
-              kMaximumRuntimeSettingsBodyBytes);
+constexpr std::size_t kMaximumTransportBodyBytes = std::size_t{64} * 1024U;
+static_assert(kMaximumTransportBodyBytes > kMaximumRuntimeSettingsBodyBytes);
 constexpr std::chrono::milliseconds kServiceThreadStopTimeout{2000};
 // How long Init waits for the listener to begin accepting after drogon reports
 // readiness (readiness fires before listen(); this bridges that gap).
@@ -980,9 +972,8 @@ constexpr std::chrono::seconds kDetectionSsePendingTimeout{15};
 constexpr std::uint32_t kDetectionSseReconnectMs{200};
 
 double SafeMilliseconds(double milliseconds) {
-  return std::isfinite(milliseconds) && milliseconds >= 0.0
-             ? milliseconds
-             : 0.0;
+  return std::isfinite(milliseconds) && milliseconds >= 0.0 ? milliseconds
+                                                            : 0.0;
 }
 
 ServiceState& GlobalState() {
@@ -996,8 +987,7 @@ std::mutex& StateMutex() {
 }
 
 bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
-  if (path == "/api/v1/audit/status" ||
-      path == "/api/v1/audit/events") {
+  if (path == "/api/v1/audit/status" || path == "/api/v1/audit/events") {
     return method == drogon::Get;
   }
   if (path == "/api/v1/system/protection") {
@@ -1044,17 +1034,15 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
   }
   if (method == drogon::Get) {
     if (path == "/api/v1/setup/status" || path == "/api/v1/auth/me" ||
-        path == "/api/v1/health" ||
-        path == "/api/v1/monitoring/cameras" || path == "/api/v1/cameras" ||
-        path == "/api/v1/ai/detections" ||
-        path == "/api/v1/ai/detections/stream" ||
-        path == "/api/v1/stream" ||
+        path == "/api/v1/health" || path == "/api/v1/monitoring/cameras" ||
+        path == "/api/v1/cameras" || path == "/api/v1/ai/detections" ||
+        path == "/api/v1/ai/detections/stream" || path == "/api/v1/stream" ||
         path == "/api/v1/settings/runtime") {
       return true;
     }
     constexpr std::string_view prefix = "/api/v1/cameras/";
-    constexpr std::array<std::string_view, 2> suffixes = {
-        "/snapshot.jpg", "/live.mp4"};
+    constexpr std::array<std::string_view, 2> suffixes = {"/snapshot.jpg",
+                                                          "/live.mp4"};
     for (const auto suffix : suffixes) {
       if (path.starts_with(prefix) && path.ends_with(suffix) &&
           path.size() > prefix.size() + suffix.size()) {
@@ -1072,12 +1060,10 @@ bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
   }
   return method == drogon::Post &&
          (path == "/api/v1/setup/initialize" ||
-          path == "/api/v1/setup/runtime" ||
-          path == "/api/v1/auth/login" ||
+          path == "/api/v1/setup/runtime" || path == "/api/v1/auth/login" ||
           path == "/api/v1/auth/logout" ||
           path == "/api/v1/auth/reauthenticate" ||
-          path == "/api/v1/runtime/restart" ||
-          path == "/api/v1/ai/restart" ||
+          path == "/api/v1/runtime/restart" || path == "/api/v1/ai/restart" ||
           path == "/api/v1/settings/runtime/apply" ||
           path == "/api/v1/settings/runtime/discard");
 }
@@ -1178,12 +1164,11 @@ Json::Value BuildLiveErrorJson(std::string_view code) {
 
 drogon::HttpResponsePtr BuildManagedLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id,
-    std::size_t maximum_response_bytes,
+    const std::string& camera_id, std::size_t maximum_response_bytes,
     std::shared_ptr<SessionStreamLease> stream_lease,
     std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
-    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
-        runtime_lease = {});
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease =
+        {});
 
 CancellableLiveMp4OpenCallback AdaptLegacyLiveMp4OpenCallback(
     LiveMp4OpenCallback legacy_callback) {
@@ -1192,28 +1177,28 @@ CancellableLiveMp4OpenCallback AdaptLegacyLiveMp4OpenCallback(
   }
   return [legacy_callback = std::move(legacy_callback)](
              const std::string& requested_camera_id) mutable
-      -> common::Result<LiveMp4StreamHandle> {
+         -> common::Result<LiveMp4StreamHandle> {
     auto opened = legacy_callback(requested_camera_id);
     if (!opened.ok()) {
       return common::Result<LiveMp4StreamHandle>::Err(opened.error());
     }
-    auto stream = std::make_shared<LiveMp4StreamCallback>(
-        std::move(opened).value());
+    auto stream =
+        std::make_shared<LiveMp4StreamCallback>(std::move(opened).value());
     if (!*stream) {
       return common::Result<LiveMp4StreamHandle>::Err(
           {"E_LIVE_UNAVAILABLE", "live preview is unavailable"});
     }
     return common::Result<LiveMp4StreamHandle>::Ok({
-        .read = [stream](char* output, std::size_t capacity) {
-          return (*stream)(output, capacity);
-        },
+        .read =
+            [stream](char* output, std::size_t capacity) {
+              return (*stream)(output, capacity);
+            },
         .cancel = [stream] { (void)(*stream)(nullptr, 0U); },
     });
   };
 }
 
-Json::Value BuildSecureMediaJson(
-    const config::SecureRtspConfig& secure_rtsp) {
+Json::Value BuildSecureMediaJson(const config::SecureRtspConfig& secure_rtsp) {
   Json::Value json(Json::objectValue);
   json["control_scheme"] = secure_rtsp.control_tls ? "rtsps" : "rtsp";
   json["media_profile"] = secure_rtsp.media_srtp ? "RTP/SAVPF" : "RTP/AVP";
@@ -1226,9 +1211,8 @@ Json::Value BuildSecureMediaJson(
   return json;
 }
 
-drogon::HttpResponsePtr JsonResponse(Json::Value json,
-                                     drogon::HttpStatusCode status =
-                                         drogon::k200OK) {
+drogon::HttpResponsePtr JsonResponse(
+    Json::Value json, drogon::HttpStatusCode status = drogon::k200OK) {
   auto response = drogon::HttpResponse::newHttpJsonResponse(std::move(json));
   response->setStatusCode(status);
   return response;
@@ -1245,8 +1229,7 @@ std::optional<std::string_view> SerializeUserRole(
   return std::nullopt;
 }
 
-using DrogonCallback =
-    std::function<void(const drogon::HttpResponsePtr&)>;
+using DrogonCallback = std::function<void(const drogon::HttpResponsePtr&)>;
 
 class TerminalResponse {
  public:
@@ -1318,19 +1301,17 @@ ListRetainedUsersForTesting() {
 
 class DetectionSsePendingResponse {
  public:
-  using ResponseCallback =
-      std::function<void(const drogon::HttpResponsePtr&)>;
+  using ResponseCallback = std::function<void(const drogon::HttpResponsePtr&)>;
 
   static std::shared_ptr<DetectionSsePendingResponse> Create(
       DetectionSnapshotProvider detection_snapshot_provider,
       ResponseCallback response_callback,
       std::shared_ptr<SessionStreamLease> stream_lease,
-      std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
-          runtime_lease);
+      std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease);
 
   DetectionSsePendingResponse(const DetectionSsePendingResponse&) = delete;
-  DetectionSsePendingResponse& operator=(
-      const DetectionSsePendingResponse&) = delete;
+  DetectionSsePendingResponse& operator=(const DetectionSsePendingResponse&) =
+      delete;
 
   bool AttachSubscription(const DetectionEventSubscriber& subscriber,
                           ai::DetectionBus::Handler handler);
@@ -1446,28 +1427,25 @@ drogon::HttpResponsePtr BootstrapErrorResponse(const common::Error& error) {
   // management-IP list and are the operator's to fix, so they answer 400 with
   // their own code rather than collapsing into a 503 the wizard would report
   // as a device fault.
-  const bool validation =
-      error.code == "E_BOOTSTRAP_PEER" ||
-      error.code.starts_with("E_USERNAME_") ||
-      error.code.starts_with("E_PASSWORD_") ||
-      error.code.starts_with("E_MANAGEMENT_IP_");
+  const bool validation = error.code == "E_BOOTSTRAP_PEER" ||
+                          error.code.starts_with("E_USERNAME_") ||
+                          error.code.starts_with("E_PASSWORD_") ||
+                          error.code.starts_with("E_MANAGEMENT_IP_");
   if (!validation && error.code != "E_BOOTSTRAP_UNAVAILABLE") {
     return SecurityUnavailableResponse();
   }
   Json::Value body(Json::objectValue);
   body["code"] = error.code;
   body["message"] = validation ? "device setup request is invalid"
-                                : "device setup is already complete";
-  return JsonResponse(std::move(body),
-                      validation ? drogon::k400BadRequest
-                                 : drogon::k409Conflict);
+                               : "device setup is already complete";
+  return JsonResponse(std::move(body), validation ? drogon::k400BadRequest
+                                                  : drogon::k409Conflict);
 }
 
 class AsyncAuthorization final
     : public std::enable_shared_from_this<AsyncAuthorization> {
  public:
-  AsyncAuthorization(trantor::EventLoop* event_loop,
-                     DrogonCallback callback,
+  AsyncAuthorization(trantor::EventLoop* event_loop, DrogonCallback callback,
                      AuthorizedContinuation continuation)
       : event_loop_(event_loop),
         terminal_(HttpCallback(std::make_shared<TerminalResponse>(
@@ -1477,7 +1455,7 @@ class AsyncAuthorization final
   void Deny(common::Error error) {
     auto response = SecurityErrorResponse(error);
     Dispatch([response = std::move(response)](HttpCallback terminal,
-                                               AuthorizedContinuation) {
+                                              AuthorizedContinuation) {
       terminal(response);
     });
   }
@@ -1680,8 +1658,7 @@ AdministratorUserDependencies CopyAdministratorUserDependencies() {
 AuditLogDependencies CopyAuditLogDependencies() {
   std::scoped_lock lock(StateMutex());
   const auto& state = GlobalState();
-  return {state.shutting_down, state.audit_log_service,
-          state.security_worker};
+  return {state.shutting_down, state.audit_log_service, state.security_worker};
 }
 
 common::Result<security::UserMutationContext> BuildUserMutationContext(
@@ -1699,8 +1676,7 @@ common::Result<security::UserMutationContext> BuildUserMutationContext(
   security::UserMutationContext context;
   context.actor = *authorized_request.principal;
   context.normalized_peer_ip = std::move(peer).value();
-  return common::Result<security::UserMutationContext>::Ok(
-      std::move(context));
+  return common::Result<security::UserMutationContext>::Ok(std::move(context));
 }
 
 void CleanseSecretRequestBody(const drogon::HttpRequestPtr& request,
@@ -1709,13 +1685,14 @@ void CleanseSecretRequestBody(const drogon::HttpRequestPtr& request,
   bool source_cleansed = true;
   if (!body.empty()) {
     OPENSSL_cleanse(const_cast<char*>(body.data()), body.size());
-    source_cleansed = std::all_of(body.begin(), body.end(), [](char value) {
-      return value == '\0';
-    });
+    source_cleansed = std::all_of(body.begin(), body.end(),
+                                  [](char value) { return value == '\0'; });
   }
   try {
     request->setBody(std::string{});
   } catch (...) {
+    // swallowed: releasing the request body is best effort after it was
+    // cleansed
   }
   internal::NotifyUserManagementRequestBodyCleanupForTesting(
       body.size(), source_cleansed, copied_to_secure_owner);
@@ -1833,136 +1810,130 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
           std::move(parsed_token).value());
     }
 
-    auto submitted = dependencies.worker->Submit(
-        [context = std::move(context), session_token,
-         dependencies, completion]() mutable {
-          try {
-            auto state = dependencies.store->State();
-            if (!state.ok()) {
-              completion->Deny(
-                  {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
-              return;
-            }
-            std::optional<std::string> runtime_pending_peer;
-            security::DeviceState process_state;
-            {
-              std::scoped_lock lock(StateMutex());
-              runtime_pending_peer = GlobalState().runtime_pending_peer;
-              process_state = GlobalState().device_state;
-            }
-            context.state = runtime_pending_peer.has_value()
-                                ? security::DeviceState::kDefault
-                                : process_state;
-            const bool setup_initialize =
-                context.path == "/api/v1/setup/initialize";
-            const bool setup_runtime =
-                context.path == "/api/v1/setup/runtime";
-            // While runtime_pending_peer is set, the gate's kDefault block
-            // also admits auth/login, auth/logout and auth/me (Task 2). By
-            // this point Initialize() has already created the real
-            // administrator account and its management-ip entry, so those
-            // routes act on live credentials, not the discarded initial
-            // account. They get the same peer pin as setup/initialize and
-            // setup/runtime: only the peer who confirmed setup may use them
-            // until the runtime finishes starting. A non-pinned peer is
-            // denied here, before AuthService spends a password
-            // verification and an unconditional audit-trail write on it.
-            const bool runtime_pending_scoped_route =
-                setup_initialize || setup_runtime ||
-                context.path == "/api/v1/auth/login" ||
-                context.path == "/api/v1/auth/logout" ||
-                context.path == "/api/v1/auth/me";
-            if (runtime_pending_scoped_route &&
-                runtime_pending_peer.has_value() &&
-                context.normalized_peer_ip != *runtime_pending_peer) {
-              completion->Deny({"E_ACCESS_DENIED", "request denied"});
-              return;
-            }
-            const bool login = context.path == "/api/v1/auth/login" &&
-                               context.method == "POST";
-            if (context.state == security::DeviceState::kOperational &&
-                !setup_initialize) {
-              auto management = dependencies.store->IsManagementPeer(
-                  context.normalized_peer_ip);
-              if (!management.ok()) {
-                completion->Deny({"E_SECURITY_UNAVAILABLE",
-                                  "security service unavailable"});
-                return;
-              }
-              context.peer_is_management = management.value();
-              if (!login && context.peer_is_management && session_token) {
-                if (session_token->size() != 0U) {
-                  const auto activity =
-                      RouteRefreshesManagementDeadline(context.path,
-                                                       context.method)
-                          ? security::ManagementActivity::kManagement
-                          : security::ManagementActivity::kNone;
-                  auto principal = dependencies.auth_service->Verify(
-                      {session_token->data(), session_token->size()},
-                      context.normalized_peer_ip, activity);
-                  if (principal.ok()) {
-                    context.principal = std::move(principal).value();
-                  } else if (principal.error().code ==
-                             "E_AUTHENTICATION_UNAVAILABLE") {
-                    completion->Deny({"E_SECURITY_UNAVAILABLE",
-                                      "security service unavailable"});
-                    return;
-                  }
-                }
-              }
-            } else if (context.state == security::DeviceState::kDefault &&
-                       !login && session_token &&
-                       session_token->size() != 0U) {
-              // The other arm of the same two-valued state. Without it
-              // auth/me and setup/initialize have no principal to check and
-              // deny every request in default state, including the initial
-              // account's own.
-              //
-              // The management-peer precondition the operational arm applies
-              // is not repeated here, and cannot be: an uninitialized device
-              // has no management_ips row. Nothing is given up by dropping it.
-              // A genuinely uninitialized device has no management peers to
-              // distinguish, and during the runtime_pending window the peer
-              // pin above has already narrowed this to the single peer that
-              // confirmed setup — which is the management peer Initialize()
-              // just registered.
-              //
-              // ManagementActivity::kNone: none of the four routes reachable
-              // here is a management operation, so none should extend a
-              // management-authority deadline. Verify() still refuses a
-              // session whose deadline has already lapsed.
+    auto submitted = dependencies.worker->Submit([context = std::move(context),
+                                                  session_token, dependencies,
+                                                  completion]() mutable {
+      try {
+        auto state = dependencies.store->State();
+        if (!state.ok()) {
+          completion->Deny(
+              {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+          return;
+        }
+        std::optional<std::string> runtime_pending_peer;
+        security::DeviceState process_state;
+        {
+          std::scoped_lock lock(StateMutex());
+          runtime_pending_peer = GlobalState().runtime_pending_peer;
+          process_state = GlobalState().device_state;
+        }
+        context.state = runtime_pending_peer.has_value()
+                            ? security::DeviceState::kDefault
+                            : process_state;
+        const bool setup_initialize =
+            context.path == "/api/v1/setup/initialize";
+        const bool setup_runtime = context.path == "/api/v1/setup/runtime";
+        // While runtime_pending_peer is set, the gate's kDefault block
+        // also admits auth/login, auth/logout and auth/me (Task 2). By
+        // this point Initialize() has already created the real
+        // administrator account and its management-ip entry, so those
+        // routes act on live credentials, not the discarded initial
+        // account. They get the same peer pin as setup/initialize and
+        // setup/runtime: only the peer who confirmed setup may use them
+        // until the runtime finishes starting. A non-pinned peer is
+        // denied here, before AuthService spends a password
+        // verification and an unconditional audit-trail write on it.
+        const bool runtime_pending_scoped_route =
+            setup_initialize || setup_runtime ||
+            context.path == "/api/v1/auth/login" ||
+            context.path == "/api/v1/auth/logout" ||
+            context.path == "/api/v1/auth/me";
+        if (runtime_pending_scoped_route && runtime_pending_peer.has_value() &&
+            context.normalized_peer_ip != *runtime_pending_peer) {
+          completion->Deny({"E_ACCESS_DENIED", "request denied"});
+          return;
+        }
+        const bool login =
+            context.path == "/api/v1/auth/login" && context.method == "POST";
+        if (context.state == security::DeviceState::kOperational &&
+            !setup_initialize) {
+          auto management =
+              dependencies.store->IsManagementPeer(context.normalized_peer_ip);
+          if (!management.ok()) {
+            completion->Deny(
+                {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+            return;
+          }
+          context.peer_is_management = management.value();
+          if (!login && context.peer_is_management && session_token) {
+            if (session_token->size() != 0U) {
+              const auto activity =
+                  RouteRefreshesManagementDeadline(context.path, context.method)
+                      ? security::ManagementActivity::kManagement
+                      : security::ManagementActivity::kNone;
               auto principal = dependencies.auth_service->Verify(
                   {session_token->data(), session_token->size()},
-                  context.normalized_peer_ip,
-                  security::ManagementActivity::kNone);
+                  context.normalized_peer_ip, activity);
               if (principal.ok()) {
                 context.principal = std::move(principal).value();
               } else if (principal.error().code ==
                          "E_AUTHENTICATION_UNAVAILABLE") {
-                completion->Deny({"E_SECURITY_UNAVAILABLE",
-                                  "security service unavailable"});
+                completion->Deny(
+                    {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
                 return;
               }
             }
-            auto authorized = AuthorizeSecurityRequest(context);
-            if (!authorized.ok()) {
-              completion->Deny(authorized.error());
-              return;
-            }
-            AuthorizedRequest authorized_request;
-            authorized_request.principal = std::move(context.principal);
-            if (authorized_request.principal.has_value() &&
-                RequiresSessionStreamLease(context.path, context.method)) {
-              authorized_request.stream_lease =
-                  dependencies.stream_registry->Acquire(
-                      authorized_request.principal->session_identity);
-            }
-            completion->Allow(std::move(authorized_request));
-          } catch (...) {
+          }
+        } else if (context.state == security::DeviceState::kDefault && !login &&
+                   session_token && session_token->size() != 0U) {
+          // The other arm of the same two-valued state. Without it
+          // auth/me and setup/initialize have no principal to check and
+          // deny every request in default state, including the initial
+          // account's own.
+          //
+          // The management-peer precondition the operational arm applies
+          // is not repeated here, and cannot be: an uninitialized device
+          // has no management_ips row. Nothing is given up by dropping it.
+          // A genuinely uninitialized device has no management peers to
+          // distinguish, and during the runtime_pending window the peer
+          // pin above has already narrowed this to the single peer that
+          // confirmed setup — which is the management peer Initialize()
+          // just registered.
+          //
+          // ManagementActivity::kNone: none of the four routes reachable
+          // here is a management operation, so none should extend a
+          // management-authority deadline. Verify() still refuses a
+          // session whose deadline has already lapsed.
+          auto principal = dependencies.auth_service->Verify(
+              {session_token->data(), session_token->size()},
+              context.normalized_peer_ip, security::ManagementActivity::kNone);
+          if (principal.ok()) {
+            context.principal = std::move(principal).value();
+          } else if (principal.error().code == "E_AUTHENTICATION_UNAVAILABLE") {
             completion->Deny(
                 {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+            return;
           }
-        });
+        }
+        auto authorized = AuthorizeSecurityRequest(context);
+        if (!authorized.ok()) {
+          completion->Deny(authorized.error());
+          return;
+        }
+        AuthorizedRequest authorized_request;
+        authorized_request.principal = std::move(context.principal);
+        if (authorized_request.principal.has_value() &&
+            RequiresSessionStreamLease(context.path, context.method)) {
+          authorized_request.stream_lease =
+              dependencies.stream_registry->Acquire(
+                  authorized_request.principal->session_identity);
+        }
+        completion->Allow(std::move(authorized_request));
+      } catch (...) {
+        completion->Deny(
+            {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
+      }
+    });
     if (!submitted.ok()) {
       completion->Deny(submitted.error());
     }
@@ -1971,12 +1942,13 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
       completion->Deny(
           {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
     } catch (...) {
+      // swallowed: the completion is being denied because the first attempt
+      // threw; nothing else can be done
     }
   }
 }
 
-void QueueResponse(trantor::EventLoop* event_loop,
-                   const HttpCallback& callback,
+void QueueResponse(trantor::EventLoop* event_loop, const HttpCallback& callback,
                    drogon::HttpResponsePtr response) {
   (void)event_loop;
   callback.Queue(std::move(response));
@@ -1988,10 +1960,9 @@ drogon::HttpResponsePtr AuditLogUnavailableResponse() {
 }
 
 DrogonCallback AuditRouteCallback(DrogonCallback callback) {
-  return [callback = std::move(callback)](
-             const drogon::HttpResponsePtr& response) {
-    if (response &&
-        response->statusCode() == drogon::k503ServiceUnavailable) {
+  return [callback =
+              std::move(callback)](const drogon::HttpResponsePtr& response) {
+    if (response && response->statusCode() == drogon::k503ServiceUnavailable) {
       callback(AuditLogUnavailableResponse());
       return;
     }
@@ -2008,15 +1979,16 @@ void QueueAuditLogResponse(trantor::EventLoop* event_loop,
     try {
       QueueResponse(event_loop, callback, AuditLogUnavailableResponse());
     } catch (...) {
+      // swallowed: the fallback response is best effort after the primary
+      // response threw
     }
   }
 }
 
-void SubmitAuthorizedAuditStatus(
-    security::Principal principal,
-    AuditLogDependencies dependencies,
-    const HttpCallback& callback,
-    trantor::EventLoop* event_loop) {
+void SubmitAuthorizedAuditStatus(security::Principal principal,
+                                 AuditLogDependencies dependencies,
+                                 const HttpCallback& callback,
+                                 trantor::EventLoop* event_loop) {
   if (!dependencies.Available()) {
     callback(AuditLogUnavailableResponse());
     return;
@@ -2040,12 +2012,11 @@ void SubmitAuthorizedAuditStatus(
   }
 }
 
-void SubmitAuthorizedAuditEvents(
-    security::Principal principal,
-    security::AuditQueryParameters parameters,
-    AuditLogDependencies dependencies,
-    const HttpCallback& callback,
-    trantor::EventLoop* event_loop) {
+void SubmitAuthorizedAuditEvents(security::Principal principal,
+                                 security::AuditQueryParameters parameters,
+                                 AuditLogDependencies dependencies,
+                                 const HttpCallback& callback,
+                                 trantor::EventLoop* event_loop) {
   if (!dependencies.Available()) {
     callback(AuditLogUnavailableResponse());
     return;
@@ -2090,11 +2061,9 @@ void HandleAuditStatusRequest(const drogon::HttpRequestPtr& request,
       callback(BuildAuditLogErrorResponse(query.error()));
       return;
     }
-    security::Principal principal =
-        std::move(*authorized_request.principal);
+    security::Principal principal = std::move(*authorized_request.principal);
     SubmitAuthorizedAuditStatus(std::move(principal),
-                                CopyAuditLogDependencies(),
-                                callback,
+                                CopyAuditLogDependencies(), callback,
                                 drogon::app().getLoop());
   } catch (...) {
     callback(AuditLogUnavailableResponse());
@@ -2122,12 +2091,10 @@ void HandleAuditEventRequest(const drogon::HttpRequestPtr& request,
       callback(BuildAuditLogErrorResponse(query.error()));
       return;
     }
-    security::Principal principal =
-        std::move(*authorized_request.principal);
+    security::Principal principal = std::move(*authorized_request.principal);
     auto parameters = std::move(query).value();
     SubmitAuthorizedAuditEvents(std::move(principal), std::move(parameters),
-                                CopyAuditLogDependencies(),
-                                callback,
+                                CopyAuditLogDependencies(), callback,
                                 drogon::app().getLoop());
   } catch (...) {
     callback(AuditLogUnavailableResponse());
@@ -2145,8 +2112,7 @@ drogon::HttpResponsePtr RuntimeSettingsBusyResponse() {
 }
 
 void QueueRuntimeSettingsResult(
-    trantor::EventLoop* event_loop,
-    HttpCallback callback,
+    trantor::EventLoop* event_loop, HttpCallback callback,
     common::Result<settings::RuntimeSettingsSnapshot> result) {
   if (result.ok()) {
     QueueResponse(event_loop, std::move(callback),
@@ -2158,9 +2124,9 @@ void QueueRuntimeSettingsResult(
 }
 
 std::string EncodeSessionToken(common::SecureBytes& token) {
-  static constexpr std::array<char, 16> kHex = {
-      '0', '1', '2', '3', '4', '5', '6', '7',
-      '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+  static constexpr std::array<char, 16> kHex = {'0', '1', '2', '3', '4', '5',
+                                                '6', '7', '8', '9', 'a', 'b',
+                                                'c', 'd', 'e', 'f'};
   std::string encoded(token.size() * 2U, '0');
   for (std::size_t index = 0; index < token.size(); ++index) {
     encoded[index * 2U] = kHex[token.data()[index] >> 4U];
@@ -2201,6 +2167,8 @@ class ThreadCompletionReporter {
     try {
       completion_->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
 
@@ -2226,24 +2194,23 @@ void RegisterHandlers() {
             "frame-ancestors 'none'");
       });
 
-  app().registerPreRoutingAdvice(
-      [](const HttpRequestPtr& request, AdviceCallback&& callback,
-         AdviceChainCallback&& chain) {
-        const std::string_view path = request->path();
-        const bool api = IsRegisteredApiRoute(path, request->method());
-        const bool static_asset =
-            request->method() == Get &&
-            (path == "/" || path == "/index.html" || path == "/app.js" ||
-             path == "/styles.css");
-        if (api || static_asset) {
-          chain();
-          return;
-        }
-        Json::Value body(Json::objectValue);
-        body["code"] = "E_NOT_FOUND";
-        body["message"] = "resource not found";
-        callback(JsonResponse(std::move(body), k404NotFound));
-      });
+  app().registerPreRoutingAdvice([](const HttpRequestPtr& request,
+                                    AdviceCallback&& callback,
+                                    AdviceChainCallback&& chain) {
+    const std::string_view path = request->path();
+    const bool api = IsRegisteredApiRoute(path, request->method());
+    const bool static_asset = request->method() == Get &&
+                              (path == "/" || path == "/index.html" ||
+                               path == "/app.js" || path == "/styles.css");
+    if (api || static_asset) {
+      chain();
+      return;
+    }
+    Json::Value body(Json::objectValue);
+    body["code"] = "E_NOT_FOUND";
+    body["message"] = "resource not found";
+    callback(JsonResponse(std::move(body), k404NotFound));
+  });
 
   app().registerHandler(
       "/api/v1/setup/status",
@@ -2268,13 +2235,13 @@ void RegisterHandlers() {
           }
         }
         if (!security_enabled) {
-          callback(SecurityErrorResponse(
-              {"E_ACCESS_DENIED", "request denied"}));
+          callback(
+              SecurityErrorResponse({"E_ACCESS_DENIED", "request denied"}));
           return;
         }
         Json::Value body(Json::objectValue);
-        const bool required = runtime_pending ||
-                              state == security::DeviceState::kDefault;
+        const bool required =
+            runtime_pending || state == security::DeviceState::kDefault;
         body["required"] = required;
         if (required) {
           auto peer = NormalizePeerIp(request->peerAddr().toIp());
@@ -2284,8 +2251,7 @@ void RegisterHandlers() {
           }
           body["tls"] = "ready";
           body["peer_ip"] = std::move(peer).value();
-          body["phase"] = runtime_pending ? "runtime_pending"
-                                           : "administrator";
+          body["phase"] = runtime_pending ? "runtime_pending" : "administrator";
           // Only the administrator phase shows the initial credential; once the
           // device is operational both members are absent, not empty.
           if (!runtime_pending && !initial_username.empty()) {
@@ -2387,118 +2353,117 @@ void RegisterHandlers() {
                 callback(SecurityUnavailableResponse());
                 return;
               }
-              auto parsed = ParseSetupJson(
-                  std::move(*secure_body), request->getHeader("content-type"));
+              auto parsed = ParseSetupJson(std::move(*secure_body),
+                                           request->getHeader("content-type"));
               secure_body->clear();
               if (!parsed.ok()) {
                 callback(SecurityErrorResponse(parsed.error()));
                 return;
               }
-              auto parsed_request =
-                  std::make_shared<ParsedSetupRequest>(std::move(parsed).value());
-              auto submitted = worker->Submit(
-                  [parsed_request, actual_peer, bootstrap, runtime_start,
-                   runtime_control_gate, callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      security::BootstrapRequest bootstrap_request;
-                      bootstrap_request.username = parsed_request->username;
-                      bootstrap_request.password =
-                          std::move(parsed_request->password);
-                      bootstrap_request.confirmed_peer_ip =
-                          parsed_request->confirmed_peer_ip;
-                      bootstrap_request.actual_peer_ip = actual_peer;
-                      bootstrap_request.management_ips =
-                          std::move(parsed_request->management_ips);
-                      bool transition_allowed = false;
-                      {
-                        std::scoped_lock lock(StateMutex());
-                        const auto& state = GlobalState();
-                        transition_allowed =
-                            !state.runtime_pending_peer.has_value() &&
-                            state.device_state == security::DeviceState::kDefault;
-                      }
-                      if (!transition_allowed) {
-                        QueueResponse(
-                            event_loop, std::move(callback),
-                            SecurityErrorResponse(
-                                {"E_ACCESS_DENIED", "request denied"}));
-                        return;
-                      }
-                      auto initialized =
-                          bootstrap->Initialize(std::move(bootstrap_request));
-                      if (!initialized.ok()) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      BootstrapErrorResponse(
-                                          initialized.error()));
-                        return;
-                      }
-                      {
-                        std::scoped_lock lock(StateMutex());
-                        GlobalState().runtime_pending_peer = actual_peer;
-                        GlobalState().device_state =
-                            security::DeviceState::kDefault;
-                        // Initialize() deleted the initial account inside the
-                        // transaction that just committed, so the plaintext is
-                        // dead here, not at transition_completed below. If
-                        // runtime_start() fails the device stays in
-                        // runtime_pending indefinitely, and keeping it that
-                        // long would both leave a dead credential resident and
-                        // leave the setup/initialize guard above comparing
-                        // against a name that no longer identifies anything —
-                        // an administrator who took the initial account's name
-                        // would match it.
-                        GlobalState().initial_account.reset();
-                      }
-                      if (!runtime_start) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      std::optional<common::Result<void>> runtime;
-                      bool runtime_admitted = true;
-                      if (runtime_control_gate) {
-                        runtime_admitted = runtime_control_gate(
-                            [&] { runtime = runtime_start(); });
-                      } else {
-                        runtime = runtime_start();
-                      }
-                      if (!runtime_admitted || !runtime.has_value() ||
-                          !runtime->ok()) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      bool transition_completed = false;
-                      {
-                        std::scoped_lock lock(StateMutex());
-                        if (GlobalState().runtime_pending_peer.has_value() &&
-                            *GlobalState().runtime_pending_peer == actual_peer) {
-                          GlobalState().device_state =
-                              security::DeviceState::kOperational;
-                          GlobalState().runtime_pending_peer.reset();
-                          // The account behind this plaintext was deleted in
-                          // Initialize's transaction; drop the in-memory copy
-                          // so setup/status stops serving it.
-                          GlobalState().initial_account.reset();
-                          transition_completed = true;
-                        }
-                      }
-                      if (!transition_completed) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      Json::Value response(Json::objectValue);
-                      response["required"] = false;
-                      response["runtime"] = "running";
-                      QueueResponse(event_loop, std::move(callback),
-                                    JsonResponse(std::move(response)));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
-                                    SecurityUnavailableResponse());
+              auto parsed_request = std::make_shared<ParsedSetupRequest>(
+                  std::move(parsed).value());
+              auto submitted = worker->Submit([parsed_request, actual_peer,
+                                               bootstrap, runtime_start,
+                                               runtime_control_gate, callback,
+                                               event_loop =
+                                                   app().getLoop()]() mutable {
+                try {
+                  security::BootstrapRequest bootstrap_request;
+                  bootstrap_request.username = parsed_request->username;
+                  bootstrap_request.password =
+                      std::move(parsed_request->password);
+                  bootstrap_request.confirmed_peer_ip =
+                      parsed_request->confirmed_peer_ip;
+                  bootstrap_request.actual_peer_ip = actual_peer;
+                  bootstrap_request.management_ips =
+                      std::move(parsed_request->management_ips);
+                  bool transition_allowed = false;
+                  {
+                    std::scoped_lock lock(StateMutex());
+                    const auto& state = GlobalState();
+                    transition_allowed =
+                        !state.runtime_pending_peer.has_value() &&
+                        state.device_state == security::DeviceState::kDefault;
+                  }
+                  if (!transition_allowed) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityErrorResponse(
+                                      {"E_ACCESS_DENIED", "request denied"}));
+                    return;
+                  }
+                  auto initialized =
+                      bootstrap->Initialize(std::move(bootstrap_request));
+                  if (!initialized.ok()) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  BootstrapErrorResponse(initialized.error()));
+                    return;
+                  }
+                  {
+                    std::scoped_lock lock(StateMutex());
+                    GlobalState().runtime_pending_peer = actual_peer;
+                    GlobalState().device_state =
+                        security::DeviceState::kDefault;
+                    // Initialize() deleted the initial account inside the
+                    // transaction that just committed, so the plaintext is
+                    // dead here, not at transition_completed below. If
+                    // runtime_start() fails the device stays in
+                    // runtime_pending indefinitely, and keeping it that
+                    // long would both leave a dead credential resident and
+                    // leave the setup/initialize guard above comparing
+                    // against a name that no longer identifies anything —
+                    // an administrator who took the initial account's name
+                    // would match it.
+                    GlobalState().initial_account.reset();
+                  }
+                  if (!runtime_start) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  std::optional<common::Result<void>> runtime;
+                  bool runtime_admitted = true;
+                  if (runtime_control_gate) {
+                    runtime_admitted = runtime_control_gate(
+                        [&] { runtime = runtime_start(); });
+                  } else {
+                    runtime = runtime_start();
+                  }
+                  if (!runtime_admitted || !runtime.has_value() ||
+                      !runtime->ok()) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  bool transition_completed = false;
+                  {
+                    std::scoped_lock lock(StateMutex());
+                    if (GlobalState().runtime_pending_peer.has_value() &&
+                        *GlobalState().runtime_pending_peer == actual_peer) {
+                      GlobalState().device_state =
+                          security::DeviceState::kOperational;
+                      GlobalState().runtime_pending_peer.reset();
+                      // The account behind this plaintext was deleted in
+                      // Initialize's transaction; drop the in-memory copy
+                      // so setup/status stops serving it.
+                      GlobalState().initial_account.reset();
+                      transition_completed = true;
                     }
-                  });
+                  }
+                  if (!transition_completed) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  Json::Value response(Json::objectValue);
+                  response["required"] = false;
+                  response["runtime"] = "running";
+                  QueueResponse(event_loop, std::move(callback),
+                                JsonResponse(std::move(response)));
+                } catch (...) {
+                  QueueResponse(event_loop, std::move(callback),
+                                SecurityUnavailableResponse());
+                }
+              });
               if (!submitted.ok()) {
                 callback(SecurityUnavailableResponse());
               }
@@ -2513,8 +2478,7 @@ void RegisterHandlers() {
         const std::string actual_peer = peer.ok() ? peer.value() : "";
         AuthorizeRequest(
             request, std::move(callback),
-            [request, actual_peer](
-                AuthorizedRequest, HttpCallback callback) {
+            [request, actual_peer](AuthorizedRequest, HttpCallback callback) {
               auto validated = ValidateEmptyJsonObject(
                   request->getBody(), request->getHeader("content-type"));
               if (!validated.ok()) {
@@ -2535,71 +2499,70 @@ void RegisterHandlers() {
                 callback(SecurityUnavailableResponse());
                 return;
               }
-              auto submitted = worker->Submit(
-                  [actual_peer, runtime_start, runtime_control_gate, callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      bool transition_allowed = false;
-                      {
-                        std::scoped_lock lock(StateMutex());
-                        const auto& state = GlobalState();
-                        transition_allowed =
-                            state.runtime_pending_peer.has_value() &&
-                            *state.runtime_pending_peer == actual_peer &&
-                            state.device_state == security::DeviceState::kDefault;
-                      }
-                      if (!transition_allowed) {
-                        QueueResponse(
-                            event_loop, std::move(callback),
-                            SecurityErrorResponse(
-                                {"E_ACCESS_DENIED", "request denied"}));
-                        return;
-                      }
-                      std::optional<common::Result<void>> runtime;
-                      bool runtime_admitted = true;
-                      if (runtime_control_gate) {
-                        runtime_admitted = runtime_control_gate(
-                            [&] { runtime = runtime_start(); });
-                      } else {
-                        runtime = runtime_start();
-                      }
-                      if (!runtime_admitted || !runtime.has_value() ||
-                          !runtime->ok()) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      bool transition_completed = false;
-                      {
-                        std::scoped_lock lock(StateMutex());
-                        auto& state = GlobalState();
-                        if (state.runtime_pending_peer.has_value() &&
-                            *state.runtime_pending_peer == actual_peer) {
-                          state.device_state =
-                              security::DeviceState::kOperational;
-                          state.runtime_pending_peer.reset();
-                          // Setup completed through the runtime-retry path; the
-                          // initial account was already deleted by Initialize,
-                          // so drop the plaintext here too.
-                          state.initial_account.reset();
-                          transition_completed = true;
-                        }
-                      }
-                      if (!transition_completed) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      Json::Value response(Json::objectValue);
-                      response["required"] = false;
-                      response["runtime"] = "running";
-                      QueueResponse(event_loop, std::move(callback),
-                                    JsonResponse(std::move(response)));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
-                                    SecurityUnavailableResponse());
+              auto submitted = worker->Submit([actual_peer, runtime_start,
+                                               runtime_control_gate, callback,
+                                               event_loop =
+                                                   app().getLoop()]() mutable {
+                try {
+                  bool transition_allowed = false;
+                  {
+                    std::scoped_lock lock(StateMutex());
+                    const auto& state = GlobalState();
+                    transition_allowed =
+                        state.runtime_pending_peer.has_value() &&
+                        *state.runtime_pending_peer == actual_peer &&
+                        state.device_state == security::DeviceState::kDefault;
+                  }
+                  if (!transition_allowed) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityErrorResponse(
+                                      {"E_ACCESS_DENIED", "request denied"}));
+                    return;
+                  }
+                  std::optional<common::Result<void>> runtime;
+                  bool runtime_admitted = true;
+                  if (runtime_control_gate) {
+                    runtime_admitted = runtime_control_gate(
+                        [&] { runtime = runtime_start(); });
+                  } else {
+                    runtime = runtime_start();
+                  }
+                  if (!runtime_admitted || !runtime.has_value() ||
+                      !runtime->ok()) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  bool transition_completed = false;
+                  {
+                    std::scoped_lock lock(StateMutex());
+                    auto& state = GlobalState();
+                    if (state.runtime_pending_peer.has_value() &&
+                        *state.runtime_pending_peer == actual_peer) {
+                      state.device_state = security::DeviceState::kOperational;
+                      state.runtime_pending_peer.reset();
+                      // Setup completed through the runtime-retry path; the
+                      // initial account was already deleted by Initialize,
+                      // so drop the plaintext here too.
+                      state.initial_account.reset();
+                      transition_completed = true;
                     }
-                  });
+                  }
+                  if (!transition_completed) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  Json::Value response(Json::objectValue);
+                  response["required"] = false;
+                  response["runtime"] = "running";
+                  QueueResponse(event_loop, std::move(callback),
+                                JsonResponse(std::move(response)));
+                } catch (...) {
+                  QueueResponse(event_loop, std::move(callback),
+                                SecurityUnavailableResponse());
+                }
+              });
               if (!submitted.ok()) {
                 callback(SecurityUnavailableResponse());
               }
@@ -2630,8 +2593,7 @@ void RegisterHandlers() {
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip, secure_body,
-             body_error = std::move(body_error)](
+            [request, peer_ip, secure_body, body_error = std::move(body_error)](
                 AuthorizedRequest, HttpCallback callback) mutable {
               if (body_error.has_value()) {
                 callback(SecurityErrorResponse(*body_error));
@@ -2641,8 +2603,8 @@ void RegisterHandlers() {
                 callback(SecurityUnavailableResponse());
                 return;
               }
-              auto parsed = ParseLoginJson(
-                  std::move(*secure_body), request->getHeader("content-type"));
+              auto parsed = ParseLoginJson(std::move(*secure_body),
+                                           request->getHeader("content-type"));
               secure_body->clear();
               if (!parsed.ok()) {
                 callback(SecurityErrorResponse(parsed.error()));
@@ -2664,8 +2626,8 @@ void RegisterHandlers() {
               // The initial account does not lock in the default state (its
               // credential is public), so bound login flooding with a request
               // rate limit -- otherwise an unbounded stream of attempts could
-              // evict the setup audit trail from the finite audit ring. Rejected
-              // here, before any password verification or audit write.
+              // evict the setup audit trail from the finite audit ring.
+              // Rejected here, before any password verification or audit write.
               if (device_state == security::DeviceState::kDefault) {
                 const auto now_seconds =
                     std::chrono::duration_cast<std::chrono::seconds>(
@@ -2678,45 +2640,45 @@ void RegisterHandlers() {
                   return;
                 }
               }
-              auto parsed_request =
-                  std::make_shared<ParsedLoginRequest>(std::move(parsed).value());
-              auto submitted = worker->Submit(
-                  [parsed_request, peer_ip, auth, callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      security::LoginRequest login_request;
-                      login_request.username = parsed_request->username;
-                      login_request.password = std::move(parsed_request->password);
-                      login_request.peer_ip = peer_ip;
-                      auto login = auth->Login(std::move(login_request));
-                      if (!login.ok()) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityErrorResponse(login.error()));
-                        return;
-                      }
-                      auto result = std::move(login).value();
-                      const auto role = SerializeUserRole(result.role);
-                      if (!role.has_value()) {
-                        result.session_token.clear();
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityUnavailableResponse());
-                        return;
-                      }
-                      Json::Value response_body(Json::objectValue);
-                      response_body["role"] = std::string(*role);
-                      response_body["idle_expires_at_seconds"] =
-                          static_cast<Json::Int64>(
-                              result.idle_expires_at_seconds);
-                      auto response = JsonResponse(std::move(response_body));
-                      response->addCookie(SessionCookie(
-                          EncodeSessionToken(result.session_token)));
-                      QueueResponse(event_loop, std::move(callback),
-                                    std::move(response));
-                    } catch (...) {
-                      QueueResponse(event_loop, std::move(callback),
-                                    SecurityUnavailableResponse());
-                    }
-                  });
+              auto parsed_request = std::make_shared<ParsedLoginRequest>(
+                  std::move(parsed).value());
+              auto submitted = worker->Submit([parsed_request, peer_ip, auth,
+                                               callback,
+                                               event_loop =
+                                                   app().getLoop()]() mutable {
+                try {
+                  security::LoginRequest login_request;
+                  login_request.username = parsed_request->username;
+                  login_request.password = std::move(parsed_request->password);
+                  login_request.peer_ip = peer_ip;
+                  auto login = auth->Login(std::move(login_request));
+                  if (!login.ok()) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityErrorResponse(login.error()));
+                    return;
+                  }
+                  auto result = std::move(login).value();
+                  const auto role = SerializeUserRole(result.role);
+                  if (!role.has_value()) {
+                    result.session_token.clear();
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityUnavailableResponse());
+                    return;
+                  }
+                  Json::Value response_body(Json::objectValue);
+                  response_body["role"] = std::string(*role);
+                  response_body["idle_expires_at_seconds"] =
+                      static_cast<Json::Int64>(result.idle_expires_at_seconds);
+                  auto response = JsonResponse(std::move(response_body));
+                  response->addCookie(
+                      SessionCookie(EncodeSessionToken(result.session_token)));
+                  QueueResponse(event_loop, std::move(callback),
+                                std::move(response));
+                } catch (...) {
+                  QueueResponse(event_loop, std::move(callback),
+                                SecurityUnavailableResponse());
+                }
+              });
               if (!submitted.ok()) {
                 callback(SecurityUnavailableResponse());
               }
@@ -2765,12 +2727,11 @@ void RegisterHandlers() {
                       HttpCallback callback) {
               try {
                 if (!authorized_request.principal.has_value()) {
-                  callback(SecurityErrorResponse(
-                      {"E_AUTHENTICATION_REQUIRED", "authentication required"}));
+                  callback(SecurityErrorResponse({"E_AUTHENTICATION_REQUIRED",
+                                                  "authentication required"}));
                   return;
                 }
-                const auto body = ValidateEmptyRequestBody(
-                    request->getBody());
+                const auto body = ValidateEmptyRequestBody(request->getBody());
                 if (!body.ok()) {
                   callback(BuildUserManagementErrorResponse(body.error()));
                   return;
@@ -2789,9 +2750,9 @@ void RegisterHandlers() {
                       try {
                         auto listed = service->ListUsers();
                         if (!listed.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
-                                        BuildUserManagementErrorResponse(
-                                            listed.error()));
+                          QueueResponse(
+                              event_loop, std::move(callback),
+                              BuildUserManagementErrorResponse(listed.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
@@ -2845,8 +2806,7 @@ void RegisterHandlers() {
         }
         AuthorizeRequest(
             request, std::move(callback),
-            [request, secure_body,
-             body_error = std::move(body_error)](
+            [request, secure_body, body_error = std::move(body_error)](
                 AuthorizedRequest authorized_request,
                 HttpCallback callback) mutable {
               std::shared_ptr<ParsedCreateViewerRequest> parsed_request;
@@ -2867,8 +2827,9 @@ void RegisterHandlers() {
                   callback(BuildUserManagementErrorResponse(context.error()));
                   return;
                 }
-                auto parsed = ParseCreateViewerJson(
-                    std::move(*secure_body), request->getHeader("content-type"));
+                auto parsed =
+                    ParseCreateViewerJson(std::move(*secure_body),
+                                          request->getHeader("content-type"));
                 secure_body->clear();
                 if (!parsed.ok()) {
                   callback(BuildUserManagementErrorResponse(parsed.error()));
@@ -2891,9 +2852,8 @@ void RegisterHandlers() {
                     std::move(parsed).value());
                 auto submitted = dependencies.worker->Submit(
                     [service = dependencies.service,
-                     context = std::move(context).value(),
-                     parsed_request, callback,
-                     event_loop = app().getLoop()]() mutable {
+                     context = std::move(context).value(), parsed_request,
+                     callback, event_loop = app().getLoop()]() mutable {
                       try {
                         auto created = service->CreateViewer(
                             std::move(parsed_request->username),
@@ -2907,8 +2867,9 @@ void RegisterHandlers() {
                         }
                         Json::Value body(Json::objectValue);
                         body["user"] = BuildManagedUserJson(created.value());
-                        QueueResponse(event_loop, std::move(callback),
-                                      JsonResponse(std::move(body), k201Created));
+                        QueueResponse(
+                            event_loop, std::move(callback),
+                            JsonResponse(std::move(body), k201Created));
                       } catch (...) {
                         parsed_request->password.clear();
                         QueueResponse(event_loop, std::move(callback),
@@ -2976,8 +2937,8 @@ void RegisterHandlers() {
                      context = std::move(context).value(), callback,
                      event_loop = app().getLoop()]() mutable {
                       try {
-                        auto updated =
-                            service->SetViewerEnabled(user_id, enabled, context);
+                        auto updated = service->SetViewerEnabled(
+                            user_id, enabled, context);
                         if (!updated.ok()) {
                           QueueResponse(event_loop, std::move(callback),
                                         BuildUserManagementErrorResponse(
@@ -3059,8 +3020,9 @@ void RegisterHandlers() {
                   callback(BuildUserManagementErrorResponse(user_id.error()));
                   return;
                 }
-                auto parsed = ParsePasswordResetJson(
-                    std::move(*secure_body), request->getHeader("content-type"));
+                auto parsed =
+                    ParsePasswordResetJson(std::move(*secure_body),
+                                           request->getHeader("content-type"));
                 secure_body->clear();
                 if (!parsed.ok()) {
                   callback(BuildUserManagementErrorResponse(parsed.error()));
@@ -3080,16 +3042,16 @@ void RegisterHandlers() {
                 auto submitted = dependencies.worker->Submit(
                     [service = dependencies.service, user_id = user_id.value(),
                      context = std::move(context).value(), parsed_request,
-                     callback,
-                     event_loop = app().getLoop()]() mutable {
+                     callback, event_loop = app().getLoop()]() mutable {
                       try {
                         auto reset = service->ResetViewerPassword(
-                            user_id, std::move(parsed_request->password), context);
+                            user_id, std::move(parsed_request->password),
+                            context);
                         parsed_request->password.clear();
                         if (!reset.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
-                                        BuildUserManagementErrorResponse(
-                                            reset.error()));
+                          QueueResponse(
+                              event_loop, std::move(callback),
+                              BuildUserManagementErrorResponse(reset.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
@@ -3201,8 +3163,8 @@ void RegisterHandlers() {
                 const auto request_body =
                     ValidateEmptyRequestBody(request->getBody());
                 if (!request_body.ok()) {
-                  callback(BuildUserManagementErrorResponse(
-                      request_body.error()));
+                  callback(
+                      BuildUserManagementErrorResponse(request_body.error()));
                   return;
                 }
                 const auto dependencies = CopyAdministratorUserDependencies();
@@ -3228,9 +3190,9 @@ void RegisterHandlers() {
                       try {
                         auto listed = service->ListManagementIps();
                         if (!listed.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
-                                        BuildUserManagementErrorResponse(
-                                            listed.error()));
+                          QueueResponse(
+                              event_loop, std::move(callback),
+                              BuildUserManagementErrorResponse(listed.error()));
                           return;
                         }
                         QueueResponse(event_loop, std::move(callback),
@@ -3307,9 +3269,9 @@ void RegisterHandlers() {
                         Json::Value body(Json::objectValue);
                         body["management_ip"] =
                             BuildManagementIpJson(created.value());
-                        QueueResponse(event_loop, std::move(callback),
-                                      JsonResponse(std::move(body),
-                                                   drogon::k201Created));
+                        QueueResponse(
+                            event_loop, std::move(callback),
+                            JsonResponse(std::move(body), drogon::k201Created));
                       } catch (...) {
                         address.clear();
                         QueueResponse(event_loop, std::move(callback),
@@ -3336,9 +3298,8 @@ void RegisterHandlers() {
          const std::string& raw_role, const std::string& raw_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_role,
-             raw_id](AuthorizedRequest authorized_request,
-                     HttpCallback callback) {
+            [request, raw_role, raw_id](AuthorizedRequest authorized_request,
+                                        HttpCallback callback) {
               try {
                 auto role = ParseManagedRole(raw_role);
                 auto management_ip_id = ParseManagedResourceId(raw_id);
@@ -3380,7 +3341,8 @@ void RegisterHandlers() {
                      event_loop = app().getLoop()]() mutable {
                       try {
                         auto updated = service->UpdateManagementIp(
-                            management_ip_id, role, std::move(address), context);
+                            management_ip_id, role, std::move(address),
+                            context);
                         address.clear();
                         if (!updated.ok()) {
                           QueueResponse(event_loop, std::move(callback),
@@ -3418,9 +3380,8 @@ void RegisterHandlers() {
          const std::string& raw_role, const std::string& raw_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_role,
-             raw_id](AuthorizedRequest authorized_request,
-                     HttpCallback callback) {
+            [request, raw_role, raw_id](AuthorizedRequest authorized_request,
+                                        HttpCallback callback) {
               try {
                 auto role = ParseManagedRole(raw_role);
                 auto management_ip_id = ParseManagedResourceId(raw_id);
@@ -3455,9 +3416,8 @@ void RegisterHandlers() {
                 auto submitted = dependencies.worker->Submit(
                     [service = dependencies.service,
                      management_ip_id = management_ip_id.value(),
-                     role = role.value(),
-                     context = std::move(context).value(), callback,
-                     event_loop = app().getLoop()]() mutable {
+                     role = role.value(), context = std::move(context).value(),
+                     callback, event_loop = app().getLoop()]() mutable {
                       try {
                         auto deleted = service->DeleteManagementIp(
                             management_ip_id, role, context);
@@ -3514,8 +3474,7 @@ void RegisterHandlers() {
         }
         AuthorizeRequest(
             request, std::move(callback),
-            [request, secure_body,
-             body_error = std::move(body_error)](
+            [request, secure_body, body_error = std::move(body_error)](
                 AuthorizedRequest authorized_request,
                 HttpCallback callback) mutable {
               std::shared_ptr<ParsedOwnPasswordRequest> parsed_request;
@@ -3536,9 +3495,9 @@ void RegisterHandlers() {
                   callback(BuildUserManagementErrorResponse(context.error()));
                   return;
                 }
-                auto parsed = ParseOwnPasswordJson(
-                    std::move(*secure_body),
-                    request->getHeader("content-type"));
+                auto parsed =
+                    ParseOwnPasswordJson(std::move(*secure_body),
+                                         request->getHeader("content-type"));
                 secure_body->clear();
                 if (!parsed.ok()) {
                   callback(BuildUserManagementErrorResponse(parsed.error()));
@@ -3616,8 +3575,7 @@ void RegisterHandlers() {
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip](AuthorizedRequest,
-                               HttpCallback callback) {
+            [request, peer_ip](AuthorizedRequest, HttpCallback callback) {
               auto token =
                   ParseSessionCookieHeaders(request->getRawCookieHeaders());
               if (!token.ok()) {
@@ -3637,30 +3595,31 @@ void RegisterHandlers() {
               }
               auto secure_token = std::make_shared<common::SecureBytes>(
                   std::move(token).value());
-              auto submitted = worker->Submit(
-                  [secure_token, peer_ip, auth, callback,
-                   event_loop = app().getLoop()]() mutable {
-                    try {
-                      auto logged_out = auth->Logout(
-                          {secure_token->data(), secure_token->size()}, peer_ip);
-                      secure_token->clear();
-                      if (!logged_out.ok()) {
-                        QueueResponse(event_loop, std::move(callback),
-                                      SecurityErrorResponse(logged_out.error()));
-                        return;
-                      }
-                      Json::Value body(Json::objectValue);
-                      body["logged_out"] = true;
-                      auto response = JsonResponse(std::move(body));
-                      response->addCookie(SessionCookie("", 0));
-                      QueueResponse(event_loop, std::move(callback),
-                                    std::move(response));
-                    } catch (...) {
-                      secure_token->clear();
-                      QueueResponse(event_loop, std::move(callback),
-                                    SecurityUnavailableResponse());
-                    }
-                  });
+              auto submitted = worker->Submit([secure_token, peer_ip, auth,
+                                               callback,
+                                               event_loop =
+                                                   app().getLoop()]() mutable {
+                try {
+                  auto logged_out = auth->Logout(
+                      {secure_token->data(), secure_token->size()}, peer_ip);
+                  secure_token->clear();
+                  if (!logged_out.ok()) {
+                    QueueResponse(event_loop, std::move(callback),
+                                  SecurityErrorResponse(logged_out.error()));
+                    return;
+                  }
+                  Json::Value body(Json::objectValue);
+                  body["logged_out"] = true;
+                  auto response = JsonResponse(std::move(body));
+                  response->addCookie(SessionCookie("", 0));
+                  QueueResponse(event_loop, std::move(callback),
+                                std::move(response));
+                } catch (...) {
+                  secure_token->clear();
+                  QueueResponse(event_loop, std::move(callback),
+                                SecurityUnavailableResponse());
+                }
+              });
               if (!submitted.ok()) {
                 secure_token->clear();
                 callback(SecurityUnavailableResponse());
@@ -3692,8 +3651,7 @@ void RegisterHandlers() {
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip, secure_body,
-             body_error = std::move(body_error)](
+            [request, peer_ip, secure_body, body_error = std::move(body_error)](
                 AuthorizedRequest, HttpCallback callback) mutable {
               if (body_error.has_value()) {
                 callback(SecurityErrorResponse(*body_error));
@@ -3736,8 +3694,8 @@ void RegisterHandlers() {
                    event_loop = app().getLoop()]() mutable {
                     try {
                       auto renewed = auth->Reauthenticate(
-                          {secure_token->data(), secure_token->size()},
-                          peer_ip, std::move(*secure_password));
+                          {secure_token->data(), secure_token->size()}, peer_ip,
+                          std::move(*secure_password));
                       secure_password->clear();
                       secure_token->clear();
                       if (!renewed.ok()) {
@@ -3769,44 +3727,41 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/health",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(
-            request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
-              std::string status;
-              {
-                std::scoped_lock lock(StateMutex());
-                status = GlobalState().args.health_status;
-              }
-              callback(JsonResponse(BuildHealthJson(status)));
-            });
+        AuthorizeRequest(request, std::move(callback),
+                         [](AuthorizedRequest, HttpCallback callback) {
+                           std::string status;
+                           {
+                             std::scoped_lock lock(StateMutex());
+                             status = GlobalState().args.health_status;
+                           }
+                           callback(JsonResponse(BuildHealthJson(status)));
+                         });
       },
       {Get});
 
   app().registerHandler(
       "/api/v1/audit/status",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(
-            request, AuditRouteCallback(std::move(callback)),
-            [request](AuthorizedRequest authorized_request,
-                      HttpCallback callback) {
-              HandleAuditStatusRequest(request,
-                                       std::move(authorized_request),
-                                       std::move(callback));
-            });
+        AuthorizeRequest(request, AuditRouteCallback(std::move(callback)),
+                         [request](AuthorizedRequest authorized_request,
+                                   HttpCallback callback) {
+                           HandleAuditStatusRequest(
+                               request, std::move(authorized_request),
+                               std::move(callback));
+                         });
       },
       {Get});
 
   app().registerHandler(
       "/api/v1/audit/events",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(
-            request, AuditRouteCallback(std::move(callback)),
-            [request](AuthorizedRequest authorized_request,
-                      HttpCallback callback) {
-              HandleAuditEventRequest(request,
-                                      std::move(authorized_request),
-                                      std::move(callback));
-            });
+        AuthorizeRequest(request, AuditRouteCallback(std::move(callback)),
+                         [request](AuthorizedRequest authorized_request,
+                                   HttpCallback callback) {
+                           HandleAuditEventRequest(
+                               request, std::move(authorized_request),
+                               std::move(callback));
+                         });
       },
       {Get});
 
@@ -3843,8 +3798,8 @@ void RegisterHandlers() {
       },
       {Get});
 
-  const auto register_protection_start = [](
-      std::string path, security::ProtectionSuite suite) {
+  const auto register_protection_start = [](std::string path,
+                                            security::ProtectionSuite suite) {
     app().registerHandler(
         std::move(path),
         [suite](const HttpRequestPtr& request, DrogonCallback&& callback) {
@@ -3871,8 +3826,7 @@ void RegisterHandlers() {
                 std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
                     runtime_lease;
                 try {
-                  runtime_lease =
-                      dependencies.runtime_lifecycle->TryAcquire();
+                  runtime_lease = dependencies.runtime_lifecycle->TryAcquire();
                 } catch (...) {
                   callback(BuildSystemProtectionStartResponse({}));
                   return;
@@ -3925,8 +3879,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest,
-                      HttpCallback callback) {
+            [request](AuthorizedRequest, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -3947,13 +3900,12 @@ void RegisterHandlers() {
                           try {
                             auto result = save(update.expected_revision,
                                                std::move(update.settings));
-                            QueueRuntimeSettingsResult(
-                                event_loop, std::move(callback),
-                                std::move(result));
+                            QueueRuntimeSettingsResult(event_loop,
+                                                       std::move(callback),
+                                                       std::move(result));
                           } catch (...) {
-                            QueueResponse(
-                                event_loop, std::move(callback),
-                                RuntimeSettingsUnavailableResponse());
+                            QueueResponse(event_loop, std::move(callback),
+                                          RuntimeSettingsUnavailableResponse());
                           }
                         });
                     if (!submitted.ok()) {
@@ -3976,16 +3928,15 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest,
-                      HttpCallback callback) {
+            [request](AuthorizedRequest, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
                 return;
               }
               std::optional<RuntimeSettingsCommandRequest> command;
-              auto response = internal::
-                  ExecuteSequentialProtectedRuntimeControlCommand(
+              auto response =
+                  internal::ExecuteSequentialProtectedRuntimeControlCommand(
                       dependencies.protection_runtime_allowed,
                       [&]() -> drogon::HttpResponsePtr {
                         auto parsed = ParseRuntimeSettingsCommandJson(
@@ -4008,14 +3959,12 @@ void RegisterHandlers() {
                               try {
                                 auto response = internal::
                                     ExecuteAtomicallyProtectedRuntimeControlCommand(
-                                        protection_runtime_control_gate,
-                                        [&] {
+                                        protection_runtime_control_gate, [&] {
                                           return BuildRuntimeSettingsApplyResponse(
                                               apply(command.expected_revision));
                                         });
-                                QueueResponse(
-                                    event_loop, std::move(callback),
-                                    std::move(response));
+                                QueueResponse(event_loop, std::move(callback),
+                                              std::move(response));
                               } catch (...) {
                                 QueueResponse(
                                     event_loop, std::move(callback),
@@ -4042,8 +3991,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest,
-                      HttpCallback callback) {
+            [request](AuthorizedRequest, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -4063,13 +4011,12 @@ void RegisterHandlers() {
                          event_loop = app().getLoop()]() mutable {
                           try {
                             auto result = discard(command.expected_revision);
-                            QueueRuntimeSettingsResult(
-                                event_loop, std::move(callback),
-                                std::move(result));
+                            QueueRuntimeSettingsResult(event_loop,
+                                                       std::move(callback),
+                                                       std::move(result));
                           } catch (...) {
-                            QueueResponse(
-                                event_loop, std::move(callback),
-                                RuntimeSettingsUnavailableResponse());
+                            QueueResponse(event_loop, std::move(callback),
+                                          RuntimeSettingsUnavailableResponse());
                           }
                         });
                     if (!submitted.ok()) {
@@ -4149,8 +4096,7 @@ void RegisterHandlers() {
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [camera_id](AuthorizedRequest,
-                        HttpCallback callback) {
+            [camera_id](AuthorizedRequest, HttpCallback callback) {
               SnapshotCallback snapshot_callback;
               {
                 std::scoped_lock lock(StateMutex());
@@ -4212,16 +4158,16 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/ai/detections",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(
-            request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
-              DetectionSnapshotProvider provider;
-              {
-                std::scoped_lock lock(StateMutex());
-                provider = GlobalState().args.detection_snapshot_provider;
-              }
-              callback(BuildDetectionSnapshotResponse(provider));
-            });
+        AuthorizeRequest(request, std::move(callback),
+                         [](AuthorizedRequest, HttpCallback callback) {
+                           DetectionSnapshotProvider provider;
+                           {
+                             std::scoped_lock lock(StateMutex());
+                             provider =
+                                 GlobalState().args.detection_snapshot_provider;
+                           }
+                           callback(BuildDetectionSnapshotResponse(provider));
+                         });
       },
       {Get});
 
@@ -4230,8 +4176,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest,
-                      HttpCallback callback) {
+            [request](AuthorizedRequest, HttpCallback callback) {
               RuntimeStartCallback restart;
               ProtectionRuntimeAllowedCallback protection_runtime_allowed;
               ProtectionRuntimeControlGate protection_runtime_control_gate;
@@ -4245,8 +4190,8 @@ void RegisterHandlers() {
                     GlobalState().args.protection_runtime_control_gate;
                 worker = GlobalState().security_worker;
               }
-              auto response = internal::
-                  ExecuteSequentialProtectedRuntimeControlCommand(
+              auto response =
+                  internal::ExecuteSequentialProtectedRuntimeControlCommand(
                       protection_runtime_allowed,
                       [&]() -> drogon::HttpResponsePtr {
                         auto validated = ValidateEmptyJsonObject(
@@ -4264,13 +4209,11 @@ void RegisterHandlers() {
                             [restart = std::move(restart),
                              protection_runtime_control_gate =
                                  std::move(protection_runtime_control_gate),
-                             callback,
-                             event_loop = app().getLoop()]() mutable {
+                             callback, event_loop = app().getLoop()]() mutable {
                               try {
                                 auto response = internal::
                                     ExecuteAtomicallyProtectedRuntimeControlCommand(
-                                        protection_runtime_control_gate,
-                                        [&] {
+                                        protection_runtime_control_gate, [&] {
                                           return BuildRuntimeRestartResponse(
                                               restart);
                                         });
@@ -4319,8 +4262,8 @@ void RegisterHandlers() {
                 callback(std::move(admitted));
                 return;
               }
-              auto dispatched = internal::
-                  DispatchAtomicallyProtectedRuntimeControlCommand(
+              auto dispatched =
+                  internal::DispatchAtomicallyProtectedRuntimeControlCommand(
                       worker, std::move(protection_runtime_control_gate),
                       [restart = std::move(restart),
                        status = std::move(status)] {
@@ -4433,8 +4376,8 @@ void RegisterHandlers() {
                 Json::Value body(Json::objectValue);
                 body["code"] = "E_CONFIG";
                 body["message"] = "service config unavailable";
-                callback(JsonResponse(std::move(body),
-                                      k500InternalServerError));
+                callback(
+                    JsonResponse(std::move(body), k500InternalServerError));
                 return;
               }
               std::optional<SecureStreamDiagnostics> diagnostics;
@@ -4475,7 +4418,7 @@ drogon::HttpResponsePtr ExecuteSequentialProtectedRuntimeControlCommand(
     return validation_error;
   }
   return ExecuteProtectedRuntimeControlCommand(protection_runtime_allowed,
-                                                command);
+                                               command);
 }
 
 drogon::HttpResponsePtr ExecuteAtomicallyProtectedRuntimeControlCommand(
@@ -4500,19 +4443,19 @@ common::Result<void> DispatchAtomicallyProtectedRuntimeControlCommand(
     return common::Result<void>::Err(
         {"E_SECURITY_UNAVAILABLE", "security service unavailable"});
   }
-  return worker->Submit(
-      [protection_runtime_control_gate =
-           std::move(protection_runtime_control_gate),
-       command = std::move(command), complete = std::move(complete)]() mutable {
-        drogon::HttpResponsePtr response;
-        try {
-          response = ExecuteAtomicallyProtectedRuntimeControlCommand(
-              protection_runtime_control_gate, command);
-        } catch (...) {
-          response = SecurityUnavailableResponse();
-        }
-        complete(std::move(response));
-      });
+  return worker->Submit([protection_runtime_control_gate =
+                             std::move(protection_runtime_control_gate),
+                         command = std::move(command),
+                         complete = std::move(complete)]() mutable {
+    drogon::HttpResponsePtr response;
+    try {
+      response = ExecuteAtomicallyProtectedRuntimeControlCommand(
+          protection_runtime_control_gate, command);
+    } catch (...) {
+      response = SecurityUnavailableResponse();
+    }
+    complete(std::move(response));
+  });
 }
 
 drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
@@ -4520,8 +4463,8 @@ drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
   return operation();
 }
 
-void InstallDefaultProtectionRuntimeAllowedCallback(
-    ServiceInitArgs& args, bool security_enabled) {
+void InstallDefaultProtectionRuntimeAllowedCallback(ServiceInitArgs& args,
+                                                    bool security_enabled) {
   if (!args.protection_runtime_allowed_callback) {
     args.protection_runtime_allowed_callback = [security_enabled] {
       return !security_enabled;
@@ -4546,12 +4489,10 @@ using AuditHandlerCallbackForTesting =
 void HandleAuthorizedAuditStatusForTesting(
     security::Principal principal,
     std::shared_ptr<security::AuditLogService> service,
-    std::shared_ptr<BoundedWorker> worker,
-    bool shutting_down,
-    trantor::EventLoop* event_loop,
-    AuditHandlerCallbackForTesting callback) {
-  HttpCallback terminal(std::make_shared<TerminalResponse>(
-      event_loop, std::move(callback)));
+    std::shared_ptr<BoundedWorker> worker, bool shutting_down,
+    trantor::EventLoop* event_loop, AuditHandlerCallbackForTesting callback) {
+  HttpCallback terminal(
+      std::make_shared<TerminalResponse>(event_loop, std::move(callback)));
   try {
     SubmitAuthorizedAuditStatus(
         std::move(principal),
@@ -4563,15 +4504,12 @@ void HandleAuthorizedAuditStatusForTesting(
 }
 
 void HandleAuthorizedAuditEventsForTesting(
-    security::Principal principal,
-    security::AuditQueryParameters parameters,
+    security::Principal principal, security::AuditQueryParameters parameters,
     std::shared_ptr<security::AuditLogService> service,
-    std::shared_ptr<BoundedWorker> worker,
-    bool shutting_down,
-    trantor::EventLoop* event_loop,
-    AuditHandlerCallbackForTesting callback) {
-  HttpCallback terminal(std::make_shared<TerminalResponse>(
-      event_loop, std::move(callback)));
+    std::shared_ptr<BoundedWorker> worker, bool shutting_down,
+    trantor::EventLoop* event_loop, AuditHandlerCallbackForTesting callback) {
+  HttpCallback terminal(
+      std::make_shared<TerminalResponse>(event_loop, std::move(callback)));
   try {
     SubmitAuthorizedAuditEvents(
         std::move(principal), std::move(parameters),
@@ -4592,8 +4530,7 @@ void InstallAuditDependenciesForShutdownTesting(
   state.shutting_down = false;
 }
 
-std::shared_ptr<BoundedWorker>
-ReplaceAuditAuthorizationWorkerForTesting(
+std::shared_ptr<BoundedWorker> ReplaceAuditAuthorizationWorkerForTesting(
     std::shared_ptr<BoundedWorker> worker) noexcept {
   std::scoped_lock lock(StateMutex());
   return std::exchange(GlobalState().security_worker, std::move(worker));
@@ -4649,11 +4586,9 @@ DetectionSsePendingResponse::Create(
     DetectionSnapshotProvider detection_snapshot_provider,
     ResponseCallback response_callback,
     std::shared_ptr<SessionStreamLease> stream_lease,
-    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
-        runtime_lease) {
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease) {
   auto state = std::make_shared<State>();
-  state->detection_snapshot_provider =
-      std::move(detection_snapshot_provider);
+  state->detection_snapshot_provider = std::move(detection_snapshot_provider);
   state->response_callback = std::move(response_callback);
   state->stream_lease = std::move(stream_lease);
   state->runtime_lease = std::move(runtime_lease);
@@ -4670,8 +4605,7 @@ DetectionSsePendingResponse::Create(
   return pending;
 }
 
-bool DetectionSsePendingResponse::BeginRuntimeCallback(
-    bool claim_terminal) {
+bool DetectionSsePendingResponse::BeginRuntimeCallback(bool claim_terminal) {
   std::shared_ptr<SessionStreamLease> stream_lease;
   {
     std::lock_guard lock(state_->mutex);
@@ -4731,8 +4665,8 @@ DetectionSsePendingResponse::EndRuntimeCallbackLocked() {
   if (state_->active_runtime_callbacks != 0U) {
     --state_->active_runtime_callbacks;
   }
-  if (state_->active_runtime_callbacks == 0U &&
-      state_->finish_external_done && !state_->completed) {
+  if (state_->active_runtime_callbacks == 0U && state_->finish_external_done &&
+      !state_->completed) {
     state_->completed = true;
     return std::move(state_->runtime_lease);
   }
@@ -4758,8 +4692,8 @@ bool DetectionSsePendingResponse::AttachSubscription(
   bool attached = false;
   {
     std::lock_guard lock(state_->mutex);
-    if (!callback_failed && !state_->completed &&
-        !state_->revoke_requested && !state_->terminal_claimed) {
+    if (!callback_failed && !state_->completed && !state_->revoke_requested &&
+        !state_->terminal_claimed) {
       state_->subscription = std::move(subscription);
       attached = true;
     }
@@ -4803,16 +4737,14 @@ bool DetectionSsePendingResponse::CompleteInitialSnapshotIfChanged(
   try {
     auto callback_scope = state_->runtime_lease->EnterCallback();
     snapshot = state_->detection_snapshot_provider();
-    snapshot_matches =
-        !last_event_id.empty() &&
-        last_event_id == BuildDetectionSseId(snapshot);
+    snapshot_matches = !last_event_id.empty() &&
+                       last_event_id == BuildDetectionSseId(snapshot);
   } catch (...) {
     callback_failed = true;
   }
 
-  const bool finish_snapshot =
-      (callback_failed || !snapshot_matches) &&
-      ClaimTerminalFromActiveCallback();
+  const bool finish_snapshot = (callback_failed || !snapshot_matches) &&
+                               ClaimTerminalFromActiveCallback();
   bool can_continue = false;
   if (!callback_failed && snapshot_matches) {
     std::lock_guard lock(state_->mutex);
@@ -4841,6 +4773,8 @@ void DetectionSsePendingResponse::SetTimeoutCancellation(
     try {
       cancel_immediately();
     } catch (...) {
+      // swallowed: cancel_immediately is best effort while the stream is
+      // discarded
     }
   }
 }
@@ -4870,8 +4804,7 @@ void DetectionSsePendingResponse::CompleteFromProvider(
       if (internal::ConsumeDetectionSseEventMergeFailureForTesting()) {
         throw std::bad_alloc();
       }
-      snapshot =
-          MergeDetectionSnapshotWithEvent(std::move(snapshot), *event);
+      snapshot = MergeDetectionSnapshotWithEvent(std::move(snapshot), *event);
     }
   } catch (...) {
     snapshot.clear();
@@ -4936,6 +4869,8 @@ void DetectionSsePendingResponse::Finish(
       auto callback_scope = callback_runtime_lease->EnterCallback();
       cancel_timeout();
     } catch (...) {
+      // swallowed: cancel_timeout is best effort while the subscription is torn
+      // down
     }
   }
   if (callback) {
@@ -4943,6 +4878,8 @@ void DetectionSsePendingResponse::Finish(
       auto callback_scope = callback_runtime_lease->EnterCallback();
       callback(BuildDetectionSseResponse(events));
     } catch (...) {
+      // swallowed: the response callback is external code; the subscription is
+      // already ending
     }
   }
   {
@@ -4964,11 +4901,11 @@ namespace internal {
 // listen() on the listener sockets: run() runs the beginning advices and only
 // then invokes ListenerManager::startListening(). So a caller that unblocks on
 // the readiness signal and immediately connects can hit a bound-but-not-yet-
-// listening socket and get its connection refused. Production clients retry, but
-// a single-shot request (as the integration tests issue) fails, and callers that
-// swallow that first failure then cascade into auth errors. Bridge the gap by
-// probing the listener with a real TCP connect until it is accepting, so Init
-// only returns Ok once the server can actually serve a request.
+// listening socket and get its connection refused. Production clients retry,
+// but a single-shot request (as the integration tests issue) fails, and callers
+// that swallow that first failure then cascade into auth errors. Bridge the gap
+// by probing the listener with a real TCP connect until it is accepting, so
+// Init only returns Ok once the server can actually serve a request.
 bool WaitForListenerAccepting(const std::string& bind_ip, std::uint16_t port,
                               std::chrono::milliseconds budget) {
   if (port == 0U) {
@@ -4978,9 +4915,8 @@ bool WaitForListenerAccepting(const std::string& bind_ip, std::uint16_t port,
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
   // An unspecified bind address (0.0.0.0) is reached via loopback.
-  const char* target = bind_ip.empty() || bind_ip == "0.0.0.0"
-                           ? "127.0.0.1"
-                           : bind_ip.c_str();
+  const char* target =
+      bind_ip.empty() || bind_ip == "0.0.0.0" ? "127.0.0.1" : bind_ip.c_str();
   if (::inet_pton(AF_INET, target, &address.sin_addr) != 1) {
     // Non-IPv4 bind address: skip the probe rather than misreport a failure.
     return true;
@@ -5142,6 +5078,8 @@ drogon::HttpResponsePtr BuildRuntimeRestartResponse(
       restarted = restart_callback();
     }
   } catch (...) {
+    // swallowed: a throwing restart callback is reported as runtime unavailable
+    // below
   }
   if (!restarted.ok()) {
     Json::Value body(Json::objectValue);
@@ -5161,8 +5099,7 @@ Json::Value BuildDetectionEventJson(const ai::DetectionEvent& event) {
   json["model_id"] = event.model_id;
   json["model_kind"] = event.model_kind;
   json["result_state"] = event.result_state;
-  json["frame_sequence"] =
-      static_cast<Json::UInt64>(event.frame_sequence);
+  json["frame_sequence"] = static_cast<Json::UInt64>(event.frame_sequence);
   json["frame_timestamp_ns"] =
       static_cast<Json::Int64>(event.frame_timestamp.count());
 
@@ -5228,8 +5165,7 @@ std::string BuildDetectionSseEvent(
          CompactJson(BuildDetectionSnapshotJson(events)) + "\n\n";
 }
 
-std::string BuildDetectionSseId(
-    const std::vector<ai::DetectionEvent>& events) {
+std::string BuildDetectionSseId(const std::vector<ai::DetectionEvent>& events) {
   if (events.empty()) {
     return "empty";
   }
@@ -5254,8 +5190,7 @@ std::string BuildDetectionSseId(
 }
 
 std::vector<ai::DetectionEvent> MergeDetectionSnapshotWithEvent(
-    std::vector<ai::DetectionEvent> events,
-    const ai::DetectionEvent& event) {
+    std::vector<ai::DetectionEvent> events, const ai::DetectionEvent& event) {
   const auto same_binding = [&event](const ai::DetectionEvent& stored) {
     return stored.camera_id == event.camera_id &&
            stored.model_id == event.model_id;
@@ -5327,8 +5262,7 @@ common::Result<void> ValidateHttpTlsConfigShape(
         {"E_HTTP_TLS_REQUIRED",
          "a complete HTTP TLS certificate and private-key pair is required"});
   }
-  if (!has_certificate &&
-      !http_config.tls.allow_development_self_signed_tls) {
+  if (!has_certificate && !http_config.tls.allow_development_self_signed_tls) {
     return common::Result<void>::Err(
         {"E_HTTP_TLS_REQUIRED", "configured HTTP TLS material is required"});
   }
@@ -5363,16 +5297,16 @@ common::Result<std::optional<security::ResolvedTlsMaterial>>
 SelectServiceTlsMaterial(const ServiceInitArgs& args) {
   auto shape = ValidateHttpTlsConfigShape(args.app_config->http);
   if (!shape.ok()) {
-    return common::Result<
-        std::optional<security::ResolvedTlsMaterial>>::Err(shape.error());
+    return common::Result<std::optional<security::ResolvedTlsMaterial>>::Err(
+        shape.error());
   }
   if (!args.app_config->http.tls.enabled) {
-    return common::Result<
-        std::optional<security::ResolvedTlsMaterial>>::Ok(std::nullopt);
+    return common::Result<std::optional<security::ResolvedTlsMaterial>>::Ok(
+        std::nullopt);
   }
   if (args.tls_material) {
-    return common::Result<
-        std::optional<security::ResolvedTlsMaterial>>::Ok(args.tls_material);
+    return common::Result<std::optional<security::ResolvedTlsMaterial>>::Ok(
+        args.tls_material);
   }
 
   // ServiceApp does not own a CryptoProvider and must never construct one of
@@ -5387,12 +5321,11 @@ SelectServiceTlsMaterial(const ServiceInitArgs& args) {
          "resolution"});
   }
   auto resolved = security::ResolveTlsMaterial(
-      args.app_config->http.tls,
-      args.app_config->security.state_directory,
+      args.app_config->http.tls, args.app_config->security.state_directory,
       *args.provider);
   if (!resolved.ok()) {
-    return common::Result<
-        std::optional<security::ResolvedTlsMaterial>>::Err(resolved.error());
+    return common::Result<std::optional<security::ResolvedTlsMaterial>>::Err(
+        resolved.error());
   }
   return common::Result<std::optional<security::ResolvedTlsMaterial>>::Ok(
       std::move(resolved).value());
@@ -5401,8 +5334,7 @@ SelectServiceTlsMaterial(const ServiceInitArgs& args) {
 }  // namespace internal
 
 drogon::HttpResponsePtr BuildSnapshotResponse(
-    const SnapshotCallback& snapshot_callback,
-    const std::string& camera_id) {
+    const SnapshotCallback& snapshot_callback, const std::string& camera_id) {
   if (!snapshot_callback) {
     return JsonResponse(BuildSnapshotUnavailableJson(),
                         drogon::k503ServiceUnavailable);
@@ -5423,37 +5355,32 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
 
 drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id,
-    std::size_t maximum_response_bytes,
+    const std::string& camera_id, std::size_t maximum_response_bytes,
     std::shared_ptr<SessionStreamLease> stream_lease) {
   static const auto pump_manager =
       std::make_shared<internal::LiveMp4PumpManager>();
-  return BuildManagedLiveMp4Response(
-      live_stream_callback, camera_id, maximum_response_bytes,
-      std::move(stream_lease), pump_manager);
+  return BuildManagedLiveMp4Response(live_stream_callback, camera_id,
+                                     maximum_response_bytes,
+                                     std::move(stream_lease), pump_manager);
 }
 
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id,
-    std::size_t maximum_response_bytes,
+    const std::string& camera_id, std::size_t maximum_response_bytes,
     std::shared_ptr<SessionStreamLease> stream_lease) {
   auto cancellable = AdaptLegacyLiveMp4OpenCallback(live_stream_callback);
   return BuildCancellableLiveMp4Response(
-      cancellable, camera_id, maximum_response_bytes,
-      std::move(stream_lease));
+      cancellable, camera_id, maximum_response_bytes, std::move(stream_lease));
 }
 
 namespace {
 
 drogon::HttpResponsePtr BuildManagedLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
-    const std::string& camera_id,
-    std::size_t maximum_response_bytes,
+    const std::string& camera_id, std::size_t maximum_response_bytes,
     std::shared_ptr<SessionStreamLease> stream_lease,
     std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
-    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
-        runtime_lease) {
+    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease) {
   if (!live_stream_callback) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
@@ -5555,8 +5482,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       effective_args.stream_registry =
           std::make_shared<SessionStreamRegistry>();
     }
-    auto live_pump_manager =
-        std::make_shared<internal::LiveMp4PumpManager>();
+    auto live_pump_manager = std::make_shared<internal::LiveMp4PumpManager>();
     auto runtime_lifecycle =
         std::make_shared<internal::RuntimeCallbackLifecycle>();
     security::DeviceState initial_device_state =
@@ -5624,8 +5550,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       hooks.revoke_all_streams = revoke_all_streams;
       security::AuthServiceDependencies auth_dependencies;
       if (effective_args.auth_service_dependencies_provider) {
-        auth_dependencies =
-            effective_args.auth_service_dependencies_provider();
+        auth_dependencies = effective_args.auth_service_dependencies_provider();
       }
       // The account Login() accepts while the device is uninitialized. Assigned
       // rather than merged, and assigned from the same optional that decides
@@ -5636,8 +5561,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
           initial_account.has_value()
               ? std::optional<std::string>(initial_account->username)
               : std::nullopt;
-      auth_service = std::shared_ptr<security::AuthService>(
-          new security::AuthService(
+      auth_service =
+          std::shared_ptr<security::AuthService>(new security::AuthService(
               *effective_args.security_store, std::move(auth_dependencies),
               std::move(hooks), {}, [](security::UserRole role) {
                 if (internal::ConsumeForcedInvalidLoginRoleForTesting()) {
@@ -5686,8 +5611,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       {
         std::lock_guard shutdown_lock(shutdown_mutex_);
         if (!shutdown_thread_started_) {
-          shutdown_thread_ =
-              std::thread([this] { RunShutdownCoordinator(); });
+          shutdown_thread_ = std::thread([this] { RunShutdownCoordinator(); });
           shutdown_thread_started_ = true;
         }
       }
@@ -5709,8 +5633,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         ServiceListenerConfig listener;
         if (tls_material.has_value()) {
           tls_material_ = *tls_material;
-          listener = BuildServiceListenerConfig(args.app_config->http,
-                                                *tls_material_);
+          listener =
+              BuildServiceListenerConfig(args.app_config->http, *tls_material_);
         } else {
           listener.bind_address = args.app_config->http.bind_ip;
           listener.port = args.app_config->http.port;
@@ -5718,16 +5642,12 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
         drogon::app().setThreadNum(4);
         drogon::app().disableSession();
         drogon::app().setMaxConnectionNum(kMaximumServiceConnections);
-        drogon::app().setMaxConnectionNumPerIP(
-            kMaximumServiceConnectionsPerIp);
+        drogon::app().setMaxConnectionNumPerIP(kMaximumServiceConnectionsPerIp);
         drogon::app().setClientMaxBodySize(kMaximumTransportBodyBytes);
-        drogon::app().setClientMaxMemoryBodySize(
-            kMaximumTransportBodyBytes);
+        drogon::app().setClientMaxMemoryBodySize(kMaximumTransportBodyBytes);
         drogon::app().setDocumentRoot(web_root.string());
-        drogon::app().addListener(listener.bind_address,
-                                  listener.port,
-                                  listener.use_tls,
-                                  listener.certificate_path,
+        drogon::app().addListener(listener.bind_address, listener.port,
+                                  listener.use_tls, listener.certificate_path,
                                   listener.private_key_path);
         RegisterHandlers();
         initialized_ = true;
@@ -5743,9 +5663,9 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
               ThreadCompletionReporter completion_reporter(thread_completion);
               try {
                 drogon::app().run();
-                startup_signal->ReportError(
-                    {"E_SERVICE_START",
-                     "Drogon service stopped before reporting startup readiness"});
+                startup_signal->ReportError({"E_SERVICE_START",
+                                             "Drogon service stopped before "
+                                             "reporting startup readiness"});
               } catch (const std::exception& ex) {
                 startup_signal->ReportError(
                     {"E_SERVICE_START",
@@ -5764,9 +5684,7 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
       auto startup = startup_signal->Wait();
       if (!startup.ok()) {
         auto stopped = internal::StopServiceThreadWithin(
-            server_thread_,
-            server_thread_done_,
-            kServiceThreadStopTimeout,
+            server_thread_, server_thread_done_, kServiceThreadStopTimeout,
             [] { drogon::app().quit(); });
         running_ = false;
         if (!stopped.ok()) {
@@ -5800,7 +5718,8 @@ common::Result<void> ServiceApp::Init(const ServiceInitArgs& args) {
   } catch (const std::exception& ex) {
     Stop();
     return common::Result<void>::Err(
-        {"E_SERVICE_START", std::string("failed to start service: ") + ex.what()});
+        {"E_SERVICE_START",
+         std::string("failed to start service: ") + ex.what()});
   } catch (...) {
     Stop();
     return common::Result<void>::Err(
@@ -5814,8 +5733,8 @@ void ServiceApp::RunShutdownCoordinator() noexcept {
   trantor::EventLoop* drain_loop = nullptr;
   {
     std::unique_lock shutdown_lock(shutdown_mutex_);
-    shutdown_condition_.wait(
-        shutdown_lock, [this] { return shutdown_requested_; });
+    shutdown_condition_.wait(shutdown_lock,
+                             [this] { return shutdown_requested_; });
     drain_loop = shutdown_drain_loop_;
   }
   PerformShutdown(drain_loop);
@@ -5900,11 +5819,14 @@ void ServiceApp::PerformShutdown(trantor::EventLoop* drain_loop) noexcept {
       try {
         auto drained = std::make_shared<std::promise<void>>();
         auto drained_future = drained->get_future();
-        auto* loop = drain_loop != nullptr ? drain_loop : drogon::app().getLoop();
+        auto* loop =
+            drain_loop != nullptr ? drain_loop : drogon::app().getLoop();
         loop->runAfter(0.01, [drained] {
           try {
             drained->set_value();
           } catch (...) {
+            // swallowed: set_value throws if the promise was already satisfied;
+            // the waiter is released either way
           }
         });
         if (drained_future.wait_for(kServiceThreadStopTimeout) !=
@@ -5968,8 +5890,8 @@ void ServiceApp::JoinShutdownCoordinator() noexcept {
   std::thread join_owner;
   {
     std::unique_lock shutdown_lock(shutdown_mutex_);
-    shutdown_condition_.wait(
-        shutdown_lock, [this] { return !shutdown_join_in_progress_; });
+    shutdown_condition_.wait(shutdown_lock,
+                             [this] { return !shutdown_join_in_progress_; });
     if (!shutdown_thread_started_ || shutdown_thread_released_) {
       return;
     }

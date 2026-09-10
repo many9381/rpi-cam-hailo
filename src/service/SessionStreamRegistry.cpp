@@ -73,6 +73,8 @@ void PauseAfterFirstMarkForTesting() {
     try {
       first_marked->set_value();
     } catch (...) {
+      // swallowed: set_value throws if the promise was already satisfied; the
+      // waiter is released either way
     }
   }
   if (release_marking.valid()) {
@@ -94,8 +96,8 @@ bool ConsumeThreadLaunchFailureForTesting() noexcept {
   auto& remaining = FailedThreadLaunchesForTesting();
   auto count = remaining.load(std::memory_order_relaxed);
   while (count != 0U) {
-    if (remaining.compare_exchange_weak(
-            count, count - 1U, std::memory_order_relaxed)) {
+    if (remaining.compare_exchange_weak(count, count - 1U,
+                                        std::memory_order_relaxed)) {
       return true;
     }
   }
@@ -125,8 +127,7 @@ struct SessionStreamRegistryState {
       return;
     }
     std::erase_if(found->second, [registration_id](const Entry& entry) {
-      return entry.registration_id == registration_id ||
-             entry.lease.expired();
+      return entry.registration_id == registration_id || entry.lease.expired();
     });
     if (found->second.empty()) {
       leases.erase(found);
@@ -140,16 +141,15 @@ struct SessionStreamRegistryState {
 
 SessionStreamLeaseState::SessionStreamLeaseState(
     std::weak_ptr<SessionStreamRegistryState> registry_owner,
-    const security::SessionIdentity& session_identity,
-    std::uint64_t id)
+    const security::SessionIdentity& session_identity, std::uint64_t id)
     : registry(std::move(registry_owner)),
       identity(session_identity),
       registration_id(id) {}
 
 SessionStreamLeaseState::~SessionStreamLeaseState() {
 #if defined(CAMERA_FIRMWARE_SERVICE_TESTING)
-  LeaseStateDestructionCounterForTesting().fetch_add(
-      1U, std::memory_order_relaxed);
+  LeaseStateDestructionCounterForTesting().fetch_add(1U,
+                                                     std::memory_order_relaxed);
 #endif
   if (auto owner = registry.lock()) {
     owner->Remove(identity, registration_id);
@@ -178,6 +178,8 @@ void SessionStreamLeaseState::InvokePending() noexcept {
   try {
     (*invoke)();
   } catch (...) {
+    // swallowed: revocation handlers are external code; the registry state is
+    // already consistent
   }
   {
     std::lock_guard lock(mutex);
@@ -196,14 +198,13 @@ SessionStreamLeaseState::TryBeginTerminalElection() {
     lock.unlock();
     InvokePending();
   }
-  return SessionStreamTerminalElection(
-      std::move(state), std::move(lock), accepted);
+  return SessionStreamTerminalElection(std::move(state), std::move(lock),
+                                       accepted);
 }
 
-void SessionStreamLeaseState::SetHandler(
-    StreamRevocationHandler new_handler) {
-  auto stored = std::make_shared<StreamRevocationHandler>(
-      std::move(new_handler));
+void SessionStreamLeaseState::SetHandler(StreamRevocationHandler new_handler) {
+  auto stored =
+      std::make_shared<StreamRevocationHandler>(std::move(new_handler));
   if (auto owner = registry.lock()) {
     std::lock_guard registry_lock(owner->mutex);
     std::lock_guard lease_lock(mutex);
@@ -246,8 +247,7 @@ void InvokeMarked(
 
   std::array<std::thread, kMaximumRevocationWorkers - 1U> threads;
   std::size_t launched = 0U;
-  const auto worker_count =
-      std::min(leases.size(), kMaximumRevocationWorkers);
+  const auto worker_count = std::min(leases.size(), kMaximumRevocationWorkers);
   for (; launched + 1U < worker_count; ++launched) {
     try {
       if (ConsumeThreadLaunchFailureForTesting()) {
@@ -283,8 +283,7 @@ void FailNextSessionStreamRevocationThreadLaunchesForTesting(
 }
 
 void ResetSessionStreamLeaseStateDestructionsForTesting() noexcept {
-  LeaseStateDestructionCounterForTesting().store(0U,
-                                                 std::memory_order_relaxed);
+  LeaseStateDestructionCounterForTesting().store(0U, std::memory_order_relaxed);
 }
 
 std::size_t SessionStreamLeaseStateDestructionsForTesting() noexcept {
@@ -300,12 +299,10 @@ internal::SessionStreamRevocationScope::SessionStreamRevocationScope(
     : SessionStreamRevocationScope(lease, Origin::kSend) {}
 
 internal::SessionStreamRevocationScope::SessionStreamRevocationScope(
-    const std::shared_ptr<SessionStreamLease>& lease,
-    Origin origin) noexcept
+    const std::shared_ptr<SessionStreamLease>& lease, Origin origin) noexcept
     : previous_(internal::active_revocation_origin),
       previous_origin_(internal::active_revocation_kind) {
-  internal::active_revocation_origin =
-      lease ? lease->state_.get() : nullptr;
+  internal::active_revocation_origin = lease ? lease->state_.get() : nullptr;
   internal::active_revocation_kind = static_cast<std::uint8_t>(origin);
 }
 
@@ -314,8 +311,8 @@ internal::SessionStreamRevocationScope::~SessionStreamRevocationScope() {
   internal::active_revocation_kind = previous_origin_;
 }
 
-bool internal::SessionStreamRevocationScope::HandlerOriginatesFromSend()
-    noexcept {
+bool internal::SessionStreamRevocationScope::
+    HandlerOriginatesFromSend() noexcept {
   return internal::active_revocation_kind ==
          static_cast<std::uint8_t>(Origin::kSend);
 }
@@ -331,8 +328,7 @@ SessionStreamLease::SessionStreamLease(
     std::shared_ptr<internal::SessionStreamLeaseState> state) noexcept
     : state_(std::move(state)) {}
 
-void SessionStreamLease::SetRevocationHandler(
-    StreamRevocationHandler handler) {
+void SessionStreamLease::SetRevocationHandler(StreamRevocationHandler handler) {
   auto state = state_;
   state->SetHandler(std::move(handler));
 }
@@ -364,9 +360,8 @@ std::shared_ptr<SessionStreamLease> SessionStreamRegistry::Acquire(
       }
       throw;
     }
-    std::erase_if(entries, [](const auto& entry) {
-      return entry.lease.expired();
-    });
+    std::erase_if(entries,
+                  [](const auto& entry) { return entry.lease.expired(); });
     entries.push_back({registration_id, lease_state});
   }
   return std::shared_ptr<SessionStreamLease>(

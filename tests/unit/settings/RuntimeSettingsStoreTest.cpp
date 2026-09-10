@@ -2,14 +2,14 @@
 
 #include <array>
 #include <cerrno>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -22,14 +22,17 @@
 #include <gtest/gtest.h>
 
 extern "C" int __real_fstat(int descriptor, struct stat* status);
-extern "C" ssize_t __real_camera_firmware_settings_write(
-    int descriptor, const void* data, size_t size);
+extern "C" ssize_t __real_camera_firmware_settings_write(int descriptor,
+                                                         const void* data,
+                                                         size_t size);
 extern "C" int __real_camera_firmware_settings_fdatasync(int descriptor);
-extern "C" int __real_camera_firmware_settings_renameat(
-    int old_directory, const char* old_name, int new_directory,
-    const char* new_name);
-extern "C" int __real_camera_firmware_settings_unlinkat(
-    int directory, const char* name, int flags);
+extern "C" int __real_camera_firmware_settings_renameat(int old_directory,
+                                                        const char* old_name,
+                                                        int new_directory,
+                                                        const char* new_name);
+extern "C" int __real_camera_firmware_settings_unlinkat(int directory,
+                                                        const char* name,
+                                                        int flags);
 extern "C" int __real_camera_firmware_settings_fsync(int descriptor);
 
 namespace {
@@ -46,17 +49,15 @@ using camera_firmware::settings::internal::EncodeRuntimeSettingsDocument;
 
 static_assert(std::is_nothrow_move_constructible_v<RuntimeSettingsDocument>);
 static_assert(std::is_nothrow_move_assignable_v<RuntimeSettingsDocument>);
-static_assert(noexcept(camera_firmware::common::Result<
-                       RuntimeSettingsDocument>::Ok(
-    std::declval<RuntimeSettingsDocument>())));
+static_assert(
+    noexcept(camera_firmware::common::Result<RuntimeSettingsDocument>::Ok(
+        std::declval<RuntimeSettingsDocument>())));
 static_assert(noexcept(camera_firmware::common::Result<void>::Ok()));
 
 constexpr std::string_view kSettingsName = "runtime-settings.json";
 constexpr std::string_view kTemporaryPrefix = ".runtime-settings.json.tmp-";
-constexpr std::string_view kRollbackName =
-    ".runtime-settings.json.rollback";
-constexpr std::string_view kPreviousName =
-    ".runtime-settings.json.previous";
+constexpr std::string_view kRollbackName = ".runtime-settings.json.rollback";
+constexpr std::string_view kPreviousName = ".runtime-settings.json.previous";
 
 bool spoof_directory_owner{false};
 bool spoof_file_owner{false};
@@ -146,9 +147,9 @@ void MakeDirectory(const std::filesystem::path& path, mode_t mode = 0700) {
 
 void WriteFile(const std::filesystem::path& path, std::string_view content,
                mode_t mode = 0600) {
-  const int descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC |
-                                                  O_NOFOLLOW | O_CLOEXEC,
-                                mode);
+  const int descriptor =
+      ::open(path.c_str(),
+             O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, mode);
   if (descriptor < 0 || ::fchmod(descriptor, mode) != 0) {
     const int error = errno;
     if (descriptor >= 0) {
@@ -163,7 +164,8 @@ void WriteFile(const std::filesystem::path& path, std::string_view content,
     if (written <= 0) {
       const int error = errno;
       (void)::close(descriptor);
-      throw std::system_error(error, std::generic_category(), "write test file");
+      throw std::system_error(error, std::generic_category(),
+                              "write test file");
     }
     offset += static_cast<std::size_t>(written);
   }
@@ -173,7 +175,8 @@ void WriteFile(const std::filesystem::path& path, std::string_view content,
 }
 
 std::string ReadFile(const std::filesystem::path& path) {
-  const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  const int descriptor =
+      ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (descriptor < 0) {
     throw std::system_error(errno, std::generic_category(), "open test file");
   }
@@ -210,9 +213,8 @@ mode_t FileMode(const std::filesystem::path& path) {
 
 bool IsTemporaryDescriptor(int descriptor) {
   std::array<char, 64U> proc_path{};
-  const int path_length =
-      std::snprintf(proc_path.data(), proc_path.size(), "/proc/self/fd/%d",
-                    descriptor);
+  const int path_length = std::snprintf(proc_path.data(), proc_path.size(),
+                                        "/proc/self/fd/%d", descriptor);
   if (path_length <= 0 ||
       static_cast<std::size_t>(path_length) >= proc_path.size()) {
     return false;
@@ -226,10 +228,9 @@ bool IsTemporaryDescriptor(int descriptor) {
   const std::string_view target_path(target.data(),
                                      static_cast<std::size_t>(target_length));
   const auto separator = target_path.find_last_of('/');
-  const std::string_view name =
-      separator == std::string_view::npos
-          ? target_path
-          : target_path.substr(separator + 1U);
+  const std::string_view name = separator == std::string_view::npos
+                                    ? target_path
+                                    : target_path.substr(separator + 1U);
   return name.starts_with(kTemporaryPrefix);
 }
 
@@ -298,7 +299,8 @@ RuntimeSettingsDocument MakeDocument() {
 }
 
 const CameraProfileCatalog& Catalog() {
-  static const CameraProfileCatalog catalog = CameraProfileCatalog::Rpi5Imx708();
+  static const CameraProfileCatalog catalog =
+      CameraProfileCatalog::Rpi5Imx708();
   return catalog;
 }
 
@@ -318,7 +320,7 @@ void ExpectSettingsEqual(const RuntimeSettings& actual,
     EXPECT_EQ(actual.osd.items[index].type, expected.osd.items[index].type);
     EXPECT_EQ(actual.osd.items[index].text, expected.osd.items[index].text);
     EXPECT_EQ(actual.osd.items[index].position,
-             expected.osd.items[index].position);
+              expected.osd.items[index].position);
   }
   ASSERT_EQ(actual.models.size(), expected.models.size());
   for (std::size_t index = 0; index < expected.models.size(); ++index) {
@@ -349,11 +351,13 @@ std::string ValidDocument(std::uint64_t revision = 7U,
                           std::string_view status = "failed",
                           std::string_view code = "E_CAMERA_START",
                           bool restored = true) {
-  const std::string pending = include_pending
-                                  ? R"json({"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]})json"
-                                  : "null";
+  const std::string pending =
+      include_pending
+          ? R"json({"camera":{"profile_id":"imx708-1080p30","bitrate_kbps":8000,"gop":30},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.55},{"id":"pose","enabled":false,"confidence_threshold":0.25}]})json"
+          : "null";
   return std::string(R"json({"schema_version":1,"revision":)json") +
-         std::to_string(revision) + R"json(,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":)json" +
+         std::to_string(revision) +
+         R"json(,"active":{"camera":{"profile_id":"imx708-1080p50","bitrate_kbps":6000,"gop":25},"models":[{"id":"objects","enabled":true,"confidence_threshold":0.4},{"id":"pose","enabled":true,"confidence_threshold":0.35}]},"pending":)json" +
          pending + R"json(,"last_apply":{"status":")json" +
          std::string(status) + R"json(","code":")json" + std::string(code) +
          R"json(","restored":)json" + (restored ? "true" : "false") + "}}";
@@ -375,7 +379,8 @@ std::string ReplaceOnce(std::string input, std::string_view from,
 std::string ValidDocumentWithActiveSubStream() {
   return ReplaceOnce(
       ValidDocument(), "\"gop\":25},\"models\":",
-      "\"gop\":25},\"sub_stream\":{\"enabled\":false,\"width\":640,\"height\":360,\"fps\":15,\"bitrate_kbps\":1000},\"models\":");
+      "\"gop\":25},\"sub_stream\":{\"enabled\":false,\"width\":640,\"height\":"
+      "360,\"fps\":15,\"bitrate_kbps\":1000},\"models\":");
 }
 
 // ValidDocument() with a valid (disabled, empty-items) osd object inserted
@@ -434,20 +439,20 @@ void ExpectDurableFailureWithoutPublication(
 
 extern "C" int __wrap_fstat(int descriptor, struct stat* status) {
   const int result = __real_fstat(descriptor, status);
-  if (result == 0 &&
-      ((spoof_directory_owner && S_ISDIR(status->st_mode)) ||
-       (spoof_file_owner && S_ISREG(status->st_mode)))) {
+  if (result == 0 && ((spoof_directory_owner && S_ISDIR(status->st_mode)) ||
+                      (spoof_file_owner && S_ISREG(status->st_mode)))) {
     status->st_uid = ::geteuid() == 0 ? 1U : ::geteuid() + 1U;
   }
-  if (result == 0 && spoof_temporary_special_mode &&
-      S_ISREG(status->st_mode) && IsTemporaryDescriptor(descriptor)) {
+  if (result == 0 && spoof_temporary_special_mode && S_ISREG(status->st_mode) &&
+      IsTemporaryDescriptor(descriptor)) {
     status->st_mode |= S_ISUID;
   }
   return result;
 }
 
-extern "C" ssize_t __wrap_camera_firmware_settings_write(
-    int descriptor, const void* data, size_t size) {
+extern "C" ssize_t __wrap_camera_firmware_settings_write(int descriptor,
+                                                         const void* data,
+                                                         size_t size) {
   ++settings_write_calls;
   if (interrupted_writes > 0) {
     --interrupted_writes;
@@ -472,20 +477,22 @@ extern "C" int __wrap_camera_firmware_settings_fdatasync(int descriptor) {
   return __real_camera_firmware_settings_fdatasync(descriptor);
 }
 
-extern "C" int __wrap_camera_firmware_settings_renameat(
-    int old_directory, const char* old_name, int new_directory,
-    const char* new_name) {
+extern "C" int __wrap_camera_firmware_settings_renameat(int old_directory,
+                                                        const char* old_name,
+                                                        int new_directory,
+                                                        const char* new_name) {
   ++settings_renameat_calls;
   if (fail_renameat || settings_renameat_calls == fail_renameat_on_call) {
     errno = EIO;
     return -1;
   }
-  return __real_camera_firmware_settings_renameat(
-      old_directory, old_name, new_directory, new_name);
+  return __real_camera_firmware_settings_renameat(old_directory, old_name,
+                                                  new_directory, new_name);
 }
 
-extern "C" int __wrap_camera_firmware_settings_unlinkat(
-    int directory, const char* name, int flags) {
+extern "C" int __wrap_camera_firmware_settings_unlinkat(int directory,
+                                                        const char* name,
+                                                        int flags) {
   ++settings_unlinkat_calls;
   if (settings_unlinkat_calls == fail_unlinkat_on_call) {
     errno = EIO;
@@ -529,8 +536,8 @@ TEST(RuntimeSettingsStoreTest, DecodesNullPendingAndNeverApplyResult) {
 
 TEST(RuntimeSettingsStoreTest,
      EncodesCanonicalCompactDocumentWithoutRecoveryOrUnmanagedData) {
-  const auto encoded = EncodeRuntimeSettingsDocument(MakeDocument(),
-                                                     MakeBaseConfig(), Catalog());
+  const auto encoded = EncodeRuntimeSettingsDocument(
+      MakeDocument(), MakeBaseConfig(), Catalog());
 
   ASSERT_TRUE(encoded.ok()) << encoded.error().message;
   EXPECT_EQ(
@@ -546,9 +553,11 @@ TEST(RuntimeSettingsStoreTest,
 TEST(RuntimeSettingsStoreTest, RoundTripsEnabledSubStream) {
   RuntimeSettingsDocument doc = MakeDocument();
   doc.active.sub_stream = {true, 1280U, 720U, 25U, 3000U};
-  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  const auto encoded =
+      EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
   ASSERT_TRUE(encoded.ok());
-  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  const auto decoded = DecodeRuntimeSettingsDocument(
+      encoded.value(), MakeBaseConfig(), Catalog());
   ASSERT_TRUE(decoded.ok());
   EXPECT_TRUE(decoded.value().active.sub_stream.enabled);
   EXPECT_EQ(decoded.value().active.sub_stream.width, 1280U);
@@ -559,11 +568,12 @@ TEST(RuntimeSettingsStoreTest, RoundTripsEnabledSubStream) {
 
 TEST(RuntimeSettingsStoreTest,
      LegacyDocumentWithoutSubStreamDecodesDisabledWithBaseGeometry) {
-  const auto decoded = DecodeRuntimeSettingsDocument(ValidDocument(), MakeBaseConfig(), Catalog());
+  const auto decoded = DecodeRuntimeSettingsDocument(
+      ValidDocument(), MakeBaseConfig(), Catalog());
   ASSERT_TRUE(decoded.ok());
   const auto& sub = decoded.value().active.sub_stream;
   EXPECT_FALSE(sub.enabled);
-  EXPECT_EQ(sub.width, 640U);       // from MakeBaseConfig().camera.sub_stream
+  EXPECT_EQ(sub.width, 640U);  // from MakeBaseConfig().camera.sub_stream
   EXPECT_EQ(sub.height, 360U);
   EXPECT_EQ(sub.fps, 15U);
   EXPECT_EQ(sub.bitrate_kbps, 1000U);
@@ -573,7 +583,8 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveSubStreamObject) {
   const std::string base = ValidDocumentWithActiveSubStream();
   // Sanity: the unmutated base document decodes successfully, so a failure
   // below is attributable to the mutation, not a malformed base fixture.
-  const auto sanity = DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
+  const auto sanity =
+      DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
   ASSERT_TRUE(sanity.ok()) << sanity.error().message;
 
   // 1. non-bool `enabled`.
@@ -587,8 +598,9 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveSubStreamObject) {
 
   // 3. extra/unknown key inside sub_stream (must be rejected by the inner
   // HasExactKeys, which requires exactly the five known keys).
-  ExpectDecodeFailure(ReplaceOnce(base, "\"bitrate_kbps\":1000},\"models\":",
-                                  "\"bitrate_kbps\":1000,\"foo\":0},\"models\":"));
+  ExpectDecodeFailure(
+      ReplaceOnce(base, "\"bitrate_kbps\":1000},\"models\":",
+                  "\"bitrate_kbps\":1000,\"foo\":0},\"models\":"));
 
   // 4. fractional / negative numeric field (must fail DecodeUnsigned).
   ExpectDecodeFailure(ReplaceOnce(base, "\"width\":640,", "\"width\":-1,"));
@@ -596,7 +608,8 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveSubStreamObject) {
 }
 
 TEST(RuntimeSettingsStoreTest, LegacyDocumentWithoutOsdDecodesDisabledEmpty) {
-  const auto decoded = DecodeRuntimeSettingsDocument(ValidDocument(), MakeBaseConfig(), Catalog());
+  const auto decoded = DecodeRuntimeSettingsDocument(
+      ValidDocument(), MakeBaseConfig(), Catalog());
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
   const auto& osd = decoded.value().active.osd;
   EXPECT_FALSE(osd.enabled);
@@ -608,9 +621,11 @@ TEST(RuntimeSettingsStoreTest, RoundTripsOsdItems) {
   doc.active.osd = {true,
                     {{"custom_text", "Camera 1", "bottom_right"},
                      {"timestamp", "", "top_left"}}};
-  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  const auto encoded =
+      EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
   ASSERT_TRUE(encoded.ok()) << encoded.error().message;
-  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  const auto decoded = DecodeRuntimeSettingsDocument(
+      encoded.value(), MakeBaseConfig(), Catalog());
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
 
   const auto& osd = decoded.value().active.osd;
@@ -624,10 +639,12 @@ TEST(RuntimeSettingsStoreTest, RoundTripsOsdItems) {
   EXPECT_EQ(osd.items[1].position, "top_left");
 }
 
-TEST(RuntimeSettingsStoreTest, RoundTripsOsdTextContainingQuotesAndBackslashes) {
+TEST(RuntimeSettingsStoreTest,
+     RoundTripsOsdTextContainingQuotesAndBackslashes) {
   RuntimeSettingsDocument doc = MakeDocument();
   doc.active.osd = {true, {{"custom_text", R"(say "hi" \ bye)", "top_right"}}};
-  const auto encoded = EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
+  const auto encoded =
+      EncodeRuntimeSettingsDocument(doc, MakeBaseConfig(), Catalog());
   ASSERT_TRUE(encoded.ok()) << encoded.error().message;
 
   // Prove the text was actually escaped on the wire (not hand-concatenated
@@ -635,7 +652,8 @@ TEST(RuntimeSettingsStoreTest, RoundTripsOsdTextContainingQuotesAndBackslashes) 
   // symmetrical bug.
   EXPECT_NE(encoded.value().find(R"(say \"hi\" \\ bye)"), std::string::npos);
 
-  const auto decoded = DecodeRuntimeSettingsDocument(encoded.value(), MakeBaseConfig(), Catalog());
+  const auto decoded = DecodeRuntimeSettingsDocument(
+      encoded.value(), MakeBaseConfig(), Catalog());
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
   ASSERT_EQ(decoded.value().active.osd.items.size(), 1U);
   EXPECT_EQ(decoded.value().active.osd.items[0].text, R"(say "hi" \ bye)");
@@ -645,7 +663,8 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveOsdObject) {
   const std::string base = ValidDocumentWithActiveOsd();
   // Sanity: the unmutated base document decodes successfully, so a failure
   // below is attributable to the mutation, not a malformed base fixture.
-  const auto sanity = DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
+  const auto sanity =
+      DecodeRuntimeSettingsDocument(base, MakeBaseConfig(), Catalog());
   ASSERT_TRUE(sanity.ok()) << sanity.error().message;
 
   // 1. extra/unknown key on the osd object (must be rejected by the outer
@@ -666,9 +685,10 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveOsdObject) {
   ExpectDecodeFailure(ReplaceOnce(base, "\"items\":[]", "\"items\":{}"));
 
   // 5. item with wrong key set (extra unknown key).
-  ExpectDecodeFailure(ReplaceOnce(
-      base, "\"items\":[]",
-      "\"items\":[{\"type\":\"timestamp\",\"text\":\"\",\"position\":\"top_left\",\"foo\":0}]"));
+  ExpectDecodeFailure(
+      ReplaceOnce(base, "\"items\":[]",
+                  "\"items\":[{\"type\":\"timestamp\",\"text\":\"\","
+                  "\"position\":\"top_left\",\"foo\":0}]"));
 
   // 6. item missing a required key (drop "text").
   ExpectDecodeFailure(ReplaceOnce(
@@ -681,9 +701,9 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveOsdObject) {
       "\"items\":[{\"type\":1,\"text\":\"\",\"position\":\"top_left\"}]"));
 
   // 8. non-string `text`.
-  ExpectDecodeFailure(ReplaceOnce(
-      base, "\"items\":[]",
-      "\"items\":[{\"type\":\"timestamp\",\"text\":1,\"position\":\"top_left\"}]"));
+  ExpectDecodeFailure(ReplaceOnce(base, "\"items\":[]",
+                                  "\"items\":[{\"type\":\"timestamp\",\"text\":"
+                                  "1,\"position\":\"top_left\"}]"));
 
   // 9. non-string `position`.
   ExpectDecodeFailure(ReplaceOnce(
@@ -693,71 +713,76 @@ TEST(RuntimeSettingsStoreTest, RejectsMalformedActiveOsdObject) {
 
 TEST(RuntimeSettingsStoreTest, RoundTripsMaximumUnsignedRevision) {
   const auto decoded = DecodeRuntimeSettingsDocument(
-      ValidDocument(std::numeric_limits<std::uint64_t>::max()), MakeBaseConfig(),
-      Catalog());
+      ValidDocument(std::numeric_limits<std::uint64_t>::max()),
+      MakeBaseConfig(), Catalog());
 
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
-  EXPECT_EQ(decoded.value().revision, std::numeric_limits<std::uint64_t>::max());
+  EXPECT_EQ(decoded.value().revision,
+            std::numeric_limits<std::uint64_t>::max());
 }
 
 TEST(RuntimeSettingsStoreTest, RejectsStrictSchemaAndSyntaxViolations) {
   std::vector<std::pair<std::string, std::string>> invalid_documents;
   invalid_documents.emplace_back(
-      "duplicate key", ReplaceOnce(ValidDocument(), "\"schema_version\":1,",
-                                   "\"schema_version\":1,\"schema_version\":1,"));
+      "duplicate key",
+      ReplaceOnce(ValidDocument(), "\"schema_version\":1,",
+                  "\"schema_version\":1,\"schema_version\":1,"));
   invalid_documents.emplace_back(
       "root unknown key", ReplaceOnce(ValidDocument(), "\"revision\":7,",
-                                       "\"revision\":7,\"unknown\":true,"));
+                                      "\"revision\":7,\"unknown\":true,"));
   invalid_documents.emplace_back(
       "root missing key", ReplaceOnce(ValidDocument(), "\"revision\":7,", ""));
-  invalid_documents.emplace_back(
-      "active unknown key", ReplaceOnce(ValidDocument(), "\"camera\":{",
-                                         "\"unknown\":true,\"camera\":{"));
+  invalid_documents.emplace_back("active unknown key",
+                                 ReplaceOnce(ValidDocument(), "\"camera\":{",
+                                             "\"unknown\":true,\"camera\":{"));
   invalid_documents.emplace_back(
       "camera unknown key", ReplaceOnce(ValidDocument(), "\"profile_id\":",
-                                         "\"unknown\":true,\"profile_id\":"));
+                                        "\"unknown\":true,\"profile_id\":"));
   invalid_documents.emplace_back(
       "camera missing key", ReplaceOnce(ValidDocument(), ",\"gop\":25", ""));
   invalid_documents.emplace_back(
-      "model unknown key", ReplaceOnce(ValidDocument(), "\"id\":\"objects\",",
-                                        "\"id\":\"objects\",\"hef_path\":\"/secret.hef\","));
+      "model unknown key",
+      ReplaceOnce(ValidDocument(), "\"id\":\"objects\",",
+                  "\"id\":\"objects\",\"hef_path\":\"/secret.hef\","));
   invalid_documents.emplace_back(
-      "last apply unknown key", ReplaceOnce(ValidDocument(), "\"status\":\"failed\",",
-                                             "\"status\":\"failed\",\"extra\":true,"));
+      "last apply unknown key",
+      ReplaceOnce(ValidDocument(), "\"status\":\"failed\",",
+                  "\"status\":\"failed\",\"extra\":true,"));
   invalid_documents.emplace_back(
-      "pending wrong type", ReplaceOnce(ValidDocument(), "\"pending\":{",
-                                          "\"pending\":\"invalid\",\"removed\":{"));
+      "pending wrong type",
+      ReplaceOnce(ValidDocument(), "\"pending\":{",
+                  "\"pending\":\"invalid\",\"removed\":{"));
   invalid_documents.emplace_back("trailing data", ValidDocument() + " true");
   invalid_documents.emplace_back(
       "nonfinite", ReplaceOnce(ValidDocument(), "\"confidence_threshold\":0.55",
-                                "\"confidence_threshold\":NaN"));
+                               "\"confidence_threshold\":NaN"));
   invalid_documents.emplace_back(
-      "floating revision", ReplaceOnce(ValidDocument(), "\"revision\":7",
-                                        "\"revision\":7.0"));
+      "floating revision",
+      ReplaceOnce(ValidDocument(), "\"revision\":7", "\"revision\":7.0"));
   invalid_documents.emplace_back(
-      "negative revision", ReplaceOnce(ValidDocument(), "\"revision\":7",
-                                        "\"revision\":-1"));
+      "negative revision",
+      ReplaceOnce(ValidDocument(), "\"revision\":7", "\"revision\":-1"));
   invalid_documents.emplace_back(
       "overflow revision", ReplaceOnce(ValidDocument(), "\"revision\":7",
-                                        "\"revision\":18446744073709551616"));
+                                       "\"revision\":18446744073709551616"));
   invalid_documents.emplace_back(
       "floating bitrate", ReplaceOnce(ValidDocument(), "\"bitrate_kbps\":8000",
-                                       "\"bitrate_kbps\":8000.0"));
+                                      "\"bitrate_kbps\":8000.0"));
   invalid_documents.emplace_back(
       "unsupported schema", ReplaceOnce(ValidDocument(), "\"schema_version\":1",
-                                          "\"schema_version\":2"));
+                                        "\"schema_version\":2"));
   invalid_documents.emplace_back(
       "unknown status", ReplaceOnce(ValidDocument(), "\"status\":\"failed\"",
-                                     "\"status\":\"unknown\""));
+                                    "\"status\":\"unknown\""));
   invalid_documents.emplace_back(
       "never restored", ReplaceOnce(ValidDocument(), "\"status\":\"failed\"",
-                                     "\"status\":\"never\""));
+                                    "\"status\":\"never\""));
   invalid_documents.emplace_back(
       "success code", ReplaceOnce(ValidDocument(), "\"status\":\"failed\"",
-                                    "\"status\":\"success\""));
+                                  "\"status\":\"success\""));
   invalid_documents.emplace_back(
-      "invalid managed settings", ReplaceOnce(ValidDocument(), "\"gop\":30",
-                                               "\"gop\":301"));
+      "invalid managed settings",
+      ReplaceOnce(ValidDocument(), "\"gop\":30", "\"gop\":301"));
   invalid_documents.emplace_back(
       "unknown active profile",
       ReplaceOnce(ValidDocument(), "imx708-1080p50", "unknown-profile"));
@@ -766,16 +791,22 @@ TEST(RuntimeSettingsStoreTest, RejectsStrictSchemaAndSyntaxViolations) {
       ReplaceOnce(ValidDocument(), "\"id\":\"pose\",\"enabled\":false",
                   "\"id\":\"unknown\",\"enabled\":false"));
   invalid_documents.emplace_back(
-      "wrong model order", ReplaceOnce(ValidDocument(),
-                                        "{\"id\":\"objects\",\"enabled\":true,\"confidence_threshold\":0.55},{\"id\":\"pose\",\"enabled\":false,\"confidence_threshold\":0.25}",
-                                        "{\"id\":\"pose\",\"enabled\":false,\"confidence_threshold\":0.25},{\"id\":\"objects\",\"enabled\":true,\"confidence_threshold\":0.55}"));
+      "wrong model order",
+      ReplaceOnce(
+          ValidDocument(),
+          "{\"id\":\"objects\",\"enabled\":true,\"confidence_threshold\":0.55},"
+          "{\"id\":\"pose\",\"enabled\":false,\"confidence_threshold\":0.25}",
+          "{\"id\":\"pose\",\"enabled\":false,\"confidence_threshold\":0.25},{"
+          "\"id\":\"objects\",\"enabled\":true,\"confidence_threshold\":0."
+          "55}"));
 
   auto invalid_utf8 = ValidDocument();
   const auto utf8_marker = invalid_utf8.find("imx708-1080p50");
   ASSERT_NE(utf8_marker, std::string::npos);
   invalid_utf8[utf8_marker] = static_cast<char>(0xc0);
   invalid_documents.emplace_back("invalid UTF-8", std::move(invalid_utf8));
-  invalid_documents.emplace_back("oversized", std::string(16U * 1024U + 1U, 'x'));
+  invalid_documents.emplace_back("oversized",
+                                 std::string(16U * 1024U + 1U, 'x'));
 
   for (const auto& [name, document] : invalid_documents) {
     SCOPED_TRACE(name);
@@ -787,7 +818,8 @@ TEST(RuntimeSettingsStoreTest, RejectsInvalidDocumentStatesDuringEncoding) {
   auto invalid = MakeDocument();
   invalid.active.models[0].confidence_threshold =
       std::numeric_limits<float>::quiet_NaN();
-  auto encoded = EncodeRuntimeSettingsDocument(invalid, MakeBaseConfig(), Catalog());
+  auto encoded =
+      EncodeRuntimeSettingsDocument(invalid, MakeBaseConfig(), Catalog());
   ASSERT_FALSE(encoded.ok());
   EXPECT_EQ(encoded.error().code, "E_RUNTIME_SETTINGS_DOCUMENT");
 
@@ -903,18 +935,14 @@ TEST(RuntimeSettingsStoreTest,
 
   const auto discarded = store->DiscardPending(0U);
   ASSERT_FALSE(discarded.ok());
-  EXPECT_EQ(discarded.error().code,
-            "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
+  EXPECT_EQ(discarded.error().code, "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
   const auto promoted = store->PromotePending(0U);
   ASSERT_FALSE(promoted.ok());
-  EXPECT_EQ(promoted.error().code,
-            "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
-  const auto recorded =
-      store->RecordApplyFailure(0U, "E_CAMERA_START", true);
+  EXPECT_EQ(promoted.error().code, "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
+  const auto recorded = store->RecordApplyFailure(0U, "E_CAMERA_START", true);
   EXPECT_FALSE(recorded.ok());
   if (!recorded.ok()) {
-    EXPECT_EQ(recorded.error().code,
-              "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
+    EXPECT_EQ(recorded.error().code, "E_RUNTIME_SETTINGS_RECOVERY_REQUIRED");
   }
 
   ExpectSnapshotEqual(store->Snapshot(), before);
@@ -928,8 +956,8 @@ TEST(RuntimeSettingsStoreTest,
   TemporaryDirectory root;
   const auto permissive = root.Path("permissive");
   MakeDirectory(permissive, 0750);
-  auto opened = RuntimeSettingsStore::Open(
-      permissive, MakeBaseActive(), MakeBaseConfig(), Catalog());
+  auto opened = RuntimeSettingsStore::Open(permissive, MakeBaseActive(),
+                                           MakeBaseConfig(), Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_STATE_MODE");
 
@@ -996,8 +1024,8 @@ TEST(RuntimeSettingsStoreTest, RejectsSpecialPermissionBitsOnStateDirectory) {
     MakeDirectory(state, mode);
     ASSERT_EQ(FileMode(state), mode);
 
-    const auto opened = RuntimeSettingsStore::Open(
-        state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+    const auto opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                                   MakeBaseConfig(), Catalog());
 
     ASSERT_FALSE(opened.ok());
     EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_STATE_MODE");
@@ -1015,30 +1043,30 @@ TEST(RuntimeSettingsStoreTest,
   const auto target = root.Path("target");
   WriteFile(target, ValidDocument());
   ASSERT_EQ(::symlink(target.c_str(), settings_path.c_str()), 0);
-  auto opened = RuntimeSettingsStore::Open(
-      state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+  auto opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                           MakeBaseConfig(), Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_PATH");
   ASSERT_EQ(::unlink(settings_path.c_str()), 0);
 
   ASSERT_EQ(::mkdir(settings_path.c_str(), 0600), 0);
-  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
-                                      MakeBaseConfig(), Catalog());
+  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(), MakeBaseConfig(),
+                                      Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_PATH");
   ASSERT_EQ(::rmdir(settings_path.c_str()), 0);
 
   WriteFile(settings_path, ValidDocument(), 0640);
-  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
-                                      MakeBaseConfig(), Catalog());
+  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(), MakeBaseConfig(),
+                                      Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_FILE_MODE");
   ASSERT_EQ(::unlink(settings_path.c_str()), 0);
 
   WriteFile(settings_path, ValidDocument());
   spoof_file_owner = true;
-  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
-                                      MakeBaseConfig(), Catalog());
+  opened = RuntimeSettingsStore::Open(state, MakeBaseActive(), MakeBaseConfig(),
+                                      Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_FILE_OWNER");
 }
@@ -1055,8 +1083,8 @@ TEST(RuntimeSettingsStoreTest, RejectsSpecialPermissionBitsOnSettingsDocument) {
     ASSERT_EQ(::chmod(settings_path.c_str(), mode), 0);
     ASSERT_EQ(FileMode(settings_path), mode);
 
-    const auto opened = RuntimeSettingsStore::Open(
-        state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+    const auto opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                                   MakeBaseConfig(), Catalog());
 
     ASSERT_FALSE(opened.ok());
     EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_FILE_MODE");
@@ -1075,15 +1103,15 @@ TEST(RuntimeSettingsStoreTest, RejectsUnprotectedTransactionMarkers) {
   for (const auto name : {kRollbackName, kPreviousName}) {
     const auto marker = state / name;
     ASSERT_EQ(::symlink(target.c_str(), marker.c_str()), 0);
-    auto opened = RuntimeSettingsStore::Open(
-        state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+    auto opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                             MakeBaseConfig(), Catalog());
     ASSERT_FALSE(opened.ok());
     EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_PATH");
     ASSERT_EQ(::unlink(marker.c_str()), 0);
 
     WriteFile(marker, ValidDocument(), 0640);
-    opened = RuntimeSettingsStore::Open(
-        state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+    opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                        MakeBaseConfig(), Catalog());
     ASSERT_FALSE(opened.ok());
     EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_FILE_MODE");
     ASSERT_EQ(::unlink(marker.c_str()), 0);
@@ -1091,8 +1119,8 @@ TEST(RuntimeSettingsStoreTest, RejectsUnprotectedTransactionMarkers) {
 
   WriteFile(state / kRollbackName, ValidDocument());
   spoof_file_owner = true;
-  const auto opened = RuntimeSettingsStore::Open(
-      state, MakeBaseActive(), MakeBaseConfig(), Catalog());
+  const auto opened = RuntimeSettingsStore::Open(state, MakeBaseActive(),
+                                                 MakeBaseConfig(), Catalog());
   ASSERT_FALSE(opened.ok());
   EXPECT_EQ(opened.error().code, "E_RUNTIME_SETTINGS_FILE_OWNER");
 }
@@ -1228,8 +1256,7 @@ TEST(RuntimeSettingsStoreTest,
   EXPECT_EQ(saved.error().code, "E_RUNTIME_SETTINGS_STORE");
   const auto poisoned = store->Snapshot();
   EXPECT_TRUE(poisoned.recovery_required);
-  EXPECT_EQ(poisoned.recovery_code,
-            "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
+  EXPECT_EQ(poisoned.recovery_code, "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
   const auto retried = store->SavePending(poisoned.revision, MakePending());
   ASSERT_FALSE(retried.ok());
   EXPECT_EQ(retried.error().code, "E_RUNTIME_SETTINGS_STORE");
@@ -1259,8 +1286,7 @@ TEST(RuntimeSettingsStoreTest,
   auto reopened = OpenStore(state);
   const auto recovered = reopened->Snapshot();
   EXPECT_TRUE(recovered.recovery_required);
-  EXPECT_EQ(recovered.recovery_code,
-            "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
+  EXPECT_EQ(recovered.recovery_code, "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
   EXPECT_EQ(recovered.revision, before.revision);
   ExpectSettingsEqual(recovered.active, before.active);
   ASSERT_TRUE(recovered.pending.has_value());
@@ -1353,8 +1379,7 @@ TEST(RuntimeSettingsStoreTest,
   auto reopened = OpenStore(state);
   const auto recovered = reopened->Snapshot();
   EXPECT_TRUE(recovered.recovery_required);
-  EXPECT_EQ(recovered.recovery_code,
-            "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
+  EXPECT_EQ(recovered.recovery_code, "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
   EXPECT_EQ(recovered.revision, before.revision);
   ExpectSettingsEqual(recovered.active, before.active);
   ASSERT_TRUE(recovered.pending.has_value());
@@ -1377,12 +1402,10 @@ TEST(RuntimeSettingsStoreTest,
   EXPECT_EQ(saved.error().code, "E_RUNTIME_SETTINGS_STORE");
   const auto poisoned = store->Snapshot();
   EXPECT_TRUE(poisoned.recovery_required);
-  EXPECT_EQ(poisoned.recovery_code,
-            "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
+  EXPECT_EQ(poisoned.recovery_code, "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
 }
 
-TEST(RuntimeSettingsStoreTest,
-     FailedRollbackSyncPoisonsFurtherMutations) {
+TEST(RuntimeSettingsStoreTest, FailedRollbackSyncPoisonsFurtherMutations) {
   StoreHooksScope hooks;
   TemporaryDirectory root;
   const auto state = root.Path("state");
@@ -1399,8 +1422,7 @@ TEST(RuntimeSettingsStoreTest,
   EXPECT_EQ(saved.error().code, "E_RUNTIME_SETTINGS_STORE");
   const auto poisoned = store->Snapshot();
   EXPECT_TRUE(poisoned.recovery_required);
-  EXPECT_EQ(poisoned.recovery_code,
-            "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
+  EXPECT_EQ(poisoned.recovery_code, "E_RUNTIME_SETTINGS_STORE_INDETERMINATE");
 }
 
 TEST(RuntimeSettingsStoreTest, MutationsEnforceRevisionAndPendingSemantics) {
@@ -1468,8 +1490,7 @@ TEST(RuntimeSettingsStoreTest,
   auto promote_stale = store->PromotePending(0U);
   ASSERT_FALSE(promote_stale.ok());
   EXPECT_EQ(promote_stale.error().code, "E_RUNTIME_SETTINGS_REVISION");
-  auto failure_stale =
-      store->RecordApplyFailure(0U, "E_CAMERA_START", false);
+  auto failure_stale = store->RecordApplyFailure(0U, "E_CAMERA_START", false);
   ASSERT_FALSE(failure_stale.ok());
   EXPECT_EQ(failure_stale.error().code, "E_RUNTIME_SETTINGS_REVISION");
 
@@ -1486,8 +1507,7 @@ TEST(RuntimeSettingsStoreTest,
   auto store = OpenStore(state);
   ASSERT_TRUE(store->SavePending(0U, MakePending()).ok());
 
-  const auto failed =
-      store->RecordApplyFailure(1U, "E_CAMERA_START", true);
+  const auto failed = store->RecordApplyFailure(1U, "E_CAMERA_START", true);
 
   ASSERT_TRUE(failed.ok()) << failed.error().message;
   EXPECT_EQ(failed.value().revision, 2U);

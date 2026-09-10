@@ -113,8 +113,10 @@ bool ValidSuite(const ProtectionSuiteSnapshot& snapshot,
 
 Json::Value BuildSuiteJson(const ProtectionSuiteSnapshot& snapshot) {
   Json::Value json(Json::objectValue);
-  json["suite"] = std::string(*SuiteName(snapshot.suite));
-  json["trigger"] = std::string(*TriggerName(snapshot.trigger));
+  // Both names were validated before this builder runs.
+  json["suite"] = std::string(SuiteName(snapshot.suite).value_or("unknown"));
+  json["trigger"] =
+      std::string(TriggerName(snapshot.trigger).value_or("unknown"));
   json["passed"] = snapshot.passed;
   json["started_at_seconds"] = Json::Int64(snapshot.started_at_seconds);
   json["finished_at_seconds"] = Json::Int64(snapshot.finished_at_seconds);
@@ -160,8 +162,7 @@ drogon::HttpResponsePtr PublicError(drogon::HttpStatusCode status,
 }
 
 drogon::HttpResponsePtr UnavailableResponse() {
-  return PublicError(drogon::k503ServiceUnavailable,
-                     "E_PROTECTION_UNAVAILABLE",
+  return PublicError(drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
                      "system protection is unavailable");
 }
 
@@ -199,12 +200,10 @@ common::Result<Json::Value> BuildSystemProtectionJson(
   json["check_running"] = snapshot.check_running;
   json["next_periodic_at_seconds"] =
       Json::Int64(snapshot.next_periodic_at_seconds);
-  json["self_test"] = snapshot.self_test
-                          ? BuildSuiteJson(*snapshot.self_test)
-                          : Json::Value(Json::nullValue);
-  json["integrity"] = snapshot.integrity
-                          ? BuildSuiteJson(*snapshot.integrity)
-                          : Json::Value(Json::nullValue);
+  json["self_test"] = snapshot.self_test ? BuildSuiteJson(*snapshot.self_test)
+                                         : Json::Value(Json::nullValue);
+  json["integrity"] = snapshot.integrity ? BuildSuiteJson(*snapshot.integrity)
+                                         : Json::Value(Json::nullValue);
   return common::Result<Json::Value>::Ok(std::move(json));
 }
 
@@ -231,13 +230,11 @@ drogon::HttpResponsePtr BuildSystemProtectionStartResponse(
       return SnapshotResponse(started.value(), drogon::k202Accepted);
     }
     if (started.error().code == "E_PROTECTION_CHECK_RUNNING") {
-      return PublicError(drogon::k409Conflict,
-                         "E_PROTECTION_CHECK_RUNNING",
+      return PublicError(drogon::k409Conflict, "E_PROTECTION_CHECK_RUNNING",
                          "protection check is already running");
     }
     if (started.error().code == "E_PROTECTION_TRANSITION_BUSY") {
-      return PublicError(drogon::k409Conflict,
-                         "E_PROTECTION_TRANSITION_BUSY",
+      return PublicError(drogon::k409Conflict, "E_PROTECTION_TRANSITION_BUSY",
                          "runtime transition is busy");
     }
     if (started.error().code == "E_PROTECTION_RESULT_INVALID") {

@@ -105,10 +105,10 @@ TEST(SecurityRequestGateTest, DefaultStateAllowsOnlyExactSetupSurface) {
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/app.js")).ok());
   EXPECT_TRUE(AuthorizeSecurityRequest(Request("/styles.css")).ok());
 
-  for (const std::string path : {
-           "/api/v1/health", "/api/v1/stream",
-           "/api/v1/setup/status/extra", "/index.html/", "/app.js.map",
-           "/assets/app.js", "/dashboard", "/%2e%2e/etc/passwd"}) {
+  for (const std::string path :
+       {"/api/v1/health", "/api/v1/stream", "/api/v1/setup/status/extra",
+        "/index.html/", "/app.js.map", "/assets/app.js", "/dashboard",
+        "/%2e%2e/etc/passwd"}) {
     auto result = AuthorizeSecurityRequest(Request(path));
     ASSERT_FALSE(result.ok()) << path;
     EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path;
@@ -127,26 +127,19 @@ TEST(SecurityRequestGateTest, DefaultStateAdmitsOnlyTheSetupSurface) {
   };
 
   const std::vector<std::pair<std::string, std::string>> allowed = {
-      {"/api/v1/setup/status", "GET"},
-      {"/api/v1/auth/login", "POST"},
-      {"/api/v1/auth/me", "GET"},
-      {"/api/v1/auth/logout", "POST"},
-      {"/api/v1/setup/initialize", "POST"},
-      {"/api/v1/setup/runtime", "POST"}};
+      {"/api/v1/setup/status", "GET"},      {"/api/v1/auth/login", "POST"},
+      {"/api/v1/auth/me", "GET"},           {"/api/v1/auth/logout", "POST"},
+      {"/api/v1/setup/initialize", "POST"}, {"/api/v1/setup/runtime", "POST"}};
   for (const auto& [path, method] : allowed) {
     EXPECT_TRUE(AuthorizeSecurityRequest(context(path, method)).ok())
         << path << " " << method;
   }
 
   const std::vector<std::pair<std::string, std::string>> denied = {
-      {"/api/v1/security/users", "GET"},
-      {"/api/v1/settings/runtime", "GET"},
-      {"/api/v1/audit/events", "GET"},
-      {"/api/v1/monitoring/cameras", "GET"},
-      {"/api/v1/cameras", "GET"},
-      {"/api/v1/system/protection", "GET"},
-      {"/api/v1/auth/password", "PUT"},
-      {"/api/v1/setup/status", "POST"}};
+      {"/api/v1/security/users", "GET"}, {"/api/v1/settings/runtime", "GET"},
+      {"/api/v1/audit/events", "GET"},   {"/api/v1/monitoring/cameras", "GET"},
+      {"/api/v1/cameras", "GET"},        {"/api/v1/system/protection", "GET"},
+      {"/api/v1/auth/password", "PUT"},  {"/api/v1/setup/status", "POST"}};
   for (const auto& [path, method] : denied) {
     const auto result = AuthorizeSecurityRequest(context(path, method));
     ASSERT_FALSE(result.ok()) << path << " " << method;
@@ -173,12 +166,9 @@ TEST(SecurityRequestGateTest,
   };
 
   const std::vector<std::pair<std::string, std::string>> allowed = {
-      {"/api/v1/setup/status", "GET"},
-      {"/api/v1/auth/login", "POST"},
-      {"/api/v1/auth/me", "GET"},
-      {"/api/v1/auth/logout", "POST"},
-      {"/api/v1/setup/initialize", "POST"},
-      {"/api/v1/setup/runtime", "POST"}};
+      {"/api/v1/setup/status", "GET"},      {"/api/v1/auth/login", "POST"},
+      {"/api/v1/auth/me", "GET"},           {"/api/v1/auth/logout", "POST"},
+      {"/api/v1/setup/initialize", "POST"}, {"/api/v1/setup/runtime", "POST"}};
 
   const std::vector<std::string> paths = {
       // The six admitted paths themselves (every method but the admitted
@@ -237,16 +227,15 @@ TEST(SecurityRequestGateTest,
       "/api/v1/auth",
   };
 
-  constexpr std::array<const char*, 5> methods = {"GET", "POST", "PUT",
-                                                   "PATCH", "DELETE"};
+  constexpr std::array<const char*, 5> methods = {"GET", "POST", "PUT", "PATCH",
+                                                  "DELETE"};
 
   std::size_t checked = 0U;
   for (const auto& path : paths) {
     for (const auto* method : methods) {
-      const bool is_allowed =
-          std::find(allowed.begin(), allowed.end(),
-                    std::pair<std::string, std::string>{path, method}) !=
-          allowed.end();
+      const bool is_allowed = std::find(allowed.begin(), allowed.end(),
+                                        std::pair<std::string, std::string>{
+                                            path, method}) != allowed.end();
       if (is_allowed) {
         continue;
       }
@@ -285,8 +274,8 @@ TEST(SecurityRequestGateTest, SetupInitializationRequiresOriginThenHeader) {
 }
 
 TEST(SecurityRequestGateTest, OperationalSetupIsLockedBeforeOtherChecks) {
-  for (const std::string path : {"/api/v1/setup/initialize",
-                                 "/api/v1/setup/runtime"}) {
+  for (const std::string path :
+       {"/api/v1/setup/initialize", "/api/v1/setup/runtime"}) {
     auto context = Operational(path, "POST");
     auto result = AuthorizeSecurityRequest(context);
     ASSERT_FALSE(result.ok()) << path;
@@ -371,8 +360,7 @@ TEST(SecurityRequestGateTest, RuntimeRestartUsesOperationalAdminCsrfPolicy) {
 }
 
 TEST(SecurityRequestGateTest, RuntimeSettingsGetRequiresManagementAdminOnly) {
-  auto context =
-      Operational("/api/v1/settings/runtime", "GET");
+  auto context = Operational("/api/v1/settings/runtime", "GET");
 
   auto missing_session = AuthorizeSecurityRequest(context);
   ASSERT_FALSE(missing_session.ok());
@@ -422,11 +410,10 @@ TEST(SecurityRequestGateTest, RuntimeSettingsRouteMethodsAreExact) {
            {"/api/v1/settings/runtime/discard", "GET"},
            {"/api/v1/settings/runtime/extra", "GET"},
        }) {
-    const auto result = AuthorizeSecurityRequest(
-        ValidManagementRequest(path, method));
+    const auto result =
+        AuthorizeSecurityRequest(ValidManagementRequest(path, method));
     ASSERT_FALSE(result.ok()) << path << ' ' << method;
-    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED")
-        << path << ' ' << method;
+    EXPECT_EQ(result.error().code, "E_ACCESS_DENIED") << path << ' ' << method;
   }
 }
 
@@ -456,8 +443,8 @@ TEST(SecurityRequestGateTest,
 
 TEST(SecurityRequestGateTest,
      ProtectionStartsRequireAdministratorOriginAndManagementHeader) {
-  for (const std::string path : {"/api/v1/system/self-tests",
-                                 "/api/v1/system/integrity-checks"}) {
+  for (const std::string path :
+       {"/api/v1/system/self-tests", "/api/v1/system/integrity-checks"}) {
     auto context = Operational(path, "POST");
     context.principal = Administrator();
 
@@ -480,7 +467,8 @@ TEST(SecurityRequestGateTest,
   }
 }
 
-TEST(SecurityRequestGateTest, ProtectionRoutesRejectWrongMethodsAndUnknownPaths) {
+TEST(SecurityRequestGateTest,
+     ProtectionRoutesRejectWrongMethodsAndUnknownPaths) {
   for (const auto& [path, method] :
        std::vector<std::pair<std::string, std::string>>{
            {"/api/v1/system/protection", "POST"},
@@ -493,11 +481,10 @@ TEST(SecurityRequestGateTest, ProtectionRoutesRejectWrongMethodsAndUnknownPaths)
            {"/api/v1/system/self-tests/extra", "POST"},
            {"/api/v1/system/integrity-check", "POST"},
        }) {
-    const auto denied = AuthorizeSecurityRequest(
-        ValidManagementRequest(path, method));
+    const auto denied =
+        AuthorizeSecurityRequest(ValidManagementRequest(path, method));
     ASSERT_FALSE(denied.ok()) << method << ' ' << path;
-    EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED")
-        << method << ' ' << path;
+    EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED") << method << ' ' << path;
   }
 }
 
@@ -526,8 +513,8 @@ TEST(SecurityRequestGateTest,
 }
 
 TEST(SecurityRequestGateTest, AuditReadsRequireAdministratorWithoutCsrf) {
-  for (const std::string path : {"/api/v1/audit/status",
-                                 "/api/v1/audit/events"}) {
+  for (const std::string path :
+       {"/api/v1/audit/status", "/api/v1/audit/events"}) {
     auto unauthenticated = Operational(path);
     const auto missing = AuthorizeSecurityRequest(unauthenticated);
     ASSERT_FALSE(missing.ok()) << path;
@@ -571,8 +558,8 @@ TEST(SecurityRequestGateTest, AuditRoutesRecognizeOnlyExactGetPaths) {
 }
 
 TEST(SecurityRequestGateTest, DefaultStateCannotAccessAuditReads) {
-  for (const std::string path : {"/api/v1/audit/status",
-                                 "/api/v1/audit/events"}) {
+  for (const std::string path :
+       {"/api/v1/audit/status", "/api/v1/audit/events"}) {
     const auto denied = AuthorizeSecurityRequest(Request(path));
     ASSERT_FALSE(denied.ok()) << path;
     EXPECT_EQ(denied.error().code, "E_ACCESS_DENIED") << path;
@@ -603,7 +590,8 @@ TEST(SecurityRequestGateTest, GetMeNeedsSessionButNotCsrf) {
   EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
 }
 
-TEST(SecurityRequestGateTest, UserManagementRoutesRecognizeExactMethodsAndShapes) {
+TEST(SecurityRequestGateTest,
+     UserManagementRoutesRecognizeExactMethodsAndShapes) {
   struct Route {
     const char* method;
     const char* path;
@@ -664,8 +652,7 @@ TEST(SecurityRequestGateTest,
         ValidManagementRequest(route.path, route.method));
     EXPECT_TRUE(result.ok()) << route.method << " " << route.path;
 
-    auto viewer_request =
-        ValidManagementRequest(route.path, route.method);
+    auto viewer_request = ValidManagementRequest(route.path, route.method);
     viewer_request.principal = Viewer();
     const auto viewer_result = AuthorizeSecurityRequest(viewer_request);
     ASSERT_FALSE(viewer_result.ok()) << route.method << " " << route.path;
@@ -733,8 +720,11 @@ TEST(SecurityRequestGateTest, ViewerCanReadOnlyMonitoringMediaAndOwnAuth) {
   EXPECT_TRUE(AuthorizeSecurityRequest(logout).ok());
 
   for (const std::string path : {
-           "/api/v1/health", "/api/v1/cameras", "/api/v1/stream",
-           "/api/v1/settings/runtime", "/api/v1/security/users",
+           "/api/v1/health",
+           "/api/v1/cameras",
+           "/api/v1/stream",
+           "/api/v1/settings/runtime",
+           "/api/v1/security/users",
            "/api/v1/security/management-ips",
        }) {
     auto context = Operational(path);
@@ -744,13 +734,11 @@ TEST(SecurityRequestGateTest, ViewerCanReadOnlyMonitoringMediaAndOwnAuth) {
     EXPECT_EQ(result.error().code, "E_AUTHORIZATION_REQUIRED") << path;
   }
 
-  auto management_mutation =
-      Operational("/api/v1/security/users", "POST");
+  auto management_mutation = Operational("/api/v1/security/users", "POST");
   management_mutation.principal = Viewer();
   management_mutation.origin = std::string(kOrigin);
   management_mutation.has_management_header = true;
-  const auto denied_mutation =
-      AuthorizeSecurityRequest(management_mutation);
+  const auto denied_mutation = AuthorizeSecurityRequest(management_mutation);
   ASSERT_FALSE(denied_mutation.ok());
   EXPECT_EQ(denied_mutation.error().code, "E_AUTHORIZATION_REQUIRED");
 }
@@ -915,8 +903,8 @@ TEST(SecurityRequestGateTest, RawSessionCookieHeadersRequireExactlyOneField) {
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_EQ(parsed.value().size(), 32U);
 
-  const std::vector<std::string> duplicate = {
-      "camera_session=" + token, "camera_session=" + token};
+  const std::vector<std::string> duplicate = {"camera_session=" + token,
+                                              "camera_session=" + token};
   EXPECT_FALSE(ParseSessionCookieHeaders(duplicate).ok());
   EXPECT_FALSE(ParseSessionCookieHeaders({}).ok());
 }
@@ -944,9 +932,9 @@ TEST(SecurityRequestGateTest, CredentialsParseInSituFromSecureBytes) {
 }
 
 TEST(SecurityRequestGateTest, LoginJsonRequiresStrictBoundedObject) {
-  auto parsed = ParseLoginJson(
-      R"({"username":"operator","password":"ValidPass1!"})",
-      "application/json; charset=utf-8");
+  auto parsed =
+      ParseLoginJson(R"({"username":"operator","password":"ValidPass1!"})",
+                     "application/json; charset=utf-8");
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_EQ(parsed.value().username, "operator");
   EXPECT_EQ(parsed.value().password.size(), 11U);
@@ -976,17 +964,15 @@ TEST(SecurityRequestGateTest, JsonParserEnforcesContentTypeAndAllBounds) {
   ASSERT_FALSE(oversized.ok());
   EXPECT_EQ(oversized.error().code, "E_REQUEST_TOO_LARGE");
 
-  auto username = ParseLoginJson(
-      "{\"username\":\"" + std::string(33U, 'a') +
-          "\",\"password\":\"ValidPass1!\"}",
-      "application/json");
+  auto username = ParseLoginJson("{\"username\":\"" + std::string(33U, 'a') +
+                                     "\",\"password\":\"ValidPass1!\"}",
+                                 "application/json");
   ASSERT_FALSE(username.ok());
   EXPECT_EQ(username.error().code, "E_INVALID_REQUEST");
 
-  auto password = ParseLoginJson(
-      "{\"username\":\"operator\",\"password\":\"" +
-          std::string(129U, 'p') + "\"}",
-      "application/json");
+  auto password = ParseLoginJson("{\"username\":\"operator\",\"password\":\"" +
+                                     std::string(129U, 'p') + "\"}",
+                                 "application/json");
   ASSERT_FALSE(password.ok());
   EXPECT_EQ(password.error().code, "E_INVALID_REQUEST");
 
@@ -1006,15 +992,16 @@ TEST(SecurityRequestGateTest, SetupJsonRequiresExactPeerFieldAndBounds) {
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_EQ(parsed.value().confirmed_peer_ip, "2001:db8::1");
 
-  auto missing = ParseSetupJson(
-      R"({"username":"operator","password":"ValidPass1!"})",
-      "application/json");
+  auto missing =
+      ParseSetupJson(R"({"username":"operator","password":"ValidPass1!"})",
+                     "application/json");
   ASSERT_FALSE(missing.ok());
   EXPECT_EQ(missing.error().code, "E_INVALID_REQUEST");
 
   auto oversized_ip = ParseSetupJson(
       "{\"username\":\"operator\",\"password\":\"ValidPass1!\","
-      "\"peer_ip\":\"" + std::string(46U, '1') + "\"}",
+      "\"peer_ip\":\"" +
+          std::string(46U, '1') + "\"}",
       "application/json");
   ASSERT_FALSE(oversized_ip.ok());
   EXPECT_EQ(oversized_ip.error().code, "E_INVALID_REQUEST");
@@ -1039,10 +1026,9 @@ TEST(SecurityRequestGateTest, SetupJsonAcceptsAnOptionalManagementIpArray) {
   // Key order is not fixed by the parser, so the array is exercised first as
   // well as last.
   auto listed = ParseSetupJson(
-      SecureBody(
-          R"({"management_ips":["198.51.100.7","2001:db8::2"],)"
-          R"("username":"operator","password":"ValidPass1!",)"
-          R"("peer_ip":"192.0.2.10"})"),
+      SecureBody(R"({"management_ips":["198.51.100.7","2001:db8::2"],)"
+                 R"("username":"operator","password":"ValidPass1!",)"
+                 R"("peer_ip":"192.0.2.10"})"),
       "application/json");
   ASSERT_TRUE(listed.ok()) << listed.error().message;
   EXPECT_EQ(listed.value().confirmed_peer_ip, "192.0.2.10");
@@ -1057,10 +1043,9 @@ TEST(SecurityRequestGateTest, SetupJsonAcceptsAnOptionalManagementIpArray) {
   // successors have been decoded over the bytes that followed it. A single
   // element, or escapes only in the final one, cannot show that at all.
   auto escaped = ParseSetupJson(
-      SecureBody(
-          R"({"username":"operator","password":"ValidPass1!",)"
-          R"("peer_ip":"192.0.2.10","management_ips":[)"
-          R"("198.51.100.\u0037","2001:db8:\u003a2","203.0.113.94"]})"),
+      SecureBody(R"({"username":"operator","password":"ValidPass1!",)"
+                 R"("peer_ip":"192.0.2.10","management_ips":[)"
+                 R"("198.51.100.\u0037","2001:db8:\u003a2","203.0.113.94"]})"),
       "application/json");
   ASSERT_TRUE(escaped.ok()) << escaped.error().message;
   EXPECT_EQ(escaped.value().management_ips,
@@ -1106,7 +1091,8 @@ TEST(SecurityRequestGateTest, SetupJsonRejectsMalformedOrUnboundedIpArrays) {
 
   auto oversized_entry = ParseSetupJson(
       R"({"username":"operator","password":"ValidPass1!","peer_ip":"192.0.2.10",)"
-      "\"management_ips\":[\"" + std::string(46U, '1') + "\"]}",
+      "\"management_ips\":[\"" +
+          std::string(46U, '1') + "\"]}",
       "application/json");
   ASSERT_FALSE(oversized_entry.ok());
   EXPECT_EQ(oversized_entry.error().code, "E_INVALID_REQUEST");
@@ -1115,9 +1101,8 @@ TEST(SecurityRequestGateTest, SetupJsonRejectsMalformedOrUnboundedIpArrays) {
   // more addresses than the device could ever hold is refused before any of it
   // is trusted.
   const auto body_with = [](std::size_t count) {
-    std::string body =
-        R"({"username":"operator","password":"ValidPass1!",)"
-        R"("peer_ip":"192.0.2.10","management_ips":[)";
+    std::string body = R"({"username":"operator","password":"ValidPass1!",)"
+                       R"("peer_ip":"192.0.2.10","management_ips":[)";
     for (std::size_t index = 0U; index < count; ++index) {
       body += (index == 0U ? "\"198.51.100." : ",\"198.51.100.") +
               std::to_string(index + 1U) + "\"";
@@ -1135,17 +1120,18 @@ TEST(SecurityRequestGateTest, SetupJsonRejectsMalformedOrUnboundedIpArrays) {
 
   // The list belongs to setup only. Login has no use for it and must keep
   // rejecting every key it does not name.
-  auto login_with_list = ParseLoginJson(
-      R"({"username":"operator","password":"ValidPass1!",)"
-      R"("management_ips":["198.51.100.7"]})",
-      "application/json");
+  auto login_with_list =
+      ParseLoginJson(R"({"username":"operator","password":"ValidPass1!",)"
+                     R"("management_ips":["198.51.100.7"]})",
+                     "application/json");
   ASSERT_FALSE(login_with_list.ok());
   EXPECT_EQ(login_with_list.error().code, "E_INVALID_REQUEST");
 }
 
 TEST(SecurityRequestGateTest, ReauthenticateJsonRequiresStrictBoundedObject) {
-  auto parsed = ParseReauthenticateJson(SecureBody(R"({"password":"ValidPass1!"})"),
-                                        "application/json; charset=utf-8");
+  auto parsed =
+      ParseReauthenticateJson(SecureBody(R"({"password":"ValidPass1!"})"),
+                              "application/json; charset=utf-8");
   ASSERT_TRUE(parsed.ok()) << parsed.error().message;
   EXPECT_EQ(parsed.value().size(), 11U);
 
@@ -1197,12 +1183,13 @@ TEST(SecurityRequestGateTest, RuntimeRetryRequiresAnExactEmptyJsonObject) {
   auto wrong_type = ValidateEmptyJsonObject("{}", "text/plain");
   ASSERT_FALSE(wrong_type.ok());
   EXPECT_EQ(wrong_type.error().code, "E_INVALID_REQUEST");
-  auto oversized = ValidateEmptyJsonObject(std::string(4097U, ' '),
-                                           "application/json");
+  auto oversized =
+      ValidateEmptyJsonObject(std::string(4097U, ' '), "application/json");
   ASSERT_FALSE(oversized.ok());
   EXPECT_EQ(oversized.error().code, "E_REQUEST_TOO_LARGE");
   for (const std::string body : {"{\v}", "{\f}"}) {
-    auto non_json_whitespace = ValidateEmptyJsonObject(body, "application/json");
+    auto non_json_whitespace =
+        ValidateEmptyJsonObject(body, "application/json");
     ASSERT_FALSE(non_json_whitespace.ok()) << body;
     EXPECT_EQ(non_json_whitespace.error().code, "E_INVALID_REQUEST") << body;
   }
@@ -1301,10 +1288,12 @@ TEST(BoundedWorkerTest, SubmitDoesNotBlockCallingThread) {
   std::promise<void> started;
   std::promise<void> release;
   auto release_future = release.get_future().share();
-  ASSERT_TRUE(worker.Submit([&] {
-    started.set_value();
-    release_future.wait();
-  }).ok());
+  ASSERT_TRUE(worker
+                  .Submit([&] {
+                    started.set_value();
+                    release_future.wait();
+                  })
+                  .ok());
   started.get_future().wait();
 
   const auto before = std::chrono::steady_clock::now();
@@ -1322,10 +1311,12 @@ TEST(BoundedWorkerTest, QueueOverflowFailsClosed) {
   std::promise<void> started;
   std::promise<void> release;
   auto release_future = release.get_future().share();
-  ASSERT_TRUE(worker.Submit([&] {
-    started.set_value();
-    release_future.wait();
-  }).ok());
+  ASSERT_TRUE(worker
+                  .Submit([&] {
+                    started.set_value();
+                    release_future.wait();
+                  })
+                  .ok());
   started.get_future().wait();
 
   EXPECT_TRUE(worker.Submit([] {}).ok());
@@ -1367,10 +1358,12 @@ TEST(BoundedWorkerTest, StopDrainsAcceptedTasksAndIsTerminal) {
 TEST(BoundedWorkerTest, StopRequestedByWorkerTaskIsTerminal) {
   BoundedWorker worker(2U);
   std::promise<void> returned_from_stop;
-  ASSERT_TRUE(worker.Submit([&] {
-    worker.Stop();
-    returned_from_stop.set_value();
-  }).ok());
+  ASSERT_TRUE(worker
+                  .Submit([&] {
+                    worker.Stop();
+                    returned_from_stop.set_value();
+                  })
+                  .ok());
 
   EXPECT_EQ(returned_from_stop.get_future().wait_for(std::chrono::seconds(1)),
             std::future_status::ready);
@@ -1387,11 +1380,13 @@ TEST(BoundedWorkerTest, ExternalAndWorkerStopRaceDoesNotDeadlock) {
     std::promise<void> task_started;
     std::promise<void> release_task;
     auto release_future = release_task.get_future().share();
-    if (!worker.Submit([&] {
-          task_started.set_value();
-          release_future.wait();
-          worker.Stop();
-        }).ok()) {
+    if (!worker
+             .Submit([&] {
+               task_started.set_value();
+               release_future.wait();
+               worker.Stop();
+             })
+             .ok()) {
       _exit(2);
     }
     task_started.get_future().wait();
@@ -1414,12 +1409,14 @@ TEST(BoundedWorkerTest, ConcurrentStopCallersWaitForWorkerDrain) {
   std::promise<void> release_task;
   auto release_future = release_task.get_future().share();
   std::atomic<int> completed{0};
-  ASSERT_TRUE(worker.Submit([&] {
-    task_started.set_value();
-    release_future.wait();
-    worker.Stop();
-    completed.fetch_add(1);
-  }).ok());
+  ASSERT_TRUE(worker
+                  .Submit([&] {
+                    task_started.set_value();
+                    release_future.wait();
+                    worker.Stop();
+                    completed.fetch_add(1);
+                  })
+                  .ok());
   ASSERT_TRUE(worker.Submit([&] { completed.fetch_add(1); }).ok());
   task_started.get_future().wait();
 

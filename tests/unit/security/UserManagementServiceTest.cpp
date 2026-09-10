@@ -24,7 +24,7 @@
 #include "camera_firmware/security/SecurityStore.hpp"
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
-                                                       bool rollback);
+                                                      bool rollback);
 
 namespace camera_firmware::security {
 namespace {
@@ -47,8 +47,7 @@ SessionIdentity Identity(unsigned char fill) {
 class TemporaryDirectory {
  public:
   TemporaryDirectory() {
-    std::array<char, 52> pattern{
-        "/tmp/cf-user-management-service-XXXXXX"};
+    std::array<char, 52> pattern{"/tmp/cf-user-management-service-XXXXXX"};
     char* created = ::mkdtemp(pattern.data());
     if (created == nullptr) {
       throw std::system_error(errno, std::generic_category(), "mkdtemp");
@@ -75,8 +74,8 @@ class TemporaryDirectory {
 class Database {
  public:
   explicit Database(const std::filesystem::path& path, int flags) {
-    if (::sqlite3_open_v2(path.c_str(), &database_, flags | SQLITE_OPEN_NOFOLLOW,
-                          nullptr) != SQLITE_OK) {
+    if (::sqlite3_open_v2(path.c_str(), &database_,
+                          flags | SQLITE_OPEN_NOFOLLOW, nullptr) != SQLITE_OK) {
       throw std::runtime_error("failed to open test database");
     }
     (void)::sqlite3_busy_timeout(database_, 1000);
@@ -166,8 +165,7 @@ SecureBytes ColumnBytes(sqlite3_stmt* statement, int column) {
 }
 
 PasswordRecord ReadPassword(const std::filesystem::path& path,
-                            std::int64_t user_id,
-                            bool history = false) {
+                            std::int64_t user_id, bool history = false) {
   Database database(path, SQLITE_OPEN_READONLY);
   Statement statement(
       database.get(),
@@ -186,8 +184,8 @@ PasswordRecord ReadPassword(const std::filesystem::path& path,
   }
   PasswordRecord record;
   record.algorithm = reinterpret_cast<const char*>(algorithm);
-  record.iterations = static_cast<std::uint32_t>(
-      ::sqlite3_column_int64(statement.get(), 1));
+  record.iterations =
+      static_cast<std::uint32_t>(::sqlite3_column_int64(statement.get(), 1));
   record.salt = ColumnBytes(statement.get(), 2);
   record.derived = ColumnBytes(statement.get(), 3);
   return record;
@@ -231,36 +229,32 @@ class UserManagementServiceTest : public ::testing::Test {
     ASSERT_TRUE(opened.ok());
     store_ = std::move(opened).value();
 
-    BootstrapRecord administrator{
-        "operator.one", "Operator.One",
-        DeriveForTest("NorthStar!9", 0x11U), "192.0.2.10", 1720000000};
+    BootstrapRecord administrator{"operator.one", "Operator.One",
+                                  DeriveForTest("NorthStar!9", 0x11U),
+                                  "192.0.2.10", 1720000000};
     auto initialized = store_->InitializeDevice(
-        std::move(administrator),
-        [] { return common::Result<void>::Ok(); });
+        std::move(administrator), [] { return common::Result<void>::Ok(); });
     ASSERT_TRUE(initialized.ok());
     administrator_id_ = QueryInt(
-        database_path(),
-        "SELECT id FROM users WHERE role = 'administrator';");
+        database_path(), "SELECT id FROM users WHERE role = 'administrator';");
     administrator_management_ip_id_ = QueryInt(
         database_path(),
         "SELECT id FROM management_ips WHERE role_scope = 'administrator';");
 
     dependencies_.now_seconds = [this] { return now_seconds_; };
     dependencies_.random_bytes = [this](std::size_t size) {
-      return common::Result<SecureBytes>::Ok(
-          FilledBytes(size, next_salt_++));
+      return common::Result<SecureBytes>::Ok(FilledBytes(size, next_salt_++));
     };
-    dependencies_.verify_password =
-        [](const SecureBytes& password, const PasswordRecord& record) {
-          return VerifyPassword(password, record);
-        };
+    dependencies_.verify_password = [](const SecureBytes& password,
+                                       const PasswordRecord& record) {
+      return VerifyPassword(password, record);
+    };
     dependencies_.revoke_sessions =
         [this](std::span<const SessionIdentity> identities) {
           ++exact_revocation_calls_;
           revoked_.assign(identities.begin(), identities.end());
         };
-    dependencies_.revoke_all_streams =
-        [this] { ++global_revocation_calls_; };
+    dependencies_.revoke_all_streams = [this] { ++global_revocation_calls_; };
   }
 
   void StartService() {
@@ -286,12 +280,11 @@ class UserManagementServiceTest : public ::testing::Test {
             "192.0.2.22"};
   }
 
-  std::int64_t SeedViewer(std::string_view canonical,
-                          std::string_view display,
-                          std::string_view password = "NorthStar!9",
-                          bool enabled = true,
-                          int failed_count = 0,
-                          std::optional<std::int64_t> lock_until = std::nullopt) {
+  std::int64_t SeedViewer(
+      std::string_view canonical, std::string_view display,
+      std::string_view password = "NorthStar!9", bool enabled = true,
+      int failed_count = 0,
+      std::optional<std::int64_t> lock_until = std::nullopt) {
     PasswordRecord record = DeriveForTest(password, next_salt_++);
     Database database(database_path(), SQLITE_OPEN_READWRITE);
     Statement statement(
@@ -302,10 +295,10 @@ class UserManagementServiceTest : public ::testing::Test {
         "lock_until_seconds, created_at_seconds) VALUES "
         "(?1, ?2, 'viewer', ?3, ?4, ?5, ?6, ?7, 1720000001, ?8, ?9, "
         "1720000001);");
-    const int lock_result = lock_until.has_value()
-                                ? ::sqlite3_bind_int64(statement.get(), 9,
-                                                       *lock_until)
-                                : ::sqlite3_bind_null(statement.get(), 9);
+    const int lock_result =
+        lock_until.has_value()
+            ? ::sqlite3_bind_int64(statement.get(), 9, *lock_until)
+            : ::sqlite3_bind_null(statement.get(), 9);
     if (::sqlite3_bind_text(statement.get(), 1, canonical.data(),
                             static_cast<int>(canonical.size()),
                             SQLITE_TRANSIENT) != SQLITE_OK ||
@@ -383,8 +376,7 @@ class UserManagementServiceTest : public ::testing::Test {
     }
   }
 
-  void SeedSession(std::int64_t user_id,
-                   UserRole role,
+  void SeedSession(std::int64_t user_id, UserRole role,
                    unsigned char identity_fill,
                    std::string_view peer_ip = "192.0.2.22") {
     auto identity = Identity(identity_fill);
@@ -412,8 +404,7 @@ class UserManagementServiceTest : public ::testing::Test {
     }
   }
 
-  std::int64_t SeedManagementIp(UserRole role,
-                                std::string_view normalized_ip,
+  std::int64_t SeedManagementIp(UserRole role, std::string_view normalized_ip,
                                 bool enabled = true) {
     Database database(database_path(), SQLITE_OPEN_READWRITE);
     Statement statement(
@@ -467,23 +458,25 @@ TEST_F(UserManagementServiceTest, CreatesCanonicalViewerAndListsStableIdOrder) {
   EXPECT_EQ(users.value()[2].username, "Monitor.West");
   EXPECT_LT(users.value()[0].id, users.value()[1].id);
   EXPECT_LT(users.value()[1].id, users.value()[2].id);
-  EXPECT_EQ(QueryText(database_path(),
-                      "SELECT subject_identity FROM audit_events WHERE "
-                      "event_type = 'viewer_created' ORDER BY sequence LIMIT 1;"),
-            "monitor.east");
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT subject_identity FROM audit_events WHERE "
+                "event_type = 'viewer_created' ORDER BY sequence LIMIT 1;"),
+      "monitor.east");
 }
 
 TEST_F(UserManagementServiceTest,
        RejectsCanonicalDuplicateAndReservedIdentityWithFailureAudit) {
   StartService();
-  ASSERT_TRUE(service_->CreateViewer("Monitor.East", Secret("SouthMoon!8"),
-                                     AdministratorContext())
+  ASSERT_TRUE(service_
+                  ->CreateViewer("Monitor.East", Secret("SouthMoon!8"),
+                                 AdministratorContext())
                   .ok());
 
-  auto duplicate = service_->CreateViewer(
-      "MONITOR.EAST", Secret("Crimson!7"), AdministratorContext());
-  auto reserved = service_->CreateViewer(
-      "ops-imx708", Secret("Crimson!7"), AdministratorContext());
+  auto duplicate = service_->CreateViewer("MONITOR.EAST", Secret("Crimson!7"),
+                                          AdministratorContext());
+  auto reserved = service_->CreateViewer("ops-imx708", Secret("Crimson!7"),
+                                         AdministratorContext());
 
   ASSERT_FALSE(duplicate.ok());
   EXPECT_EQ(duplicate.error().code, "E_USER_DUPLICATE");
@@ -503,8 +496,8 @@ TEST_F(UserManagementServiceTest, CountsEnabledAndDisabledViewersTowardLimit) {
   }
   StartService();
 
-  auto result = service_->CreateViewer(
-      "monitor.extra", Secret("SouthMoon!8"), AdministratorContext());
+  auto result = service_->CreateViewer("monitor.extra", Secret("SouthMoon!8"),
+                                       AdministratorContext());
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_VIEWER_LIMIT");
@@ -517,11 +510,12 @@ TEST_F(UserManagementServiceTest, CountsEnabledAndDisabledViewersTowardLimit) {
             "failure");
 }
 
-TEST_F(UserManagementServiceTest, AdministratorIsImmutableThroughViewerCommands) {
+TEST_F(UserManagementServiceTest,
+       AdministratorIsImmutableThroughViewerCommands) {
   StartService();
 
-  auto disabled = service_->SetViewerEnabled(
-      administrator_id_, false, AdministratorContext());
+  auto disabled = service_->SetViewerEnabled(administrator_id_, false,
+                                             AdministratorContext());
   auto reset = service_->ResetViewerPassword(
       administrator_id_, Secret("SouthMoon!8"), AdministratorContext());
   auto deleted =
@@ -533,45 +527,40 @@ TEST_F(UserManagementServiceTest, AdministratorIsImmutableThroughViewerCommands)
   EXPECT_EQ(reset.error().code, "E_USER_PROTECTED");
   ASSERT_FALSE(deleted.ok());
   EXPECT_EQ(deleted.error().code, "E_USER_PROTECTED");
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT enabled FROM users WHERE id = 1;"),
-            1);
+  EXPECT_EQ(
+      QueryInt(database_path(), "SELECT enabled FROM users WHERE id = 1;"), 1);
 }
 
 TEST_F(UserManagementServiceTest,
        DisableEnableAndDeletePublishOnlyCommittedExactSessions) {
-  const std::int64_t viewer_id =
-      SeedViewer("monitor.east", "Monitor.East");
+  const std::int64_t viewer_id = SeedViewer("monitor.east", "Monitor.East");
   SeedSession(viewer_id, UserRole::kViewer, 0x51U);
   dependencies_.revoke_sessions =
       [this](std::span<const SessionIdentity> identities) {
         ++exact_revocation_calls_;
         revoked_.assign(identities.begin(), identities.end());
-        EXPECT_EQ(QueryInt(database_path(),
-                           "SELECT COUNT(*) FROM sessions;"),
+        EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM sessions;"),
                   0);
       };
   StartService();
 
-  ASSERT_TRUE(service_->SetViewerEnabled(viewer_id, false,
-                                         AdministratorContext())
-                  .ok());
+  ASSERT_TRUE(
+      service_->SetViewerEnabled(viewer_id, false, AdministratorContext())
+          .ok());
   ASSERT_EQ(exact_revocation_calls_, 1);
   ASSERT_EQ(revoked_.size(), 1U);
   EXPECT_EQ(revoked_[0], Identity(0x51U));
 
-  ASSERT_TRUE(service_->SetViewerEnabled(viewer_id, true,
-                                         AdministratorContext())
-                  .ok());
+  ASSERT_TRUE(
+      service_->SetViewerEnabled(viewer_id, true, AdministratorContext()).ok());
   EXPECT_EQ(exact_revocation_calls_, 1);
   SeedSession(viewer_id, UserRole::kViewer, 0x52U);
   ASSERT_TRUE(service_->DeleteViewer(viewer_id, AdministratorContext()).ok());
   EXPECT_EQ(exact_revocation_calls_, 2);
   ASSERT_EQ(revoked_.size(), 1U);
   EXPECT_EQ(revoked_[0], Identity(0x52U));
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT COUNT(*) FROM users WHERE id = 2;"),
-            0);
+  EXPECT_EQ(
+      QueryInt(database_path(), "SELECT COUNT(*) FROM users WHERE id = 2;"), 0);
 }
 
 TEST_F(UserManagementServiceTest,
@@ -581,8 +570,8 @@ TEST_F(UserManagementServiceTest,
   StartService();
   auto context = ViewerContext(viewer_id, "monitor.east");
 
-  auto changed = service_->ChangeOwnPassword(
-      Secret("NorthStar!9"), Secret("SouthMoon!8"), context);
+  auto changed = service_->ChangeOwnPassword(Secret("NorthStar!9"),
+                                             Secret("SouthMoon!8"), context);
   ASSERT_TRUE(changed.ok());
   auto current_reuse = service_->ChangeOwnPassword(
       Secret("SouthMoon!8"), Secret("SouthMoon!8"), context);
@@ -593,37 +582,40 @@ TEST_F(UserManagementServiceTest,
   EXPECT_EQ(current_reuse.error().code, "E_PASSWORD_REUSE");
   ASSERT_FALSE(previous_reuse.ok());
   EXPECT_EQ(previous_reuse.error().code, "E_PASSWORD_REUSE");
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT COUNT(*) FROM password_history WHERE user_id = 2;"),
-            1);
+  EXPECT_EQ(
+      QueryInt(database_path(),
+               "SELECT COUNT(*) FROM password_history WHERE user_id = 2;"),
+      1);
 }
 
 TEST_F(UserManagementServiceTest,
        ResetReplacesOneHistoryClearsLockoutDeletesSessionAndRevokes) {
-  const std::int64_t viewer_id = SeedViewer(
-      "monitor.east", "Monitor.East", "NorthStar!9", true, 5, 1720000500);
+  const std::int64_t viewer_id = SeedViewer("monitor.east", "Monitor.East",
+                                            "NorthStar!9", true, 5, 1720000500);
   SeedHistory(viewer_id, "OldHarbor!6");
   SeedSession(viewer_id, UserRole::kViewer, 0x61U);
   StartService();
 
-  auto reset = service_->ResetViewerPassword(
-      viewer_id, Secret("SouthMoon!8"), AdministratorContext());
+  auto reset = service_->ResetViewerPassword(viewer_id, Secret("SouthMoon!8"),
+                                             AdministratorContext());
 
   ASSERT_TRUE(reset.ok());
   EXPECT_EQ(QueryInt(database_path(),
                      "SELECT failed_login_count FROM users WHERE id = 2;"),
             0);
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT lock_until_seconds IS NULL FROM users WHERE id = 2;"),
-            1);
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT COUNT(*) FROM password_history WHERE user_id = 2;"),
-            1);
+  EXPECT_EQ(
+      QueryInt(database_path(),
+               "SELECT lock_until_seconds IS NULL FROM users WHERE id = 2;"),
+      1);
+  EXPECT_EQ(
+      QueryInt(database_path(),
+               "SELECT COUNT(*) FROM password_history WHERE user_id = 2;"),
+      1);
   auto new_password = Secret("SouthMoon!8");
   auto old_password = Secret("NorthStar!9");
-  ASSERT_TRUE(VerifyPassword(new_password,
-                             ReadPassword(database_path(), viewer_id))
-                  .value());
+  ASSERT_TRUE(
+      VerifyPassword(new_password, ReadPassword(database_path(), viewer_id))
+          .value());
   ASSERT_TRUE(VerifyPassword(old_password,
                              ReadPassword(database_path(), viewer_id, true))
                   .value());
@@ -639,8 +631,8 @@ TEST_F(UserManagementServiceTest, ResetRejectsCurrentAndPreviousPassword) {
   SeedHistory(viewer_id, "OldHarbor!6");
   StartService();
 
-  auto current = service_->ResetViewerPassword(
-      viewer_id, Secret("NorthStar!9"), AdministratorContext());
+  auto current = service_->ResetViewerPassword(viewer_id, Secret("NorthStar!9"),
+                                               AdministratorContext());
   auto previous = service_->ResetViewerPassword(
       viewer_id, Secret("OldHarbor!6"), AdministratorContext());
 
@@ -656,16 +648,15 @@ TEST_F(UserManagementServiceTest,
       SeedViewer("monitor.east", "Monitor.East", "NorthStar!9");
   StartService();
 
-  auto changed = service_->ChangeOwnPassword(
-      Secret("WrongLake!4"), Secret("SouthMoon!8"),
-      ViewerContext(viewer_id, "monitor.east"));
+  auto changed =
+      service_->ChangeOwnPassword(Secret("WrongLake!4"), Secret("SouthMoon!8"),
+                                  ViewerContext(viewer_id, "monitor.east"));
 
   ASSERT_FALSE(changed.ok());
   EXPECT_EQ(changed.error().code, "E_CURRENT_PASSWORD");
   auto original = Secret("NorthStar!9");
-  EXPECT_TRUE(
-      VerifyPassword(original, ReadPassword(database_path(), viewer_id))
-          .value());
+  EXPECT_TRUE(VerifyPassword(original, ReadPassword(database_path(), viewer_id))
+                  .value());
   EXPECT_EQ(QueryText(database_path(),
                       "SELECT subject_identity FROM audit_events WHERE "
                       "event_type = 'password_changed' AND outcome = 'failure' "
@@ -686,14 +677,13 @@ TEST_F(UserManagementServiceTest,
   };
   StartService();
 
-  auto changed = service_->ChangeOwnPassword(
-      Secret("NorthStar!9"), Secret("SouthMoon!8"),
-      ViewerContext(viewer_id, "monitor.east"));
+  auto changed =
+      service_->ChangeOwnPassword(Secret("NorthStar!9"), Secret("SouthMoon!8"),
+                                  ViewerContext(viewer_id, "monitor.east"));
 
   ASSERT_FALSE(changed.ok());
   EXPECT_EQ(changed.error().code, "E_USER_CONFLICT");
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT COUNT(*) FROM password_history;"),
+  EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM password_history;"),
             0);
   EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM sessions;"), 1);
   EXPECT_EQ(exact_revocation_calls_, 0);
@@ -705,18 +695,18 @@ TEST_F(UserManagementServiceTest,
       SeedViewer("monitor.east", "Monitor.East", "NorthStar!9");
   SeedHistory(viewer_id, "OldHarbor!6");
   SeedSession(viewer_id, UserRole::kViewer, 0x73U);
-  auto raced_history = std::make_shared<PasswordRecord>(
-      DeriveForTest("SouthMoon!8", 0x74U));
-  dependencies_.random_bytes =
-      [this, viewer_id, raced_history](std::size_t size) {
-        ReplaceHistory(viewer_id, *raced_history);
-        return common::Result<SecureBytes>::Ok(FilledBytes(size, 0x75U));
-      };
+  auto raced_history =
+      std::make_shared<PasswordRecord>(DeriveForTest("SouthMoon!8", 0x74U));
+  dependencies_.random_bytes = [this, viewer_id,
+                                raced_history](std::size_t size) {
+    ReplaceHistory(viewer_id, *raced_history);
+    return common::Result<SecureBytes>::Ok(FilledBytes(size, 0x75U));
+  };
   StartService();
 
-  auto changed = service_->ChangeOwnPassword(
-      Secret("NorthStar!9"), Secret("SouthMoon!8"),
-      ViewerContext(viewer_id, "monitor.east"));
+  auto changed =
+      service_->ChangeOwnPassword(Secret("NorthStar!9"), Secret("SouthMoon!8"),
+                                  ViewerContext(viewer_id, "monitor.east"));
 
   ASSERT_FALSE(changed.ok());
   EXPECT_EQ(changed.error().code, "E_USER_CONFLICT");
@@ -751,19 +741,19 @@ TEST_F(UserManagementServiceTest,
   };
   StartService();
 
-  auto reset = service_->ResetViewerPassword(
-      viewer_id, Secret("SouthMoon!8"), AdministratorContext());
+  auto reset = service_->ResetViewerPassword(viewer_id, Secret("SouthMoon!8"),
+                                             AdministratorContext());
 
   ASSERT_FALSE(reset.ok());
   EXPECT_EQ(reset.error().code, "E_USER_MANAGEMENT_UNAVAILABLE");
   auto original = Secret("NorthStar!9");
-  EXPECT_TRUE(
-      VerifyPassword(original, ReadPassword(database_path(), viewer_id))
-          .value());
-  EXPECT_EQ(QueryText(database_path(),
-                      "SELECT outcome FROM audit_events WHERE event_type = "
-                      "'viewer_password_reset' ORDER BY sequence DESC LIMIT 1;"),
-            "failure");
+  EXPECT_TRUE(VerifyPassword(original, ReadPassword(database_path(), viewer_id))
+                  .value());
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT outcome FROM audit_events WHERE event_type = "
+                "'viewer_password_reset' ORDER BY sequence DESC LIMIT 1;"),
+      "failure");
 }
 
 TEST_F(UserManagementServiceTest,
@@ -776,17 +766,17 @@ TEST_F(UserManagementServiceTest,
   };
   StartService();
 
-  auto reset = service_->ResetViewerPassword(
-      viewer_id, Secret("SouthMoon!8"), AdministratorContext());
+  auto reset = service_->ResetViewerPassword(viewer_id, Secret("SouthMoon!8"),
+                                             AdministratorContext());
 
   ASSERT_FALSE(reset.ok());
   EXPECT_EQ(reset.error().code, "E_USER_MANAGEMENT_UNAVAILABLE");
-  EXPECT_EQ(QueryText(database_path(),
-                      "SELECT outcome FROM audit_events WHERE event_type = "
-                      "'viewer_password_reset' ORDER BY sequence DESC LIMIT 1;"),
-            "failure");
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT COUNT(*) FROM password_history;"),
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT outcome FROM audit_events WHERE event_type = "
+                "'viewer_password_reset' ORDER BY sequence DESC LIMIT 1;"),
+      "failure");
+  EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM password_history;"),
             0);
 }
 
@@ -796,8 +786,8 @@ TEST_F(UserManagementServiceTest,
   auto invalid_actor = AdministratorContext();
   invalid_actor.actor.user_id = 9999;
 
-  auto created = service_->CreateViewer(
-      "monitor.east", Secret("SouthMoon!8"), invalid_actor);
+  auto created = service_->CreateViewer("monitor.east", Secret("SouthMoon!8"),
+                                        invalid_actor);
 
   ASSERT_FALSE(created.ok());
   EXPECT_EQ(created.error().code, "E_USER_MANAGEMENT_UNAVAILABLE");
@@ -815,14 +805,13 @@ TEST_F(UserManagementServiceTest,
   ScopedTransactionFailureReset reset;
   ConfigureSecurityStoreTransactionFailuresForTest(true, false);
 
-  auto disabled = service_->SetViewerEnabled(
-      viewer_id, false, AdministratorContext());
+  auto disabled =
+      service_->SetViewerEnabled(viewer_id, false, AdministratorContext());
 
   ASSERT_FALSE(disabled.ok());
   EXPECT_EQ(disabled.error().code, "E_USER_MANAGEMENT_UNAVAILABLE");
-  EXPECT_EQ(QueryInt(database_path(),
-                     "SELECT enabled FROM users WHERE id = 2;"),
-            1);
+  EXPECT_EQ(
+      QueryInt(database_path(), "SELECT enabled FROM users WHERE id = 2;"), 1);
   EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM sessions;"), 1);
   EXPECT_EQ(exact_revocation_calls_, 0);
 }
@@ -837,8 +826,8 @@ TEST_F(UserManagementServiceTest,
   };
   StartService();
 
-  auto disabled = service_->SetViewerEnabled(
-      viewer_id, false, AdministratorContext());
+  auto disabled =
+      service_->SetViewerEnabled(viewer_id, false, AdministratorContext());
 
   EXPECT_TRUE(disabled.ok());
   EXPECT_EQ(global_revocation_calls_, 1);
@@ -851,8 +840,9 @@ TEST_F(UserManagementServiceTest,
       SeedViewer("monitor.east", "Monitor.East", "NorthStar!9");
   StartService();
 
-  ASSERT_TRUE(service_->ResetViewerPassword(
-                  viewer_id, Secret("SouthMoon!8"), AdministratorContext())
+  ASSERT_TRUE(service_
+                  ->ResetViewerPassword(viewer_id, Secret("SouthMoon!8"),
+                                        AdministratorContext())
                   .ok());
 
   EXPECT_EQ(QueryInt(database_path(),
@@ -867,8 +857,8 @@ TEST_F(UserManagementServiceTest,
        ManagementIpCanonicalizesIpv4AndIpv6AndListsStableIdOrder) {
   StartService();
 
-  auto ipv4 = service_->AddManagementIp(
-      UserRole::kViewer, "198.51.100.42", AdministratorContext());
+  auto ipv4 = service_->AddManagementIp(UserRole::kViewer, "198.51.100.42",
+                                        AdministratorContext());
   auto ipv6 = service_->AddManagementIp(
       UserRole::kViewer, "2001:0DB8:0000:0000:0000:0000:0000:002A",
       AdministratorContext());
@@ -894,10 +884,10 @@ TEST_F(UserManagementServiceTest,
        ManagementIpAllowsSameAddressPerRoleAndAuditsDuplicateRole) {
   StartService();
 
-  auto viewer = service_->AddManagementIp(
-      UserRole::kViewer, "192.0.2.10", AdministratorContext());
-  auto duplicate = service_->AddManagementIp(
-      UserRole::kViewer, "192.0.2.10", AdministratorContext());
+  auto viewer = service_->AddManagementIp(UserRole::kViewer, "192.0.2.10",
+                                          AdministratorContext());
+  auto duplicate = service_->AddManagementIp(UserRole::kViewer, "192.0.2.10",
+                                             AdministratorContext());
 
   ASSERT_TRUE(viewer.ok());
   ASSERT_FALSE(duplicate.ok());
@@ -906,24 +896,29 @@ TEST_F(UserManagementServiceTest,
                      "SELECT COUNT(*) FROM management_ips WHERE "
                      "normalized_ip = '192.0.2.10';"),
             2);
-  EXPECT_EQ(QueryText(database_path(),
-                      "SELECT subject_type || '|' || subject_identity || '|' || "
-                      "outcome FROM audit_events WHERE event_type = "
-                      "'management_ip_created' ORDER BY sequence DESC LIMIT 1;"),
-            "management_ip|192.0.2.10|failure");
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT subject_type || '|' || subject_identity || '|' || "
+                "outcome FROM audit_events WHERE event_type = "
+                "'management_ip_created' ORDER BY sequence DESC LIMIT 1;"),
+      "management_ip|192.0.2.10|failure");
 }
 
 TEST_F(UserManagementServiceTest,
        ManagementIpRejectsNonHostAndUnspecifiedInputsWithFailureAudits) {
   StartService();
-  const std::vector<std::string> invalid{
-      "",           "192.0.2.0/24", "192.0.2.1-192.0.2.4",
-      "*",          "camera.local", "0.0.0.0",
-      "::",         std::string("192.0.2.1\0junk", 14)};
+  const std::vector<std::string> invalid{"",
+                                         "192.0.2.0/24",
+                                         "192.0.2.1-192.0.2.4",
+                                         "*",
+                                         "camera.local",
+                                         "0.0.0.0",
+                                         "::",
+                                         std::string("192.0.2.1\0junk", 14)};
 
   for (const auto& input : invalid) {
     auto added = service_->AddManagementIp(UserRole::kViewer, input,
-                                            AdministratorContext());
+                                           AdministratorContext());
     ASSERT_FALSE(added.ok()) << input;
     EXPECT_EQ(added.error().code, "E_MANAGEMENT_IP_INVALID") << input;
   }
@@ -941,13 +936,13 @@ TEST_F(UserManagementServiceTest,
 TEST_F(UserManagementServiceTest,
        ManagementIpCountsEnabledAndDisabledRowsTowardPerRoleLimit) {
   for (int index = 1; index <= 32; ++index) {
-    SeedManagementIp(UserRole::kViewer,
-                     "198.51.100." + std::to_string(index), index % 2 == 0);
+    SeedManagementIp(UserRole::kViewer, "198.51.100." + std::to_string(index),
+                     index % 2 == 0);
   }
   StartService();
 
-  auto rejected = service_->AddManagementIp(
-      UserRole::kViewer, "198.51.100.99", AdministratorContext());
+  auto rejected = service_->AddManagementIp(UserRole::kViewer, "198.51.100.99",
+                                            AdministratorContext());
   auto administrator = service_->AddManagementIp(
       UserRole::kAdministrator, "198.51.100.99", AdministratorContext());
 
@@ -994,11 +989,11 @@ TEST_F(UserManagementServiceTest,
   StartService();
 
   auto updated = service_->UpdateManagementIp(
-      administrator_management_ip_id_, UserRole::kAdministrator,
-      "192.0.2.10", AdministratorContext());
-  auto deleted = service_->DeleteManagementIp(
-      administrator_management_ip_id_, UserRole::kAdministrator,
+      administrator_management_ip_id_, UserRole::kAdministrator, "192.0.2.10",
       AdministratorContext());
+  auto deleted = service_->DeleteManagementIp(administrator_management_ip_id_,
+                                              UserRole::kAdministrator,
+                                              AdministratorContext());
 
   ASSERT_FALSE(updated.ok());
   ASSERT_FALSE(deleted.ok());
@@ -1016,9 +1011,9 @@ TEST_F(UserManagementServiceTest,
   auto off_peer = AdministratorContext();
   off_peer.normalized_peer_ip = "192.0.2.99";
 
-  auto updated = service_->UpdateManagementIp(
-      administrator_management_ip_id_, UserRole::kAdministrator,
-      "192.0.2.10", off_peer);
+  auto updated = service_->UpdateManagementIp(administrator_management_ip_id_,
+                                              UserRole::kAdministrator,
+                                              "192.0.2.10", off_peer);
   auto deleted = service_->DeleteManagementIp(
       administrator_management_ip_id_, UserRole::kAdministrator, off_peer);
 
@@ -1039,12 +1034,12 @@ TEST_F(UserManagementServiceTest,
   auto replacement_peer = AdministratorContext();
   replacement_peer.normalized_peer_ip = "192.0.2.20";
 
-  auto updated = service_->UpdateManagementIp(
-      administrator_management_ip_id_, UserRole::kAdministrator,
-      "192.0.2.30", replacement_peer);
-  auto deleted = service_->DeleteManagementIp(
-      administrator_management_ip_id_, UserRole::kAdministrator,
-      replacement_peer);
+  auto updated = service_->UpdateManagementIp(administrator_management_ip_id_,
+                                              UserRole::kAdministrator,
+                                              "192.0.2.30", replacement_peer);
+  auto deleted =
+      service_->DeleteManagementIp(administrator_management_ip_id_,
+                                   UserRole::kAdministrator, replacement_peer);
 
   ASSERT_TRUE(updated.ok());
   ASSERT_TRUE(deleted.ok());
@@ -1058,8 +1053,7 @@ TEST_F(UserManagementServiceTest,
             "192.0.2.20");
 }
 
-TEST_F(UserManagementServiceTest,
-       ManagementIpAllowsDeletingFinalViewerIp) {
+TEST_F(UserManagementServiceTest, ManagementIpAllowsDeletingFinalViewerIp) {
   const auto management_ip_id =
       SeedManagementIp(UserRole::kViewer, "198.51.100.20");
   StartService();
@@ -1080,9 +1074,9 @@ TEST_F(UserManagementServiceTest,
       SeedManagementIp(UserRole::kViewer, "198.51.100.20");
   StartService();
 
-  auto updated = service_->UpdateManagementIp(
-      management_ip_id, UserRole::kAdministrator, "198.51.100.21",
-      AdministratorContext());
+  auto updated =
+      service_->UpdateManagementIp(management_ip_id, UserRole::kAdministrator,
+                                   "198.51.100.21", AdministratorContext());
   auto deleted = service_->DeleteManagementIp(
       management_ip_id, UserRole::kAdministrator, AdministratorContext());
 
@@ -1109,9 +1103,9 @@ TEST_F(UserManagementServiceTest,
               "198.51.100.20");
   StartService();
 
-  auto updated = service_->UpdateManagementIp(
-      management_ip_id, UserRole::kViewer, "198.51.100.21",
-      AdministratorContext());
+  auto updated =
+      service_->UpdateManagementIp(management_ip_id, UserRole::kViewer,
+                                   "198.51.100.21", AdministratorContext());
 
   ASSERT_TRUE(updated.ok());
   ASSERT_EQ(exact_revocation_calls_, 1);
@@ -1150,11 +1144,12 @@ TEST_F(UserManagementServiceTest,
   EXPECT_EQ(exact_revocation_calls_, 0);
   EXPECT_EQ(global_revocation_calls_, 0);
   EXPECT_TRUE(revoked_.empty());
-  EXPECT_EQ(QueryText(database_path(),
-                      "SELECT detail_code || '|' || subject_identity || '|' || "
-                      "outcome FROM audit_events WHERE event_type = "
-                      "'management_ip_updated' ORDER BY sequence DESC LIMIT 1;"),
-            "unchanged|2001:db8::20|success");
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT detail_code || '|' || subject_identity || '|' || "
+                "outcome FROM audit_events WHERE event_type = "
+                "'management_ip_updated' ORDER BY sequence DESC LIMIT 1;"),
+      "unchanged|2001:db8::20|success");
 }
 
 TEST_F(UserManagementServiceTest,

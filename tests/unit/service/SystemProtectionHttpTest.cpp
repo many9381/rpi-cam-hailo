@@ -63,22 +63,22 @@ SystemProtectionSnapshot CompleteSnapshot() {
       .passed = false,
       .started_at_seconds = 1'721'358'400,
       .finished_at_seconds = 1'721'358'402,
-      .integrity_items = {
-          {"firmware", IntegrityCategory::kFirmware, true, "OK"},
-          {"library", IntegrityCategory::kLibrary, true, "OK"},
-          {"configuration", IntegrityCategory::kConfiguration, true, "OK"},
-          {"web", IntegrityCategory::kWebAsset, true, "OK"},
-          {"kernel", IntegrityCategory::kKernel, false,
-           "E_INTEGRITY_MISMATCH"},
-          {"module", IntegrityCategory::kKernelModule, true, "OK"},
-      },
+      .integrity_items =
+          {
+              {"firmware", IntegrityCategory::kFirmware, true, "OK"},
+              {"library", IntegrityCategory::kLibrary, true, "OK"},
+              {"configuration", IntegrityCategory::kConfiguration, true, "OK"},
+              {"web", IntegrityCategory::kWebAsset, true, "OK"},
+              {"kernel", IntegrityCategory::kKernel, false,
+               "E_INTEGRITY_MISMATCH"},
+              {"module", IntegrityCategory::kKernelModule, true, "OK"},
+          },
   };
   return snapshot;
 }
 
 void ExpectPublicError(const drogon::HttpResponsePtr& response,
-                       drogon::HttpStatusCode status,
-                       std::string_view code,
+                       drogon::HttpStatusCode status, std::string_view code,
                        std::string_view message) {
   ASSERT_NE(response, nullptr);
   EXPECT_EQ(response->statusCode(), status);
@@ -94,33 +94,31 @@ TEST(SystemProtectionHttpTest,
   auto serialized = BuildSystemProtectionJson(CompleteSnapshot());
   ASSERT_TRUE(serialized.ok()) << serialized.error().code;
   const auto& json = serialized.value();
-  ExpectExactKeys(json, {"state", "check_running",
-                         "next_periodic_at_seconds", "self_test",
-                         "integrity"});
+  ExpectExactKeys(json, {"state", "check_running", "next_periodic_at_seconds",
+                         "self_test", "integrity"});
   EXPECT_EQ(json["state"].asString(), "operational");
   EXPECT_FALSE(json["check_running"].asBool());
   EXPECT_EQ(json["next_periodic_at_seconds"].asInt64(), 1'721'444'800);
 
   const auto& self_test = json["self_test"];
-  ExpectExactKeys(self_test, {"suite", "trigger", "passed",
-                              "started_at_seconds", "finished_at_seconds",
-                              "items"});
+  ExpectExactKeys(self_test,
+                  {"suite", "trigger", "passed", "started_at_seconds",
+                   "finished_at_seconds", "items"});
   EXPECT_EQ(self_test["suite"].asString(), "self_test");
   EXPECT_EQ(self_test["trigger"].asString(), "startup");
   ASSERT_EQ(self_test["items"].size(), 1U);
-  ExpectExactKeys(self_test["items"][0U],
-                  {"id", "category", "passed", "code"});
+  ExpectExactKeys(self_test["items"][0U], {"id", "category", "passed", "code"});
   EXPECT_TRUE(self_test["items"][0U]["category"].isNull());
 
   const auto& integrity = json["integrity"];
   EXPECT_EQ(integrity["suite"].asString(), "integrity");
   EXPECT_EQ(integrity["trigger"].asString(), "periodic");
   const std::vector<std::string> expected_categories = {
-      "firmware", "library", "configuration", "web_asset", "kernel",
-      "kernel_module"};
+      "firmware",  "library", "configuration",
+      "web_asset", "kernel",  "kernel_module"};
   ASSERT_EQ(integrity["items"].size(), expected_categories.size());
-  for (Json::ArrayIndex index = 0U;
-       index < integrity["items"].size(); ++index) {
+  for (Json::ArrayIndex index = 0U; index < integrity["items"].size();
+       ++index) {
     ExpectExactKeys(integrity["items"][index],
                     {"id", "category", "passed", "code"});
     EXPECT_EQ(integrity["items"][index]["category"].asString(),
@@ -135,7 +133,8 @@ TEST(SystemProtectionHttpTest,
   EXPECT_EQ(text.find("message"), std::string::npos);
 }
 
-TEST(SystemProtectionHttpTest, SerializesCheckingRestrictedManualAndNullSuites) {
+TEST(SystemProtectionHttpTest,
+     SerializesCheckingRestrictedManualAndNullSuites) {
   SystemProtectionSnapshot snapshot;
   snapshot.state = ProtectionState::kChecking;
   snapshot.check_running = true;
@@ -155,8 +154,7 @@ TEST(SystemProtectionHttpTest, SerializesCheckingRestrictedManualAndNullSuites) 
   auto restricted = BuildSystemProtectionJson(snapshot);
   ASSERT_TRUE(restricted.ok());
   EXPECT_EQ(restricted.value()["state"].asString(), "restricted");
-  EXPECT_EQ(restricted.value()["self_test"]["trigger"].asString(),
-            "manual");
+  EXPECT_EQ(restricted.value()["self_test"]["trigger"].asString(), "manual");
 }
 
 TEST(SystemProtectionHttpTest, RejectsOversizedResultArraysWithoutPartialJson) {
@@ -193,7 +191,8 @@ TEST(SystemProtectionHttpTest, RejectsOversizedIdsAndCodes) {
   EXPECT_EQ(serialized.error().code, "E_PROTECTION_RESULT_INVALID");
 }
 
-TEST(SystemProtectionHttpTest, StatusResponseConvertsInvalidAndExceptionalData) {
+TEST(SystemProtectionHttpTest,
+     StatusResponseConvertsInvalidAndExceptionalData) {
   auto invalid = CompleteSnapshot();
   invalid.integrity->integrity_items[0U].id.assign(65U, 'x');
   ExpectPublicError(
@@ -207,32 +206,28 @@ TEST(SystemProtectionHttpTest, StatusResponseConvertsInvalidAndExceptionalData) 
       drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
       "system protection is unavailable");
   ExpectPublicError(BuildSystemProtectionStatusResponse({}),
-                    drogon::k503ServiceUnavailable,
-                    "E_PROTECTION_UNAVAILABLE",
+                    drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
                     "system protection is unavailable");
 }
 
 TEST(SystemProtectionHttpTest, StartResponseReturns202Snapshot) {
-  auto response = BuildSystemProtectionStartResponse([] {
-    return Result<SystemProtectionSnapshot>::Ok(CompleteSnapshot());
-  });
+  auto response = BuildSystemProtectionStartResponse(
+      [] { return Result<SystemProtectionSnapshot>::Ok(CompleteSnapshot()); });
   ASSERT_NE(response, nullptr);
   EXPECT_EQ(response->statusCode(), drogon::k202Accepted);
   const auto* json = response->getJsonObject().get();
   ASSERT_NE(json, nullptr);
-  ExpectExactKeys(*json, {"state", "check_running",
-                          "next_periodic_at_seconds", "self_test",
-                          "integrity"});
+  ExpectExactKeys(*json, {"state", "check_running", "next_periodic_at_seconds",
+                          "self_test", "integrity"});
 }
 
 TEST(SystemProtectionHttpTest, StartResponseMapsConflictAndUnavailable) {
-  ExpectPublicError(
-      BuildSystemProtectionStartResponse([] {
-        return Result<SystemProtectionSnapshot>::Err(
-            {"E_PROTECTION_CHECK_RUNNING", "/private/running"});
-      }),
-      drogon::k409Conflict, "E_PROTECTION_CHECK_RUNNING",
-      "protection check is already running");
+  ExpectPublicError(BuildSystemProtectionStartResponse([] {
+                      return Result<SystemProtectionSnapshot>::Err(
+                          {"E_PROTECTION_CHECK_RUNNING", "/private/running"});
+                    }),
+                    drogon::k409Conflict, "E_PROTECTION_CHECK_RUNNING",
+                    "protection check is already running");
   ExpectPublicError(
       BuildSystemProtectionStartResponse([] {
         return Result<SystemProtectionSnapshot>::Err(
@@ -240,20 +235,18 @@ TEST(SystemProtectionHttpTest, StartResponseMapsConflictAndUnavailable) {
       }),
       drogon::k409Conflict, "E_PROTECTION_TRANSITION_BUSY",
       "runtime transition is busy");
-  ExpectPublicError(
-      BuildSystemProtectionStartResponse([] {
-        return Result<SystemProtectionSnapshot>::Err(
-            {"E_PROTECTION_STOPPING", "/private/stopping"});
-      }),
-      drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
-      "system protection is unavailable");
-  ExpectPublicError(
-      BuildSystemProtectionStartResponse(
-          []() -> Result<SystemProtectionSnapshot> {
-            throw std::runtime_error("/private/exception");
-          }),
-      drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
-      "system protection is unavailable");
+  ExpectPublicError(BuildSystemProtectionStartResponse([] {
+                      return Result<SystemProtectionSnapshot>::Err(
+                          {"E_PROTECTION_STOPPING", "/private/stopping"});
+                    }),
+                    drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
+                    "system protection is unavailable");
+  ExpectPublicError(BuildSystemProtectionStartResponse(
+                        []() -> Result<SystemProtectionSnapshot> {
+                          throw std::runtime_error("/private/exception");
+                        }),
+                    drogon::k503ServiceUnavailable, "E_PROTECTION_UNAVAILABLE",
+                    "system protection is unavailable");
 }
 
 }  // namespace

@@ -43,13 +43,12 @@ bool IsValidUtf8(std::string_view input) {
     } else if (byte == 0xe0U) {
       length = 3U;
       minimum_second = 0xa0U;
-    } else if (byte >= 0xe1U && byte <= 0xecU) {
+    } else if ((byte >= 0xe1U && byte <= 0xecU) ||
+               (byte >= 0xeeU && byte <= 0xefU)) {
       length = 3U;
     } else if (byte == 0xedU) {
       length = 3U;
       maximum_second = 0x9fU;
-    } else if (byte >= 0xeeU && byte <= 0xefU) {
-      length = 3U;
     } else if (byte == 0xf0U) {
       length = 4U;
       minimum_second = 0x90U;
@@ -182,8 +181,7 @@ common::Result<settings::RuntimeSettings> ParseSettings(
     const Json::Value& value) {
   if (!HasKeysWithOptional(value, {"camera", "models"},
                            {"sub_stream", "osd"}) ||
-      !HasExactKeys(value["camera"],
-                    {"profile_id", "bitrate_kbps", "gop"}) ||
+      !HasExactKeys(value["camera"], {"profile_id", "bitrate_kbps", "gop"}) ||
       !value["camera"]["profile_id"].isString() ||
       !IsValidUtf8(value["camera"]["profile_id"].asString()) ||
       !value["models"].isArray()) {
@@ -203,8 +201,7 @@ common::Result<settings::RuntimeSettings> ParseSettings(
   if (value.isMember("sub_stream")) {
     const auto& sub_stream_value = value["sub_stream"];
     if (!HasExactKeys(sub_stream_value,
-                      {"enabled", "width", "height", "fps",
-                       "bitrate_kbps"}) ||
+                      {"enabled", "width", "height", "fps", "bitrate_kbps"}) ||
         !sub_stream_value["enabled"].isBool()) {
       return InvalidRequest<settings::RuntimeSettings>();
     }
@@ -247,10 +244,8 @@ common::Result<settings::RuntimeSettings> ParseSettings(
 
   parsed.models.reserve(value["models"].size());
   for (const auto& model : value["models"]) {
-    if (!HasExactKeys(model,
-                      {"id", "enabled", "confidence_threshold"}) ||
-        !model["id"].isString() ||
-        !IsValidUtf8(model["id"].asString()) ||
+    if (!HasExactKeys(model, {"id", "enabled", "confidence_threshold"}) ||
+        !model["id"].isString() || !IsValidUtf8(model["id"].asString()) ||
         !model["enabled"].isBool() ||
         !model["confidence_threshold"].isNumeric()) {
       return InvalidRequest<settings::RuntimeSettings>();
@@ -259,8 +254,7 @@ common::Result<settings::RuntimeSettings> ParseSettings(
     if (!std::isfinite(confidence) || confidence < 0.0 || confidence > 1.0) {
       return InvalidRequest<settings::RuntimeSettings>();
     }
-    parsed.models.push_back({model["id"].asString(),
-                             model["enabled"].asBool(),
+    parsed.models.push_back({model["id"].asString(), model["enabled"].asBool(),
                              static_cast<float>(confidence)});
   }
   return common::Result<settings::RuntimeSettings>::Ok(std::move(parsed));
@@ -361,8 +355,7 @@ PublicError MapPublicError(const common::Error& error) {
       error.code == "E_RUNTIME_SETTINGS_AI_DISABLED" ||
       error.code.starts_with("E_RUNTIME_SETTINGS_MODEL_") ||
       error.code.starts_with("E_RUNTIME_SETTINGS_SUB") ||
-      error.code == "E_SETTINGS_OSD" ||
-      error.code.starts_with("E_CONFIG_") ||
+      error.code == "E_SETTINGS_OSD" || error.code.starts_with("E_CONFIG_") ||
       error.code == "E_PIPELINE_CANDIDATE" ||
       error.code == "E_SETTINGS_UNSUPPORTED") {
     return {drogon::k422UnprocessableEntity, "E_SETTINGS_UNSUPPORTED",
@@ -389,8 +382,7 @@ PublicError MapPublicError(const common::Error& error) {
 }
 
 drogon::HttpResponsePtr JsonResponse(
-    Json::Value json,
-    drogon::HttpStatusCode status = drogon::k200OK) {
+    Json::Value json, drogon::HttpStatusCode status = drogon::k200OK) {
   auto response = drogon::HttpResponse::newHttpJsonResponse(std::move(json));
   response->setStatusCode(status);
   return response;
@@ -399,8 +391,7 @@ drogon::HttpResponsePtr JsonResponse(
 }  // namespace
 
 common::Result<RuntimeSettingsUpdateRequest> ParseRuntimeSettingsUpdateJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto root = ParseStrictJson(body, content_type);
   if (!root.ok() ||
       !HasExactKeys(root.value(), {"expected_revision", "settings"})) {
@@ -416,19 +407,16 @@ common::Result<RuntimeSettingsUpdateRequest> ParseRuntimeSettingsUpdateJson(
 }
 
 common::Result<RuntimeSettingsCommandRequest> ParseRuntimeSettingsCommandJson(
-    std::string_view body,
-    std::string_view content_type) {
+    std::string_view body, std::string_view content_type) {
   auto root = ParseStrictJson(body, content_type);
-  if (!root.ok() ||
-      !HasExactKeys(root.value(), {"expected_revision"})) {
+  if (!root.ok() || !HasExactKeys(root.value(), {"expected_revision"})) {
     return InvalidRequest<RuntimeSettingsCommandRequest>();
   }
   auto revision = ParseRevision(root.value()["expected_revision"]);
   if (!revision.ok()) {
     return InvalidRequest<RuntimeSettingsCommandRequest>();
   }
-  return common::Result<RuntimeSettingsCommandRequest>::Ok(
-      {revision.value()});
+  return common::Result<RuntimeSettingsCommandRequest>::Ok({revision.value()});
 }
 
 Json::Value BuildRuntimeSettingsSnapshotJson(
@@ -483,10 +471,12 @@ Json::Value BuildRuntimeSettingsSnapshotJson(
   }
 
   Json::Value last_apply(Json::objectValue);
-  last_apply["status"] = std::string(ApplyStatusName(snapshot.last_apply.status));
-  last_apply["code"] = snapshot.last_apply.status == settings::ApplyStatus::kFailed
-                           ? "E_SETTINGS_APPLY_FAILED"
-                           : "";
+  last_apply["status"] =
+      std::string(ApplyStatusName(snapshot.last_apply.status));
+  last_apply["code"] =
+      snapshot.last_apply.status == settings::ApplyStatus::kFailed
+          ? "E_SETTINGS_APPLY_FAILED"
+          : "";
   last_apply["restored"] = snapshot.last_apply.restored;
   json["last_apply"] = std::move(last_apply);
   return json;

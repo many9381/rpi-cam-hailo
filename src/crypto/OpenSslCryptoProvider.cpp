@@ -100,11 +100,11 @@ bool RawDeriveKeyPbkdf2(std::span<const unsigned char> password,
   char digest[] = "SHA256";
   std::array<OSSL_PARAM, 5> parameters = {
       OSSL_PARAM_construct_octet_string(
-          OSSL_KDF_PARAM_PASSWORD,
-          const_cast<unsigned char*>(password.data()), password.size()),
-      OSSL_PARAM_construct_octet_string(
-          OSSL_KDF_PARAM_SALT, const_cast<unsigned char*>(salt.data()),
-          salt.size()),
+          OSSL_KDF_PARAM_PASSWORD, const_cast<unsigned char*>(password.data()),
+          password.size()),
+      OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT,
+                                        const_cast<unsigned char*>(salt.data()),
+                                        salt.size()),
       OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER, &iterations),
       OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, digest, 0U),
       OSSL_PARAM_construct_end()};
@@ -116,10 +116,9 @@ bool RawDeriveKeyPbkdf2(std::span<const unsigned char> password,
 // the key is constructed from a raw 32-byte seed
 // (EVP_PKEY_new_raw_private_key) rather than read from a PEM file, because
 // this interface's contract takes a raw seed rather than a key path.
-bool RawSignEd25519(std::span<const unsigned char> message,
-                    std::span<const unsigned char> seed,
-                    std::array<unsigned char, kEd25519SignatureBytes>&
-                        signature_out) {
+bool RawSignEd25519(
+    std::span<const unsigned char> message, std::span<const unsigned char> seed,
+    std::array<unsigned char, kEd25519SignatureBytes>& signature_out) {
   EvpPkey key(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr,
                                            seed.data(), seed.size()),
               EVP_PKEY_free);
@@ -148,15 +147,14 @@ int RawVerifyEd25519(std::span<const unsigned char> message,
                      std::span<const unsigned char> signature,
                      std::span<const unsigned char> public_key) {
   EvpPkey key(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
-                                          public_key.data(),
-                                          public_key.size()),
+                                          public_key.data(), public_key.size()),
               EVP_PKEY_free);
   if (!key) {
     return -1;
   }
   EvpMdContext context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-  if (!context || EVP_DigestVerifyInit(context.get(), nullptr, nullptr,
-                                       nullptr, key.get()) != 1) {
+  if (!context || EVP_DigestVerifyInit(context.get(), nullptr, nullptr, nullptr,
+                                       key.get()) != 1) {
     return -1;
   }
   return EVP_DigestVerify(context.get(), signature.data(), signature.size(),
@@ -254,21 +252,18 @@ bool RawOpenAesGcm(std::span<const unsigned char> key,
 // PBKDF2-HMAC-SHA256, password = "password", salt = "salt", 4096 iterations.
 constexpr std::array<unsigned char, 8U> kSelfTestPbkdf2Password{
     'p', 'a', 's', 's', 'w', 'o', 'r', 'd'};
-constexpr std::array<unsigned char, 4U> kSelfTestPbkdf2Salt{'s', 'a', 'l',
-                                                             't'};
+constexpr std::array<unsigned char, 4U> kSelfTestPbkdf2Salt{'s', 'a', 'l', 't'};
 constexpr std::uint32_t kSelfTestPbkdf2Iterations = 4096U;
 constexpr std::array<unsigned char, 32U> kSelfTestPbkdf2Expected{
-    0xc5U, 0xe4U, 0x78U, 0xd5U, 0x92U, 0x88U, 0xc8U, 0x41U,
-    0xaaU, 0x53U, 0x0dU, 0xb6U, 0x84U, 0x5cU, 0x4cU, 0x8dU,
-    0x96U, 0x28U, 0x93U, 0xa0U, 0x01U, 0xceU, 0x4eU, 0x11U,
-    0xa4U, 0x96U, 0x38U, 0x73U, 0xaaU, 0x98U, 0x13U, 0x4aU};
+    0xc5U, 0xe4U, 0x78U, 0xd5U, 0x92U, 0x88U, 0xc8U, 0x41U, 0xaaU, 0x53U, 0x0dU,
+    0xb6U, 0x84U, 0x5cU, 0x4cU, 0x8dU, 0x96U, 0x28U, 0x93U, 0xa0U, 0x01U, 0xceU,
+    0x4eU, 0x11U, 0xa4U, 0x96U, 0x38U, 0x73U, 0xaaU, 0x98U, 0x13U, 0x4aU};
 
 // Ed25519, RFC 8032 section 7.1, TEST 1 (empty message).
 constexpr std::array<unsigned char, kEd25519SeedBytes> kSelfTestEd25519Seed{
-    0x9dU, 0x61U, 0xb1U, 0x9dU, 0xefU, 0xfdU, 0x5aU, 0x60U,
-    0xbaU, 0x84U, 0x4aU, 0xf4U, 0x92U, 0xecU, 0x2cU, 0xc4U,
-    0x44U, 0x49U, 0xc5U, 0x69U, 0x7bU, 0x32U, 0x69U, 0x19U,
-    0x70U, 0x3bU, 0xacU, 0x03U, 0x1cU, 0xaeU, 0x7fU, 0x60U};
+    0x9dU, 0x61U, 0xb1U, 0x9dU, 0xefU, 0xfdU, 0x5aU, 0x60U, 0xbaU, 0x84U, 0x4aU,
+    0xf4U, 0x92U, 0xecU, 0x2cU, 0xc4U, 0x44U, 0x49U, 0xc5U, 0x69U, 0x7bU, 0x32U,
+    0x69U, 0x19U, 0x70U, 0x3bU, 0xacU, 0x03U, 0x1cU, 0xaeU, 0x7fU, 0x60U};
 constexpr std::array<unsigned char, kEd25519PublicKeyBytes>
     kSelfTestEd25519PublicKey{0xd7U, 0x5aU, 0x98U, 0x01U, 0x82U, 0xb1U, 0x0aU,
                               0xb7U, 0xd5U, 0x4bU, 0xfeU, 0xd3U, 0xc9U, 0x64U,
@@ -338,7 +333,7 @@ bool RunPbkdf2SelfTest() noexcept {
     return RawDeriveKeyPbkdf2(kSelfTestPbkdf2Password, kSelfTestPbkdf2Salt,
                               kSelfTestPbkdf2Iterations, output) &&
            CRYPTO_memcmp(output.data(), kSelfTestPbkdf2Expected.data(),
-                        output.size()) == 0;
+                         output.size()) == 0;
   } catch (...) {
     return false;
   }
@@ -375,11 +370,10 @@ bool RunAes256GcmSelfTest() noexcept {
     common::SecureBytes tag;
     ciphertext.resize(16U);
     tag.resize(kAesGcmTagBytes);
-    if (!RawSealAesGcm(kSelfTestAesKey, kSelfTestAesIv, kSelfTestAesPlaintext,
-                       {},
-                       std::span<unsigned char>(ciphertext.data(),
-                                                ciphertext.size()),
-                       std::span<unsigned char>(tag.data(), tag.size()))) {
+    if (!RawSealAesGcm(
+            kSelfTestAesKey, kSelfTestAesIv, kSelfTestAesPlaintext, {},
+            std::span<unsigned char>(ciphertext.data(), ciphertext.size()),
+            std::span<unsigned char>(tag.data(), tag.size()))) {
       return false;
     }
     if (CRYPTO_memcmp(ciphertext.data(), kSelfTestAesCiphertext.data(),
@@ -393,8 +387,7 @@ bool RunAes256GcmSelfTest() noexcept {
             kSelfTestAesKey, kSelfTestAesIv,
             std::span<const unsigned char>(ciphertext.data(),
                                            ciphertext.size()),
-            {},
-            std::span<const unsigned char>(tag.data(), tag.size()),
+            {}, std::span<const unsigned char>(tag.data(), tag.size()),
             std::span<unsigned char>(decrypted.data(), decrypted.size()))) {
       return false;
     }
@@ -419,7 +412,7 @@ common::Result<SelfTestReport> OpenSslCryptoProvider::SelfTest() {
     bool overall_passed = true;
 
     const auto record = [&report, &overall_passed](std::string id,
-                                                    bool passed) {
+                                                   bool passed) {
       SelfTestItem item;
       item.id = std::move(id);
       item.passed = passed;
@@ -469,8 +462,8 @@ common::Result<common::SecureBytes> OpenSslCryptoProvider::RandomBytes(
   return common::Result<common::SecureBytes>::Ok(std::move(output));
 }
 
-common::Result<common::SecureBytes>
-OpenSslCryptoProvider::RandomBytesPrivate(std::size_t output_size) {
+common::Result<common::SecureBytes> OpenSslCryptoProvider::RandomBytesPrivate(
+    std::size_t output_size) {
   if (status_.load() != ProviderStatus::kOperational) {
     return Unavailable<common::SecureBytes>();
   }
@@ -490,10 +483,8 @@ OpenSslCryptoProvider::RandomBytesPrivate(std::size_t output_size) {
 }
 
 common::Result<common::SecureBytes> OpenSslCryptoProvider::DeriveKeyPbkdf2(
-    const common::SecureBytes& password,
-    std::span<const unsigned char> salt,
-    std::uint32_t iterations,
-    std::size_t output_size) {
+    const common::SecureBytes& password, std::span<const unsigned char> salt,
+    std::uint32_t iterations, std::size_t output_size) {
   if (status_.load() != ProviderStatus::kOperational) {
     return Unavailable<common::SecureBytes>();
   }
@@ -518,13 +509,14 @@ common::Result<std::array<unsigned char, kEd25519SignatureBytes>>
 OpenSslCryptoProvider::SignEd25519(
     std::span<const unsigned char> message,
     std::span<const unsigned char> private_key_seed) {
-  using ResultT = common::Result<std::array<unsigned char, kEd25519SignatureBytes>>;
+  using ResultT =
+      common::Result<std::array<unsigned char, kEd25519SignatureBytes>>;
   if (status_.load() != ProviderStatus::kOperational) {
     return Unavailable<std::array<unsigned char, kEd25519SignatureBytes>>();
   }
   if (private_key_seed.size() != kEd25519SeedBytes) {
-    return ResultT::Err(
-        {"E_CRYPTO_INVALID_KEY", "Ed25519 private key seed has invalid length"});
+    return ResultT::Err({"E_CRYPTO_INVALID_KEY",
+                         "Ed25519 private key seed has invalid length"});
   }
   std::array<unsigned char, kEd25519SignatureBytes> signature{};
   if (!RawSignEd25519(message, private_key_seed, signature)) {
@@ -546,8 +538,7 @@ common::Result<bool> OpenSslCryptoProvider::VerifyEd25519(
   }
   if (signature.size() != kEd25519SignatureBytes) {
     return common::Result<bool>::Err(
-        {"E_CRYPTO_INVALID_SIGNATURE",
-         "Ed25519 signature has invalid length"});
+        {"E_CRYPTO_INVALID_SIGNATURE", "Ed25519 signature has invalid length"});
   }
   const int verify_result = RawVerifyEd25519(message, signature, public_key);
   if (verify_result < 0) {
@@ -558,12 +549,10 @@ common::Result<bool> OpenSslCryptoProvider::VerifyEd25519(
 }
 
 common::Result<void> OpenSslCryptoProvider::SealAesGcm(
-    std::span<const unsigned char> key,
-    std::span<const unsigned char> nonce,
+    std::span<const unsigned char> key, std::span<const unsigned char> nonce,
     std::span<const unsigned char> plaintext,
     std::span<const unsigned char> associated_data,
-    std::span<unsigned char> ciphertext_out,
-    std::span<unsigned char> tag_out) {
+    std::span<unsigned char> ciphertext_out, std::span<unsigned char> tag_out) {
   if (status_.load() != ProviderStatus::kOperational) {
     return Unavailable<void>();
   }
@@ -584,8 +573,7 @@ common::Result<void> OpenSslCryptoProvider::SealAesGcm(
 }
 
 common::Result<void> OpenSslCryptoProvider::OpenAesGcm(
-    std::span<const unsigned char> key,
-    std::span<const unsigned char> nonce,
+    std::span<const unsigned char> key, std::span<const unsigned char> nonce,
     std::span<const unsigned char> ciphertext,
     std::span<const unsigned char> associated_data,
     std::span<const unsigned char> tag,

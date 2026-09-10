@@ -14,8 +14,7 @@ TEST(DetectionBusTest, PublishesToSubscribers) {
 
   camera_firmware::ai::DetectionEvent event;
   event.camera_id = "imx708-main";
-  event.detections.push_back(
-      {0, "person", 0.9f, {0.1f, 0.2f, 0.3f, 0.4f}});
+  event.detections.push_back({0, "person", 0.9f, {0.1f, 0.2f, 0.3f, 0.4f}});
 
   bus.Publish(event);
 
@@ -36,11 +35,11 @@ TEST(DetectionBusTest, UnsubscribeStopsDelivery) {
   int a = 0;
   int b = 0;
 
-  auto sub_a = bus.Subscribe(
-      [&](const camera_firmware::ai::DetectionEvent&) { ++a; });
+  auto sub_a =
+      bus.Subscribe([&](const camera_firmware::ai::DetectionEvent&) { ++a; });
   {
-    auto sub_b = bus.Subscribe(
-        [&](const camera_firmware::ai::DetectionEvent&) { ++b; });
+    auto sub_b =
+        bus.Subscribe([&](const camera_firmware::ai::DetectionEvent&) { ++b; });
     bus.Publish(camera_firmware::ai::DetectionEvent{});
   }
 

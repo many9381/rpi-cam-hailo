@@ -141,8 +141,8 @@ FragmentRing::Reader::WaitNext(std::chrono::milliseconds timeout) {
     return Result::Ok(std::nullopt);
   }
 
-  const auto offset = static_cast<std::size_t>(
-      cursor_->next_fragment_sequence - earliest);
+  const auto offset =
+      static_cast<std::size_t>(cursor_->next_fragment_sequence - earliest);
   assert(offset < state->fragments.size());
   const auto& entry = state->fragments[offset];
   cursor_->next_fragment_sequence = entry.sequence + 1U;
@@ -220,8 +220,7 @@ common::Result<std::uint64_t> FragmentRing::BeginGeneration(
 }
 
 common::Result<void> FragmentRing::Publish(
-    std::vector<std::uint8_t> media_fragment,
-    bool random_access) {
+    std::vector<std::uint8_t> media_fragment, bool random_access) {
   std::lock_guard lock(state_->mutex);
   const auto invalidate = [this] {
     ++state_->generation;
@@ -305,10 +304,11 @@ common::Result<FragmentRing::Reader> FragmentRing::OpenReaderInternal(
   }
   if (maximum_age.has_value()) {
     const auto current_time = state_->now();
+    const auto& last_publication_at = state_->last_publication_at;
     if (*maximum_age <= std::chrono::milliseconds::zero() ||
-        !state_->last_publication_at.has_value() ||
-        current_time < *state_->last_publication_at ||
-        current_time - *state_->last_publication_at > *maximum_age) {
+        !last_publication_at.has_value() ||
+        current_time < *last_publication_at ||
+        current_time - *last_publication_at > *maximum_age) {
       return common::Result<Reader>::Err(
           {"E_LIVE_STALE", "live stream has stopped producing fragments"});
     }

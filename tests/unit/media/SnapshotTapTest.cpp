@@ -22,8 +22,7 @@ int CreateNv12Memfd() {
     return fd;
   }
   const std::vector<std::uint8_t> nv12{
-      0x40, 0x80, 0x80, 0xc0,
-      0x80, 0x80,
+      0x40, 0x80, 0x80, 0xc0, 0x80, 0x80,
   };
   if (ftruncate(fd, static_cast<off_t>(nv12.size())) != 0) {
     close(fd);
@@ -53,12 +52,11 @@ TEST(SnapshotTapTest, BuildsJpegForLatestMatchingCameraFrame) {
   handle.planes[1] = {.dmabuf_fd = fd, .offset = 4, .length = 2, .stride = 2};
 
   camera_firmware::media::SnapshotTap tap;
-  tap.Publish(camera_firmware::media::FrameLease(std::move(handle), [fd] {
-    close(fd);
-  }));
+  tap.Publish(camera_firmware::media::FrameLease(std::move(handle),
+                                                 [fd] { close(fd); }));
 
-  auto jpeg = camera_firmware::media::BuildLatestSnapshotJpeg(
-      tap, "imx708-main");
+  auto jpeg =
+      camera_firmware::media::BuildLatestSnapshotJpeg(tap, "imx708-main");
 
   ASSERT_TRUE(jpeg.has_value());
   ASSERT_GE(jpeg->size(), 4u);
@@ -99,9 +97,8 @@ TEST(SnapshotTapTest, FreshFrameExpiresFromBoundedSnapshotAccess) {
   handle.plane_count = 2;
   handle.planes[0] = {.dmabuf_fd = fd, .offset = 0, .length = 4, .stride = 2};
   handle.planes[1] = {.dmabuf_fd = fd, .offset = 4, .length = 2, .stride = 2};
-  tap.Publish(camera_firmware::media::FrameLease(std::move(handle), [fd] {
-    (void)close(fd);
-  }));
+  tap.Publish(camera_firmware::media::FrameLease(std::move(handle),
+                                                 [fd] { (void)close(fd); }));
 
   EXPECT_TRUE(tap.HasFreshFrame(2000ms));
   EXPECT_TRUE(tap.Latest(2000ms).has_value());
@@ -149,8 +146,8 @@ TEST(SnapshotTapTest, PublicationClockRunsUnlockedAndLateCallCannotOverwrite) {
   camera_firmware::media::FrameHandle first_handle;
   first_handle.sequence = 1U;
   std::thread first([&] {
-    tap.Publish(camera_firmware::media::FrameLease(
-        std::move(first_handle), [] {}));
+    tap.Publish(
+        camera_firmware::media::FrameLease(std::move(first_handle), [] {}));
   });
 
   {
@@ -161,8 +158,8 @@ TEST(SnapshotTapTest, PublicationClockRunsUnlockedAndLateCallCannotOverwrite) {
   camera_firmware::media::FrameHandle second_handle;
   second_handle.sequence = 2U;
   std::thread second([&] {
-    tap.Publish(camera_firmware::media::FrameLease(
-        std::move(second_handle), [] {}));
+    tap.Publish(
+        camera_firmware::media::FrameLease(std::move(second_handle), [] {}));
   });
 
   bool second_clock_call_ran_before_release = false;
@@ -191,9 +188,9 @@ TEST(SnapshotTapTest, SourceRunMetadataInvalidatesPriorCameraFrames) {
   camera_firmware::media::FrameHandle first_handle;
   first_handle.camera_id = "imx708-main";
   first_handle.sequence = 41U;
-  tap.Publish(camera_firmware::media::FrameLease(std::move(first_handle),
-                                                  [] {}),
-              first_run);
+  tap.Publish(
+      camera_firmware::media::FrameLease(std::move(first_handle), [] {}),
+      first_run);
 
   auto first = tap.LatestPublication(100ms);
   ASSERT_TRUE(first.has_value());
@@ -211,17 +208,17 @@ TEST(SnapshotTapTest, SourceRunMetadataInvalidatesPriorCameraFrames) {
   camera_firmware::media::FrameHandle late_first_handle;
   late_first_handle.camera_id = "imx708-main";
   late_first_handle.sequence = 42U;
-  tap.Publish(camera_firmware::media::FrameLease(
-                  std::move(late_first_handle), [] {}),
-              first_run);
+  tap.Publish(
+      camera_firmware::media::FrameLease(std::move(late_first_handle), [] {}),
+      first_run);
   EXPECT_FALSE(tap.Latest().has_value());
 
   camera_firmware::media::FrameHandle second_handle;
   second_handle.camera_id = "imx708-main";
   second_handle.sequence = 43U;
-  tap.Publish(camera_firmware::media::FrameLease(std::move(second_handle),
-                                                  [] {}),
-              second_run);
+  tap.Publish(
+      camera_firmware::media::FrameLease(std::move(second_handle), [] {}),
+      second_run);
   auto second = tap.LatestPublication(100ms);
   ASSERT_TRUE(second.has_value());
   EXPECT_EQ(second->frame.handle().sequence, 43U);

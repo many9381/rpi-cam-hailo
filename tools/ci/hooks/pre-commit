@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Format gate for staged C++ sources (install with tools/ci/install-hooks.sh).
+set -euo pipefail
+CLANG_FORMAT="${CLANG_FORMAT:-}"
+if [ -z "$CLANG_FORMAT" ]; then
+  for candidate in clang-format-18 clang-format; do
+    command -v "$candidate" >/dev/null 2>&1 && CLANG_FORMAT="$candidate" && break
+  done
+fi
+[ -n "$CLANG_FORMAT" ] || { echo "pre-commit: clang-format not found (apt install clang-format-18)" >&2; exit 1; }
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.cpp' '*.hpp' '*.h' '*.c' | grep -vE '^(vendor|patches)/' || true)
+[ -z "$files" ] && exit 0
+if ! echo "$files" | xargs "$CLANG_FORMAT" --dry-run --Werror; then
+  echo "pre-commit: run '$CLANG_FORMAT -i <files>' and re-stage" >&2
+  exit 1
+fi

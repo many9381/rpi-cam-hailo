@@ -50,14 +50,16 @@ class TemporaryDirectory {
   std::filesystem::path path_;
 };
 
-inline void WriteFile(const std::filesystem::path& path, std::string_view data) {
+inline void WriteFile(const std::filesystem::path& path,
+                      std::string_view data) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   ASSERT_TRUE(output.is_open());
   output.write(data.data(), static_cast<std::streamsize>(data.size()));
   ASSERT_TRUE(output.good());
 }
 
-inline void AppendFile(const std::filesystem::path& path, std::string_view data) {
+inline void AppendFile(const std::filesystem::path& path,
+                       std::string_view data) {
   std::ofstream output(path, std::ios::binary | std::ios::app);
   ASSERT_TRUE(output.is_open());
   output.write(data.data(), static_cast<std::streamsize>(data.size()));
@@ -90,12 +92,14 @@ class EphemeralEd25519Key {
 
   [[nodiscard]] EVP_PKEY* key() const noexcept { return key_.get(); }
 
-  [[nodiscard]] std::array<unsigned char, 64U> Sign(std::string_view data) const {
+  [[nodiscard]] std::array<unsigned char, 64U> Sign(
+      std::string_view data) const {
     MdContextPtr context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     std::array<unsigned char, 64U> signature{};
     std::size_t size = signature.size();
     if (!context ||
-        EVP_DigestSignInit(context.get(), nullptr, nullptr, nullptr, key_.get()) != 1 ||
+        EVP_DigestSignInit(context.get(), nullptr, nullptr, nullptr,
+                           key_.get()) != 1 ||
         EVP_DigestSign(context.get(), signature.data(), &size,
                        reinterpret_cast<const unsigned char*>(data.data()),
                        data.size()) != 1 ||
@@ -112,7 +116,8 @@ class EphemeralEd25519Key {
 class EphemeralEcKey {
  public:
   EphemeralEcKey()
-      : key_(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256"), EVP_PKEY_free) {
+      : key_(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256"),
+             EVP_PKEY_free) {
     if (!key_) {
       throw std::runtime_error("EVP_PKEY_Q_keygen");
     }

@@ -33,8 +33,7 @@ TEST(SrtpSessionKeyTest, FileLoaderZeroizesTemporaryStorageOnSuccess) {
   config.path = key_path.string();
   camera_firmware::rtsp::SessionKeyLoadDiagnostics diagnostics;
 
-  auto loaded =
-      camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
+  auto loaded = camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
 
   std::filesystem::remove(key_path);
   ASSERT_TRUE(loaded.ok()) << loaded.error().message;
@@ -55,8 +54,7 @@ TEST(SrtpSessionKeyTest, FileLoaderZeroizesTemporaryStorageOnParseError) {
   config.path = key_path.string();
   camera_firmware::rtsp::SessionKeyLoadDiagnostics diagnostics;
 
-  auto loaded =
-      camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
+  auto loaded = camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
 
   std::filesystem::remove(key_path);
   ASSERT_FALSE(loaded.ok());
@@ -75,8 +73,7 @@ TEST(SrtpSessionKeyTest, FileLoaderRejectsOversizedTemporaryKeyFile) {
   config.path = key_path.string();
   camera_firmware::rtsp::SessionKeyLoadDiagnostics diagnostics;
 
-  auto loaded =
-      camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
+  auto loaded = camera_firmware::rtsp::LoadSrtpSessionKey(config, &diagnostics);
 
   std::filesystem::remove(key_path);
   ASSERT_FALSE(loaded.ok());

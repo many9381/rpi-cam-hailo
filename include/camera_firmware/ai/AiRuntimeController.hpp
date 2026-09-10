@@ -11,8 +11,7 @@ namespace camera_firmware::ai {
 
 class AiRuntimeController {
  public:
-  AiRuntimeController(const config::AppConfig& config,
-                      AiRuntime& runtime,
+  AiRuntimeController(const config::AppConfig& config, AiRuntime& runtime,
                       AiFramePump& frame_pump);
 
   [[nodiscard]] common::Result<void> Restart();

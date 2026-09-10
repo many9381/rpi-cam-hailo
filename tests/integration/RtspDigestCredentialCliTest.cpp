@@ -1,23 +1,23 @@
 #include "camera_firmware/rtsp/RtspDigestCredentials.hpp"
 #include "camera_firmware/rtsp/RtspDigestCrypto.hpp"
 
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <termios.h>
+#include <unistd.h>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <fcntl.h>
 #include <iterator>
 #include <span>
-#include <signal.h>
 #include <string>
 #include <string_view>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <termios.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -119,149 +119,64 @@ ProcessResult RunSet(const SetInvocation& invocation,
 
     const std::string file = invocation.file.string();
     if (invocation.forbidden_password_flag) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password",
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--password",
             static_cast<char*>(nullptr));
     } else if (invocation.forbidden_password_assignment) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password=not-secret",
-            static_cast<char*>(nullptr));
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(),
+            "--password=not-secret", static_cast<char*>(nullptr));
     } else if (invocation.invalid_password_stdin_assignment) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password-stdin=1",
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--password-stdin=1",
             static_cast<char*>(nullptr));
     } else if (invocation.repeated_password_stdin) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password-stdin",
-            "--password-stdin",
-            static_cast<char*>(nullptr));
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--password-stdin",
+            "--password-stdin", static_cast<char*>(nullptr));
     } else if (invocation.repeated_allow_md5) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--allow-md5",
-            "--allow-md5",
-            "--password-stdin",
-            static_cast<char*>(nullptr));
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--allow-md5",
+            "--allow-md5", "--password-stdin", static_cast<char*>(nullptr));
     } else if (invocation.repeated_file) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password-stdin",
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--password-stdin",
             static_cast<char*>(nullptr));
     } else if (invocation.missing_realm) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password-stdin",
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--algorithm",
+            invocation.algorithm.c_str(), "--password-stdin",
             static_cast<char*>(nullptr));
     } else if (invocation.unknown_flag) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--unknown",
-            "--password-stdin",
-            static_cast<char*>(nullptr));
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--unknown",
+            "--password-stdin", static_cast<char*>(nullptr));
     } else if (invocation.allow_md5) {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--allow-md5",
-            "--password-stdin",
-            static_cast<char*>(nullptr));
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--allow-md5",
+            "--password-stdin", static_cast<char*>(nullptr));
     } else {
-      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-            "set",
-            "--file",
-            file.c_str(),
-            "--username",
-            invocation.username.c_str(),
-            "--realm",
-            invocation.realm.c_str(),
-            "--algorithm",
-            invocation.algorithm.c_str(),
-            "--password-stdin",
+      execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL,
+            "set", "--file", file.c_str(), "--username",
+            invocation.username.c_str(), "--realm", invocation.realm.c_str(),
+            "--algorithm", invocation.algorithm.c_str(), "--password-stdin",
             static_cast<char*>(nullptr));
     }
     _exit(127);
@@ -351,18 +266,10 @@ ProcessResult RunSetFromTty(const SetInvocation& invocation,
     }
     close(master);
     const std::string file = invocation.file.string();
-    execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-          CF_RTSP_DIGEST_CREDENTIAL_TOOL,
-          "set",
-          "--file",
-          file.c_str(),
-          "--username",
-          invocation.username.c_str(),
-          "--realm",
-          invocation.realm.c_str(),
-          "--algorithm",
-          invocation.algorithm.c_str(),
-          static_cast<char*>(nullptr));
+    execl(CF_RTSP_DIGEST_CREDENTIAL_TOOL, CF_RTSP_DIGEST_CREDENTIAL_TOOL, "set",
+          "--file", file.c_str(), "--username", invocation.username.c_str(),
+          "--realm", invocation.realm.c_str(), "--algorithm",
+          invocation.algorithm.c_str(), static_cast<char*>(nullptr));
     _exit(127);
   }
   if (child < 0) {
@@ -374,8 +281,7 @@ ProcessResult RunSetFromTty(const SetInvocation& invocation,
   result.command_line = ReadCommandLine(child);
   termios settings{};
   for (int attempt = 0; attempt < 1000; ++attempt) {
-    if (tcgetattr(master, &settings) == 0 &&
-        (settings.c_lflag & ECHO) == 0) {
+    if (tcgetattr(master, &settings) == 0 && (settings.c_lflag & ECHO) == 0) {
       result.echo_disabled = true;
       break;
     }
@@ -446,17 +352,16 @@ void ExpectLoadableHa1(const std::filesystem::path& path,
   auto lookup = store.value()->Lookup("operator", algorithm);
   ASSERT_TRUE(lookup.ok()) << lookup.error().message;
   ASSERT_TRUE(lookup.value().matched);
-  auto expected = ComputeRtspDigestHa1(
-      algorithm, "operator", "rpi-camera", password);
+  auto expected =
+      ComputeRtspDigestHa1(algorithm, "operator", "rpi-camera", password);
   ASSERT_TRUE(expected.ok()) << expected.error().message;
-  EXPECT_TRUE(RtspDigestConstantTimeEqual(lookup.value().ha1.data() == nullptr
-                                             ? std::span<const unsigned char>{}
-                                             : std::span<const unsigned char>(
-                                                   lookup.value().ha1.data(),
-                                                   lookup.value().ha1.size()),
-                                         std::span<const unsigned char>(
-                                             expected.value().data(),
-                                             expected.value().size())));
+  EXPECT_TRUE(RtspDigestConstantTimeEqual(
+      lookup.value().ha1.data() == nullptr
+          ? std::span<const unsigned char>{}
+          : std::span<const unsigned char>(lookup.value().ha1.data(),
+                                           lookup.value().ha1.size()),
+      std::span<const unsigned char>(expected.value().data(),
+                                     expected.value().size())));
 }
 
 class RtspDigestCredentialCliTest : public testing::Test {
@@ -489,8 +394,7 @@ TEST_F(RtspDigestCredentialCliTest, CreatesLoadableSha256FileFromStdin) {
             std::string::npos);
   EXPECT_EQ(result.output.find(credential_file_.string()), std::string::npos);
   EXPECT_EQ(InspectFile(credential_file_).mode, 0600);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(password).first(password.size() - 1U));
 }
 
@@ -504,8 +408,7 @@ TEST_F(RtspDigestCredentialCliTest, ReadsFromTtyWithoutEchoAndRestoresTermios) {
   EXPECT_TRUE(result.echo_restored);
   EXPECT_EQ(result.command_line.find("tty-only-password"), std::string::npos);
   EXPECT_EQ(result.output.find("tty-only-password"), std::string::npos);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(password).first(password.size() - 1U));
 
   const std::vector<unsigned char> empty_password = {'\n'};
@@ -514,10 +417,9 @@ TEST_F(RtspDigestCredentialCliTest, ReadsFromTtyWithoutEchoAndRestoresTermios) {
   EXPECT_TRUE(rejected.echo_disabled);
   EXPECT_TRUE(rejected.echo_restored);
 
-  const std::vector<unsigned char> unterminated_password = {
-      't', 't', 'y', 0x04U, 0x04U};
-  auto eof_rejected =
-      RunSetFromTty({credential_file_}, unterminated_password);
+  const std::vector<unsigned char> unterminated_password = {'t', 't', 'y',
+                                                            0x04U, 0x04U};
+  auto eof_rejected = RunSetFromTty({credential_file_}, unterminated_password);
   EXPECT_EQ(eof_rejected.exit_code, 2) << eof_rejected.output;
   EXPECT_TRUE(eof_rejected.echo_disabled);
   EXPECT_TRUE(eof_rejected.echo_restored);
@@ -535,38 +437,32 @@ TEST_F(RtspDigestCredentialCliTest, UpdatesExistingFileAtomically) {
   const auto after = InspectFile(credential_file_);
   EXPECT_EQ(after.mode, 0600);
   EXPECT_NE(after.inode, before.inode);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(new_password).first(new_password.size() - 1U));
 }
 
-TEST_F(RtspDigestCredentialCliTest,
-       AcceptsPasswordLengthBoundariesAndCrLf) {
+TEST_F(RtspDigestCredentialCliTest, AcceptsPasswordLengthBoundariesAndCrLf) {
   const auto one_byte = PasswordInput("x");
   ASSERT_EQ(RunSet({credential_file_}, one_byte).exit_code, 0);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(one_byte).first(1U));
 
   std::vector<unsigned char> maximum(kMaximumPasswordBytes, 'm');
   maximum.push_back('\n');
   ASSERT_EQ(RunSet({credential_file_}, maximum).exit_code, 0);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(maximum).first(kMaximumPasswordBytes));
 
   std::vector<unsigned char> maximum_crlf(kMaximumPasswordBytes, 'r');
   maximum_crlf.push_back('\r');
   maximum_crlf.push_back('\n');
   ASSERT_EQ(RunSet({credential_file_}, maximum_crlf).exit_code, 0);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(maximum_crlf).first(kMaximumPasswordBytes));
 
   std::vector<unsigned char> crlf = {'c', 'r', 'l', 'f', '\r', '\n'};
   ASSERT_EQ(RunSet({credential_file_}, crlf).exit_code, 0);
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(crlf).first(4U));
 }
 
@@ -637,18 +533,15 @@ TEST_F(RtspDigestCredentialCliTest, CreatesMd5AlongsideRequiredSha256) {
   auto result = RunSet(invocation, password);
 
   ASSERT_EQ(result.exit_code, 0) << result.output;
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kSha256,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kSha256,
                     std::span(password).first(password.size() - 1U),
                     {RtspDigestAlgorithm::kSha256, RtspDigestAlgorithm::kMd5});
-  ExpectLoadableHa1(credential_file_,
-                    RtspDigestAlgorithm::kMd5,
+  ExpectLoadableHa1(credential_file_, RtspDigestAlgorithm::kMd5,
                     std::span(password).first(password.size() - 1U),
                     {RtspDigestAlgorithm::kSha256, RtspDigestAlgorithm::kMd5});
 }
 
-TEST_F(RtspDigestCredentialCliTest,
-       RejectsEmptyInvalidUtf8AndOversizedInput) {
+TEST_F(RtspDigestCredentialCliTest, RejectsEmptyInvalidUtf8AndOversizedInput) {
   const auto valid_password = PasswordInput("preserved-password");
   ASSERT_EQ(RunSet({credential_file_}, valid_password).exit_code, 0);
   const std::string original = ReadFile(credential_file_);
@@ -671,8 +564,8 @@ TEST_F(RtspDigestCredentialCliTest,
 
 TEST_F(RtspDigestCredentialCliTest,
        RejectsTrailingDataRegardlessOfPipeSegmentation) {
-  const std::vector<unsigned char> split_input = {
-      'a', 'b', 'c', '\n', 'j', 'u', 'n', 'k'};
+  const std::vector<unsigned char> split_input = {'a', 'b', 'c', '\n',
+                                                  'j', 'u', 'n', 'k'};
 
   auto result = RunSet({credential_file_}, split_input, 4U);
 
@@ -694,24 +587,20 @@ TEST_F(RtspDigestCredentialCliTest,
   EXPECT_EQ(result.output.find(invocation.realm), std::string::npos);
 }
 
-TEST_F(RtspDigestCredentialCliTest,
-       FailedProvisioningPreservesExistingFile) {
+TEST_F(RtspDigestCredentialCliTest, FailedProvisioningPreservesExistingFile) {
   const auto old_password = PasswordInput("preserved-on-failure");
   ASSERT_EQ(RunSet({credential_file_}, old_password).exit_code, 0);
   const std::string original = ReadFile(credential_file_);
   std::filesystem::permissions(
       directory_,
-      std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_exec,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
       std::filesystem::perm_options::replace);
   const auto new_password = PasswordInput("must-not-replace");
 
   auto result = RunSet({credential_file_}, new_password);
 
-  std::filesystem::permissions(
-      directory_,
-      std::filesystem::perms::owner_all,
-      std::filesystem::perm_options::replace);
+  std::filesystem::permissions(directory_, std::filesystem::perms::owner_all,
+                               std::filesystem::perm_options::replace);
   EXPECT_EQ(result.exit_code, 1) << result.output;
   EXPECT_EQ(ReadFile(credential_file_), original);
 }

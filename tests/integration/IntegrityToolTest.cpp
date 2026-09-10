@@ -3,6 +3,9 @@
 #include "camera_firmware/integrity/IntegrityVerifier.hpp"
 #include "unit/integrity/IntegrityTestSupport.hpp"
 
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <array>
 #include <cerrno>
 #include <cstddef>
@@ -12,9 +15,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -108,7 +108,8 @@ ProcessResult RunTool(const std::vector<std::string>& arguments) {
 
 std::string ReadFile(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary);
-  return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
 }
 
 std::vector<unsigned char> ReadBytes(const std::filesystem::path& path) {
@@ -119,9 +120,9 @@ std::vector<unsigned char> ReadBytes(const std::filesystem::path& path) {
 void WritePrivateKey(const std::filesystem::path& path, EVP_PKEY* key) {
   BIO* bio = BIO_new_file(path.c_str(), "w");
   ASSERT_NE(bio, nullptr);
-  ASSERT_EQ(PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr,
-                                     nullptr),
-            1);
+  ASSERT_EQ(
+      PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr),
+      1);
   ASSERT_EQ(BIO_free(bio), 1);
   ASSERT_EQ(::chmod(path.c_str(), S_IRUSR | S_IWUSR), 0);
 }
@@ -155,10 +156,16 @@ class IntegrityToolTest : public ::testing::Test {
     WriteFile(kernel_, "kernel bytes\n");
   }
 
-  std::vector<std::string> CreateArguments(const std::filesystem::path& output) const {
-    return {"create", "--output", output.string(), "--entry",
-            "firmware:firmware:" + firmware_.string(), "--entry",
-            "configuration:configuration:" + configuration_.string(), "--entry",
+  std::vector<std::string> CreateArguments(
+      const std::filesystem::path& output) const {
+    return {"create",
+            "--output",
+            output.string(),
+            "--entry",
+            "firmware:firmware:" + firmware_.string(),
+            "--entry",
+            "configuration:configuration:" + configuration_.string(),
+            "--entry",
             "kernel:kernel:" + kernel_.string()};
   }
 
@@ -192,7 +199,8 @@ TEST_F(IntegrityToolTest, CreatesSortedStrictManifestWithColonPath) {
   ExpectMode0600(manifest);
 }
 
-TEST_F(IntegrityToolTest, RejectsDuplicateIdsPathsAndInvalidEntriesBeforeOutput) {
+TEST_F(IntegrityToolTest,
+       RejectsDuplicateIdsPathsAndInvalidEntriesBeforeOutput) {
   const auto manifest = directory_.path() / "manifest.yaml";
   WriteFile(manifest, "preserved\n");
   const std::vector<std::vector<std::string>> invalid_invocations = {
@@ -218,7 +226,8 @@ TEST_F(IntegrityToolTest, RejectsDuplicateIdsPathsAndInvalidEntriesBeforeOutput)
   }
 }
 
-TEST_F(IntegrityToolTest, RejectsSymlinkInputsAndUnsafeOutputsWithoutReplacement) {
+TEST_F(IntegrityToolTest,
+       RejectsSymlinkInputsAndUnsafeOutputsWithoutReplacement) {
   const auto input_link = directory_.path() / "firmware-link";
   const auto manifest = directory_.path() / "manifest.yaml";
   const auto protected_target = directory_.path() / "protected";
@@ -264,9 +273,9 @@ TEST_F(IntegrityToolTest, SignsExactManifestBytesAndRoundTripsRuntimeVerifier) {
   WritePrivateKey(private_key, key.key());
   ASSERT_EQ(RunTool(CreateArguments(manifest)).exit_code, 0);
 
-  const auto result = RunTool({"sign", "--manifest", manifest.string(),
-                               "--private-key", private_key.string(), "--output",
-                               signature.string()});
+  const auto result =
+      RunTool({"sign", "--manifest", manifest.string(), "--private-key",
+               private_key.string(), "--output", signature.string()});
 
   ASSERT_EQ(result.exit_code, 0) << result.output;
   EXPECT_TRUE(result.output.empty());
@@ -274,13 +283,15 @@ TEST_F(IntegrityToolTest, SignsExactManifestBytesAndRoundTripsRuntimeVerifier) {
   ExpectMode0600(signature);
   camera_firmware::crypto::OpenSslCryptoProvider provider;
   ASSERT_TRUE(provider.SelfTest().ok());
-  const auto verified = VerifyIntegrityManifest(manifest, signature, key.PublicPem(),
-                                                firmware_, configuration_, provider);
+  const auto verified =
+      VerifyIntegrityManifest(manifest, signature, key.PublicPem(), firmware_,
+                              configuration_, provider);
   ASSERT_TRUE(verified.ok()) << verified.error().code;
   EXPECT_TRUE(verified.value().passed);
 }
 
-TEST_F(IntegrityToolTest, RejectsWrongTrailingAndSymlinkPrivateKeysWithoutLeakingBytes) {
+TEST_F(IntegrityToolTest,
+       RejectsWrongTrailingAndSymlinkPrivateKeysWithoutLeakingBytes) {
   const auto manifest = directory_.path() / "manifest.yaml";
   const auto signature = directory_.path() / "manifest.sig";
   const auto ec_key = directory_.path() / "ec.pem";
@@ -292,8 +303,9 @@ TEST_F(IntegrityToolTest, RejectsWrongTrailingAndSymlinkPrivateKeysWithoutLeakin
   WritePrivateKey(ed_key, ed.key());
   ASSERT_EQ(RunTool(CreateArguments(manifest)).exit_code, 0);
 
-  auto result = RunTool({"sign", "--manifest", manifest.string(), "--private-key",
-                         ec_key.string(), "--output", signature.string()});
+  auto result =
+      RunTool({"sign", "--manifest", manifest.string(), "--private-key",
+               ec_key.string(), "--output", signature.string()});
   EXPECT_NE(result.exit_code, 0) << result.output;
   EXPECT_EQ(result.output.find(ReadFile(ec_key)), std::string::npos);
   EXPECT_EQ(result.output.find("-----BEGIN"), std::string::npos);
@@ -325,10 +337,10 @@ TEST_F(IntegrityToolTest, RejectsInvalidOptionsAndUnsafeManifestInput) {
       {"create", "--unknown"},
       {"create", "--output", manifest.string(), "--output", manifest.string(),
        "--entry", "firmware:firmware:" + firmware_.string()},
-      {"sign", "--manifest", manifest.string(), "--private-key", key_path.string(),
-       "--output", signature.string(), "--entry", "ignored"},
-      {"sign", "--manifest", manifest_link.string(), "--private-key", key_path.string(),
-       "--output", signature.string()},
+      {"sign", "--manifest", manifest.string(), "--private-key",
+       key_path.string(), "--output", signature.string(), "--entry", "ignored"},
+      {"sign", "--manifest", manifest_link.string(), "--private-key",
+       key_path.string(), "--output", signature.string()},
   };
 
   for (const auto& arguments : invalid_invocations) {
@@ -344,8 +356,9 @@ TEST_F(IntegrityToolTest, RejectsMoreThanManifestEntryLimitBeforeHashing) {
   std::vector<std::string> arguments{"create", "--output", manifest.string()};
   for (std::size_t index = 0U; index <= 4096U; ++index) {
     arguments.emplace_back("--entry");
-    arguments.push_back("firmware:file-" + std::to_string(index) + ":" +
-                        (directory_.path() / ("missing-" + std::to_string(index))).string());
+    arguments.push_back(
+        "firmware:file-" + std::to_string(index) + ":" +
+        (directory_.path() / ("missing-" + std::to_string(index))).string());
   }
 
   const auto result = RunTool(arguments);

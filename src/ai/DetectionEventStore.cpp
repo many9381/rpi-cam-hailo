@@ -11,13 +11,12 @@ struct DetectionEventStore::SharedState {
 
 DetectionEventStore::DetectionEventStore(DetectionBus& bus)
     : state_(std::make_shared<SharedState>()),
-      subscription_(bus.Subscribe(
-          [state = std::weak_ptr<SharedState>(state_)](
-              const DetectionEvent& event) {
-            if (auto locked = state.lock()) {
-              Record(locked, event);
-            }
-          })) {}
+      subscription_(bus.Subscribe([state = std::weak_ptr<SharedState>(state_)](
+                                      const DetectionEvent& event) {
+        if (auto locked = state.lock()) {
+          Record(locked, event);
+        }
+      })) {}
 
 std::vector<DetectionEvent> DetectionEventStore::Snapshot() const {
   return Snapshot(state_);
@@ -41,9 +40,8 @@ void DetectionEventStore::Record(const std::shared_ptr<SharedState>& state,
     return stored.camera_id == event.camera_id &&
            stored.model_id == event.model_id;
   };
-  const auto existing = std::find_if(state->events.begin(),
-                                     state->events.end(),
-                                     same_binding);
+  const auto existing =
+      std::find_if(state->events.begin(), state->events.end(), same_binding);
   if (existing != state->events.end()) {
     *existing = event;
     return;

@@ -26,14 +26,14 @@
 #include "camera_firmware/security/SecurityTypes.hpp"
 
 void ConfigureSecurityStoreTransactionFailuresForTest(bool commit,
-                                                       bool rollback);
+                                                      bool rollback);
 
 namespace {
 
-using camera_firmware::security::AuditLogService;
-using camera_firmware::security::AuditLogServiceTestAccess;
 using camera_firmware::security::AuditEvent;
 using camera_firmware::security::AuditEventPage;
+using camera_firmware::security::AuditLogService;
+using camera_firmware::security::AuditLogServiceTestAccess;
 using camera_firmware::security::AuditQueryParameters;
 using camera_firmware::security::Principal;
 using camera_firmware::security::SecurityStore;
@@ -94,8 +94,8 @@ class DatabaseConnection {
 void ExecuteSql(const std::filesystem::path& path, const char* sql) {
   DatabaseConnection connection(path);
   char* error_message = nullptr;
-  const int result = ::sqlite3_exec(connection.get(), sql, nullptr, nullptr,
-                                    &error_message);
+  const int result =
+      ::sqlite3_exec(connection.get(), sql, nullptr, nullptr, &error_message);
   if (error_message != nullptr) {
     ::sqlite3_free(error_message);
   }
@@ -138,8 +138,7 @@ std::unique_ptr<SecurityStore> OpenStore(const std::filesystem::path& state,
   return std::move(opened).value();
 }
 
-void InsertEvents(SecurityStore& store,
-                  std::int64_t first_timestamp,
+void InsertEvents(SecurityStore& store, std::int64_t first_timestamp,
                   std::size_t count) {
   for (std::size_t index = 0; index < count; ++index) {
     auto inserted = AuditLogServiceTestAccess::InsertCommittedEvent(
@@ -168,8 +167,8 @@ void SeedEvent(const std::filesystem::path& path, const AuditEvent& event) {
   };
   const bool bound =
       ::sqlite3_bind_int64(statement, 1, event.sequence) == SQLITE_OK &&
-      ::sqlite3_bind_int64(statement, 2,
-                           event.server_timestamp_seconds) == SQLITE_OK &&
+      ::sqlite3_bind_int64(statement, 2, event.server_timestamp_seconds) ==
+          SQLITE_OK &&
       bind_text(3, event.event_type) && bind_text(4, event.outcome) &&
       bind_text(5, event.actor_identity) && bind_text(6, event.peer_ip) &&
       bind_text(7, event.detail_code) && bind_text(8, event.subject_type) &&
@@ -183,18 +182,18 @@ void SeedEvent(const std::filesystem::path& path, const AuditEvent& event) {
 
 void SeedQueryEvents(const SecurityStore& store) {
   const std::array<AuditEvent, 6> events{{
-      {1, 100, "login", "failure", "alice", "192.0.2.10", "d1",
-       "user", "viewer"},
-      {2, 100, "login", "success", "bob", "2001:db8::1", "d2",
-       "user", "viewer"},
-      {3, 200, "config_changed", "failure", "alice", "192.0.2.11",
-       "d3", "config", "network"},
-      {4, 200, "login", "success", "charlie", "2001:db8::1", "d4",
-       "user", "camera"},
-      {5, 300, "zeta", "failure", "bob", "192.0.2.10", "d5",
-       "device", "camera"},
-      {6, 300, "login", "success", "alice", "192.0.2.12", "d6",
-       "user", "viewer"},
+      {1, 100, "login", "failure", "alice", "192.0.2.10", "d1", "user",
+       "viewer"},
+      {2, 100, "login", "success", "bob", "2001:db8::1", "d2", "user",
+       "viewer"},
+      {3, 200, "config_changed", "failure", "alice", "192.0.2.11", "d3",
+       "config", "network"},
+      {4, 200, "login", "success", "charlie", "2001:db8::1", "d4", "user",
+       "camera"},
+      {5, 300, "zeta", "failure", "bob", "192.0.2.10", "d5", "device",
+       "camera"},
+      {6, 300, "login", "success", "alice", "192.0.2.12", "d6", "user",
+       "viewer"},
   }};
   for (const auto& event : events) {
     SeedEvent(store.database_path(), event);
@@ -212,8 +211,7 @@ std::vector<std::int64_t> Sequences(const AuditEventPage& page) {
 
 AuditEventPage ListOrThrow(AuditLogService& service,
                            const AuditQueryParameters& parameters) {
-  auto listed =
-      service.ListEvents(parameters, Actor(UserRole::kAdministrator));
+  auto listed = service.ListEvents(parameters, Actor(UserRole::kAdministrator));
   if (!listed.ok()) {
     throw std::runtime_error(listed.error().code + ": " +
                              listed.error().message);
@@ -223,8 +221,7 @@ AuditEventPage ListOrThrow(AuditLogService& service,
 
 void ExpectInvalid(AuditLogService& service,
                    const AuditQueryParameters& parameters) {
-  auto listed =
-      service.ListEvents(parameters, Actor(UserRole::kAdministrator));
+  auto listed = service.ListEvents(parameters, Actor(UserRole::kAdministrator));
   ASSERT_FALSE(listed.ok());
   EXPECT_EQ(listed.error().code, "E_AUDIT_QUERY_INVALID");
   EXPECT_EQ(listed.error().message, "audit query is invalid");
@@ -240,11 +237,9 @@ std::string EncodeBase64Url(const std::vector<unsigned char>& bytes) {
     const std::size_t remaining = bytes.size() - index;
     const std::uint32_t block =
         static_cast<std::uint32_t>(bytes[index]) << 16U |
-        (remaining > 1U
-             ? static_cast<std::uint32_t>(bytes[index + 1U]) << 8U
-             : 0U) |
-        (remaining > 2U ? static_cast<std::uint32_t>(bytes[index + 2U])
-                        : 0U);
+        (remaining > 1U ? static_cast<std::uint32_t>(bytes[index + 1U]) << 8U
+                        : 0U) |
+        (remaining > 2U ? static_cast<std::uint32_t>(bytes[index + 2U]) : 0U);
     encoded.push_back(kBase64UrlAlphabet[(block >> 18U) & 0x3fU]);
     encoded.push_back(kBase64UrlAlphabet[(block >> 12U) & 0x3fU]);
     if (remaining > 1U) {
@@ -266,8 +261,7 @@ std::vector<unsigned char> DecodeBase64Url(std::string_view encoded) {
     if (position == std::string_view::npos) {
       throw std::runtime_error("invalid test base64url");
     }
-    accumulator = (accumulator << 6U) |
-                  static_cast<std::uint32_t>(position);
+    accumulator = (accumulator << 6U) | static_cast<std::uint32_t>(position);
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
@@ -295,11 +289,8 @@ std::vector<unsigned char> TextKey(std::string_view value) {
 }
 
 std::vector<unsigned char> CursorPayload(
-    unsigned char sort,
-    unsigned char direction,
-    unsigned char kind,
-    std::uint64_t sequence,
-    const std::vector<unsigned char>& key,
+    unsigned char sort, unsigned char direction, unsigned char kind,
+    std::uint64_t sequence, const std::vector<unsigned char>& key,
     std::optional<std::uint16_t> declared_length = std::nullopt) {
   std::vector<unsigned char> payload{1U, sort, direction, kind};
   AppendUint64(payload, sequence);
@@ -483,8 +474,7 @@ TEST(AuditLogServiceTest, RotationCounterOverflowRollsBackDeletionAndEvent) {
              "UPDATE audit_state SET rotated_event_count = "
              "9223372036854775807 WHERE id = 1;");
 
-  auto inserted =
-      AuditLogServiceTestAccess::InsertCommittedEvent(*store, 1406);
+  auto inserted = AuditLogServiceTestAccess::InsertCommittedEvent(*store, 1406);
 
   ASSERT_FALSE(inserted.ok());
   EXPECT_EQ(inserted.error().code, "E_SECURITY_DB_AUDIT");
@@ -666,8 +656,7 @@ TEST(AuditLogServiceTest, CursorTraversesDuplicateKeysForEverySort) {
       }
       query.cursor = page.next_cursor;
     }
-    EXPECT_EQ(traversed, item.expected)
-        << item.field << " " << item.direction;
+    EXPECT_EQ(traversed, item.expected) << item.field << " " << item.direction;
   }
 }
 
@@ -817,8 +806,7 @@ TEST(AuditLogServiceTest, CursorUsesExactVersionedBinaryFormat) {
   EXPECT_EQ(timestamp[2], 1U);
   EXPECT_EQ(timestamp[3], 0U);
   EXPECT_EQ(ReadUint64(timestamp, 4U), 6U);
-  EXPECT_EQ((static_cast<std::uint16_t>(timestamp[12]) << 8U |
-             timestamp[13]),
+  EXPECT_EQ((static_cast<std::uint16_t>(timestamp[12]) << 8U | timestamp[13]),
             8U);
   EXPECT_EQ(ReadUint64(timestamp, 14U), 300U);
 
@@ -866,8 +854,8 @@ TEST(AuditLogServiceTest, CursorRejectsNoncanonicalAndMalformedPayloads) {
   expect_timestamp_payload_invalid(payload);
   payload = CursorPayload(0U, 1U, 0U, 6U, IntegerKey(300U), 7U);
   expect_timestamp_payload_invalid(payload);
-  payload = CursorPayload(0U, 1U, 0U, 6U,
-                          std::vector<unsigned char>(7U, 0U), 8U);
+  payload =
+      CursorPayload(0U, 1U, 0U, 6U, std::vector<unsigned char>(7U, 0U), 8U);
   expect_timestamp_payload_invalid(payload);
   payload = CursorPayload(0U, 1U, 0U, 6U, IntegerKey(1ULL << 63U));
   expect_timestamp_payload_invalid(payload);
@@ -885,12 +873,10 @@ TEST(AuditLogServiceTest, CursorRejectsNoncanonicalAndMalformedPayloads) {
         ExpectInvalid(service, query);
       };
   expect_event_payload_invalid(CursorPayload(1U, 1U, 1U, 1U, {}));
-  expect_event_payload_invalid(CursorPayload(
-      1U, 1U, 1U, 1U, std::vector<unsigned char>(65U, 'x')));
   expect_event_payload_invalid(
-      CursorPayload(1U, 1U, 1U, 1U, {0xc3U, 0x28U}));
-  expect_event_payload_invalid(
-      CursorPayload(1U, 1U, 1U, 1U, {'a', 0U, 'b'}));
+      CursorPayload(1U, 1U, 1U, 1U, std::vector<unsigned char>(65U, 'x')));
+  expect_event_payload_invalid(CursorPayload(1U, 1U, 1U, 1U, {0xc3U, 0x28U}));
+  expect_event_payload_invalid(CursorPayload(1U, 1U, 1U, 1U, {'a', 0U, 'b'}));
 
   AuditQueryParameters query;
   query.cursor = "A";
@@ -947,8 +933,8 @@ TEST(AuditLogServiceTest, CursorRemainsStableWhenNewerEventIsInserted) {
   ASSERT_EQ(Sequences(first), (std::vector<std::int64_t>{5, 4}));
   ASSERT_TRUE(first.next_cursor.has_value());
 
-  ASSERT_TRUE(AuditLogServiceTestAccess::InsertCommittedEvent(*store, 600)
-                  .ok());
+  ASSERT_TRUE(
+      AuditLogServiceTestAccess::InsertCommittedEvent(*store, 600).ok());
   std::vector<std::int64_t> traversed = Sequences(first);
   query.cursor = first.next_cursor;
   while (true) {
@@ -971,8 +957,8 @@ TEST(AuditLogServiceTest, CursorDoesNotRepeatRowsWhenPageOneRowRotates) {
   auto store = OpenStore(root.StatePath(), 6U, 80U);
   for (std::int64_t sequence = 1; sequence <= 6; ++sequence) {
     SeedEvent(store->database_path(),
-              {sequence, 700 - sequence * 100, "rotating", "success",
-               "system", "192.0.2.1", "", "", ""});
+              {sequence, 700 - sequence * 100, "rotating", "success", "system",
+               "192.0.2.1", "", "", ""});
   }
   AuditLogService service(*store);
   AuditQueryParameters query;
@@ -981,8 +967,8 @@ TEST(AuditLogServiceTest, CursorDoesNotRepeatRowsWhenPageOneRowRotates) {
   ASSERT_EQ(Sequences(first), (std::vector<std::int64_t>{1, 2}));
   ASSERT_TRUE(first.next_cursor.has_value());
 
-  ASSERT_TRUE(AuditLogServiceTestAccess::InsertCommittedEvent(*store, 800)
-                  .ok());
+  ASSERT_TRUE(
+      AuditLogServiceTestAccess::InsertCommittedEvent(*store, 800).ok());
   std::vector<std::int64_t> traversed = Sequences(first);
   query.cursor = first.next_cursor;
   while (true) {
@@ -1023,8 +1009,7 @@ TEST(AuditLogServiceTest, QueryStoreFailureIsSanitized) {
   ExecuteSql(store->database_path(), "DROP TABLE audit_events;");
   AuditLogService service(*store);
 
-  const auto listed =
-      service.ListEvents({}, Actor(UserRole::kAdministrator));
+  const auto listed = service.ListEvents({}, Actor(UserRole::kAdministrator));
 
   ASSERT_FALSE(listed.ok());
   EXPECT_EQ(listed.error().code, "E_AUDIT_UNAVAILABLE");
@@ -1051,13 +1036,15 @@ VALUES
 )sql");
   AuditLogService service(*store);
 
-  ASSERT_TRUE(service.AppendSystemEvent("self_test.started", "success",
-                                        "OK", "suite", "self_test")
+  ASSERT_TRUE(service
+                  .AppendSystemEvent("self_test.started", "success", "OK",
+                                     "suite", "self_test")
                   .ok());
-  ASSERT_TRUE(service.AppendAdministratorEvent(
-                  Actor(UserRole::kAdministrator), "2001:db8::1",
-                  "self_test.succeeded", "success", "OK", "suite",
-                  "self_test")
+  ASSERT_TRUE(service
+                  .AppendAdministratorEvent(Actor(UserRole::kAdministrator),
+                                            "2001:db8::1",
+                                            "self_test.succeeded", "success",
+                                            "OK", "suite", "self_test")
                   .ok());
 
   AuditQueryParameters query;
@@ -1070,10 +1057,9 @@ VALUES
   EXPECT_EQ(page.events[1].sequence, 2);
   EXPECT_EQ(page.events[1].actor_identity, "operator.one");
   EXPECT_EQ(page.events[1].peer_ip, "2001:db8::1");
-  EXPECT_EQ(QueryInt64Rows(
-                store->database_path(),
-                "SELECT actor_user_id IS NULL FROM audit_events "
-                "WHERE sequence = 1;"),
+  EXPECT_EQ(QueryInt64Rows(store->database_path(),
+                           "SELECT actor_user_id IS NULL FROM audit_events "
+                           "WHERE sequence = 1;"),
             (std::vector<std::int64_t>{1}));
 }
 
@@ -1125,9 +1111,9 @@ TEST(AuditLogServiceTest, RejectsNonAdministratorAuditAppendActor) {
   auto store = OpenStore(root.StatePath(), 5U, 80U);
   AuditLogService service(*store);
 
-  auto result = service.AppendAdministratorEvent(
-      Actor(UserRole::kViewer), "192.0.2.10", "self_test.started", "success",
-      "OK");
+  auto result =
+      service.AppendAdministratorEvent(Actor(UserRole::kViewer), "192.0.2.10",
+                                       "self_test.started", "success", "OK");
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, "E_AUDIT_FORBIDDEN");

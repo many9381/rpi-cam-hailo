@@ -21,13 +21,14 @@ inline LoresSize ComputeLoresSize(unsigned int sensor_width,
   if (sensor_width == 0U || sensor_height == 0U || model_input_width == 0U) {
     return {0U, 0U};
   }
-  const unsigned int width =
-      std::min(model_input_width, sensor_width) & ~1U;
+  const unsigned int width = std::min(model_input_width, sensor_width) & ~1U;
   if (width == 0U) {
     return {0U, 0U};
   }
-  const auto height = static_cast<unsigned int>(
-      static_cast<unsigned long>(width) * sensor_height / sensor_width) & ~1U;
+  const auto height =
+      static_cast<unsigned int>(static_cast<unsigned long>(width) *
+                                sensor_height / sensor_width) &
+      ~1U;
   return {width, height == 0U ? 2U : height};
 }
 

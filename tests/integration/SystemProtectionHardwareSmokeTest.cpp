@@ -26,8 +26,8 @@ using camera_firmware::security::SystemProtectionService;
 bool HardwareSmokeEnabled() {
   const char* camera = std::getenv("CF_RUN_CAMERA_HARDWARE_SMOKE");
   const char* hailo = std::getenv("CF_RUN_HAILO_HARDWARE_SMOKE");
-  return camera != nullptr && std::string(camera) == "1" &&
-         hailo != nullptr && std::string(hailo) == "1";
+  return camera != nullptr && std::string(camera) == "1" && hailo != nullptr &&
+         std::string(hailo) == "1";
 }
 
 Result<SelfTestReport> PassingSelfTestReport() {
@@ -71,8 +71,8 @@ TEST(SystemProtectionHardwareSmokeTest,
 
   FirmwareRuntime runtime(config.value());
   const auto started = runtime.Start();
-  ASSERT_TRUE(started.ok()) << started.error().code << ": "
-                            << started.error().message;
+  ASSERT_TRUE(started.ok())
+      << started.error().code << ": " << started.error().message;
 
   bool resources_allocated = false;
   for (int attempt = 0; attempt < 100; ++attempt) {
@@ -87,10 +87,10 @@ TEST(SystemProtectionHardwareSmokeTest,
   SystemProtectionDependencies dependencies;
   dependencies.run_self_tests = PassingSelfTestReport;
   dependencies.run_integrity = FailingIntegrityReport;
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return Result<void>::Ok();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) {
+    return Result<void>::Ok();
+  };
   dependencies.read_device_state = [] {
     return Result<DeviceState>::Ok(DeviceState::kOperational);
   };

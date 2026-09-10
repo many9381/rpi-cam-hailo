@@ -32,8 +32,8 @@ TEST(LiveMp4ByteStreamTest, WaitTimeoutKeepsTheStreamAliveUntilNextFragment) {
   auto opened = ring.OpenReader();
   ASSERT_TRUE(opened.ok()) << opened.error().message;
   LiveMp4ByteStream stream(std::move(opened).value(),
-                            /*stale_timeout=*/std::chrono::milliseconds{30},
-                            /*maximum_idle=*/std::chrono::milliseconds{10000});
+                           /*stale_timeout=*/std::chrono::milliseconds{30},
+                           /*maximum_idle=*/std::chrono::milliseconds{10000});
 
   char buffer[1024];
   ASSERT_GT(stream.Read(buffer, sizeof buffer), 0U);  // init segment
@@ -54,8 +54,8 @@ TEST(LiveMp4ByteStreamTest, IdleBeyondMaximumIdleEndsTheStream) {
   auto opened = ring.OpenReader();
   ASSERT_TRUE(opened.ok()) << opened.error().message;
   LiveMp4ByteStream stream(std::move(opened).value(),
-                            /*stale_timeout=*/std::chrono::milliseconds{20},
-                            /*maximum_idle=*/std::chrono::milliseconds{60});
+                           /*stale_timeout=*/std::chrono::milliseconds{20},
+                           /*maximum_idle=*/std::chrono::milliseconds{60});
 
   char buffer[1024];
   ASSERT_GT(stream.Read(buffer, sizeof buffer), 0U);  // init segment

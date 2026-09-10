@@ -17,10 +17,9 @@ common::Result<std::array<std::int64_t, 2>> FixedFrameDurationLimits(
          "camera fps cannot be represented as a libcamera frame duration"});
   }
 
-  const auto duration = static_cast<std::int64_t>(
-      (kMicrosecondsPerSecond + (fps / 2U)) / fps);
-  return common::Result<std::array<std::int64_t, 2>>::Ok(
-      {duration, duration});
+  const auto duration =
+      static_cast<std::int64_t>((kMicrosecondsPerSecond + (fps / 2U)) / fps);
+  return common::Result<std::array<std::int64_t, 2>>::Ok({duration, duration});
 }
 
 X264RuntimePolicy ResolveX264RuntimePolicy(
@@ -44,7 +43,9 @@ void FrameRateEstimator::Record(std::chrono::nanoseconds timestamp) {
   }
 }
 
-void FrameRateEstimator::Reset() { samples_.clear(); }
+void FrameRateEstimator::Reset() {
+  samples_.clear();
+}
 
 double FrameRateEstimator::FramesPerSecond() const {
   if (samples_.size() < 2U) {
@@ -55,8 +56,8 @@ double FrameRateEstimator::FramesPerSecond() const {
     return 0.0;
   }
   constexpr double kNanosecondsPerSecond = 1000000000.0;
-  return static_cast<double>(samples_.size() - 1U) *
-         kNanosecondsPerSecond / static_cast<double>(elapsed.count());
+  return static_cast<double>(samples_.size() - 1U) * kNanosecondsPerSecond /
+         static_cast<double>(elapsed.count());
 }
 
 std::size_t FrameRateEstimator::sample_count() const noexcept {

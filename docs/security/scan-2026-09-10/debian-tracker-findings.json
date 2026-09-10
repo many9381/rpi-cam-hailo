@@ -1,0 +1,1662 @@
+{
+ "release": "trixie",
+ "summary": {
+  "NOT-IN-TRACKER": 19,
+  "OPEN": 152
+ },
+ "findings": [
+  {
+   "package": "hailort",
+   "source": "hailort",
+   "installed": "4.24.0",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libatomic1",
+   "source": "gcc-14",
+   "installed": "14.2.0-19",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libboost-filesystem1.83.0",
+   "source": "boost1.83",
+   "installed": "1.83.0-4.2",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libboost-log1.83.0",
+   "source": "boost1.83",
+   "installed": "1.83.0-4.2",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libboost-thread1.83.0",
+   "source": "boost1.83",
+   "installed": "1.83.0-4.2",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libcamera0.7",
+   "source": "libcamera",
+   "installed": "0.7.2+rpt20260817-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libdrm2",
+   "source": "libdrm",
+   "installed": "2.4.134-3~bpo13+1+rpt1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libgcc-s1",
+   "source": "gcc-14",
+   "installed": "14.2.0-19",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libjsoncpp26",
+   "source": "libjsoncpp",
+   "installed": "1.9.6-3",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libnuma1",
+   "source": "numactl",
+   "installed": "2.0.19-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libpisp1",
+   "source": "libpisp",
+   "installed": "1.7.0-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libselinux1",
+   "source": "libselinux",
+   "installed": "3.8.1-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libstdc++6",
+   "source": "gcc-14",
+   "installed": "14.2.0-19",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libunistring5",
+   "source": "libunistring",
+   "installed": "1.3-2",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libva-drm2",
+   "source": "libva",
+   "installed": "2.22.0-3",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libva-x11-2",
+   "source": "libva",
+   "installed": "2.22.0-3",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libva2",
+   "source": "libva",
+   "installed": "2.22.0-3",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libxau6",
+   "source": "libxau",
+   "installed": "1:1.0.11-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "ocl-icd-libopencl1",
+   "source": "ocl-icd",
+   "installed": "2.3.3-1",
+   "cve": null,
+   "status": "NOT-IN-TRACKER"
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-13858",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Out of bounds read in FFmpeg in Google Chrome prior to 150.0.7871.47 allowed a remote attacker to obtain potentially sensitive information from process memory via a crafted video file. (Chromium security severity: Medium)"
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-18393",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in FFmpeg. The tdsc_load_cursor() function writes beyond the bounds of a heap-allocated buffer when processing crafted TDSC cursor data. A remote attacker could exploit this by supplying a specially crafted video file, potentially leading to a denial of service or arbitrary code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-30999",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A heap buffer overflow in the av_bprint_finalize() function of FFmpeg v8.0.1 allows attackers to cause a Denial of Service (DoS) via a crafted input."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-38350",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "An integer overflow in the target_sws_fuzzer() function (libswscale/output.c) of FFmpeg N-122528-gdd2976b9e1 allows attackers to cause a Denial of Service (DoS) via supplying a crafted input."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-58049",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg's RASC video decoder (decode_dlta in libavcodec/rasc.c) performs 32-bit reads and writes at the row cursor before the NEXT_LINE row-boundary check and validates the DLTA region in pixel rather than byte units, so a DLTA run on a PAL8 frame can access several bytes past the row allocation. A crafted media stream using the RASC FourCC, decoded by libavcodec, triggers a bitstream-controlled out-of-bounds heap write and adjacent out-of-bounds read, leading to memory corruption."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-6385",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in FFmpeg. A remote attacker could exploit this vulnerability by providing a specially crafted MPEG-PS/VOB media file containing a malicious DVD subtitle stream. This vulnerability is caused by a signed integer overflow in the DVD subtitle parser's fragment reassembly bounds checks, leading to a heap out-of-bounds write. Successful exploitation can result in a denial of service (DoS) due to an application crash, and potentially lead to arbitrary code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64830",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 2.1 through 8.1.2 contains a heap buffer overflow vulnerability in the VobSub subtitle demuxer that allows attackers to corrupt adjacent heap memory by supplying a malicious .sub/.idx subtitle file declaring more distinct stream IDs than the fixed-size array bounds in libavformat/mpeg.c. Attackers can craft a subtitle file with excessive distinct stream IDs to trigger unbounded writes beyond the vobsub->q[] array boundary via ff_subtitles_queue_insert(), potentially achieving arbitrary code execution in any application using FFmpeg's VobSub demuxer."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64831",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 8.0 through 8.1.2 contains a stack buffer overflow vulnerability in the Vulkan HEVC hardware decoder that allows remote attackers to overwrite return addresses and adjacent stack frames by supplying a crafted HEVC/H.265 bitstream. Attackers can embed a malicious vps_num_hrd_parameters value exceeding HEVC_MAX_SUB_LAYERS in any supported container format to overflow stack-allocated arrays in the vk_hevc_end_frame function, potentially achieving arbitrary code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64832",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 4.4 through 8.1.2 contain a double-free vulnerability in the NVIDIA NVDEC hardware decoder within libavcodec/nvdec.c that allows attackers to trigger memory corruption by supplying a crafted video file. When no decoder surfaces remain, the ff_nvdec_start_frame_sep_ref error path frees memory via nvdec_fdd_priv_free while the calling layer subsequently frees the same frame description data, resulting in a double-free of the underlying decoder context in any FFmpeg-based application using NVDEC hardware-accelerated decoding."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64833",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 0.7.1 through 8.1.2 contain an out-of-bounds read vulnerability in the S/PDIF muxer that allows attackers to access memory beyond buffer boundaries by supplying a crafted DTS stream with a core_size value larger than the actual packet length. Attackers can exploit the missing bounds check in the spdif_header_dts4 function by providing a malicious DTS-HD audio stream during S/PDIF re-muxing to trigger unauthorized memory reads beyond the packet buffer."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64834",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 0.6.3 through 8.1.2 contain an infinite loop vulnerability in the RTP/ASF demuxer within libavformat/rtpdec_asf.c that allows remote attackers to cause denial of service by sending a crafted RTP/ASF stream. The rtp_asf_fix_header function fails to validate a minimum chunksize when iterating over ASF objects, causing the loop pointer to never advance when a chunksize is smaller than the 24-byte minimum ASF object header size, resulting in CPU exhaustion that denies service to legitimate users."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64835",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 4.4 through 8.1.2 contain an out-of-bounds memory access vulnerability in the ADX audio decoder within libavcodec/adxdec.c that allows attackers to trigger both out-of-bounds reads and writes by supplying a crafted ADX or AAX audio file with a mid-stream channel layout change. When AV_PKT_DATA_NEW_EXTRADATA side data is received mid-stream, the adx_decode_frame function re-parses the stream header but fails to update the internal channel state, causing subsequent decoding operations to access the prev[] state array using a stale channel count."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65703",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 2.7 through 8.1.2 contain an out-of-bounds write vulnerability in the TDSC video decoder that allows remote attackers to cause heap corruption by supplying a crafted AVI file that changes frame dimensions across TDSF frames. The tdsc_parse_tdsf() function fails to unreference the existing reference frame before calling av_frame_get_buffer(), causing tdsc_blit() and tdsc_yuv2rgb() to write attacker-controlled pixel data beyond the end of the undersized reference frame buffer, resulting in a process crash and potential code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65704",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2 contains an out-of-bounds write vulnerability that allows attackers to cause heap corruption by supplying a crafted ffconcat file processed with the -safe 0 flag. The TY demuxer's demux_audio() function decrements packet size without bounds checking, producing a negative size value that is passed to memcpy() in shorten_decode_frame(), where conversion to size_t wraps the value to near SIZE_MAX and triggers reads beyond the source allocation and writes far beyond the Shorten decoder's bitstream buffer."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65705",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 3.4 through 8.1.2 contain an out-of-bounds write vulnerability in the vf_floodfill video filter that allows attackers to corrupt heap memory by supplying a dynamically sized video stream with filtergraph reinitialization disabled via -reinit_filter 0. When config_input() allocates the points traversal stack based on initial frame dimensions and a subsequent larger frame is processed, filter_frame() performs flood-fill neighbor pushes beyond the original allocation boundary, resulting in heap corruption and process crash with potential for code execution depending on heap layout and process hardening."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65706",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 3.0 through 8.1.2 contain an out-of-bounds write vulnerability in the vf_swaprect video filter that allows attackers to corrupt heap memory by supplying a crafted NV12 video frame with odd width dimensions. The filter_frame() function reuses a temporary row buffer sized for plane 0's single-byte pixel step across all planes, causing an 18-byte memcpy into a 17-byte heap allocation when processing the two-byte-per-sample interleaved chroma plane of a 17x16 NV12 frame, resulting in heap corruption and process crash with potential for code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66036",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 5d7112c, contains a heap out-of-bounds write vulnerability in the vf_hqdn3d filter that allows attackers to corrupt heap memory by supplying a crafted video whose frame resolution increases between frames when filtergraph reinitialization is disabled via the -reinit_filter 0 option. Attackers can provide a malicious video input where vf_hqdn3d.config_input() allocates undersized per-plane line-history buffers based on the initial frame width, and subsequent larger frames cause denoise_spatial() to write beyond the allocation boundary, resulting in heap memory corruption."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66037",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 5d7112c, contains an uncontrolled resource consumption vulnerability in the IAMF demuxer that allows an unauthenticated attacker to cause multi-gigabyte memory allocation from a 17-byte input file by supplying a crafted count_label field. The mix_presentation_obu() function in libavformat/iamf_parse.c calls av_calloc(count_label, sizeof(*language_label)) with an attacker-controlled value before validating available OBU data, enabling an allocation amplification of approximately 126 million bytes per input byte that exhausts process memory or triggers an OOM-kill during format probing."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66038",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 8670835, contains an information disclosure vulnerability in the LCL/ZLIB video decoder that allows attackers to expose uninitialized heap memory by supplying a valid zlib stream that inflates to fewer bytes than the expected frame size. The zlib_decomp() function in lcldec.c treats short decompression as non-fatal and continues to the RGB24 conversion path, which copies a full frame's worth of rows from the allocation buffer using original frame dimensions, causing uninitialized heap contents including pointer-derived allocator bytes to be copied into the attacker-observable AVFrame output and potentially defeating ASLR in long-lived media processing services."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66039",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit aafb5c6, contains a signed integer overflow vulnerability in the MACE6 audio decoder that allows attackers to corrupt heap memory by supplying a crafted CAF file with a malicious bytes_per_packet value. Attackers can craft a CAF file with oversized bytes_per_packet and frames_per_packet values in the desc chunk to trigger an integer overflow in mace_decode_frame() during output sample count computation, resulting in an undersized buffer allocation and heap out-of-bounds write that could enable code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66040",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit b506faf, contains a heap out-of-bounds write vulnerability in the native PNG and APNG encoders that allows remote attackers to corrupt heap memory by supplying a crafted PNG image with a malicious eXIf chunk. Attackers can craft an eXIf chunk where multiple IFD entries reference the same large value payload, causing canonical serialization to expand the output far beyond the undersized allocation estimated by add_exif_profile_size(), resulting in png_write_chunk() writing tens of thousands of bytes past the buffer boundary, leading to deterministic heap corruption, process crash, and potentially arbitrary code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66041",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg 7.0 through 8.1.2, fixed in commit 4da9812, contains a heap out-of-bounds write vulnerability in the vf_quirc filter that allows an attacker to corrupt heap memory by supplying a crafted PGS/SUP subtitle file with mismatched frame dimensions. Attackers can provide a subtitle file whose second presentation has larger dimensions than its first, causing av_image_copy_plane() to copy data exceeding the initial allocation size into the undersized libquirc grayscale image buffer, resulting in heap corruption and process crash with potential for code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70628",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 0.5 up to, but not including, 9.0 contain a signed integer overflow vulnerability in the DVB subtitle parser in libavcodec/dvbsub_parser.c that allows attackers to trigger a heap buffer overflow by supplying a crafted WTV file. The overflow causes the bounds-check guard expression to wrap to INT_MIN, bypassing the PARSE_BUF_SIZE comparison and invoking memcpy() with attacker-controlled data into a heap buffer, resulting in an out-of-bounds heap write and potential memory corruption or code execution."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70629",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 3.0 up to, but not including, 9.0 contain an uninitialized heap memory read vulnerability in the native RSCC decoder (libavcodec/rscc.c) that allows attackers to disclose heap memory contents by supplying a crafted video file with a compressed tile that decompresses fewer bytes than the declared tile geometry requires. When rscc_decode_frame() calls av_image_copy_plane() without validating the decompressed byte count against the tile dimensions, the unwritten suffix of the persistent intermediate buffer ctx->inflated_buf is copied into the decoded frame, potentially exposing data from prior heap allocations or previous decoded frames in persistent decoding services."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70630",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 3.0 up to, but not including, 9.0 contain an uninitialized heap memory read vulnerability in the native Screenpresso decoder (libavcodec/screenpresso.c) that allows attackers to recover sensitive memory contents by supplying a crafted SPV1 packet with a valid zlib stream that decompresses fewer bytes than the full frame requires. The screenpresso_decode_frame() function fails to validate the produced byte count before calling av_image_copy_plane() to copy the complete frame dimensions from the persistent ctx->inflated_buf buffer, causing unwritten heap memory from prior allocations or prior frames to be copied into decoded output and potentially exposing sensitive data such as userspace addresses from persistent decoding services."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70631",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 0.5 up to, but not including, 9.0 contain an uninitialized heap memory disclosure vulnerability in the native TIFF decoder in libavcodec/tiff.c. An attacker who can cause FFmpeg to decode a crafted TIFF file can supply a valid Deflate-compressed strip that terminates successfully after producing fewer bytes than the declared strip requires. The tiff_unpack_zlib() function allocates a heap buffer sized for the full declared strip but copies all declared rows via memcpy() regardless of how many bytes zlib actually decompressed, causing unwritten bytes that can contain stale data from prior heap allocations to be incorporated into decoded image output and potentially exposing sensitive data in persistent services."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70632",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 4.4 up to, but not including, 9.0 contain an out-of-bounds heap write vulnerability in the native GoPro CineForm HD (CFHD) decoder that allows remote attackers to corrupt heap memory by supplying a crafted AVI file during stream probing. The cfhd_decode() function fails to enforce the non-Bayer logical output-width invariant in the transform-type-2 reconstruction path, causing horiz_filter_clip() to write oversized 16-bit sample rows far beyond the allocated output frame buffer, which can be escalated to arbitrary code execution via overwrite of a live cleanup callback pointer."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75141",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit acf5d7c contains a heap buffer overflow in the hvcC box writer. When writing an HEVC configuration record with more NAL units of a single type than the count field can represent, the NAL unit count overflows, causing a heap buffer overflow. A crafted HEVC input file triggers the overflow during muxing."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75142",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 9d786e4 contains a stack buffer overflow in the MPEG-PS muxer (libavformat/mpegenc.c). When muxing input with more streams than the muxer's fixed-size stack buffer accommodates, the buffer is overflowed. A crafted input with an excessive number of streams triggers the overflow during MPEG-PS muxing."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75143",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 1c10bcc contains a heap buffer overflow in the RIST protocol reader (libavformat/librist.c). librist_read() ignored its size argument and copied the full received payload length into the caller-provided destination buffer, overflowing it when the payload exceeds the destination size. This is reachable via the async:rist:// URL scheme, where the async wrapper supplies a smaller buffer than the received payload. A remote RIST sender can trigger the overflow by sending a packet whose payload exceeds the caller buffer size."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75144",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 1cdeb3c contains a heap buffer overflow vulnerability in the VC-2/Dirac RTP packetizer (libavformat/rtpenc_vc2hq.c) that allows attackers to trigger memory corruption by supplying a crafted Dirac data unit. The packetizer copies an input-derived data unit or fragment size into a fixed-size buffer without an upper bound check, causing a heap buffer overflow when the crafted input is packetized for RTP output."
+  },
+  {
+   "package": "libavutil59",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75146",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 65b0dab contains an out-of-bounds read in the DASH demuxer (libavformat/dashdec.c). When a live DASH manifest is refreshed with a startNumber that is lower than the previous value, the current sequence number is driven negative. The fragment retrieval function checked only the upper bound before indexing the fragments array, allowing a negative index to be used and causing an out-of-bounds read. A malicious or misconfigured DASH server can trigger this by serving a live manifest with a decreasing startNumber across a manifest refresh."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2022-0563",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A flaw was found in the util-linux chfn and chsh utilities when compiled with Readline support. The Readline library uses an \"INPUTRC\" environment variable to get a path to the library config file. When the library cannot parse the specified file, it prints an error message containing data from the file. This flaw allows an unprivileged user to read root-owned files, potentially leading to privilege escalation. This flaw affects util-linux versions prior to 2.37.4."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-3184",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Improper hostname canonicalization in the `login(1)` utility, when invoked with the `-h` option, can modify the supplied remote hostname before setting `PAM_RHOST`. A remote attacker could exploit this by providing a specially crafted hostname, potentially bypassing host-based Pluggable Authentication Modules (PAM) access control rules that rely on fully qualified domain names. This could lead to unauthorized access."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-76642",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "util-linux versions through 2.41.5 and 2.42.2 fail to check mount helper exit status before running post-mount hooks, allowing unprivileged users to execute privileged operations on pre-existing filesystems. Attackers can exploit X-mount.idmap or X-mount.owner hooks to clone filesystems with inherited suid bits or modify target inode permissions after a helper fails, achieving privilege escalation."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78408",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The nsenter --join-cgroup option opens the target cgroup.procs file as root and leaves that file descriptor open across later namespace and credential changes and across execve(). Because the kernel checks later cgroup migrations using the credentials from the original open, a program run in an attacker-controlled target can inherit root's ability to move host processes between cgroups. After a privileged operator uses --join-cgroup against that target, an unprivileged user can migrate and terminate unrelated root processes."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78409",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The X-mount.subdir option uses a detached-tree fast path on Linux 6.15 and later and passes the configured subdirectory to open_tree() with AT_SYMLINK_NOFOLLOW. That flag does not stop intermediate symlink traversal or keep resolution inside the newly mounted filesystem. A local unprivileged user with an fstab-authorized X-mount.subdir entry can attach a host path at the intended mountpoint."
+  },
+  {
+   "package": "libblkid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78410",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Restricted bind mounts take the source path from fstab but do not pin that source before the privileged mount. A local unprivileged user who can replace the authorized source or a writable ancestor can redirect SUID mount(8) to bind another host directory. If the fstab entry also sets X-mount.owner, X-mount.group, or X-mount.mode, root then changes ownership or mode on that redirected inode."
+  },
+  {
+   "package": "libbz2-1.0",
+   "source": "bzip2",
+   "installed": "1.0.8-6",
+   "cve": "CVE-2026-42250",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "bzip2 contains an off\u2011by\u2011one error in the bzip2recover utility. When processing a specially crafted file, the application performs an out\u2011of\u2011bounds write to a global buffer, resulting in memory corruption and a crash (denial of service).  This issue was fixed in bzip2 patch\u00a035d122a3df8b0cc4082a4d89fdc6ee99f375fe67"
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2010-4756",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "The glob implementation in the GNU C Library (aka glibc or libc6) allows remote authenticated users to cause a denial of service (CPU and memory consumption) via crafted glob expressions that do not match any pathnames, as demonstrated by glob expressions in STAT commands to an FTP daemon, a different vulnerability than CVE-2010-2632."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2018-20796",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "In the GNU C Library (aka glibc or libc6) through 2.29, check_dst_limits_calc_pos_1 in posix/regexec.c has Uncontrolled Recursion, as demonstrated by '(\\227|)(\\\\1\\\\1|t1|\\\\\\2537)+' in grep."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2019-1010022",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "GNU Libc current is affected by: Mitigation bypass. The impact is: Attacker may bypass stack guard protection. The component is: nptl. The attack vector is: Exploit stack buffer overflow vulnerability and use this bypass vulnerability to bypass stack guard. NOTE: Upstream comments indicate \"this is being treated as a non-security bug and no real threat."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2019-1010023",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "GNU Libc current is affected by: Re-mapping current loaded library with malicious ELF file. The impact is: In worst case attacker may evaluate privileges. The component is: libld. The attack vector is: Attacker sends 2 ELF files to victim and asks to run ldd on it. ldd execute code. NOTE: Upstream comments indicate \"this is being treated as a non-security bug and no real threat."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2019-1010024",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "GNU Libc current is affected by: Mitigation bypass. The impact is: Attacker may bypass ASLR using cache of thread stack and heap. The component is: glibc. NOTE: Upstream comments indicate \"this is being treated as a non-security bug and no real threat."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2019-1010025",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "GNU Libc current is affected by: Mitigation bypass. The impact is: Attacker may guess the heap addresses of pthread_created thread. The component is: glibc. NOTE: the vendor's position is \"ASLR bypass itself is not a vulnerability."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2019-9192",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "In the GNU C Library (aka glibc or libc6) through 2.29, check_dst_limits_calc_pos_1 in posix/regexec.c has Uncontrolled Recursion, as demonstrated by '(|)(\\\\1\\\\1)*' in grep, a different issue than CVE-2018-20796. NOTE: the software maintainer disputes that this is a vulnerability because the behavior occurs only with a crafted pattern"
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-18374",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Passing an effectively empty string to the `,ccs=` syntax extension of the mode argument in the `fopen` function in the GNU C Library version 2.45 or earlier may result in a heap buffer overflow when the mode string input to the function is attacker controlled.    This usage pattern is not seen in applications in common GNU/Linux distributions and applications that process user-supplied values for `ccs` should not pass them through without validation."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-19499",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-19542",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-5435",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The deprecated functions ns_printrrf, ns_printrr and fp_nquery in the GNU C Library version 2.2 and newer fail to enforce the caller-supplied buffer length, and can result in an out-of-bounds write when printing TSIG records."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-5450",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Calling the scanf family of functions with a %mc (malloc'd character match) in the GNU C Library version 2.7 to version 2.43 with a format width specifier with an explicit width greater than 1024 could result in a one byte heap buffer overflow."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-5928",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Calling the ungetwc function on a FILE stream with wide characters encoded in a character set that has overlaps between its single byte and multi-byte character encodings, in the GNU C Library version 2.43 or earlier, may result in an attempt to read bytes before an allocated buffer, potentially resulting in unintentional disclosure of neighboring data in the heap, or a program crash.  A bug in the wide character pushback implementation (_IO_wdefault_pbackfail in libio/wgenops.c) causes ungetwc() to operate on the regular character buffer (fp->_IO_read_ptr) instead of the actual wide-stream read pointer (fp->_wide_data->_IO_read_ptr). The program crash may happen in cases where fp->_IO_read_ptr is not initialized and hence points to NULL. The buffer under-read requires a special situation where the input character encoding is such that there are overlaps between single byte representations and multibyte representations in that encoding, resulting in spurious matches. The spurious match case is not possible in the standard Unicode character sets."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-6238",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The deprecated functions ns_printrrf, ns_printrr and fp_nquery in the GNU C Library version 2.0.1 to version 2.43 fail to validate the RDATA content against the RDATA length in a DNS response when processing A6, CERT, LOC, TKEY or TSIG records, which may allow an attacker to craft a DNS response, causing a target application to crash or read uninitialized memory.  These functions are for application debugging only and hence not in the path of code executed by the DNS resolver.  Further, they have been deprecated since version 2.34 and should not be used by any new applications.  Applications should consider porting away from these interfaces since they may be removed in future versions."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-6368",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Calling wordexp with WRDE_APPEND in the GNU C Library version 2.0 to version 2.43\u00a0can cause the interface to return invalid memory in the we_wordv member, which on subsequent calls to wordfree may abort the process."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-6791",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "When expanding paths that begin with a tilde (~) followed by a username, the internal parse_tilde function extracts the username to determine the user's home directory.  The implementation allocates memory for this username directly on the stack using the strndupa macro. Because the size of this allocation was determined by the length of the user-supplied input without any bounds checks, passing an excessively long username e.g. thousands of characters, forces the thread to exhaust its stack space. Thus if an application passes untrusted, attacker-controlled input to the wordexp function, an attacker can trigger a stack clash."
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-77117",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libc6",
+   "source": "glibc",
+   "installed": "2.41-12+rpt1+deb13u3",
+   "cve": "CVE-2026-80489",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2024-25260",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "elfutils v0.189 was discovered to contain a NULL pointer dereference via the handle_verdef() function at readelf.c."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1352",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability has been found in GNU elfutils 0.192 and classified as critical. This vulnerability affects the function __libdw_thread_tail in the library libdw_alloc.c of the component eu-readelf. The manipulation of the argument w leads to memory corruption. The attack can be initiated remotely. The complexity of an attack is rather high. The exploitation appears to be difficult. The exploit has been disclosed to the public and may be used. The name of the patch is 2636426a091bd6c6f7f02e49ab20d4cdc6bfc753. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1365",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability, which was classified as critical, was found in GNU elfutils 0.192. This affects the function process_symtab of the file readelf.c of the component eu-readelf. The manipulation of the argument D/a leads to buffer overflow. Local access is required to approach this attack. The exploit has been disclosed to the public and may be used. The identifier of the patch is 5e5c0394d82c53e97750fe7b18023e6f84157b81. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1371",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability has been found in GNU elfutils 0.192 and classified as problematic. This vulnerability affects the function handle_dynamic_symtab of the file readelf.c of the component eu-read. The manipulation leads to null pointer dereference. Attacking locally is a requirement. The exploit has been disclosed to the public and may be used. The patch is identified as b38e562a4c907e08171c76b8b2def8464d5a104a. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1372",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability was found in GNU elfutils 0.192. It has been declared as critical. Affected by this vulnerability is the function dump_data_section/print_string_section of the file readelf.c of the component eu-readelf. The manipulation of the argument z/x leads to buffer overflow. An attack has to be approached locally. The exploit has been disclosed to the public and may be used. The identifier of the patch is 73db9d2021cab9e23fd734b0a76a612d52a6f1db. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1376",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability classified as problematic was found in GNU elfutils 0.192. This vulnerability affects the function elf_strptr in the library /libelf/elf_strptr.c of the component eu-strip. The manipulation leads to denial of service. It is possible to launch the attack on the local host. The complexity of an attack is rather high. The exploitation appears to be difficult. The exploit has been disclosed to the public and may be used. The name of the patch is b16f441cca0a4841050e3215a9f120a6d8aea918. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libdw1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1377",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability, which was classified as problematic, has been found in GNU elfutils 0.192. This issue affects the function gelf_getsymshndx of the file strip.c of the component eu-strip. The manipulation leads to denial of service. The attack needs to be approached locally. The exploit has been disclosed to the public and may be used. The identifier of the patch is fbf1df9ca286de3323ae541973b08449f8d03aba. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2024-25260",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "elfutils v0.189 was discovered to contain a NULL pointer dereference via the handle_verdef() function at readelf.c."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1352",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability has been found in GNU elfutils 0.192 and classified as critical. This vulnerability affects the function __libdw_thread_tail in the library libdw_alloc.c of the component eu-readelf. The manipulation of the argument w leads to memory corruption. The attack can be initiated remotely. The complexity of an attack is rather high. The exploitation appears to be difficult. The exploit has been disclosed to the public and may be used. The name of the patch is 2636426a091bd6c6f7f02e49ab20d4cdc6bfc753. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1365",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability, which was classified as critical, was found in GNU elfutils 0.192. This affects the function process_symtab of the file readelf.c of the component eu-readelf. The manipulation of the argument D/a leads to buffer overflow. Local access is required to approach this attack. The exploit has been disclosed to the public and may be used. The identifier of the patch is 5e5c0394d82c53e97750fe7b18023e6f84157b81. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1371",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability has been found in GNU elfutils 0.192 and classified as problematic. This vulnerability affects the function handle_dynamic_symtab of the file readelf.c of the component eu-read. The manipulation leads to null pointer dereference. Attacking locally is a requirement. The exploit has been disclosed to the public and may be used. The patch is identified as b38e562a4c907e08171c76b8b2def8464d5a104a. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1372",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability was found in GNU elfutils 0.192. It has been declared as critical. Affected by this vulnerability is the function dump_data_section/print_string_section of the file readelf.c of the component eu-readelf. The manipulation of the argument z/x leads to buffer overflow. An attack has to be approached locally. The exploit has been disclosed to the public and may be used. The identifier of the patch is 73db9d2021cab9e23fd734b0a76a612d52a6f1db. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1376",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability classified as problematic was found in GNU elfutils 0.192. This vulnerability affects the function elf_strptr in the library /libelf/elf_strptr.c of the component eu-strip. The manipulation leads to denial of service. It is possible to launch the attack on the local host. The complexity of an attack is rather high. The exploitation appears to be difficult. The exploit has been disclosed to the public and may be used. The name of the patch is b16f441cca0a4841050e3215a9f120a6d8aea918. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libelf1t64",
+   "source": "elfutils",
+   "installed": "0.192-4",
+   "cve": "CVE-2025-1377",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A vulnerability, which was classified as problematic, has been found in GNU elfutils 0.192. This issue affects the function gelf_getsymshndx of the file strip.c of the component eu-strip. The manipulation leads to denial of service. The attack needs to be approached locally. The exploit has been disclosed to the public and may be used. The identifier of the patch is fbf1df9ca286de3323ae541973b08449f8d03aba. It is recommended to apply a patch to fix this issue."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2012-0039",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "GLib 2.31.8 and earlier, when the g_str_hash function is used, computes hash values without restricting the ability to trigger hash collisions predictably, which allows context-dependent attackers to cause a denial of service (CPU consumption) via crafted input to an application that maintains a hash table. NOTE: this issue may be disputed by the vendor; the existence of the g_str_hash function is not a vulnerability in the library, because callers of g_hash_table_new and g_hash_table_new_full can specify an arbitrary hash function that is appropriate for the application."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-15588",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A denial-of-service and resource exhaustion vulnerability exists within the `GDBus` component of GLib. The `gdbusauth` authentication mechanism fails to enforce proper length limitations on data lines read from a client. An unauthenticated local or remote attacker can exploit this lack of input validation by sending excessively long streams of data, causing the application to consume massive amounts of system memory and CPU, potentially leading to a crash or system hang."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-16118",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in xdgmime. A heap-based buffer overflow can be triggered in _xdg_mime_magic_parse_magic_line() in the xdgmimemagic.c file on little-endian systems when an attacker-controlled MIME magic file in a user-writable XDG data location (e.g., in the $XDG_DATA_HOME/mime/magic path) is parsed by an application performing MIME type detection (e.g., via g_content_type_guess()). When performing byte-swap, incorrect pointer arithmetic on the write side causes an out-of-bounds write of 2 bytes, resulting in an application crash or memory corruption."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58010",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. An off-by-one error can occur in the gvs_tuple_is_normal function in the glib/gvariant-serialiser.c file when doing an alignment padding check because the bounds check uses > instead of >=, causing an out-of-bounds read of only 1 byte. This issue can cause a minor information disclosure of 1 byte and a denial of service when the out-of-bounds read crosses a page boundary."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58011",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. An out-of-bounds read of only 2 bytes can occur in the g_date_time_get_ymd function in the glib/gdatetime.c file when an invalid GDateTime object produced by the g_date_time_add_full function is processed. This flaw can corrupt the date output and potentially cause logic errors that may lead to a denial of service."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58012",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. A buffer over-read can occur in the g_regex_replace function when used with the `G_REGEX_RAW` compile flag and case-change replacement escapes because the string_append function processes matched substrings using UTF-8 functions that assume valid UTF-8 input, even when the string is treated as raw bytes. This vulnerability can cause a minor information disclosure of 1-5 bytes and a denial of service when the buffer over-read crosses a page boundary."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58013",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. A buffer over-read can occur in g_io_channel_read_line_backend() in the giochannel.c file when a custom line terminator with a length greater than one is set, causing memcmp to read past the GString buffer. This vulnerability can cause a minor information disclosure of 7 bytes or a denial of service when the buffer over-read crosses a page boundary."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58014",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. An off-by-one error can occur in the g_key_file_get_locale_string_list function in the gkeyfile.c file when loading a key file with an empty value. This flaw can cause an out-of-bounds access of 1 byte or a denial of service when the out-of-bounds access crosses a page boundary."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58015",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. The D-Bus client-side implementation of the DBUS_COOKIE_SHA1 SASL authentication mechanism does not validate the cookie_context parameter received from the server. A malicious D-Bus server can supply a cookie_context containing path traversal sequences, causing the client to read an arbitrary file and exfiltrate sensitive data by verifying guessed file contents against a generated hash."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-58016",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib. A state confusion issue exists in g_dbus_node_info_new_for_xml() in the gio/gdbusintrospection.c file when processing malformed D-Bus introspection XML, specifically with a `node` element nested within other elements like `method`, `signal`, `property` or `arg`. This issue can cause an unsigned integer overflow and lead to an out-of-bounds read, resulting in a denial of service."
+  },
+  {
+   "package": "libglib2.0-0t64",
+   "source": "glib2.0",
+   "installed": "2.84.4-3~deb13u3",
+   "cve": "CVE-2026-86469",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in GLib2. When g_file_replace() is used with G_FILE_CREATE_REPLACE_DESTINATION and creating the .goutputstream-XXXXXX temporary file fails, the library unlinks the destination and recreates it without exclusive creation or symlink protection. A local attacker who can write to the destination directory can win that race and redirect the write to another file."
+  },
+  {
+   "package": "libgnutls30t64",
+   "source": "gnutls28",
+   "installed": "3.8.9-3+deb13u4",
+   "cve": "CVE-2011-3389",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "The SSL protocol, as used in certain configurations in Microsoft Windows and Microsoft Internet Explorer, Mozilla Firefox, Google Chrome, Opera, and other products, encrypts data by using CBC mode with chained initialization vectors, which allows man-in-the-middle attackers to obtain plaintext HTTP headers via a blockwise chosen-boundary attack (BCBA) on an HTTPS session, in conjunction with JavaScript code that uses (1) the HTML5 WebSocket API, (2) the Java URLConnection API, or (3) the Silverlight WebClient API, aka a \"BEAST\" attack."
+  },
+  {
+   "package": "libgstreamer-plugins-base1.0-0",
+   "source": "gst-plugins-base1.0",
+   "installed": "1.26.2-1+rpt3+deb13u1",
+   "cve": "CVE-2026-85150",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A NULL pointer dereference flaw was found in GStreamer's RTSP support library. The vulnerability occurs while parsing an Authorization or WWW-Authenticate header that uses Digest authentication. Specially crafted whitespace placement around a parameter's terminator can cause an internal length calculation to underflow, leading to a crash of the process parsing the header. On an RTSP server this can be triggered by a remote, unauthenticated attacker sending a single malformed request when the server has authentication enabled; the same flaw can also be triggered against an RTSP client by a malicious or compromised RTSP server. Successful exploitation results in a denial of service (application crash) and has no confirmed impact on confidentiality or integrity."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2022-0563",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A flaw was found in the util-linux chfn and chsh utilities when compiled with Readline support. The Readline library uses an \"INPUTRC\" environment variable to get a path to the library config file. When the library cannot parse the specified file, it prints an error message containing data from the file. This flaw allows an unprivileged user to read root-owned files, potentially leading to privilege escalation. This flaw affects util-linux versions prior to 2.37.4."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-3184",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Improper hostname canonicalization in the `login(1)` utility, when invoked with the `-h` option, can modify the supplied remote hostname before setting `PAM_RHOST`. A remote attacker could exploit this by providing a specially crafted hostname, potentially bypassing host-based Pluggable Authentication Modules (PAM) access control rules that rely on fully qualified domain names. This could lead to unauthorized access."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-76642",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "util-linux versions through 2.41.5 and 2.42.2 fail to check mount helper exit status before running post-mount hooks, allowing unprivileged users to execute privileged operations on pre-existing filesystems. Attackers can exploit X-mount.idmap or X-mount.owner hooks to clone filesystems with inherited suid bits or modify target inode permissions after a helper fails, achieving privilege escalation."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78408",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The nsenter --join-cgroup option opens the target cgroup.procs file as root and leaves that file descriptor open across later namespace and credential changes and across execve(). Because the kernel checks later cgroup migrations using the credentials from the original open, a program run in an attacker-controlled target can inherit root's ability to move host processes between cgroups. After a privileged operator uses --join-cgroup against that target, an unprivileged user can migrate and terminate unrelated root processes."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78409",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The X-mount.subdir option uses a detached-tree fast path on Linux 6.15 and later and passes the configured subdirectory to open_tree() with AT_SYMLINK_NOFOLLOW. That flag does not stop intermediate symlink traversal or keep resolution inside the newly mounted filesystem. A local unprivileged user with an fstab-authorized X-mount.subdir entry can attach a host path at the intended mountpoint."
+  },
+  {
+   "package": "libmount1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78410",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Restricted bind mounts take the source path from fstab but do not pin that source before the privileged mount. A local unprivileged user who can replace the authorized source or a writable ancestor can redirect SUID mount(8) to bind another host directory. If the fstab entry also sets X-mount.owner, X-mount.group, or X-mount.mode, root then changes ownership or mode on that redirected inode."
+  },
+  {
+   "package": "libp11-kit0",
+   "source": "p11-kit",
+   "installed": "0.25.5-3",
+   "cve": "CVE-2026-13757",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in p11-kit. The RPC message attribute parsing functions p11_rpc_message_get_attribute() and p11_rpc_message_get_attribute_array_value() form a mutually-recursive call chain with no recursion depth limit when processing nested CKA_WRAP_TEMPLATE, CKA_UNWRAP_TEMPLATE, and CKA_DERIVE_TEMPLATE attributes. An unauthenticated attacker with local access to the p11-kit RPC Unix domain socket can send a specially crafted request with deeply nested template attributes, causing stack exhaustion and crashing the p11-kit server process and its dependent services."
+  },
+  {
+   "package": "libp11-kit0",
+   "source": "p11-kit",
+   "installed": "0.25.5-3",
+   "cve": "CVE-2026-18938",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in p11-kit. A local attacker, or one with equivalent access to a reachable RPC channel, could exploit an integer overflow vulnerability. By sending specially crafted messages, the attacker can cause the system to miscalculate memory allocation for nested attributes. This leads to a memory corruption issue, specifically a heap out-of-bounds write, which can crash the p11-kit RPC parsing process, resulting in a Denial of Service (DoS). This vulnerability is only exploitable on 32 bit systems."
+  },
+  {
+   "package": "libpcre2-8-0",
+   "source": "pcre2",
+   "installed": "10.46-1~deb13u1",
+   "cve": "CVE-2026-86145",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "PCRE2 before 10.48 allows a pcre2_dfa_match out-of-bounds write because reuse of a cached workspace block, in a recursive DFA matching workspace, lacks a size check (even though a newly allocated block, for the same purpose, does have a size check). This outcome requires an attacker-controlled regular expression, or a recursive pattern in conjunction with a small heap limit (this can be set through the API)."
+  },
+  {
+   "package": "libpcre2-8-0",
+   "source": "pcre2",
+   "installed": "10.46-1~deb13u1",
+   "cve": "TEMP-0000000-21C4F8",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libpcre2-8-0",
+   "source": "pcre2",
+   "installed": "10.46-1~deb13u1",
+   "cve": "TEMP-0000000-8188AC",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libpcre2-8-0",
+   "source": "pcre2",
+   "installed": "10.46-1~deb13u1",
+   "cve": "TEMP-0000000-A5518C",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libpcre2-8-0",
+   "source": "pcre2",
+   "installed": "10.46-1~deb13u1",
+   "cve": "TEMP-0000000-B05303",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": ""
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2021-45346",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A Memory Leak vulnerability exists in SQLite Project SQLite3 3.35.1 and 3.37.0 via maliciously crafted SQL Queries (made via editing the Database File), it is possible to query a record, and leak subsequent bytes of memory that extend beyond the record, which could let a malicious user obtain sensitive information. NOTE: The developer disputes this as a vulnerability stating that If you give SQLite a corrupted database file and submit a query against the database, it might read parts of the database that you did not intend or expect."
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2025-70873",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "An information disclosure issue in the zipfileInflate function in the zipfile extension in SQLite v3.51.1 and earlier allows attackers to obtain heap memory via supplying a crafted ZIP file."
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2026-11822",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "SQLite before 3.53.2 contains memory corruption vulnerabilities in the FTS5 full-text search extension that allow attackers to cause process crashes, memory exhaustion, or arbitrary code execution by supplying a crafted database with malformed FTS5 page data. Attackers can trigger an out-of-bounds read in fts5LeafSeek() via an attacker-controlled loop bound and a heap buffer overflow write in fts5ChunkIterate() through a crafted continuation page causing an integer underflow, exploitable when an FTS5 MATCH query is executed against the malicious database."
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2026-11824",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "SQLite before 3.53.2 contains a heap-based buffer overflow vulnerability in the FTS5 full-text search extension that allows attackers to cause a crash or execute arbitrary code by supplying a crafted database with malicious continuation page metadata specifying a szLeaf value smaller than 4. Attackers can trigger an integer underflow in fts5ChunkIterate() causing an inflated remaining byte count during FTS5 MATCH query processing, leading to a heap buffer overflow of attacker-controlled data in applications compiled with SQLITE_ENABLE_FTS5."
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2026-39113",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Buffer Overflow vulnerability in SQLite affected version source snapshots/builds containing Fossil check-in 8bdc0d485e3ad0c7a1e818da66f106951d496b05cbe61d12c2c448f2f24b6d5d (Git mirror 169f68ed88b34cb68f720191c64c058f2ccec508, 2026-03-11) and later snapshots/builds allows an attacker to cause a denial of service via the ext/misc/sqlar.c, sqlarUncompressFunc(), sqlar_uncompress(), sqlite3_value_int64(), sqlite3_malloc(int), uncompress() components"
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2026-50812",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A NULL pointer dereference in the SQLite Session Extension in SQLite 3.53.1 and SQLite trunk builds before check-in e807d4e3798efd53 allows an attacker who can supply a malformed changeset blob to cause a denial of service. The issue occurs when sqlite3changeset_apply_v3() applies a corrupt changeset and reaches sqlite3_value_type() with a NULL sqlite3_value pointer."
+  },
+  {
+   "package": "libsqlite3-0",
+   "source": "sqlite3",
+   "installed": "3.46.1-7+deb13u1",
+   "cve": "CVE-2026-50813",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "An issue in SQLite before Fossil check-in 869a51ae84df allows a local attacker to obtain sensitive information via the Session Extension changeset concat/changegroup merge path"
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-13858",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Out of bounds read in FFmpeg in Google Chrome prior to 150.0.7871.47 allowed a remote attacker to obtain potentially sensitive information from process memory via a crafted video file. (Chromium security severity: Medium)"
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-18393",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in FFmpeg. The tdsc_load_cursor() function writes beyond the bounds of a heap-allocated buffer when processing crafted TDSC cursor data. A remote attacker could exploit this by supplying a specially crafted video file, potentially leading to a denial of service or arbitrary code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-30999",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A heap buffer overflow in the av_bprint_finalize() function of FFmpeg v8.0.1 allows attackers to cause a Denial of Service (DoS) via a crafted input."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-38350",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "An integer overflow in the target_sws_fuzzer() function (libswscale/output.c) of FFmpeg N-122528-gdd2976b9e1 allows attackers to cause a Denial of Service (DoS) via supplying a crafted input."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-58049",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg's RASC video decoder (decode_dlta in libavcodec/rasc.c) performs 32-bit reads and writes at the row cursor before the NEXT_LINE row-boundary check and validates the DLTA region in pixel rather than byte units, so a DLTA run on a PAL8 frame can access several bytes past the row allocation. A crafted media stream using the RASC FourCC, decoded by libavcodec, triggers a bitstream-controlled out-of-bounds heap write and adjacent out-of-bounds read, leading to memory corruption."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-6385",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in FFmpeg. A remote attacker could exploit this vulnerability by providing a specially crafted MPEG-PS/VOB media file containing a malicious DVD subtitle stream. This vulnerability is caused by a signed integer overflow in the DVD subtitle parser's fragment reassembly bounds checks, leading to a heap out-of-bounds write. Successful exploitation can result in a denial of service (DoS) due to an application crash, and potentially lead to arbitrary code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64830",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 2.1 through 8.1.2 contains a heap buffer overflow vulnerability in the VobSub subtitle demuxer that allows attackers to corrupt adjacent heap memory by supplying a malicious .sub/.idx subtitle file declaring more distinct stream IDs than the fixed-size array bounds in libavformat/mpeg.c. Attackers can craft a subtitle file with excessive distinct stream IDs to trigger unbounded writes beyond the vobsub->q[] array boundary via ff_subtitles_queue_insert(), potentially achieving arbitrary code execution in any application using FFmpeg's VobSub demuxer."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64831",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 8.0 through 8.1.2 contains a stack buffer overflow vulnerability in the Vulkan HEVC hardware decoder that allows remote attackers to overwrite return addresses and adjacent stack frames by supplying a crafted HEVC/H.265 bitstream. Attackers can embed a malicious vps_num_hrd_parameters value exceeding HEVC_MAX_SUB_LAYERS in any supported container format to overflow stack-allocated arrays in the vk_hevc_end_frame function, potentially achieving arbitrary code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64832",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 4.4 through 8.1.2 contain a double-free vulnerability in the NVIDIA NVDEC hardware decoder within libavcodec/nvdec.c that allows attackers to trigger memory corruption by supplying a crafted video file. When no decoder surfaces remain, the ff_nvdec_start_frame_sep_ref error path frees memory via nvdec_fdd_priv_free while the calling layer subsequently frees the same frame description data, resulting in a double-free of the underlying decoder context in any FFmpeg-based application using NVDEC hardware-accelerated decoding."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64833",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 0.7.1 through 8.1.2 contain an out-of-bounds read vulnerability in the S/PDIF muxer that allows attackers to access memory beyond buffer boundaries by supplying a crafted DTS stream with a core_size value larger than the actual packet length. Attackers can exploit the missing bounds check in the spdif_header_dts4 function by providing a malicious DTS-HD audio stream during S/PDIF re-muxing to trigger unauthorized memory reads beyond the packet buffer."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64834",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 0.6.3 through 8.1.2 contain an infinite loop vulnerability in the RTP/ASF demuxer within libavformat/rtpdec_asf.c that allows remote attackers to cause denial of service by sending a crafted RTP/ASF stream. The rtp_asf_fix_header function fails to validate a minimum chunksize when iterating over ASF objects, causing the loop pointer to never advance when a chunksize is smaller than the 24-byte minimum ASF object header size, resulting in CPU exhaustion that denies service to legitimate users."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-64835",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 4.4 through 8.1.2 contain an out-of-bounds memory access vulnerability in the ADX audio decoder within libavcodec/adxdec.c that allows attackers to trigger both out-of-bounds reads and writes by supplying a crafted ADX or AAX audio file with a mid-stream channel layout change. When AV_PKT_DATA_NEW_EXTRADATA side data is received mid-stream, the adx_decode_frame function re-parses the stream header but fails to update the internal channel state, causing subsequent decoding operations to access the prev[] state array using a stale channel count."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65703",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 2.7 through 8.1.2 contain an out-of-bounds write vulnerability in the TDSC video decoder that allows remote attackers to cause heap corruption by supplying a crafted AVI file that changes frame dimensions across TDSF frames. The tdsc_parse_tdsf() function fails to unreference the existing reference frame before calling av_frame_get_buffer(), causing tdsc_blit() and tdsc_yuv2rgb() to write attacker-controlled pixel data beyond the end of the undersized reference frame buffer, resulting in a process crash and potential code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65704",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2 contains an out-of-bounds write vulnerability that allows attackers to cause heap corruption by supplying a crafted ffconcat file processed with the -safe 0 flag. The TY demuxer's demux_audio() function decrements packet size without bounds checking, producing a negative size value that is passed to memcpy() in shorten_decode_frame(), where conversion to size_t wraps the value to near SIZE_MAX and triggers reads beyond the source allocation and writes far beyond the Shorten decoder's bitstream buffer."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65705",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 3.4 through 8.1.2 contain an out-of-bounds write vulnerability in the vf_floodfill video filter that allows attackers to corrupt heap memory by supplying a dynamically sized video stream with filtergraph reinitialization disabled via -reinit_filter 0. When config_input() allocates the points traversal stack based on initial frame dimensions and a subsequent larger frame is processed, filter_frame() performs flood-fill neighbor pushes beyond the original allocation boundary, resulting in heap corruption and process crash with potential for code execution depending on heap layout and process hardening."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-65706",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions 3.0 through 8.1.2 contain an out-of-bounds write vulnerability in the vf_swaprect video filter that allows attackers to corrupt heap memory by supplying a crafted NV12 video frame with odd width dimensions. The filter_frame() function reuses a temporary row buffer sized for plane 0's single-byte pixel step across all planes, causing an 18-byte memcpy into a 17-byte heap allocation when processing the two-byte-per-sample interleaved chroma plane of a 17x16 NV12 frame, resulting in heap corruption and process crash with potential for code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66036",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 5d7112c, contains a heap out-of-bounds write vulnerability in the vf_hqdn3d filter that allows attackers to corrupt heap memory by supplying a crafted video whose frame resolution increases between frames when filtergraph reinitialization is disabled via the -reinit_filter 0 option. Attackers can provide a malicious video input where vf_hqdn3d.config_input() allocates undersized per-plane line-history buffers based on the initial frame width, and subsequent larger frames cause denoise_spatial() to write beyond the allocation boundary, resulting in heap memory corruption."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66037",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 5d7112c, contains an uncontrolled resource consumption vulnerability in the IAMF demuxer that allows an unauthenticated attacker to cause multi-gigabyte memory allocation from a 17-byte input file by supplying a crafted count_label field. The mix_presentation_obu() function in libavformat/iamf_parse.c calls av_calloc(count_label, sizeof(*language_label)) with an attacker-controlled value before validating available OBU data, enabling an allocation amplification of approximately 126 million bytes per input byte that exhausts process memory or triggers an OOM-kill during format probing."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66038",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit 8670835, contains an information disclosure vulnerability in the LCL/ZLIB video decoder that allows attackers to expose uninitialized heap memory by supplying a valid zlib stream that inflates to fewer bytes than the expected frame size. The zlib_decomp() function in lcldec.c treats short decompression as non-fatal and continues to the RGB24 conversion path, which copies a full frame's worth of rows from the allocation buffer using original frame dimensions, causing uninitialized heap contents including pointer-derived allocator bytes to be copied into the attacker-observable AVFrame output and potentially defeating ASLR in long-lived media processing services."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66039",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit aafb5c6, contains a signed integer overflow vulnerability in the MACE6 audio decoder that allows attackers to corrupt heap memory by supplying a crafted CAF file with a malicious bytes_per_packet value. Attackers can craft a CAF file with oversized bytes_per_packet and frames_per_packet values in the desc chunk to trigger an integer overflow in mace_decode_frame() during output sample count computation, resulting in an undersized buffer allocation and heap out-of-bounds write that could enable code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66040",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg through 8.1.2, fixed in commit b506faf, contains a heap out-of-bounds write vulnerability in the native PNG and APNG encoders that allows remote attackers to corrupt heap memory by supplying a crafted PNG image with a malicious eXIf chunk. Attackers can craft an eXIf chunk where multiple IFD entries reference the same large value payload, causing canonical serialization to expand the output far beyond the undersized allocation estimated by add_exif_profile_size(), resulting in png_write_chunk() writing tens of thousands of bytes past the buffer boundary, leading to deterministic heap corruption, process crash, and potentially arbitrary code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-66041",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg 7.0 through 8.1.2, fixed in commit 4da9812, contains a heap out-of-bounds write vulnerability in the vf_quirc filter that allows an attacker to corrupt heap memory by supplying a crafted PGS/SUP subtitle file with mismatched frame dimensions. Attackers can provide a subtitle file whose second presentation has larger dimensions than its first, causing av_image_copy_plane() to copy data exceeding the initial allocation size into the undersized libquirc grayscale image buffer, resulting in heap corruption and process crash with potential for code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70628",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 0.5 up to, but not including, 9.0 contain a signed integer overflow vulnerability in the DVB subtitle parser in libavcodec/dvbsub_parser.c that allows attackers to trigger a heap buffer overflow by supplying a crafted WTV file. The overflow causes the bounds-check guard expression to wrap to INT_MIN, bypassing the PARSE_BUF_SIZE comparison and invoking memcpy() with attacker-controlled data into a heap buffer, resulting in an out-of-bounds heap write and potential memory corruption or code execution."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70629",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 3.0 up to, but not including, 9.0 contain an uninitialized heap memory read vulnerability in the native RSCC decoder (libavcodec/rscc.c) that allows attackers to disclose heap memory contents by supplying a crafted video file with a compressed tile that decompresses fewer bytes than the declared tile geometry requires. When rscc_decode_frame() calls av_image_copy_plane() without validating the decompressed byte count against the tile dimensions, the unwritten suffix of the persistent intermediate buffer ctx->inflated_buf is copied into the decoded frame, potentially exposing data from prior heap allocations or previous decoded frames in persistent decoding services."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70630",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 3.0 up to, but not including, 9.0 contain an uninitialized heap memory read vulnerability in the native Screenpresso decoder (libavcodec/screenpresso.c) that allows attackers to recover sensitive memory contents by supplying a crafted SPV1 packet with a valid zlib stream that decompresses fewer bytes than the full frame requires. The screenpresso_decode_frame() function fails to validate the produced byte count before calling av_image_copy_plane() to copy the complete frame dimensions from the persistent ctx->inflated_buf buffer, causing unwritten heap memory from prior allocations or prior frames to be copied into decoded output and potentially exposing sensitive data such as userspace addresses from persistent decoding services."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70631",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 0.5 up to, but not including, 9.0 contain an uninitialized heap memory disclosure vulnerability in the native TIFF decoder in libavcodec/tiff.c. An attacker who can cause FFmpeg to decode a crafted TIFF file can supply a valid Deflate-compressed strip that terminates successfully after producing fewer bytes than the declared strip requires. The tiff_unpack_zlib() function allocates a heap buffer sized for the full declared strip but copies all declared rows via memcpy() regardless of how many bytes zlib actually decompressed, causing unwritten bytes that can contain stale data from prior heap allocations to be incorporated into decoded image output and potentially exposing sensitive data in persistent services."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-70632",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg versions from 4.4 up to, but not including, 9.0 contain an out-of-bounds heap write vulnerability in the native GoPro CineForm HD (CFHD) decoder that allows remote attackers to corrupt heap memory by supplying a crafted AVI file during stream probing. The cfhd_decode() function fails to enforce the non-Bayer logical output-width invariant in the transform-type-2 reconstruction path, causing horiz_filter_clip() to write oversized 16-bit sample rows far beyond the allocated output frame buffer, which can be escalated to arbitrary code execution via overwrite of a live cleanup callback pointer."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75141",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit acf5d7c contains a heap buffer overflow in the hvcC box writer. When writing an HEVC configuration record with more NAL units of a single type than the count field can represent, the NAL unit count overflows, causing a heap buffer overflow. A crafted HEVC input file triggers the overflow during muxing."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75142",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 9d786e4 contains a stack buffer overflow in the MPEG-PS muxer (libavformat/mpegenc.c). When muxing input with more streams than the muxer's fixed-size stack buffer accommodates, the buffer is overflowed. A crafted input with an excessive number of streams triggers the overflow during MPEG-PS muxing."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75143",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 1c10bcc contains a heap buffer overflow in the RIST protocol reader (libavformat/librist.c). librist_read() ignored its size argument and copied the full received payload length into the caller-provided destination buffer, overflowing it when the payload exceeds the destination size. This is reachable via the async:rist:// URL scheme, where the async wrapper supplies a smaller buffer than the received payload. A remote RIST sender can trigger the overflow by sending a packet whose payload exceeds the caller buffer size."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75144",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 1cdeb3c contains a heap buffer overflow vulnerability in the VC-2/Dirac RTP packetizer (libavformat/rtpenc_vc2hq.c) that allows attackers to trigger memory corruption by supplying a crafted Dirac data unit. The packetizer copies an input-derived data unit or fragment size into a fixed-size buffer without an upper bound check, causing a heap buffer overflow when the crafted input is packetized for RTP output."
+  },
+  {
+   "package": "libswscale8",
+   "source": "ffmpeg",
+   "installed": "8:7.1.5-0+deb13u1+rpt2",
+   "cve": "CVE-2026-75146",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "FFmpeg before commit 65b0dab contains an out-of-bounds read in the DASH demuxer (libavformat/dashdec.c). When a live DASH manifest is refreshed with a startNumber that is lower than the previous value, the current sequence number is driven negative. The fragment retrieval function checked only the upper bound before indexing the fragments array, allowing a negative index to be used and causing an out-of-bounds read. A malicious or misconfigured DASH server can trigger this by serving a live manifest with a decreasing startNumber across a manifest refresh."
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2013-4392",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "systemd, when updating file permissions, allows local users to change the permissions and SELinux security contexts for arbitrary files via a symlink attack on unspecified files."
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2023-31437",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "An issue was discovered in systemd 253. An attacker can modify a sealed log file such that, in some views, not all existing and sealed log messages are displayed. NOTE: the vendor reportedly sent \"a reply denying that any of the finding was a security vulnerability.\""
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2023-31438",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "An issue was discovered in systemd 253. An attacker can truncate a sealed log file and then resume log sealing such that checking the integrity shows no error, despite modifications. NOTE: the vendor reportedly sent \"a reply denying that any of the finding was a security vulnerability.\""
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2023-31439",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "An issue was discovered in systemd 253. An attacker can modify the contents of past events in a sealed log file and then adjust the file such that checking the integrity shows no error, despite modifications. NOTE: the vendor reportedly sent \"a reply denying that any of the finding was a security vulnerability.\""
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2026-15059",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "Local unprivileged users can terminate arbitrary local processes via a systemd-oomd IPC API due to a missing path traversal validation."
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2026-16742",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "systemd-homed contains a local privilege escalation bug via arbitrary system group addition to a local, logged in, homed-managed user"
+  },
+  {
+   "package": "libudev1",
+   "source": "systemd",
+   "installed": "257.13-1~deb13u1",
+   "cve": "CVE-2026-40228",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "In systemd 259, systemd-journald can send ANSI escape sequences to the terminals of arbitrary users when a \"logger -p emerg\" command is executed, if ForwardToWall=yes is set."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2022-0563",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "A flaw was found in the util-linux chfn and chsh utilities when compiled with Readline support. The Readline library uses an \"INPUTRC\" environment variable to get a path to the library config file. When the library cannot parse the specified file, it prints an error message containing data from the file. This flaw allows an unprivileged user to read root-owned files, potentially leading to privilege escalation. This flaw affects util-linux versions prior to 2.37.4."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-3184",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Improper hostname canonicalization in the `login(1)` utility, when invoked with the `-h` option, can modify the supplied remote hostname before setting `PAM_RHOST`. A remote attacker could exploit this by providing a specially crafted hostname, potentially bypassing host-based Pluggable Authentication Modules (PAM) access control rules that rely on fully qualified domain names. This could lead to unauthorized access."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-76642",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "util-linux versions through 2.41.5 and 2.42.2 fail to check mount helper exit status before running post-mount hooks, allowing unprivileged users to execute privileged operations on pre-existing filesystems. Attackers can exploit X-mount.idmap or X-mount.owner hooks to clone filesystems with inherited suid bits or modify target inode permissions after a helper fails, achieving privilege escalation."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78408",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The nsenter --join-cgroup option opens the target cgroup.procs file as root and leaves that file descriptor open across later namespace and credential changes and across execve(). Because the kernel checks later cgroup migrations using the credentials from the original open, a program run in an attacker-controlled target can inherit root's ability to move host processes between cgroups. After a privileged operator uses --join-cgroup against that target, an unprivileged user can migrate and terminate unrelated root processes."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78409",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "The X-mount.subdir option uses a detached-tree fast path on Linux 6.15 and later and passes the configured subdirectory to open_tree() with AT_SYMLINK_NOFOLLOW. That flag does not stop intermediate symlink traversal or keep resolution inside the newly mounted filesystem. A local unprivileged user with an fstab-authorized X-mount.subdir entry can attach a host path at the intended mountpoint."
+  },
+  {
+   "package": "libuuid1",
+   "source": "util-linux",
+   "installed": "2.41.5-0+deb13u1",
+   "cve": "CVE-2026-78410",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "A flaw was found in util-linux. Restricted bind mounts take the source path from fstab but do not pin that source before the privileged mount. A local unprivileged user who can replace the authorized source or a writable ancestor can redirect SUID mount(8) to bind another host directory. If the fstab entry also sets X-mount.owner, X-mount.group, or X-mount.mode, root then changes ownership or mode on that redirected inode."
+  },
+  {
+   "package": "libx264-164",
+   "source": "x264",
+   "installed": "2:0.164.3108+git31e19f9-2+b1",
+   "cve": "CVE-2025-25467",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "unimportant",
+   "description": "Insufficient tracking and releasing of allocated used memory in libx264 git master allows attackers to execute arbitrary code via creating a crafted AAC file."
+  },
+  {
+   "package": "zlib1g",
+   "source": "zlib",
+   "installed": "1:1.3.dfsg+really1.3.1-1+b1",
+   "cve": "CVE-2026-27171",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "zlib before 1.3.2 allows CPU consumption via crc32_combine64 and crc32_combine_gen64 because x2nmodp can do right shifts within a loop that has no termination condition."
+  },
+  {
+   "package": "zlib1g",
+   "source": "zlib",
+   "installed": "1:1.3.dfsg+really1.3.1-1+b1",
+   "cve": "CVE-2026-85091",
+   "status": "OPEN",
+   "fixed_version": null,
+   "urgency": "not yet assigned",
+   "description": "zlib versions 1.3.1.2 through 1.3.2 contain a heap buffer overflow vulnerability in the gz_vacate() function when processing non-blocking gzwrite() operations with stale external buffer pointers. Attackers can trigger the overflow by calling gzprintf() or gzvprintf() after a write stall, causing an unchecked memmove() to write beyond the internal input buffer boundary."
+  }
+ ]
+}

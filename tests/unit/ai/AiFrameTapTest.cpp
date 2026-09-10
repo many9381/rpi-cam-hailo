@@ -33,8 +33,8 @@ TEST(AiFrameTapTest, DoesNotRetainTheFrameWhenAConsumerIsSubscribed) {
   camera_firmware::ai::AiFrameTap tap;
   bool released = false;
   std::optional<camera_firmware::media::FrameLease> received;
-  auto subscription = tap.Subscribe(
-      [&received](camera_firmware::media::FrameLease frame) {
+  auto subscription =
+      tap.Subscribe([&received](camera_firmware::media::FrameLease frame) {
         received.emplace(std::move(frame));
       });
 
@@ -45,7 +45,7 @@ TEST(AiFrameTapTest, DoesNotRetainTheFrameWhenAConsumerIsSubscribed) {
 
   EXPECT_FALSE(tap.Latest().has_value());  // nothing retained
   ASSERT_TRUE(received.has_value());
-  received.reset();  // subscriber drops its lease
+  received.reset();       // subscriber drops its lease
   EXPECT_TRUE(released);  // the only holder was the subscriber
 }
 
@@ -133,9 +133,9 @@ TEST(AiFrameTapTest, SubscriberReadingLatestFromItsCallbackDoesNotDeadlock) {
   // PublishLatest must not hold the tap mutex while invoking subscribers.
   // In pull mode nothing is retained with a subscriber present, so Latest()
   // returns empty; the frame arrives via the callback parameter instead.
-  auto subscription =
-      tap.Subscribe([&tap, &callback_ran, &delivered_sequence, &latest_retained](
-                        camera_firmware::media::FrameLease frame) {
+  auto subscription = tap.Subscribe(
+      [&tap, &callback_ran, &delivered_sequence,
+       &latest_retained](camera_firmware::media::FrameLease frame) {
         callback_ran = true;
         delivered_sequence = frame.handle().sequence;
         latest_retained = tap.Latest().has_value();
@@ -162,9 +162,9 @@ TEST(AiFrameTapTest, UnsubscribeWaitsForInFlightCallback) {
   std::promise<void> release_callback;
   auto release_future = release_callback.get_future();
 
-  auto subscription = tap.Subscribe(
-      [&callback_started, &release_future](
-          camera_firmware::media::FrameLease) mutable {
+  auto subscription =
+      tap.Subscribe([&callback_started, &release_future](
+                        camera_firmware::media::FrameLease) mutable {
         callback_started.set_value();
         release_future.wait();
       });
@@ -195,10 +195,8 @@ TEST(AiFrameTapTest, UnsubscribePreventsFutureCallbacks) {
   camera_firmware::ai::AiFrameTap tap;
   int deliveries = 0;
 
-  auto subscription =
-      tap.Subscribe([&deliveries](camera_firmware::media::FrameLease) {
-        ++deliveries;
-      });
+  auto subscription = tap.Subscribe(
+      [&deliveries](camera_firmware::media::FrameLease) { ++deliveries; });
   subscription = camera_firmware::ai::AiFrameTap::Subscription{};
 
   camera_firmware::media::FrameHandle handle;

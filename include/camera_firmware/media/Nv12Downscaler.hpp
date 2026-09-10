@@ -36,7 +36,8 @@ class Nv12Downscaler {
   // Scales src into a tightly-packed dst NV12 buffer: Y then interleaved UV.
   // dst_out is resized to dst_width*dst_height*3/2. Returns false on geometry
   // mismatch or an inactive sws context.
-  [[nodiscard]] bool Scale(const Nv12Plane& src, std::vector<std::uint8_t>& dst_out);
+  [[nodiscard]] bool Scale(const Nv12Plane& src,
+                           std::vector<std::uint8_t>& dst_out);
 
  private:
   int src_width_{0};

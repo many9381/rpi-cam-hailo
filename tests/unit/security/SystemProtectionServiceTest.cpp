@@ -49,7 +49,9 @@ void FailNextAllocationOfSize(std::size_t size) noexcept {
 
 }  // namespace
 
-void* operator new(std::size_t size) { return AllocateForProtectionTest(size); }
+void* operator new(std::size_t size) {
+  return AllocateForProtectionTest(size);
+}
 void* operator new[](std::size_t size) {
   return AllocateForProtectionTest(size);
 }
@@ -67,8 +69,12 @@ void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
     return nullptr;
   }
 }
-void operator delete(void* allocation) noexcept { std::free(allocation); }
-void operator delete[](void* allocation) noexcept { std::free(allocation); }
+void operator delete(void* allocation) noexcept {
+  std::free(allocation);
+}
+void operator delete[](void* allocation) noexcept {
+  std::free(allocation);
+}
 void operator delete(void* allocation, const std::nothrow_t&) noexcept {
   std::free(allocation);
 }
@@ -128,9 +134,7 @@ TEST(SystemProtectionServiceTest,
     return PassingSelfTestReport();
   };
   dependencies.run_integrity = PassingIntegrityReport;
-  dependencies.append_system_audit = [](auto, auto, auto) {
-    return AuditOk();
-  };
+  dependencies.append_system_audit = [](auto, auto, auto) { return AuditOk(); };
   dependencies.append_administrator_audit = [](auto const&, auto, auto, auto) {
     return AuditOk();
   };
@@ -172,14 +176,13 @@ TEST(SystemProtectionServiceTest,
   EXPECT_EQ(busy.error().code, "E_PROTECTION_TRANSITION_BUSY");
 
   const auto accepted = service.StartManualCheck(
-      ProtectionSuite::kSelfTest,
-      ProtectionActor{1, "admin", "127.0.0.1"});
+      ProtectionSuite::kSelfTest, ProtectionActor{1, "admin", "127.0.0.1"});
   ASSERT_TRUE(accepted.ok()) << accepted.error().message;
   manual_entered.wait();
 
   unsigned int rejected_command_calls = 0U;
-  EXPECT_FALSE(service.RunRuntimeControlIfAllowed(
-      [&] { ++rejected_command_calls; }));
+  EXPECT_FALSE(
+      service.RunRuntimeControlIfAllowed([&] { ++rejected_command_calls; }));
   EXPECT_EQ(rejected_command_calls, 0U);
 
   release_manual.count_down();
@@ -368,10 +371,8 @@ TEST(SystemProtectionServiceTest,
     calls.emplace_back("integrity");
     return PassingIntegrityReport();
   };
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -451,16 +452,15 @@ TEST(SystemProtectionServiceTest,
   EXPECT_EQ(self_test_failed->trigger, ProtectionTrigger::kStartup);
   EXPECT_EQ(self_test_failed->detail_code, "E_PROTECTION_SELF_TEST");
   EXPECT_EQ(self_test_failed->duration_milliseconds, 37);
-  EXPECT_EQ(self_test_failed->failed_check_ids,
-            (std::vector<std::string>{"crypto.sha256",
-                                      "security.tls_identity"}));
+  EXPECT_EQ(
+      self_test_failed->failed_check_ids,
+      (std::vector<std::string>{"crypto.sha256", "security.tls_identity"}));
   EXPECT_EQ(ProtectionAuditSubjectType(*self_test_failed), "startup");
   EXPECT_EQ(ProtectionAuditSubjectIdentity(*self_test_failed),
             "d_ms=37;n=2;ids=crypto.sha256,security.tls_identity");
 
   const auto integrity_succeeded = std::ranges::find(
-      records, "integrity_check.succeeded",
-      &ProtectionAuditRecord::event_type);
+      records, "integrity_check.succeeded", &ProtectionAuditRecord::event_type);
   ASSERT_NE(integrity_succeeded, records.end());
   EXPECT_EQ(integrity_succeeded->duration_milliseconds, 13);
   EXPECT_TRUE(integrity_succeeded->failed_check_ids.empty());
@@ -468,8 +468,7 @@ TEST(SystemProtectionServiceTest,
             "d_ms=13;n=0;ids=-");
 
   ProtectionAuditRecord oversized = *self_test_failed;
-  oversized.failed_check_ids = {std::string(64U, 'a'),
-                                std::string(64U, 'b')};
+  oversized.failed_check_ids = {std::string(64U, 'a'), std::string(64U, 'b')};
   const auto bounded_subject = ProtectionAuditSubjectIdentity(oversized);
   EXPECT_LE(bounded_subject.size(), 64U);
   EXPECT_EQ(bounded_subject, "d_ms=37;n=2;ids=;more=2");
@@ -491,13 +490,13 @@ TEST(SystemProtectionServiceTest,
           {false, {{"crypto.sha256", false, "E_SELF_TEST_SHA256"}}});
     };
     dependencies.run_integrity = PassingIntegrityReport;
-    dependencies.append_system_audit = [&](std::string_view event_type,
-                                           auto, auto) {
+    dependencies.append_system_audit = [&](std::string_view event_type, auto,
+                                           auto) {
       events.emplace_back(event_type);
       return AuditOk();
     };
-    dependencies.append_administrator_audit =
-        [](auto const&, auto, auto, auto) { return AuditOk(); };
+    dependencies.append_administrator_audit = [](auto const&, auto, auto,
+                                                 auto) { return AuditOk(); };
     dependencies.read_device_state = [] {
       return common::Result<DeviceState>::Ok(DeviceState::kOperational);
     };
@@ -514,13 +513,11 @@ TEST(SystemProtectionServiceTest,
     ASSERT_TRUE(snapshot.self_test.has_value());
     EXPECT_FALSE(snapshot.self_test->passed);
     ASSERT_EQ(snapshot.self_test->self_test_items.size(), 1U);
-    EXPECT_EQ(snapshot.self_test->self_test_items.front().id,
-              "crypto.sha256");
-    EXPECT_EQ(events,
-              (std::vector<std::string>{
-                  "self_test.started", "self_test.failed",
-                  "protection.restricted", "integrity_check.started",
-                  "integrity_check.succeeded"}));
+    EXPECT_EQ(snapshot.self_test->self_test_items.front().id, "crypto.sha256");
+    EXPECT_EQ(events, (std::vector<std::string>{
+                          "self_test.started", "self_test.failed",
+                          "protection.restricted", "integrity_check.started",
+                          "integrity_check.succeeded"}));
   });
 
   EXPECT_TRUE(BoundedSubprocessPassed(bounded));
@@ -555,15 +552,14 @@ TEST(SystemProtectionServiceTest,
       }
       return report;
     };
-    dependencies.append_system_audit =
-        [&](std::string_view event_type, std::string_view,
-            std::string_view) {
-          events.emplace_back("audit:" + std::string(event_type));
-          if (event_type == "protection.restricted") {
-            EXPECT_EQ(stop_calls, 1U);
-          }
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [&](std::string_view event_type,
+                                           std::string_view, std::string_view) {
+      events.emplace_back("audit:" + std::string(event_type));
+      if (event_type == "protection.restricted") {
+        EXPECT_EQ(stop_calls, 1U);
+      }
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) {
@@ -576,22 +572,22 @@ TEST(SystemProtectionServiceTest,
     dependencies.wall_now = [] {
       return std::chrono::system_clock::time_point{std::chrono::seconds{1'000}};
     };
-    dependencies.steady_now = [] {
-      return std::chrono::steady_clock::now();
-    };
+    dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
     SystemProtectionService service(std::move(dependencies));
     service_ptr = &service;
-    service.SetRuntimeCallbacks(
-        {.start = [&] {
-           ++start_calls;
-           return AuditOk();
-         },
-         .stop = [&] {
-           state_seen_by_stop = service_ptr->Snapshot().state;
-           ++stop_calls;
-           events.emplace_back("runtime:stop");
-         }});
+    service.SetRuntimeCallbacks({.start =
+                                     [&] {
+                                       ++start_calls;
+                                       return AuditOk();
+                                     },
+                                 .stop =
+                                     [&] {
+                                       state_seen_by_stop =
+                                           service_ptr->Snapshot().state;
+                                       ++stop_calls;
+                                       events.emplace_back("runtime:stop");
+                                     }});
 
     const auto result = service.RunStartupChecks();
 
@@ -601,19 +597,18 @@ TEST(SystemProtectionServiceTest,
     EXPECT_EQ(start_calls, 0U);
     EXPECT_EQ(state_seen_by_stop, ProtectionState::kRestricted);
     if (failed_suite == ProtectionSuite::kSelfTest) {
-      EXPECT_EQ(events,
-                (std::vector<std::string>{
-                    "audit:self_test.started", "audit:self_test.failed",
-                    "runtime:stop", "audit:protection.restricted",
-                    "audit:integrity_check.started",
-                    "audit:integrity_check.succeeded"}));
+      EXPECT_EQ(events, (std::vector<std::string>{
+                            "audit:self_test.started", "audit:self_test.failed",
+                            "runtime:stop", "audit:protection.restricted",
+                            "audit:integrity_check.started",
+                            "audit:integrity_check.succeeded"}));
     } else {
-      EXPECT_EQ(events,
-                (std::vector<std::string>{
-                    "audit:self_test.started", "audit:self_test.succeeded",
-                    "audit:integrity_check.started",
-                    "audit:integrity_check.failed", "runtime:stop",
-                    "audit:protection.restricted"}));
+      EXPECT_EQ(
+          events,
+          (std::vector<std::string>{
+              "audit:self_test.started", "audit:self_test.succeeded",
+              "audit:integrity_check.started", "audit:integrity_check.failed",
+              "runtime:stop", "audit:protection.restricted"}));
     }
   }
 }
@@ -642,10 +637,10 @@ TEST(SystemProtectionServiceTest,
       return PassingSelfTestReport();
     };
     dependencies.run_integrity = PassingIntegrityReport;
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [&](const ProtectionActor& actor, std::string_view event_type,
             std::string_view outcome, std::string_view detail_code) {
@@ -660,20 +655,18 @@ TEST(SystemProtectionServiceTest,
       return common::Result<DeviceState>::Ok(DeviceState::kOperational);
     };
     dependencies.wall_now = [] {
-      return std::chrono::system_clock::time_point{
-          std::chrono::seconds{2'000}};
+      return std::chrono::system_clock::time_point{std::chrono::seconds{2'000}};
     };
     dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
     SystemProtectionService service(std::move(dependencies));
-    service.SetRuntimeCallbacks(
-        {.start = [&] {
-           ++runtime_start_calls;
-           return AuditOk();
-         },
-         .stop = [] {}});
-    ASSERT_EQ(service.RunStartupChecks().state,
-              ProtectionState::kOperational);
+    service.SetRuntimeCallbacks({.start =
+                                     [&] {
+                                       ++runtime_start_calls;
+                                       return AuditOk();
+                                     },
+                                 .stop = [] {}});
+    ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kOperational);
 
     const ProtectionActor actor{42, "admin.one", "192.0.2.44"};
     const auto requester_thread = std::this_thread::get_id();
@@ -711,8 +704,7 @@ TEST(SystemProtectionServiceTest,
                                           "self_test.succeeded"}));
       EXPECT_EQ(administrator_outcomes,
                 (std::vector<std::string>{"success", "success"}));
-      EXPECT_EQ(administrator_details,
-                (std::vector<std::string>{"OK", "OK"}));
+      EXPECT_EQ(administrator_details, (std::vector<std::string>{"OK", "OK"}));
       ASSERT_EQ(administrator_actors.size(), 2U);
       for (const auto& observed_actor : administrator_actors) {
         EXPECT_EQ(observed_actor.user_id, actor.user_id);
@@ -748,22 +740,20 @@ TEST(SystemProtectionServiceTest,
     report.value().items.front().passed = report.value().passed;
     return report;
   };
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
-  dependencies.append_administrator_audit =
-      [&](const ProtectionActor&, std::string_view event_type,
-          std::string_view, std::string_view) {
-        std::lock_guard lock(event_mutex);
-        events.emplace_back("audit:" + std::string(event_type));
-        if (event_type == "protection.recovered") {
-          EXPECT_EQ(service_ptr->Snapshot().state,
-                    ProtectionState::kOperational);
-          EXPECT_EQ(start_calls.load(), 0U);
-        }
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
+  dependencies.append_administrator_audit = [&](const ProtectionActor&,
+                                                std::string_view event_type,
+                                                std::string_view,
+                                                std::string_view) {
+    std::lock_guard lock(event_mutex);
+    events.emplace_back("audit:" + std::string(event_type));
+    if (event_type == "protection.recovered") {
+      EXPECT_EQ(service_ptr->Snapshot().state, ProtectionState::kOperational);
+      EXPECT_EQ(start_calls.load(), 0U);
+    }
+    return AuditOk();
+  };
   dependencies.read_device_state = [&] {
     EXPECT_EQ(service_ptr->Snapshot().state, ProtectionState::kOperational);
     return common::Result<DeviceState>::Ok(DeviceState::kOperational);
@@ -773,22 +763,22 @@ TEST(SystemProtectionServiceTest,
 
   SystemProtectionService service(std::move(dependencies));
   service_ptr = &service;
-  service.SetRuntimeCallbacks(
-      {.start = [&] {
-         EXPECT_EQ(service.Snapshot().state, ProtectionState::kOperational);
-         ++start_calls;
-         std::lock_guard lock(event_mutex);
-         events.emplace_back("runtime:start");
-         return AuditOk();
-       },
-       .stop = [&] { ++stop_calls; }});
+  service.SetRuntimeCallbacks({.start =
+                                   [&] {
+                                     EXPECT_EQ(service.Snapshot().state,
+                                               ProtectionState::kOperational);
+                                     ++start_calls;
+                                     std::lock_guard lock(event_mutex);
+                                     events.emplace_back("runtime:start");
+                                     return AuditOk();
+                                   },
+                               .stop = [&] { ++stop_calls; }});
   ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kRestricted);
   EXPECT_EQ(stop_calls.load(), 1U);
 
   const ProtectionActor actor{7, "recovery.admin", "198.51.100.7"};
   self_test_passes = true;
-  ASSERT_TRUE(
-      service.StartManualCheck(ProtectionSuite::kSelfTest, actor).ok());
+  ASSERT_TRUE(service.StartManualCheck(ProtectionSuite::kSelfTest, actor).ok());
   ASSERT_TRUE(WaitForIdle(service));
   EXPECT_EQ(service.Snapshot().state, ProtectionState::kRestricted);
   EXPECT_EQ(start_calls.load(), 0U);
@@ -803,12 +793,12 @@ TEST(SystemProtectionServiceTest,
   EXPECT_EQ(stop_calls.load(), 1U);
   {
     std::lock_guard lock(event_mutex);
-    EXPECT_EQ(events,
-              (std::vector<std::string>{
-                  "audit:self_test.started", "audit:self_test.succeeded",
-                  "audit:integrity_check.started",
-                  "audit:integrity_check.succeeded",
-                  "audit:protection.recovered", "runtime:start"}));
+    EXPECT_EQ(
+        events,
+        (std::vector<std::string>{
+            "audit:self_test.started", "audit:self_test.succeeded",
+            "audit:integrity_check.started", "audit:integrity_check.succeeded",
+            "audit:protection.recovered", "runtime:start"}));
   }
 
   integrity_passes = false;
@@ -836,10 +826,8 @@ TEST(SystemProtectionServiceTest, RecoveryOnDefaultDeviceDoesNotStartRuntime) {
     report.value().items.front().passed = report.value().passed;
     return report;
   };
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -850,12 +838,12 @@ TEST(SystemProtectionServiceTest, RecoveryOnDefaultDeviceDoesNotStartRuntime) {
   dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
   SystemProtectionService service(std::move(dependencies));
-  service.SetRuntimeCallbacks(
-      {.start = [&] {
-         ++start_calls;
-         return AuditOk();
-       },
-       .stop = [] {}});
+  service.SetRuntimeCallbacks({.start =
+                                   [&] {
+                                     ++start_calls;
+                                     return AuditOk();
+                                   },
+                               .stop = [] {}});
   ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kRestricted);
 
   integrity_passes = true;
@@ -898,10 +886,8 @@ TEST(SystemProtectionServiceTest,
     run_serialized(integrity_calls);
     return PassingIntegrityReport();
   };
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -961,10 +947,8 @@ TEST(SystemProtectionServiceTest,
     }
     return PassingIntegrityReport();
   };
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -1028,10 +1012,10 @@ TEST(SystemProtectionServiceTest,
       }
       return report;
     };
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [&](const ProtectionActor&, std::string_view event_type,
             std::string_view, std::string_view) {
@@ -1048,14 +1032,13 @@ TEST(SystemProtectionServiceTest,
     dependencies.automatic_interval = 20ms;
 
     SystemProtectionService service(std::move(dependencies));
-    service.SetRuntimeCallbacks(
-        {.start = [&] {
-           ++runtime_start_calls;
-           return AuditOk();
-         },
-         .stop = [] {}});
-    ASSERT_EQ(service.RunStartupChecks().state,
-              ProtectionState::kRestricted);
+    service.SetRuntimeCallbacks({.start =
+                                     [&] {
+                                       ++runtime_start_calls;
+                                       return AuditOk();
+                                     },
+                                 .stop = [] {}});
+    ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kRestricted);
 
     recovery_integrity_passes = true;
     ASSERT_TRUE(service
@@ -1126,10 +1109,10 @@ TEST(SystemProtectionServiceTest,
       integrity_completed = true;
       return PassingIntegrityReport();
     };
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) { return AuditOk(); };
@@ -1203,10 +1186,10 @@ TEST(SystemProtectionServiceTest,
       ++integrity_calls;
       return PassingIntegrityReport();
     };
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) { return AuditOk(); };
@@ -1235,8 +1218,7 @@ TEST(SystemProtectionServiceTest,
 TEST(SystemProtectionServiceTest,
      PublishedRestrictionStopsRuntimeBeforeConcurrentStopReturns) {
   const auto bounded = RunInBoundedSubprocessAtBoundary([](int boundary) {
-    const auto copy_boundary =
-        std::make_shared<RuntimeStopCopyBoundaryState>();
+    const auto copy_boundary = std::make_shared<RuntimeStopCopyBoundaryState>();
     std::atomic<bool> startup_returned{false};
     std::atomic<bool> stop_returned{false};
     std::atomic<bool> stop_observed_before_return{false};
@@ -1249,10 +1231,10 @@ TEST(SystemProtectionServiceTest,
       return report;
     };
     dependencies.run_integrity = PassingIntegrityReport;
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) { return AuditOk(); };
@@ -1264,8 +1246,7 @@ TEST(SystemProtectionServiceTest,
 
     SystemProtectionService service(std::move(dependencies));
     service.SetRuntimeCallbacks(
-        {.start = AuditOk,
-         .stop = RuntimeStopAtCopyBoundary{copy_boundary}});
+        {.start = AuditOk, .stop = RuntimeStopAtCopyBoundary{copy_boundary}});
     copy_boundary->block_next_copy = true;
 
     std::thread startup([&] {
@@ -1325,9 +1306,7 @@ TEST(SystemProtectionServiceTest,
       return common::Result<DeviceState>::Ok(DeviceState::kOperational);
     };
     dependencies.wall_now = [] { return std::chrono::system_clock::now(); };
-    dependencies.steady_now = [] {
-      return std::chrono::steady_clock::now();
-    };
+    dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
     SystemProtectionService service(std::move(dependencies));
     const auto snapshot = service.RunStartupChecks();
@@ -1346,97 +1325,89 @@ TEST(SystemProtectionServiceTest,
 TEST(SystemProtectionServiceTest,
      RecoveryAuditFailureKeepsRuntimeUnauthorizedWhileAuditIsBlocked) {
   for (const bool throw_from_audit : {false, true}) {
-    const auto bounded = RunInBoundedSubprocessAtBoundary(
-        [throw_from_audit](int boundary) {
-          std::atomic<bool> integrity_passes{false};
-          std::atomic<std::size_t> runtime_start_calls{0U};
-          std::latch recovery_audit_entered{1};
-          std::latch release_recovery_audit{1};
-          std::vector<std::string> administrator_events;
-          std::mutex event_mutex;
-          SystemProtectionDependencies dependencies;
-          dependencies.run_self_tests = PassingSelfTestReport;
-          dependencies.run_integrity = [&] {
-            auto report = PassingIntegrityReport();
-            report.value().passed = integrity_passes.load();
-            report.value().items.front().passed = report.value().passed;
-            return report;
+    const auto bounded = RunInBoundedSubprocessAtBoundary([throw_from_audit](
+                                                              int boundary) {
+      std::atomic<bool> integrity_passes{false};
+      std::atomic<std::size_t> runtime_start_calls{0U};
+      std::latch recovery_audit_entered{1};
+      std::latch release_recovery_audit{1};
+      std::vector<std::string> administrator_events;
+      std::mutex event_mutex;
+      SystemProtectionDependencies dependencies;
+      dependencies.run_self_tests = PassingSelfTestReport;
+      dependencies.run_integrity = [&] {
+        auto report = PassingIntegrityReport();
+        report.value().passed = integrity_passes.load();
+        report.value().items.front().passed = report.value().passed;
+        return report;
+      };
+      dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                            std::string_view) {
+        return AuditOk();
+      };
+      dependencies.append_administrator_audit =
+          [&](const ProtectionActor&, std::string_view event_type,
+              std::string_view, std::string_view) {
+            {
+              std::lock_guard lock(event_mutex);
+              administrator_events.emplace_back(event_type);
+            }
+            if (event_type == "protection.recovered") {
+              recovery_audit_entered.count_down();
+              release_recovery_audit.wait();
+              if (throw_from_audit) {
+                throw std::runtime_error("/secret/audit/recovery.log");
+              }
+              return common::Result<void>::Err(
+                  {"E_PRIVATE", "/secret/audit/recovery.log"});
+            }
+            return AuditOk();
           };
-          dependencies.append_system_audit =
-              [](std::string_view, std::string_view, std::string_view) {
-                return AuditOk();
-              };
-          dependencies.append_administrator_audit =
-              [&](const ProtectionActor&, std::string_view event_type,
-                  std::string_view, std::string_view) {
-                {
-                  std::lock_guard lock(event_mutex);
-                  administrator_events.emplace_back(event_type);
-                }
-                if (event_type == "protection.recovered") {
-                  recovery_audit_entered.count_down();
-                  release_recovery_audit.wait();
-                  if (throw_from_audit) {
-                    throw std::runtime_error("/secret/audit/recovery.log");
-                  }
-                  return common::Result<void>::Err(
-                      {"E_PRIVATE", "/secret/audit/recovery.log"});
-                }
-                return AuditOk();
-              };
-          dependencies.read_device_state = [] {
-            return common::Result<DeviceState>::Ok(
-                DeviceState::kOperational);
-          };
-          dependencies.wall_now = [] {
-            return std::chrono::system_clock::now();
-          };
-          dependencies.steady_now = [] {
-            return std::chrono::steady_clock::now();
-          };
+      dependencies.read_device_state = [] {
+        return common::Result<DeviceState>::Ok(DeviceState::kOperational);
+      };
+      dependencies.wall_now = [] { return std::chrono::system_clock::now(); };
+      dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
-          SystemProtectionService service(std::move(dependencies));
-          service.SetRuntimeCallbacks(
-              {.start = [&] {
-                 ++runtime_start_calls;
-                 return AuditOk();
-               },
-               .stop = [] {}});
-          ASSERT_EQ(service.RunStartupChecks().state,
-                    ProtectionState::kRestricted);
-          EXPECT_FALSE(service.RuntimeAllowed());
+      SystemProtectionService service(std::move(dependencies));
+      service.SetRuntimeCallbacks({.start =
+                                       [&] {
+                                         ++runtime_start_calls;
+                                         return AuditOk();
+                                       },
+                                   .stop = [] {}});
+      ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kRestricted);
+      EXPECT_FALSE(service.RuntimeAllowed());
 
-          integrity_passes = true;
-          ASSERT_TRUE(service
-                          .StartManualCheck(
-                              ProtectionSuite::kIntegrity,
-                              {19, "audit.admin", "192.0.2.19"})
-                          .ok());
-          MarkSubprocessBoundary(boundary);
-          recovery_audit_entered.wait();
+      integrity_passes = true;
+      ASSERT_TRUE(service
+                      .StartManualCheck(ProtectionSuite::kIntegrity,
+                                        {19, "audit.admin", "192.0.2.19"})
+                      .ok());
+      MarkSubprocessBoundary(boundary);
+      recovery_audit_entered.wait();
 
-          EXPECT_EQ(service.Snapshot().state,
-                    ProtectionState::kOperational);
-          EXPECT_FALSE(service.RuntimeAllowed());
-          EXPECT_EQ(runtime_start_calls.load(), 0U);
+      EXPECT_EQ(service.Snapshot().state, ProtectionState::kOperational);
+      EXPECT_FALSE(service.RuntimeAllowed());
+      EXPECT_EQ(runtime_start_calls.load(), 0U);
 
-          release_recovery_audit.count_down();
-          ASSERT_TRUE(WaitForIdle(service));
+      release_recovery_audit.count_down();
+      ASSERT_TRUE(WaitForIdle(service));
 
-          const auto snapshot = service.Snapshot();
-          EXPECT_EQ(snapshot.state, ProtectionState::kRestricted);
-          EXPECT_FALSE(service.RuntimeAllowed());
-          ASSERT_TRUE(snapshot.integrity.has_value());
-          EXPECT_TRUE(snapshot.integrity->passed);
-          ASSERT_TRUE(snapshot.transition_code.has_value());
-          EXPECT_EQ(*snapshot.transition_code, "E_PROTECTION_AUDIT");
-          EXPECT_EQ(runtime_start_calls.load(), 0U);
-          std::lock_guard lock(event_mutex);
-          EXPECT_EQ(administrator_events,
-                    (std::vector<std::string>{"integrity_check.started",
-                                              "integrity_check.succeeded",
-                                              "protection.recovered"}));
-        });
+      const auto snapshot = service.Snapshot();
+      EXPECT_EQ(snapshot.state, ProtectionState::kRestricted);
+      EXPECT_FALSE(service.RuntimeAllowed());
+      ASSERT_TRUE(snapshot.integrity.has_value());
+      EXPECT_TRUE(snapshot.integrity->passed);
+      ASSERT_TRUE(snapshot.transition_code.has_value());
+      EXPECT_EQ(*snapshot.transition_code, "E_PROTECTION_AUDIT");
+      EXPECT_EQ(runtime_start_calls.load(), 0U);
+      std::lock_guard lock(event_mutex);
+      EXPECT_EQ(administrator_events,
+                (std::vector<std::string>{"integrity_check.started",
+                                          "integrity_check.succeeded",
+                                          "protection.recovered"}));
+    });
 
     EXPECT_TRUE(BoundedSubprocessPassed(bounded))
         << "throw_from_audit=" << throw_from_audit;
@@ -1456,10 +1427,10 @@ TEST(SystemProtectionServiceTest,
           {"E_PRIVATE", "/secret/self-test/key.pem"});
     };
     dependencies.run_integrity = PassingIntegrityReport;
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) { return AuditOk(); };
@@ -1467,9 +1438,7 @@ TEST(SystemProtectionServiceTest,
       return common::Result<DeviceState>::Ok(DeviceState::kOperational);
     };
     dependencies.wall_now = [] { return std::chrono::system_clock::now(); };
-    dependencies.steady_now = [] {
-      return std::chrono::steady_clock::now();
-    };
+    dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
     SystemProtectionService service(std::move(dependencies));
     SystemProtectionSnapshot snapshot;
@@ -1486,7 +1455,12 @@ TEST(SystemProtectionServiceTest,
 
 TEST(SystemProtectionServiceTest,
      DeviceAndRuntimeStartFailuresDoNotFalsifyRecoveredSuites) {
-  enum class FailureMode { kDeviceError, kDeviceThrow, kStartError, kStartThrow };
+  enum class FailureMode {
+    kDeviceError,
+    kDeviceThrow,
+    kStartError,
+    kStartThrow
+  };
   for (const auto mode : {FailureMode::kDeviceError, FailureMode::kDeviceThrow,
                           FailureMode::kStartError, FailureMode::kStartThrow}) {
     std::atomic<bool> integrity_passes{false};
@@ -1499,10 +1473,10 @@ TEST(SystemProtectionServiceTest,
       report.value().items.front().passed = report.value().passed;
       return report;
     };
-    dependencies.append_system_audit =
-        [](std::string_view, std::string_view, std::string_view) {
-          return AuditOk();
-        };
+    dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                          std::string_view) {
+      return AuditOk();
+    };
     dependencies.append_administrator_audit =
         [](const ProtectionActor&, std::string_view, std::string_view,
            std::string_view) { return AuditOk(); };
@@ -1517,21 +1491,19 @@ TEST(SystemProtectionServiceTest,
       return common::Result<DeviceState>::Ok(DeviceState::kOperational);
     };
     dependencies.wall_now = [] { return std::chrono::system_clock::now(); };
-    dependencies.steady_now = [] {
-      return std::chrono::steady_clock::now();
-    };
+    dependencies.steady_now = [] { return std::chrono::steady_clock::now(); };
 
     SystemProtectionService service(std::move(dependencies));
-    service.SetRuntimeCallbacks(
-        {.start = [&, mode]() -> common::Result<void> {
-           ++start_calls;
-           if (mode == FailureMode::kStartThrow) {
-             throw std::runtime_error("/secret/runtime/socket");
-           }
-           return common::Result<void>::Err(
-               {"E_PRIVATE", "/secret/runtime/socket"});
-         },
-         .stop = [] {}});
+    service.SetRuntimeCallbacks({.start = [&, mode]() -> common::Result<void> {
+                                   ++start_calls;
+                                   if (mode == FailureMode::kStartThrow) {
+                                     throw std::runtime_error(
+                                         "/secret/runtime/socket");
+                                   }
+                                   return common::Result<void>::Err(
+                                       {"E_PRIVATE", "/secret/runtime/socket"});
+                                 },
+                                 .stop = [] {}});
     ASSERT_EQ(service.RunStartupChecks().state, ProtectionState::kRestricted);
     integrity_passes = true;
     ASSERT_TRUE(service
@@ -1546,11 +1518,11 @@ TEST(SystemProtectionServiceTest,
     ASSERT_TRUE(snapshot.integrity.has_value());
     EXPECT_TRUE(snapshot.integrity->passed);
     ASSERT_TRUE(snapshot.transition_code.has_value());
-    const bool device_failure = mode == FailureMode::kDeviceError ||
-                                mode == FailureMode::kDeviceThrow;
-    EXPECT_EQ(*snapshot.transition_code,
-              device_failure ? "E_PROTECTION_DEVICE_STATE"
-                             : "E_PROTECTION_RUNTIME_START");
+    const bool device_failure =
+        mode == FailureMode::kDeviceError || mode == FailureMode::kDeviceThrow;
+    EXPECT_EQ(*snapshot.transition_code, device_failure
+                                             ? "E_PROTECTION_DEVICE_STATE"
+                                             : "E_PROTECTION_RUNTIME_START");
     EXPECT_EQ(start_calls.load(), device_failure ? 0U : 1U);
     EXPECT_EQ(snapshot.transition_code->find("secret"), std::string::npos);
   }
@@ -1566,10 +1538,8 @@ TEST(SystemProtectionServiceTest,
     return report;
   };
   dependencies.run_integrity = PassingIntegrityReport;
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -1602,10 +1572,8 @@ TEST(SystemProtectionServiceTest,
     return report;
   };
   dependencies.run_integrity = PassingIntegrityReport;
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -1679,10 +1647,8 @@ TEST(SystemProtectionServiceTest,
     return PassingSelfTestReport();
   };
   dependencies.run_integrity = PassingIntegrityReport;
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };
@@ -1716,10 +1682,8 @@ TEST(SystemProtectionServiceTest,
     return PassingSelfTestReport();
   };
   dependencies.run_integrity = PassingIntegrityReport;
-  dependencies.append_system_audit =
-      [](std::string_view, std::string_view, std::string_view) {
-        return AuditOk();
-      };
+  dependencies.append_system_audit = [](std::string_view, std::string_view,
+                                        std::string_view) { return AuditOk(); };
   dependencies.append_administrator_audit =
       [](const ProtectionActor&, std::string_view, std::string_view,
          std::string_view) { return AuditOk(); };

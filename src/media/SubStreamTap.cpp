@@ -34,7 +34,8 @@ void SubStreamTap::PublishLatest(FrameLease frame) {
   // superseded's lease releases here, off the lock, requeuing its buffer.
 }
 
-std::optional<FrameLease> SubStreamTap::WaitNext(std::chrono::milliseconds timeout) {
+std::optional<FrameLease> SubStreamTap::WaitNext(
+    std::chrono::milliseconds timeout) {
   std::unique_lock lock(mutex_);
   cv_.wait_for(lock, timeout,
                [this] { return pending_.has_value() || !active_ || closed_; });

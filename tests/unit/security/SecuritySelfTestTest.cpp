@@ -24,8 +24,8 @@ using camera_firmware::security::ResetSecuritySelfTestHooksForTest;
 using camera_firmware::security::RunSecuritySelfTests;
 using camera_firmware::security::SecuritySelfTestDependencies;
 using camera_firmware::security::SecuritySelfTestSensitiveBuffer;
-using camera_firmware::security::SetSecuritySelfTestCryptoFailureForTest;
 using camera_firmware::security::SecuritySelfTestZeroizationObservationsForTest;
+using camera_firmware::security::SetSecuritySelfTestCryptoFailureForTest;
 
 // A single self-tested provider, shared by every test in this file. Its
 // self-test is real OpenSSL work (PBKDF2/Ed25519/AES-GCM known-answer
@@ -74,11 +74,16 @@ TEST(SecuritySelfTestTest, ReportsEveryCheckInThePublishedStableOrder) {
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_TRUE(result.value().passed);
   ASSERT_EQ(result.value().items.size(), 10U);
-  const std::array<std::string, 10> expected_ids{
-      "crypto.sha256",      "crypto.hmac_sha256",   "security.database",
-      "security.tls_identity", "security.audit_append",
-      "pbkdf2_hmac_sha256", "random_bytes",         "random_bytes_private",
-      "ed25519",            "aes_256_gcm"};
+  const std::array<std::string, 10> expected_ids{"crypto.sha256",
+                                                 "crypto.hmac_sha256",
+                                                 "security.database",
+                                                 "security.tls_identity",
+                                                 "security.audit_append",
+                                                 "pbkdf2_hmac_sha256",
+                                                 "random_bytes",
+                                                 "random_bytes_private",
+                                                 "ed25519",
+                                                 "aes_256_gcm"};
   for (std::size_t index = 0; index < expected_ids.size(); ++index) {
     EXPECT_EQ(result.value().items[index].id, expected_ids[index]);
     EXPECT_TRUE(result.value().items[index].passed);
@@ -158,8 +163,7 @@ TEST(SecuritySelfTestTest, ContinuesAfterEachInjectedCryptoFailure) {
         EXPECT_TRUE(result.value().items[index].passed) << index;
       }
     }
-    EXPECT_EQ(calls,
-              (std::vector<std::string>{"database", "tls", "audit"}));
+    EXPECT_EQ(calls, (std::vector<std::string>{"database", "tls", "audit"}));
   }
 }
 
@@ -217,19 +221,18 @@ TEST(SecuritySelfTestTest,
 
 void ExpectZeroized(SecuritySelfTestSensitiveBuffer expected_buffer,
                     std::size_t expected_size) {
-  const auto observations =
-      SecuritySelfTestZeroizationObservationsForTest();
-  const auto matches = std::count_if(
-      observations.begin(), observations.end(),
-      [expected_buffer](const auto& observation) {
-        return observation.buffer == expected_buffer;
-      });
+  const auto observations = SecuritySelfTestZeroizationObservationsForTest();
+  const auto matches =
+      std::count_if(observations.begin(), observations.end(),
+                    [expected_buffer](const auto& observation) {
+                      return observation.buffer == expected_buffer;
+                    });
   ASSERT_EQ(matches, 1U);
-  const auto observation = std::find_if(
-      observations.begin(), observations.end(),
-      [expected_buffer](const auto& candidate) {
-        return candidate.buffer == expected_buffer;
-      });
+  const auto observation =
+      std::find_if(observations.begin(), observations.end(),
+                   [expected_buffer](const auto& candidate) {
+                     return candidate.buffer == expected_buffer;
+                   });
   ASSERT_NE(observation, observations.end());
   EXPECT_EQ(observation->allocation_size, expected_size);
   EXPECT_TRUE(observation->all_zero);
@@ -260,8 +263,7 @@ TEST(SecuritySelfTestTest, CleansesEverySensitiveCryptoBufferOnSuccess) {
 TEST(SecuritySelfTestTest,
      CleansesEveryAllocatedCryptoBufferOnRelevantInjectedFailures) {
   ResetSecuritySelfTestHooksForTest();
-  SetSecuritySelfTestCryptoFailureForTest(
-      CryptoSelfTestOperation::kHmacSha256);
+  SetSecuritySelfTestCryptoFailureForTest(CryptoSelfTestOperation::kHmacSha256);
   const auto hmac_failure = RunSecuritySelfTests(PassingDependencies());
   ASSERT_TRUE(hmac_failure.ok()) << hmac_failure.error().message;
   EXPECT_FALSE(hmac_failure.value().items[1].passed);

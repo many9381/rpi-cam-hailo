@@ -1,0 +1,5 @@
+# Commits git blame should skip (git config blame.ignoreRevsFile .git-blame-ignore-revs,
+# set by tools/ci/install-hooks.sh).
+
+# style: clang-format the whole tree (2026-09-10)
+bb7c43f2ce2dcd082b348e489f13f845f3236ed6

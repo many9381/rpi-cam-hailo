@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cctype>
-#include <climits>
+#include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -37,11 +37,10 @@
 
 #include "camera_firmware/common/SecureBytes.hpp"
 
-extern "C" int camera_firmware_tls_rename_noreplace(
-    int old_directory,
-    const char* old_name,
-    int new_directory,
-    const char* new_name);
+extern "C" int camera_firmware_tls_rename_noreplace(int old_directory,
+                                                    const char* old_name,
+                                                    int new_directory,
+                                                    const char* new_name);
 
 namespace camera_firmware::security {
 
@@ -73,7 +72,7 @@ constexpr mode_t kStateDirectoryMode = 0700;
 constexpr mode_t kIdentityDirectoryMode = 0700;
 constexpr mode_t kPrivateKeyMode = 0600;
 constexpr mode_t kCertificateMode = 0644;
-constexpr std::size_t kMaximumPemBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumPemBytes = std::size_t{1024} * 1024U;
 constexpr long kCertificateLifetimeSeconds = 5L * 365L * 24L * 60L * 60L;
 
 class UniqueFd {
@@ -155,7 +154,8 @@ class SecretMemoryBio {
     if (bio_ != nullptr) {
       BUF_MEM* memory = nullptr;
       BIO_get_mem_ptr(bio_, &memory);
-      if (memory != nullptr && memory->data != nullptr && memory->length != 0U) {
+      if (memory != nullptr && memory->data != nullptr &&
+          memory->length != 0U) {
         OPENSSL_cleanse(memory->data, memory->length);
       }
       BIO_free(bio_);
@@ -196,9 +196,9 @@ class TemporaryIdentityDirectory {
     if (!active_) {
       return;
     }
-    UniqueFd directory(::openat(parent_, name_.c_str(),
-                                O_RDONLY | O_DIRECTORY | O_CLOEXEC |
-                                    O_NOFOLLOW));
+    UniqueFd directory(
+        ::openat(parent_, name_.c_str(),
+                 O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (directory.valid()) {
       (void)::unlinkat(directory.get(), kPrivateKeyName.data(), 0);
       (void)::unlinkat(directory.get(), kCertificateName.data(), 0);
@@ -219,7 +219,9 @@ using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
 using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using BnPtr = std::unique_ptr<BIGNUM, decltype(&BN_free)>;
 
-int RejectEncryptedPemPassword(char*, int, int, void*) { return 0; }
+int RejectEncryptedPemPassword(char*, int, int, void*) {
+  return 0;
+}
 
 std::vector<std::string> ExpectedDnsNames();
 
@@ -266,7 +268,8 @@ bool GeneratedCertificateExtensionsAreExact(X509* certificate) {
                       certificate, NID_basic_constraints, &critical, nullptr)),
                   BASIC_CONSTRAINTS_free);
   if (!HasOneExtension(certificate, NID_basic_constraints) || !constraints ||
-      critical != 1 || constraints->ca != 0 || constraints->pathlen != nullptr) {
+      critical != 1 || constraints->ca != 0 ||
+      constraints->pathlen != nullptr) {
     return false;
   }
 
@@ -338,8 +341,7 @@ bool GeneratedCertificateExtensionsAreExact(X509* certificate) {
   std::sort(ip_addresses.begin(), ip_addresses.end());
   std::vector<std::vector<unsigned char>> expected_ip_addresses{
       {127U, 0U, 0U, 1U},
-      {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U,
-       0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U}};
+      {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U}};
   std::sort(expected_ip_addresses.begin(), expected_ip_addresses.end());
   return dns_names == expected_dns_names &&
          ip_addresses == expected_ip_addresses;
@@ -348,8 +350,7 @@ bool GeneratedCertificateExtensionsAreExact(X509* certificate) {
 bool GeneratedCertificateValidityIsBounded(X509* certificate) {
   int days = 0;
   int seconds = 0;
-  if (ASN1_TIME_diff(&days, &seconds,
-                     X509_get0_notBefore(certificate),
+  if (ASN1_TIME_diff(&days, &seconds, X509_get0_notBefore(certificate),
                      X509_get0_notAfter(certificate)) != 1 ||
       days < 0 || seconds < 0) {
     return false;
@@ -394,7 +395,8 @@ struct PinnedPemSnapshot {
 bool SamePemSnapshot(const struct stat& first,
                      const struct stat& second) noexcept {
   return first.st_dev == second.st_dev && first.st_ino == second.st_ino &&
-         first.st_size == second.st_size && first.st_mtim.tv_sec == second.st_mtim.tv_sec &&
+         first.st_size == second.st_size &&
+         first.st_mtim.tv_sec == second.st_mtim.tv_sec &&
          first.st_mtim.tv_nsec == second.st_mtim.tv_nsec &&
          first.st_ctim.tv_sec == second.st_ctim.tv_sec &&
          first.st_ctim.tv_nsec == second.st_ctim.tv_nsec;
@@ -427,8 +429,8 @@ class PemInspectionBufferCleanser {
   ~PemInspectionBufferCleanser() { OPENSSL_cleanse(data_, size_); }
 
   PemInspectionBufferCleanser(const PemInspectionBufferCleanser&) = delete;
-  PemInspectionBufferCleanser& operator=(
-      const PemInspectionBufferCleanser&) = delete;
+  PemInspectionBufferCleanser& operator=(const PemInspectionBufferCleanser&) =
+      delete;
 
  private:
   void* data_;
@@ -436,7 +438,7 @@ class PemInspectionBufferCleanser {
 };
 
 common::Result<PinnedPemSnapshot> ReadPinnedPemSnapshot(int descriptor,
-                                                         bool private_key) {
+                                                        bool private_key) {
   struct stat initial {};
   if (::fstat(descriptor, &initial) != 0 || !S_ISREG(initial.st_mode) ||
       S_ISLNK(initial.st_mode) || initial.st_uid != ::geteuid() ||
@@ -512,12 +514,11 @@ bool IsTemporaryIdentityName(std::string_view name) {
       name.size() != kTemporaryPrefix.size() + 24U) {
     return false;
   }
-  return std::all_of(name.begin() +
-                         static_cast<std::ptrdiff_t>(kTemporaryPrefix.size()),
-                     name.end(), [](unsigned char value) {
-                       return (value >= '0' && value <= '9') ||
-                              (value >= 'a' && value <= 'f');
-                     });
+  return std::all_of(
+      name.begin() + static_cast<std::ptrdiff_t>(kTemporaryPrefix.size()),
+      name.end(), [](unsigned char value) {
+        return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+      });
 }
 
 struct ValidatedStaleEntry {
@@ -526,21 +527,21 @@ struct ValidatedStaleEntry {
   ino_t inode{0};
 };
 
-common::Result<ValidatedStaleEntry> ValidateStaleEntry(
-    int directory,
-    std::string_view name,
-    mode_t expected_mode) {
+common::Result<ValidatedStaleEntry> ValidateStaleEntry(int directory,
+                                                       std::string_view name,
+                                                       mode_t expected_mode) {
   struct stat path_status {};
-  if (::fstatat(directory, name.data(), &path_status, AT_SYMLINK_NOFOLLOW) != 0 ||
+  if (::fstatat(directory, name.data(), &path_status, AT_SYMLINK_NOFOLLOW) !=
+          0 ||
       !S_ISREG(path_status.st_mode) || S_ISLNK(path_status.st_mode) ||
       path_status.st_uid != ::geteuid() || path_status.st_nlink != 1 ||
       !HasMode(path_status, expected_mode) || path_status.st_size <= 0 ||
       static_cast<unsigned long long>(path_status.st_size) > kMaximumPemBytes) {
-    return TlsError<ValidatedStaleEntry>(
-        "E_HTTP_TLS_IDENTITY", "stale TLS identity entry is unsafe");
+    return TlsError<ValidatedStaleEntry>("E_HTTP_TLS_IDENTITY",
+                                         "stale TLS identity entry is unsafe");
   }
-  UniqueFd descriptor(::openat(directory, name.data(),
-                               O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+  UniqueFd descriptor(
+      ::openat(directory, name.data(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
   struct stat descriptor_status {};
   if (!descriptor.valid() ||
       ::fstat(descriptor.get(), &descriptor_status) != 0 ||
@@ -557,8 +558,7 @@ common::Result<ValidatedStaleEntry> ValidateStaleEntry(
       {std::string(name), path_status.st_dev, path_status.st_ino});
 }
 
-bool StaleEntryStillMatches(int directory,
-                            const ValidatedStaleEntry& entry,
+bool StaleEntryStillMatches(int directory, const ValidatedStaleEntry& entry,
                             mode_t expected_mode) {
   struct stat status {};
   return ::fstatat(directory, entry.name.c_str(), &status,
@@ -590,11 +590,11 @@ common::Result<void> ScavengeTemporaryIdentity(int state_directory,
                     "stale TLS identity directory changed during scan");
   }
 
-  UniqueFd scan_descriptor(::openat(directory.get(), ".",
-                                    O_RDONLY | O_DIRECTORY | O_CLOEXEC |
-                                        O_NOFOLLOW));
-  DIR* raw_entries =
-      scan_descriptor.valid() ? ::fdopendir(scan_descriptor.Release()) : nullptr;
+  UniqueFd scan_descriptor(::openat(
+      directory.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  DIR* raw_entries = scan_descriptor.valid()
+                         ? ::fdopendir(scan_descriptor.Release())
+                         : nullptr;
   DirectoryStreamPtr entries(raw_entries);
   if (!entries) {
     return TlsError("E_HTTP_TLS_IDENTITY",
@@ -605,6 +605,9 @@ common::Result<void> ScavengeTemporaryIdentity(int state_directory,
   std::optional<ValidatedStaleEntry> private_key;
   while (true) {
     errno = 0;
+    // Private DIR stream: glibc's readdir is safe per stream and readdir_r
+    // is deprecated.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const struct dirent* entry = ::readdir(entries.get());
     if (entry == nullptr) {
       if (errno != 0) {
@@ -663,11 +666,11 @@ common::Result<void> ScavengeTemporaryIdentity(int state_directory,
 }
 
 common::Result<void> ScavengeTemporaryIdentities(int state_directory) {
-  UniqueFd scan_descriptor(::openat(state_directory, ".",
-                                    O_RDONLY | O_DIRECTORY | O_CLOEXEC |
-                                        O_NOFOLLOW));
-  DIR* raw_entries =
-      scan_descriptor.valid() ? ::fdopendir(scan_descriptor.Release()) : nullptr;
+  UniqueFd scan_descriptor(::openat(
+      state_directory, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  DIR* raw_entries = scan_descriptor.valid()
+                         ? ::fdopendir(scan_descriptor.Release())
+                         : nullptr;
   DirectoryStreamPtr entries(raw_entries);
   if (!entries) {
     return TlsError("E_HTTP_TLS_IDENTITY",
@@ -677,12 +680,14 @@ common::Result<void> ScavengeTemporaryIdentities(int state_directory) {
   std::vector<std::string> temporary_names;
   while (true) {
     errno = 0;
+    // Private DIR stream: glibc's readdir is safe per stream and readdir_r
+    // is deprecated.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const struct dirent* entry = ::readdir(entries.get());
     if (entry == nullptr) {
       if (errno != 0) {
-        return TlsError(
-            "E_HTTP_TLS_IDENTITY",
-            "failed while scanning protected TLS state directory");
+        return TlsError("E_HTTP_TLS_IDENTITY",
+                        "failed while scanning protected TLS state directory");
       }
       break;
     }
@@ -734,8 +739,8 @@ common::Result<UniqueFd> OpenProtectedStateDirectory(
         "protected TLS state directory has unsafe ownership, type, or mode");
   }
 
-  UniqueFd directory(::open(absolute.c_str(), O_RDONLY | O_DIRECTORY |
-                                                   O_CLOEXEC | O_NOFOLLOW));
+  UniqueFd directory(::open(absolute.c_str(),
+                            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   struct stat descriptor_status {};
   if (!directory.valid() || ::fstat(directory.get(), &descriptor_status) != 0 ||
       !IsProtectedDirectory(descriptor_status, ::geteuid(),
@@ -748,11 +753,12 @@ common::Result<UniqueFd> OpenProtectedStateDirectory(
   return common::Result<UniqueFd>::Ok(std::move(directory));
 }
 
-common::Result<OpenedPemFile> OpenGeneratedPemFile(
-    int directory, std::string_view name, mode_t expected_mode,
-    bool certificate_file) {
-  UniqueFd input(::openat(directory, name.data(),
-                          O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+common::Result<OpenedPemFile> OpenGeneratedPemFile(int directory,
+                                                   std::string_view name,
+                                                   mode_t expected_mode,
+                                                   bool certificate_file) {
+  UniqueFd input(
+      ::openat(directory, name.data(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
   struct stat status {};
   if (!input.valid() || ::fstat(input.get(), &status) != 0 ||
       !S_ISREG(status.st_mode) || S_ISLNK(status.st_mode) ||
@@ -761,9 +767,9 @@ common::Result<OpenedPemFile> OpenGeneratedPemFile(
                         : !HasMode(status, expected_mode)) ||
       status.st_size <= 0 ||
       static_cast<unsigned long long>(status.st_size) > kMaximumPemBytes) {
-    return TlsError<OpenedPemFile>(
-        "E_HTTP_TLS_IDENTITY",
-        "generated TLS identity has unsafe file ownership, type, mode, or size");
+    return TlsError<OpenedPemFile>("E_HTTP_TLS_IDENTITY",
+                                   "generated TLS identity has unsafe file "
+                                   "ownership, type, mode, or size");
   }
 
   common::SecureBytes bytes;
@@ -813,18 +819,18 @@ common::Result<void> ValidatePemPair(const common::SecureBytes& certificate_pem,
           ? PEM_read_bio_X509(certificate_bio.get(), nullptr, nullptr, nullptr)
           : nullptr,
       X509_free);
-  KeyPtr private_key(
-      private_key_bio ? PEM_read_bio_PrivateKey(private_key_bio.get(), nullptr,
-                                                RejectEncryptedPemPassword,
-                                                nullptr)
-                      : nullptr,
-      EVP_PKEY_free);
+  KeyPtr private_key(private_key_bio ? PEM_read_bio_PrivateKey(
+                                           private_key_bio.get(), nullptr,
+                                           RejectEncryptedPemPassword, nullptr)
+                                     : nullptr,
+                     EVP_PKEY_free);
   if (!certificate || !private_key ||
       X509_cmp_current_time(X509_get0_notBefore(certificate.get())) >= 0 ||
       X509_cmp_current_time(X509_get0_notAfter(certificate.get())) <= 0 ||
       X509_check_private_key(certificate.get(), private_key.get()) != 1) {
-    return TlsError("E_HTTP_TLS_IDENTITY",
-                    "TLS certificate and private key are invalid or mismatched");
+    return TlsError(
+        "E_HTTP_TLS_IDENTITY",
+        "TLS certificate and private key are invalid or mismatched");
   }
 
   if (!require_development_profile) {
@@ -846,8 +852,9 @@ common::Result<void> ValidatePemPair(const common::SecureBytes& certificate_pem,
       X509_check_host(certificate.get(), "camera.local", 0, 0, nullptr) != 1 ||
       X509_check_ip_asc(certificate.get(), "127.0.0.1", 0) != 1 ||
       X509_check_ip_asc(certificate.get(), "::1", 0) != 1) {
-    return TlsError("E_HTTP_TLS_IDENTITY",
-                    "generated TLS identity does not match its required profile");
+    return TlsError(
+        "E_HTTP_TLS_IDENTITY",
+        "generated TLS identity does not match its required profile");
   }
   return common::Result<void>::Ok();
 }
@@ -869,9 +876,8 @@ OpenValidatedGeneratedIdentity(int state_directory) {
     return TlsError<std::pair<OpenedPemFile, OpenedPemFile>>(
         certificate.error().code, certificate.error().message);
   }
-  auto private_key =
-      OpenGeneratedPemFile(identity.get(), kPrivateKeyName, kPrivateKeyMode,
-                           false);
+  auto private_key = OpenGeneratedPemFile(identity.get(), kPrivateKeyName,
+                                          kPrivateKeyMode, false);
   if (!private_key.ok()) {
     return TlsError<std::pair<OpenedPemFile, OpenedPemFile>>(
         private_key.error().code, private_key.error().message);
@@ -897,8 +903,8 @@ common::Result<OpenedPemFile> OpenConfiguredPem(
                    : !CertificateModeIsProtected(status)) ||
       status.st_size <= 0 ||
       static_cast<unsigned long long>(status.st_size) > kMaximumPemBytes) {
-    return TlsError<OpenedPemFile>(
-        "E_HTTP_TLS_IDENTITY", "configured TLS identity file is unsafe");
+    return TlsError<OpenedPemFile>("E_HTTP_TLS_IDENTITY",
+                                   "configured TLS identity file is unsafe");
   }
 
   common::SecureBytes bytes;
@@ -913,8 +919,8 @@ common::Result<OpenedPemFile> OpenConfiguredPem(
     }
     if (read_size <= 0) {
       bytes.clear();
-      return TlsError<OpenedPemFile>(
-          "E_HTTP_TLS_IDENTITY", "failed to read configured TLS identity");
+      return TlsError<OpenedPemFile>("E_HTTP_TLS_IDENTITY",
+                                     "failed to read configured TLS identity");
     }
     offset += static_cast<std::size_t>(read_size);
   }
@@ -960,7 +966,8 @@ bool IsDnsHostname(std::string_view hostname) {
          std::all_of(hostname.begin(), hostname.end(), [](unsigned char value) {
            return (value >= 'a' && value <= 'z') ||
                   (value >= 'A' && value <= 'Z') ||
-                  (value >= '0' && value <= '9') || value == '-' || value == '.';
+                  (value >= '0' && value <= '9') || value == '-' ||
+                  value == '.';
          });
 }
 
@@ -1005,13 +1012,14 @@ GeneratePemIdentity(crypto::CryptoProvider& provider) {
   serial_bytes.data()[0] &= 0x7fU;
   serial_bytes.data()[serial_bytes.size() - 1U] |= 0x01U;
   BnPtr serial(BN_bin2bn(serial_bytes.data(),
-                        static_cast<int>(serial_bytes.size()), nullptr),
+                         static_cast<int>(serial_bytes.size()), nullptr),
                BN_free);
   if (!serial ||
-      BN_to_ASN1_INTEGER(serial.get(), X509_get_serialNumber(certificate.get())) ==
-          nullptr ||
+      BN_to_ASN1_INTEGER(serial.get(),
+                         X509_get_serialNumber(certificate.get())) == nullptr ||
       X509_set_version(certificate.get(), 2) != 1 ||
-      X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -300) == nullptr ||
+      X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -300) ==
+          nullptr ||
       X509_gmtime_adj(X509_getm_notAfter(certificate.get()),
                       kCertificateLifetimeSeconds) == nullptr ||
       X509_set_pubkey(certificate.get(), private_key.get()) != 1) {
@@ -1024,8 +1032,8 @@ GeneratePemIdentity(crypto::CryptoProvider& provider) {
   constexpr unsigned char kOrganization[] = "Camera Firmware Development";
   const std::string subject_alternative_names = SubjectAlternativeNames();
   if (subject == nullptr ||
-      X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, kCommonName, -1, -1,
-                                 0) != 1 ||
+      X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, kCommonName, -1,
+                                 -1, 0) != 1 ||
       X509_NAME_add_entry_by_txt(subject, "O", MBSTRING_ASC, kOrganization, -1,
                                  -1, 0) != 1 ||
       X509_set_issuer_name(certificate.get(), subject) != 1 ||
@@ -1045,8 +1053,8 @@ GeneratePemIdentity(crypto::CryptoProvider& provider) {
   SecretMemoryBio private_key_bio;
   if (!certificate_bio || !private_key_bio.get() ||
       PEM_write_bio_X509(certificate_bio.get(), certificate.get()) != 1 ||
-      PEM_write_bio_PrivateKey(private_key_bio.get(), private_key.get(), nullptr,
-                               nullptr, 0, nullptr, nullptr) != 1) {
+      PEM_write_bio_PrivateKey(private_key_bio.get(), private_key.get(),
+                               nullptr, nullptr, 0, nullptr, nullptr) != 1) {
     return TlsError<std::pair<std::vector<unsigned char>, common::SecureBytes>>(
         "E_HTTP_TLS_GENERATE", "failed to serialize development TLS identity");
   }
@@ -1069,9 +1077,9 @@ GeneratePemIdentity(crypto::CryptoProvider& provider) {
   private_key_pem.assign(
       reinterpret_cast<const unsigned char*>(private_key_memory->data),
       private_key_memory->length);
-  return common::Result<
-      std::pair<std::vector<unsigned char>, common::SecureBytes>>::Ok(
-      {std::move(certificate_pem), std::move(private_key_pem)});
+  return common::
+      Result<std::pair<std::vector<unsigned char>, common::SecureBytes>>::Ok(
+          {std::move(certificate_pem), std::move(private_key_pem)});
 }
 
 common::Result<void> WriteDurableFile(int directory, std::string_view name,
@@ -1131,15 +1139,16 @@ common::Result<std::string> CreateTemporaryDirectory(int state_directory) {
                                "failed to reserve temporary TLS directory");
 }
 
-common::Result<void> PublishGeneratedIdentity(int state_directory,
-                                              crypto::CryptoProvider& provider) {
+common::Result<void> PublishGeneratedIdentity(
+    int state_directory, crypto::CryptoProvider& provider) {
   auto generated = GeneratePemIdentity(provider);
   if (!generated.ok()) {
     return TlsError(generated.error().code, generated.error().message);
   }
   auto temporary_name = CreateTemporaryDirectory(state_directory);
   if (!temporary_name.ok()) {
-    return TlsError(temporary_name.error().code, temporary_name.error().message);
+    return TlsError(temporary_name.error().code,
+                    temporary_name.error().message);
   }
   TemporaryIdentityDirectory cleanup(state_directory, temporary_name.value());
   UniqueFd temporary(::openat(state_directory, temporary_name.value().c_str(),
@@ -1245,8 +1254,7 @@ common::Result<PreparedTlsMaterial> ResolveGeneratedIdentity(
 }  // namespace
 
 ResolvedTlsMaterial::ResolvedTlsMaterial(
-    std::filesystem::path certificate,
-    std::filesystem::path private_key,
+    std::filesystem::path certificate, std::filesystem::path private_key,
     bool generated,
     std::shared_ptr<detail::ResolvedTlsHandles> handles) noexcept
     : certificate_path(std::move(certificate)),
@@ -1295,15 +1303,16 @@ common::Result<ResolvedTlsMaterial> ResolveTlsMaterial(
       return TlsError<ResolvedTlsMaterial>(
           "E_HTTP_TLS_REQUIRED", "configured HTTP TLS material is required");
     }
-    auto prepared = ResolveGeneratedIdentity(protected_state_directory, provider);
+    auto prepared =
+        ResolveGeneratedIdentity(protected_state_directory, provider);
     if (!prepared.ok()) {
       return TlsError<ResolvedTlsMaterial>(prepared.error().code,
                                            prepared.error().message);
     }
     return finalize(std::move(prepared).value());
   } catch (...) {
-    return TlsError<ResolvedTlsMaterial>(
-        "E_HTTP_TLS_GENERATE", "failed to resolve HTTP TLS identity");
+    return TlsError<ResolvedTlsMaterial>("E_HTTP_TLS_GENERATE",
+                                         "failed to resolve HTTP TLS identity");
   }
 }
 
@@ -1311,7 +1320,8 @@ common::Result<void> CheckTlsMaterialHealth(
     const ResolvedTlsMaterial& material,
     std::chrono::system_clock::time_point now) {
   const auto failure = [] {
-    return TlsError("E_SECURITY_TLS_HEALTH", "TLS identity health check failed");
+    return TlsError("E_SECURITY_TLS_HEALTH",
+                    "TLS identity health check failed");
   };
   try {
     if (!material.handles_ || material.handles_->certificate < 0 ||
@@ -1323,7 +1333,8 @@ common::Result<void> CheckTlsMaterialHealth(
     if (!certificate.ok()) {
       return failure();
     }
-    auto private_key = ReadPinnedPemSnapshot(material.handles_->private_key, true);
+    auto private_key =
+        ReadPinnedPemSnapshot(material.handles_->private_key, true);
     if (!private_key.ok()) {
       return failure();
     }
@@ -1338,9 +1349,9 @@ common::Result<void> CheckTlsMaterialHealth(
                         static_cast<int>(private_key.value().bytes.size())),
         BIO_free);
     X509Ptr parsed_certificate(
-        certificate_bio
-            ? PEM_read_bio_X509(certificate_bio.get(), nullptr, nullptr, nullptr)
-            : nullptr,
+        certificate_bio ? PEM_read_bio_X509(certificate_bio.get(), nullptr,
+                                            nullptr, nullptr)
+                        : nullptr,
         X509_free);
     KeyPtr parsed_private_key(
         private_key_bio
@@ -1348,8 +1359,7 @@ common::Result<void> CheckTlsMaterialHealth(
                                       RejectEncryptedPemPassword, nullptr)
             : nullptr,
         EVP_PKEY_free);
-    std::time_t current_time =
-        std::chrono::system_clock::to_time_t(now);
+    std::time_t current_time = std::chrono::system_clock::to_time_t(now);
     const int not_before_comparison =
         parsed_certificate
             ? ASN1_TIME_cmp_time_t(
@@ -1357,8 +1367,8 @@ common::Result<void> CheckTlsMaterialHealth(
             : -2;
     const int not_after_comparison =
         parsed_certificate
-            ? ASN1_TIME_cmp_time_t(
-                  X509_get0_notAfter(parsed_certificate.get()), current_time)
+            ? ASN1_TIME_cmp_time_t(X509_get0_notAfter(parsed_certificate.get()),
+                                   current_time)
             : -2;
     if (!parsed_certificate || !parsed_private_key ||
         !HasOnlyWhitespaceRemaining(certificate_bio.get()) ||

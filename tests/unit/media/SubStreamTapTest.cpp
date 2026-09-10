@@ -70,7 +70,8 @@ TEST(SubStreamTapTest, DeactivateWakesWaiterWithNullopt) {
   SubStreamTap tap;
   tap.SetActive(true);
   std::atomic_bool got_value{true};
-  std::thread t([&] { got_value = tap.WaitNext(std::chrono::seconds(2)).has_value(); });
+  std::thread t(
+      [&] { got_value = tap.WaitNext(std::chrono::seconds(2)).has_value(); });
   // Give the waiter a chance to actually enter the wait before deactivating.
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   tap.SetActive(false);
@@ -82,7 +83,8 @@ TEST(SubStreamTapTest, CloseWakesWaiterWithNulloptPermanently) {
   SubStreamTap tap;
   tap.SetActive(true);
   std::atomic_bool got_value{true};
-  std::thread t([&] { got_value = tap.WaitNext(std::chrono::seconds(2)).has_value(); });
+  std::thread t(
+      [&] { got_value = tap.WaitNext(std::chrono::seconds(2)).has_value(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   tap.Close();
   t.join();

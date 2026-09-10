@@ -1,26 +1,26 @@
 #pragma once
 
-#include <cstddef>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
-#include <future>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 
-#include "camera_firmware/media/JpegEncoder.hpp"
 #include <string_view>
 #include <thread>
 #include <vector>
+#include "camera_firmware/media/JpegEncoder.hpp"
 
-#include <json/value.h>
 #include <drogon/HttpResponse.h>
+#include <json/value.h>
 
-#include "camera_firmware/ai/DetectionBus.hpp"
 #include "camera_firmware/ai/AiTypes.hpp"
+#include "camera_firmware/ai/DetectionBus.hpp"
 #include "camera_firmware/common/Result.hpp"
 #include "camera_firmware/config/AppConfig.hpp"
 #include "camera_firmware/crypto/CryptoProvider.hpp"
@@ -72,10 +72,10 @@ struct LiveMp4StreamHandle {
   LiveMp4StreamCallback read;
   LiveMp4CancelCallback cancel;
 };
-using LiveMp4OpenCallback = std::function<
-    common::Result<LiveMp4StreamCallback>(const std::string&)>;
-using CancellableLiveMp4OpenCallback = std::function<
-    common::Result<LiveMp4StreamHandle>(const std::string&)>;
+using LiveMp4OpenCallback =
+    std::function<common::Result<LiveMp4StreamCallback>(const std::string&)>;
+using CancellableLiveMp4OpenCallback =
+    std::function<common::Result<LiveMp4StreamHandle>(const std::string&)>;
 
 struct AiRunnerServiceStatus {
   std::string camera_id;
@@ -119,17 +119,18 @@ using AiControlCallback = std::function<common::Result<void>()>;
 using RuntimeStartCallback = std::function<common::Result<void>()>;
 using RuntimeSettingsSnapshotCallback =
     std::function<settings::RuntimeSettingsSnapshot()>;
-using RuntimeSettingsSaveCallback = std::function<
-    common::Result<settings::RuntimeSettingsSnapshot>(
+using RuntimeSettingsSaveCallback =
+    std::function<common::Result<settings::RuntimeSettingsSnapshot>(
         std::uint64_t, settings::RuntimeSettings)>;
 using RuntimeSettingsApplyCallback =
     std::function<settings::SettingsApplyResult(std::uint64_t)>;
-using RuntimeSettingsDiscardCallback = std::function<
-    common::Result<settings::RuntimeSettingsSnapshot>(std::uint64_t)>;
+using RuntimeSettingsDiscardCallback =
+    std::function<common::Result<settings::RuntimeSettingsSnapshot>(
+        std::uint64_t)>;
 using ProtectionSnapshotCallback =
     std::function<security::SystemProtectionSnapshot()>;
-using ProtectionStartCheckCallback = std::function<
-    common::Result<security::SystemProtectionSnapshot>(
+using ProtectionStartCheckCallback =
+    std::function<common::Result<security::SystemProtectionSnapshot>(
         security::ProtectionSuite, security::ProtectionActor)>;
 using ProtectionRuntimeAllowedCallback = std::function<bool()>;
 using ProtectionRuntimeControlGate =
@@ -211,10 +212,8 @@ Json::Value BuildDetectionSnapshotJson(
 drogon::HttpResponsePtr BuildDetectionSnapshotResponse(
     const DetectionSnapshotProvider& detection_snapshot_provider);
 std::vector<ai::DetectionEvent> MergeDetectionSnapshotWithEvent(
-    std::vector<ai::DetectionEvent> events,
-    const ai::DetectionEvent& event);
-std::string BuildDetectionSseId(
-    const std::vector<ai::DetectionEvent>& events);
+    std::vector<ai::DetectionEvent> events, const ai::DetectionEvent& event);
+std::string BuildDetectionSseId(const std::vector<ai::DetectionEvent>& events);
 std::string BuildDetectionSseEvent(
     const std::vector<ai::DetectionEvent>& events);
 drogon::HttpResponsePtr BuildDetectionSseResponse(
@@ -230,8 +229,7 @@ ServiceListenerConfig BuildServiceListenerConfig(
 common::Result<void> ValidateHttpTlsConfigFiles(
     const config::HttpConfig& http_config, crypto::CryptoProvider& provider);
 drogon::HttpResponsePtr BuildSnapshotResponse(
-    const SnapshotCallback& snapshot_callback,
-    const std::string& camera_id);
+    const SnapshotCallback& snapshot_callback, const std::string& camera_id);
 drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id,
@@ -267,8 +265,8 @@ drogon::HttpResponsePtr ExecuteUnrestrictedRuntimeOperation(
     const std::function<drogon::HttpResponsePtr()>& operation);
 common::Result<std::optional<security::ResolvedTlsMaterial>>
 SelectServiceTlsMaterial(const ServiceInitArgs& args);
-void InstallDefaultProtectionRuntimeAllowedCallback(
-    ServiceInitArgs& args, bool security_enabled);
+void InstallDefaultProtectionRuntimeAllowedCallback(ServiceInitArgs& args,
+                                                    bool security_enabled);
 
 std::thread StartServiceThreadWithTlsOwner(
     std::optional<security::ResolvedTlsMaterial> tls_material,

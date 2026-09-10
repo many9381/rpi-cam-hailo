@@ -12,8 +12,8 @@
 
 #include <sys/stat.h>
 
-#include <openssl/crypto.h>
 #include <gtest/gtest.h>
+#include <openssl/crypto.h>
 
 #include <stdlib.h>
 
@@ -70,9 +70,9 @@ TEST(SafeFileDigestTest, HashesKnownContent) {
   ASSERT_TRUE(result.ok());
   const Sha256Digest expected = DigestFromHex(
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-  EXPECT_EQ(CRYPTO_memcmp(result.value().data(), expected.data(),
-                          expected.size()),
-            0);
+  EXPECT_EQ(
+      CRYPTO_memcmp(result.value().data(), expected.data(), expected.size()),
+      0);
 }
 
 TEST(SafeFileDigestTest, RejectsMissingFileWithoutDisclosingPath) {

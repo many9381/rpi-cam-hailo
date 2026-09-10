@@ -54,8 +54,8 @@ class OsdCompositor {
   };
 
   [[nodiscard]] static common::Result<OsdCompositor> Create(
-      const config::CameraOsdConfig& config, std::string camera_id,
-      int width, int height, TextRasterizer& rasterizer);
+      const config::CameraOsdConfig& config, std::string camera_id, int width,
+      int height, TextRasterizer& rasterizer);
 
   void Stamp(const Nv12MutableView& frame, std::time_t now);
   [[nodiscard]] std::vector<SpriteRect> SpriteRects() const;

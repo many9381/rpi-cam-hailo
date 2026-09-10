@@ -1,12 +1,12 @@
 #pragma once
 
-#include <chrono>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
-#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -54,8 +54,7 @@ class SnapshotTap {
   [[nodiscard]] std::optional<FrameLease> Latest() const;
   [[nodiscard]] std::optional<FrameLease> Latest(
       std::chrono::milliseconds maximum_age) const;
-  [[nodiscard]] bool HasFreshFrame(
-      std::chrono::milliseconds maximum_age) const;
+  [[nodiscard]] bool HasFreshFrame(std::chrono::milliseconds maximum_age) const;
 
  private:
   struct PublishedFrame {
@@ -76,11 +75,9 @@ class SnapshotTap {
 };
 
 [[nodiscard]] std::optional<JpegBytes> BuildLatestSnapshotJpeg(
-    const SnapshotTap& tap,
-    std::string_view camera_id);
+    const SnapshotTap& tap, std::string_view camera_id);
 [[nodiscard]] std::optional<JpegBytes> BuildLatestSnapshotJpeg(
-    const SnapshotTap& tap,
-    std::string_view camera_id,
+    const SnapshotTap& tap, std::string_view camera_id,
     std::chrono::milliseconds maximum_age);
 
 }  // namespace camera_firmware::media

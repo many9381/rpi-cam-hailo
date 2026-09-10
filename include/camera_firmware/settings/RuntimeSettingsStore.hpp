@@ -32,8 +32,7 @@ struct RuntimeSettingsDocument {
 class RuntimeSettingsStore final {
  public:
   static common::Result<std::unique_ptr<RuntimeSettingsStore>> Open(
-      const std::filesystem::path& state_directory,
-      RuntimeSettings base_active,
+      const std::filesystem::path& state_directory, RuntimeSettings base_active,
       const config::AppConfig& base_config,
       const CameraProfileCatalog& profiles);
 
@@ -44,16 +43,13 @@ class RuntimeSettingsStore final {
 
   RuntimeSettingsDocument Snapshot() const;
   common::Result<RuntimeSettingsDocument> SavePending(
-      std::uint64_t expected_revision,
-      RuntimeSettings pending);
+      std::uint64_t expected_revision, RuntimeSettings pending);
   common::Result<RuntimeSettingsDocument> DiscardPending(
       std::uint64_t expected_revision);
   common::Result<RuntimeSettingsDocument> PromotePending(
       std::uint64_t expected_revision);
   common::Result<RuntimeSettingsDocument> RecordApplyFailure(
-      std::uint64_t expected_revision,
-      std::string code,
-      bool restored);
+      std::uint64_t expected_revision, std::string code, bool restored);
 
  private:
   struct Impl;

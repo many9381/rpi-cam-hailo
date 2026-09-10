@@ -17,8 +17,7 @@ namespace camera_firmware::rtsp {
 
 struct RtspDigestNonceDependencies {
   std::function<std::uint64_t()> now_seconds;
-  std::function<common::Result<common::SecureBytes>(std::size_t)>
-      random_bytes;
+  std::function<common::Result<common::SecureBytes>(std::size_t)> random_bytes;
   crypto::CryptoProvider* provider{nullptr};
 };
 
@@ -33,8 +32,7 @@ struct RtspDigestNonceValidation {
 class RtspDigestNonceManager {
  public:
   static common::Result<std::unique_ptr<RtspDigestNonceManager>> Create(
-      std::chrono::seconds ttl,
-      RtspDigestNonceDependencies dependencies = {},
+      std::chrono::seconds ttl, RtspDigestNonceDependencies dependencies = {},
       std::size_t replay_capacity = 4096);
 
   ~RtspDigestNonceManager();
@@ -48,11 +46,9 @@ class RtspDigestNonceManager {
   // with_qop=false is a legacy RFC 2069 authorization, which carries no nonce
   // count; a zero nonce_count is then accepted and the nonce becomes
   // single-use (a second use of the same nonce fails the monotonic check).
-  common::Result<bool> Commit(
-      std::string_view username,
-      const RtspDigestNonceValidation& validation,
-      std::uint32_t nonce_count,
-      bool with_qop = true);
+  common::Result<bool> Commit(std::string_view username,
+                              const RtspDigestNonceValidation& validation,
+                              std::uint32_t nonce_count, bool with_qop = true);
   void Clear() noexcept;
   [[nodiscard]] common::ZeroizeAudit zeroize_audit() const noexcept;
 

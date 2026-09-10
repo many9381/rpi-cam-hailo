@@ -1,10 +1,11 @@
 #include "camera_firmware/integrity/IntegritySigner.hpp"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -21,7 +22,6 @@ namespace {
 using camera_firmware::common::Error;
 using camera_firmware::common::Result;
 using camera_firmware::integrity::DigestRegularFile;
-using camera_firmware::integrity::IntegrityCategory;
 using camera_firmware::integrity::IntegrityEntry;
 using camera_firmware::integrity::IntegrityManifest;
 using camera_firmware::integrity::kMaximumIntegrityManifestEntries;
@@ -33,10 +33,14 @@ using camera_firmware::integrity::WriteIntegrityArtifactAtomically;
 
 constexpr std::size_t kMaximumPathBytes = 4096U;
 
-const Error kUsageError{"E_INTEGRITY_TOOL_USAGE", "Invalid integrity tool arguments"};
-const Error kEntryError{"E_INTEGRITY_TOOL_ENTRY", "Invalid integrity tool entry"};
-const Error kCreateError{"E_INTEGRITY_TOOL_CREATE", "Unable to create integrity manifest"};
-const Error kSignError{"E_INTEGRITY_TOOL_SIGN", "Unable to sign integrity manifest"};
+const Error kUsageError{"E_INTEGRITY_TOOL_USAGE",
+                        "Invalid integrity tool arguments"};
+const Error kEntryError{"E_INTEGRITY_TOOL_ENTRY",
+                        "Invalid integrity tool entry"};
+const Error kCreateError{"E_INTEGRITY_TOOL_CREATE",
+                         "Unable to create integrity manifest"};
+const Error kSignError{"E_INTEGRITY_TOOL_SIGN",
+                       "Unable to sign integrity manifest"};
 
 struct CreateOptions {
   std::filesystem::path output;
@@ -58,8 +62,7 @@ bool IsAbsoluteNormalizedPath(const std::filesystem::path& path) {
 
 bool IsValidId(std::string_view value) {
   if (value.empty() ||
-      value.size() >
-          camera_firmware::integrity::kMaximumIntegrityIdBytes) {
+      value.size() > camera_firmware::integrity::kMaximumIntegrityIdBytes) {
     return false;
   }
   for (const unsigned char character : value) {
@@ -127,7 +130,8 @@ Result<CreateOptions> ParseCreateOptions(int argc, char** argv) {
     }
     options.entries.push_back(entry.value());
   }
-  if (!has_output || options.entries.empty() || !IsAbsoluteNormalizedPath(options.output)) {
+  if (!has_output || options.entries.empty() ||
+      !IsAbsoluteNormalizedPath(options.output)) {
     return Result<CreateOptions>::ErrFromStaticLifetime(kUsageError);
   }
   return Result<CreateOptions>::Ok(std::move(options));
@@ -140,7 +144,8 @@ Result<SignOptions> ParseSignOptions(int argc, char** argv) {
   bool has_output = false;
   for (int index = 2; index < argc; ++index) {
     const std::string_view option(argv[index]);
-    if ((option != "--manifest" && option != "--private-key" && option != "--output") ||
+    if ((option != "--manifest" && option != "--private-key" &&
+         option != "--output") ||
         index + 1 >= argc) {
       return Result<SignOptions>::ErrFromStaticLifetime(kUsageError);
     }
@@ -178,14 +183,15 @@ Result<SignOptions> ParseSignOptions(int argc, char** argv) {
 }
 
 Result<std::string> UtcTimestamp() {
-  const std::time_t now = std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now());
-  std::tm utc {};
+  const std::time_t now =
+      std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm utc{};
   if (::gmtime_r(&now, &utc) == nullptr) {
     return Result<std::string>::ErrFromStaticLifetime(kCreateError);
   }
   std::array<char, 21U> output{};
-  if (std::strftime(output.data(), output.size(), "%Y-%m-%dT%H:%M:%SZ", &utc) == 0U) {
+  if (std::strftime(output.data(), output.size(), "%Y-%m-%dT%H:%M:%SZ", &utc) ==
+      0U) {
     return Result<std::string>::ErrFromStaticLifetime(kCreateError);
   }
   return Result<std::string>::Ok(output.data());
@@ -238,9 +244,7 @@ void PrintError(const Error& error) {
   (void)std::fputc('\n', stderr);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+int RunCommand(int argc, char** argv) {
   if (argc < 2) {
     PrintError(kUsageError);
     return 2;
@@ -268,8 +272,8 @@ int main(int argc, char** argv) {
     camera_firmware::crypto::OpenSslCryptoProvider provider;
     auto self_test = provider.SelfTest();
     if (!self_test.ok() || !self_test.value().passed) {
-      PrintError({"E_CRYPTO_UNAVAILABLE",
-                 "cryptographic provider self-test failed"});
+      PrintError(
+          {"E_CRYPTO_UNAVAILABLE", "cryptographic provider self-test failed"});
       return 1;
     }
     const auto signed_manifest = SignManifest(options.value(), provider);
@@ -281,4 +285,17 @@ int main(int argc, char** argv) {
   }
   PrintError(kUsageError);
   return 2;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  try {
+    return RunCommand(argc, argv);
+  } catch (const std::exception& error) {
+    PrintError({"E_UNHANDLED_EXCEPTION", error.what()});
+  } catch (...) {
+    PrintError({"E_UNHANDLED_EXCEPTION", "unknown exception"});
+  }
+  return 1;
 }
