@@ -125,7 +125,7 @@ class TemporaryFile {
     if (renamed_) {
       return true;
     }
-    int result;
+    int result = 0;
     do {
       result = ::unlinkat(directory_, name_.c_str(), 0);
     } while (result != 0 && errno == EINTR);
@@ -162,7 +162,7 @@ bool SameObject(const struct stat& first, const struct stat& second) noexcept {
 }
 
 int OpenDirectoryAtNoFollow(int parent, const char* name) noexcept {
-  int descriptor;
+  int descriptor = 0;
   do {
     descriptor =
         ::openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -272,7 +272,7 @@ bool VerifyDirectoryAnchorNoThrow(const std::filesystem::path& path,
 
 common::Result<std::optional<std::string>> ReadDocument(
     int directory_descriptor, uid_t expected_owner, std::string_view name) {
-  int raw_descriptor;
+  int raw_descriptor = 0;
   do {
     raw_descriptor = ::openat(directory_descriptor, name.data(),
                               O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
@@ -351,7 +351,7 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
   for (std::size_t attempt = 0U; attempt < kMaximumTemporaryNameAttempts;
        ++attempt) {
     std::string name = NextTemporaryName();
-    int raw_descriptor;
+    int raw_descriptor = 0;
     do {
       raw_descriptor =
           ::openat(directory_descriptor, name.c_str(),
@@ -367,7 +367,7 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
 
     UniqueFd descriptor(raw_descriptor);
     if (::fchmod(descriptor.get(), kSettingsFileMode) != 0) {
-      int result;
+      int result = 0;
       do {
         result = ::unlinkat(directory_descriptor, name.c_str(), 0);
       } while (result != 0 && errno == EINTR);
@@ -377,7 +377,7 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
     if (::fstat(descriptor.get(), &status) != 0 || !S_ISREG(status.st_mode) ||
         status.st_uid != expected_owner ||
         (status.st_mode & kPermissionAndSpecialModeMask) != kSettingsFileMode) {
-      int result;
+      int result = 0;
       do {
         result = ::unlinkat(directory_descriptor, name.c_str(), 0);
       } while (result != 0 && errno == EINTR);
@@ -392,7 +392,7 @@ common::Result<std::pair<UniqueFd, std::string>> CreateTemporaryFile(
 common::Result<std::unique_ptr<TemporaryFile>> PreserveCurrentDocument(
     int directory_descriptor, uid_t expected_owner) {
   struct stat current_status {};
-  int status_result;
+  int status_result = 0;
   do {
     status_result = ::fstatat(directory_descriptor, kSettingsName.data(),
                               &current_status, AT_SYMLINK_NOFOLLOW);
@@ -413,7 +413,7 @@ common::Result<std::unique_ptr<TemporaryFile>> PreserveCurrentDocument(
   for (std::size_t attempt = 0U; attempt < kMaximumTemporaryNameAttempts;
        ++attempt) {
     std::string backup_name = NextTemporaryName() + "-rollback";
-    int link_result;
+    int link_result = 0;
     do {
       link_result = ::linkat(directory_descriptor, kSettingsName.data(),
                              directory_descriptor, backup_name.c_str(), 0);
@@ -540,7 +540,7 @@ struct RuntimeSettingsStore::Impl {
       return DurableStoreError<void>();
     }
 
-    int link_result;
+    int link_result = 0;
     do {
       link_result = ::linkat(directory_descriptor, kSettingsName.data(),
                              directory_descriptor, kRollbackName.data(), 0);
@@ -619,7 +619,7 @@ struct RuntimeSettingsStore::Impl {
     const int directory_descriptor =
         directory_anchor.state_directory_descriptor();
     if (!has_previous_marker) {
-      int link_result;
+      int link_result = 0;
       do {
         link_result = ::linkat(directory_descriptor, kRollbackName.data(),
                                directory_descriptor, kPreviousName.data(), 0);
@@ -642,7 +642,7 @@ struct RuntimeSettingsStore::Impl {
       return true;
     }
 
-    int link_result;
+    int link_result = 0;
     do {
       link_result = ::linkat(directory_descriptor, kPreviousName.data(),
                              directory_descriptor, kRollbackName.data(), 0);

@@ -436,7 +436,7 @@ class LiveMp4PumpState final {
  public:
   static std::shared_ptr<LiveMp4PumpState> Create(
       LiveMp4StreamHandle stream, std::size_t maximum_response_bytes,
-      std::shared_ptr<SessionStreamLease> stream_lease) {
+      const std::shared_ptr<SessionStreamLease>& stream_lease) {
     struct OpenedStreamGuard {
       ~OpenedStreamGuard() {
         if (!armed || !stream.cancel) {
@@ -488,7 +488,7 @@ class LiveMp4PumpState final {
         start = true;
       }
     }
-    Close(std::move(close_immediately));
+    Close(close_immediately);
     return start;
   }
 
@@ -580,7 +580,7 @@ class LiveMp4PumpState final {
       }
       owner_manager = owner_manager_;
     }
-    Close(std::move(output));
+    Close(output);
     if (defer_media_cancel) {
       return;
     }
@@ -702,7 +702,8 @@ class LiveMp4PumpState final {
     return sent && !terminal_requested_.load(std::memory_order_acquire);
   }
 
-  static void Close(std::shared_ptr<trantor::AsyncStream> output) noexcept {
+  static void Close(
+      const std::shared_ptr<trantor::AsyncStream>& output) noexcept {
     if (!output) {
       return;
     }
@@ -1165,10 +1166,10 @@ Json::Value BuildLiveErrorJson(std::string_view code) {
 drogon::HttpResponsePtr BuildManagedLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id, std::size_t maximum_response_bytes,
-    std::shared_ptr<SessionStreamLease> stream_lease,
-    std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
-    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease =
-        {});
+    const std::shared_ptr<SessionStreamLease>& stream_lease,
+    const std::shared_ptr<internal::LiveMp4PumpManager>& pump_manager,
+    const std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>&
+        runtime_lease = {});
 
 CancellableLiveMp4OpenCallback AdaptLegacyLiveMp4OpenCallback(
     LiveMp4OpenCallback legacy_callback) {
@@ -1236,7 +1237,7 @@ class TerminalResponse {
   TerminalResponse(trantor::EventLoop* event_loop, DrogonCallback callback)
       : event_loop_(event_loop), callback_(std::move(callback)) {}
 
-  void Respond(drogon::HttpResponsePtr response) {
+  void Respond(const drogon::HttpResponsePtr& response) {
     if (completed_.exchange(true)) {
       return;
     }
@@ -1344,7 +1345,7 @@ class DetectionSsePendingResponse {
   std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>
   EndRuntimeCallbackLocked();
   void CompleteFromProvider(const ai::DetectionEvent* event);
-  void Finish(std::vector<ai::DetectionEvent> events);
+  void Finish(const std::vector<ai::DetectionEvent>& events);
 
   std::shared_ptr<State> state_;
 };
@@ -1361,8 +1362,8 @@ class HttpCallback {
   explicit HttpCallback(std::shared_ptr<TerminalResponse> terminal)
       : terminal_(std::move(terminal)) {}
 
-  void operator()(drogon::HttpResponsePtr response) const {
-    terminal_->Respond(std::move(response));
+  void operator()(const drogon::HttpResponsePtr& response) const {
+    terminal_->Respond(response);
   }
 
   void Queue(drogon::HttpResponsePtr response) const {
@@ -1452,18 +1453,18 @@ class AsyncAuthorization final
             event_loop, std::move(callback)))),
         continuation_(std::move(continuation)) {}
 
-  void Deny(common::Error error) {
+  void Deny(const common::Error& error) {
     auto response = SecurityErrorResponse(error);
-    Dispatch([response = std::move(response)](HttpCallback terminal,
-                                              AuthorizedContinuation) {
+    Dispatch([response = std::move(response)](const HttpCallback& terminal,
+                                              const AuthorizedContinuation&) {
       terminal(response);
     });
   }
 
   void Allow(AuthorizedRequest authorized_request) {
     Dispatch([authorized_request = std::move(authorized_request)](
-                 HttpCallback terminal,
-                 AuthorizedContinuation continuation) mutable {
+                 const HttpCallback& terminal,
+                 const AuthorizedContinuation& continuation) mutable {
       try {
         continuation(std::move(authorized_request), terminal);
       } catch (...) {
@@ -1821,7 +1822,7 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
           return;
         }
         std::optional<std::string> runtime_pending_peer;
-        security::DeviceState process_state;
+        security::DeviceState process_state = security::DeviceState::kDefault;
         {
           std::scoped_lock lock(StateMutex());
           runtime_pending_peer = GlobalState().runtime_pending_peer;
@@ -1986,7 +1987,7 @@ void QueueAuditLogResponse(trantor::EventLoop* event_loop,
 }
 
 void SubmitAuthorizedAuditStatus(security::Principal principal,
-                                 AuditLogDependencies dependencies,
+                                 const AuditLogDependencies& dependencies,
                                  const HttpCallback& callback,
                                  trantor::EventLoop* event_loop) {
   if (!dependencies.Available()) {
@@ -2014,7 +2015,7 @@ void SubmitAuthorizedAuditStatus(security::Principal principal,
 
 void SubmitAuthorizedAuditEvents(security::Principal principal,
                                  security::AuditQueryParameters parameters,
-                                 AuditLogDependencies dependencies,
+                                 const AuditLogDependencies& dependencies,
                                  const HttpCallback& callback,
                                  trantor::EventLoop* event_loop) {
   if (!dependencies.Available()) {
@@ -2042,7 +2043,7 @@ void SubmitAuthorizedAuditEvents(security::Principal principal,
 
 void HandleAuditStatusRequest(const drogon::HttpRequestPtr& request,
                               AuthorizedRequest authorized_request,
-                              HttpCallback callback) {
+                              const HttpCallback& callback) {
   try {
     if (!authorized_request.principal.has_value() ||
         authorized_request.principal->role !=
@@ -2072,7 +2073,7 @@ void HandleAuditStatusRequest(const drogon::HttpRequestPtr& request,
 
 void HandleAuditEventRequest(const drogon::HttpRequestPtr& request,
                              AuthorizedRequest authorized_request,
-                             HttpCallback callback) {
+                             const HttpCallback& callback) {
   try {
     if (!authorized_request.principal.has_value() ||
         authorized_request.principal->role !=
@@ -2112,14 +2113,14 @@ drogon::HttpResponsePtr RuntimeSettingsBusyResponse() {
 }
 
 void QueueRuntimeSettingsResult(
-    trantor::EventLoop* event_loop, HttpCallback callback,
+    trantor::EventLoop* event_loop, const HttpCallback& callback,
     common::Result<settings::RuntimeSettingsSnapshot> result) {
   if (result.ok()) {
-    QueueResponse(event_loop, std::move(callback),
+    QueueResponse(event_loop, callback,
                   BuildRuntimeSettingsSnapshotResponse(result.value()));
     return;
   }
-  QueueResponse(event_loop, std::move(callback),
+  QueueResponse(event_loop, callback,
                 BuildRuntimeSettingsErrorResponse(result.error()));
 }
 
@@ -2148,7 +2149,7 @@ drogon::Cookie SessionCookie(std::string value, int max_age = -1) {
   return cookie;
 }
 
-std::string CompactJson(Json::Value json) {
+std::string CompactJson(const Json::Value& json) {
   Json::StreamWriterBuilder writer;
   writer["indentation"] = "";
   return Json::writeString(writer, json);
@@ -2215,7 +2216,7 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/setup/status",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        security::DeviceState state;
+        security::DeviceState state = security::DeviceState::kDefault;
         bool runtime_pending = false;
         bool security_enabled = false;
         std::string initial_username;
@@ -2290,7 +2291,7 @@ void RegisterHandlers() {
             [request, actual_peer, secure_body,
              body_error = std::move(body_error)](
                 AuthorizedRequest authorized_request,
-                HttpCallback callback) mutable {
+                const HttpCallback& callback) mutable {
               // Claiming the administrator account requires proving you can
               // read the device's login screen. The generated password is the
               // whole of this feature's security value; if this endpoint stayed
@@ -2386,7 +2387,7 @@ void RegisterHandlers() {
                         state.device_state == security::DeviceState::kDefault;
                   }
                   if (!transition_allowed) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityErrorResponse(
                                       {"E_ACCESS_DENIED", "request denied"}));
                     return;
@@ -2394,7 +2395,7 @@ void RegisterHandlers() {
                   auto initialized =
                       bootstrap->Initialize(std::move(bootstrap_request));
                   if (!initialized.ok()) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   BootstrapErrorResponse(initialized.error()));
                     return;
                   }
@@ -2416,7 +2417,7 @@ void RegisterHandlers() {
                     GlobalState().initial_account.reset();
                   }
                   if (!runtime_start) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
@@ -2430,7 +2431,7 @@ void RegisterHandlers() {
                   }
                   if (!runtime_admitted || !runtime.has_value() ||
                       !runtime->ok()) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
@@ -2450,17 +2451,17 @@ void RegisterHandlers() {
                     }
                   }
                   if (!transition_completed) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
                   Json::Value response(Json::objectValue);
                   response["required"] = false;
                   response["runtime"] = "running";
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 JsonResponse(std::move(response)));
                 } catch (...) {
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 SecurityUnavailableResponse());
                 }
               });
@@ -2478,7 +2479,8 @@ void RegisterHandlers() {
         const std::string actual_peer = peer.ok() ? peer.value() : "";
         AuthorizeRequest(
             request, std::move(callback),
-            [request, actual_peer](AuthorizedRequest, HttpCallback callback) {
+            [request, actual_peer](const AuthorizedRequest&,
+                                   const HttpCallback& callback) {
               auto validated = ValidateEmptyJsonObject(
                   request->getBody(), request->getHeader("content-type"));
               if (!validated.ok()) {
@@ -2514,7 +2516,7 @@ void RegisterHandlers() {
                         state.device_state == security::DeviceState::kDefault;
                   }
                   if (!transition_allowed) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityErrorResponse(
                                       {"E_ACCESS_DENIED", "request denied"}));
                     return;
@@ -2529,7 +2531,7 @@ void RegisterHandlers() {
                   }
                   if (!runtime_admitted || !runtime.has_value() ||
                       !runtime->ok()) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
@@ -2549,17 +2551,17 @@ void RegisterHandlers() {
                     }
                   }
                   if (!transition_completed) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
                   Json::Value response(Json::objectValue);
                   response["required"] = false;
                   response["runtime"] = "running";
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 JsonResponse(std::move(response)));
                 } catch (...) {
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 SecurityUnavailableResponse());
                 }
               });
@@ -2594,7 +2596,8 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request, peer_ip, secure_body, body_error = std::move(body_error)](
-                AuthorizedRequest, HttpCallback callback) mutable {
+                const AuthorizedRequest&,
+                const HttpCallback& callback) mutable {
               if (body_error.has_value()) {
                 callback(SecurityErrorResponse(*body_error));
                 return;
@@ -2612,7 +2615,8 @@ void RegisterHandlers() {
               }
               std::shared_ptr<security::AuthService> auth;
               std::shared_ptr<BoundedWorker> worker;
-              security::DeviceState device_state;
+              security::DeviceState device_state =
+                  security::DeviceState::kDefault;
               {
                 std::scoped_lock lock(StateMutex());
                 auth = GlobalState().auth_service;
@@ -2653,7 +2657,7 @@ void RegisterHandlers() {
                   login_request.peer_ip = peer_ip;
                   auto login = auth->Login(std::move(login_request));
                   if (!login.ok()) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityErrorResponse(login.error()));
                     return;
                   }
@@ -2661,7 +2665,7 @@ void RegisterHandlers() {
                   const auto role = SerializeUserRole(result.role);
                   if (!role.has_value()) {
                     result.session_token.clear();
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityUnavailableResponse());
                     return;
                   }
@@ -2672,10 +2676,9 @@ void RegisterHandlers() {
                   auto response = JsonResponse(std::move(response_body));
                   response->addCookie(
                       SessionCookie(EncodeSessionToken(result.session_token)));
-                  QueueResponse(event_loop, std::move(callback),
-                                std::move(response));
+                  QueueResponse(event_loop, callback, std::move(response));
                 } catch (...) {
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 SecurityUnavailableResponse());
                 }
               });
@@ -2692,7 +2695,7 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request](AuthorizedRequest authorized_request,
-                      HttpCallback callback) {
+                      const HttpCallback& callback) {
               auto& principal = authorized_request.principal;
               if (!principal.has_value()) {
                 callback(SecurityErrorResponse(
@@ -2723,8 +2726,8 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest authorized_request,
-                      HttpCallback callback) {
+            [request](const AuthorizedRequest& authorized_request,
+                      const HttpCallback& callback) {
               try {
                 if (!authorized_request.principal.has_value()) {
                   callback(SecurityErrorResponse({"E_AUTHENTICATION_REQUIRED",
@@ -2751,7 +2754,7 @@ void RegisterHandlers() {
                         auto listed = service->ListUsers();
                         if (!listed.ok()) {
                           QueueResponse(
-                              event_loop, std::move(callback),
+                              event_loop, callback,
                               BuildUserManagementErrorResponse(listed.error()));
                           return;
                         }
@@ -2761,10 +2764,10 @@ void RegisterHandlers() {
                           users.append(BuildManagedUserJson(user));
                         }
                         body["users"] = std::move(users);
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -2807,8 +2810,8 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request, secure_body, body_error = std::move(body_error)](
-                AuthorizedRequest authorized_request,
-                HttpCallback callback) mutable {
+                const AuthorizedRequest& authorized_request,
+                const HttpCallback& callback) mutable {
               std::shared_ptr<ParsedCreateViewerRequest> parsed_request;
               try {
                 if (body_error.has_value()) {
@@ -2860,7 +2863,7 @@ void RegisterHandlers() {
                             std::move(parsed_request->password), context);
                         parsed_request->password.clear();
                         if (!created.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             created.error()));
                           return;
@@ -2868,11 +2871,11 @@ void RegisterHandlers() {
                         Json::Value body(Json::objectValue);
                         body["user"] = BuildManagedUserJson(created.value());
                         QueueResponse(
-                            event_loop, std::move(callback),
+                            event_loop, callback,
                             JsonResponse(std::move(body), k201Created));
                       } catch (...) {
                         parsed_request->password.clear();
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -2903,8 +2906,8 @@ void RegisterHandlers() {
          const std::string& raw_user_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_user_id](AuthorizedRequest authorized_request,
-                                   HttpCallback callback) {
+            [request, raw_user_id](const AuthorizedRequest& authorized_request,
+                                   const HttpCallback& callback) {
               try {
                 auto context =
                     BuildUserMutationContext(request, authorized_request);
@@ -2940,17 +2943,17 @@ void RegisterHandlers() {
                         auto updated = service->SetViewerEnabled(
                             user_id, enabled, context);
                         if (!updated.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             updated.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
                         body["updated"] = true;
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -2995,8 +2998,8 @@ void RegisterHandlers() {
             request, std::move(callback),
             [request, raw_user_id, secure_body,
              body_error = std::move(body_error)](
-                AuthorizedRequest authorized_request,
-                HttpCallback callback) mutable {
+                const AuthorizedRequest& authorized_request,
+                const HttpCallback& callback) mutable {
               std::shared_ptr<ParsedPasswordResetRequest> parsed_request;
               try {
                 if (body_error.has_value()) {
@@ -3050,17 +3053,17 @@ void RegisterHandlers() {
                         parsed_request->password.clear();
                         if (!reset.ok()) {
                           QueueResponse(
-                              event_loop, std::move(callback),
+                              event_loop, callback,
                               BuildUserManagementErrorResponse(reset.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
                         body["password_reset"] = true;
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
                         parsed_request->password.clear();
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3091,8 +3094,8 @@ void RegisterHandlers() {
          const std::string& raw_user_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_user_id](AuthorizedRequest authorized_request,
-                                   HttpCallback callback) {
+            [request, raw_user_id](const AuthorizedRequest& authorized_request,
+                                   const HttpCallback& callback) {
               try {
                 auto context =
                     BuildUserMutationContext(request, authorized_request);
@@ -3125,17 +3128,17 @@ void RegisterHandlers() {
                       try {
                         auto deleted = service->DeleteViewer(user_id, context);
                         if (!deleted.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             deleted.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
                         body["deleted"] = true;
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3158,7 +3161,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest, HttpCallback callback) {
+            [request](const AuthorizedRequest&, const HttpCallback& callback) {
               try {
                 const auto request_body =
                     ValidateEmptyRequestBody(request->getBody());
@@ -3191,15 +3194,15 @@ void RegisterHandlers() {
                         auto listed = service->ListManagementIps();
                         if (!listed.ok()) {
                           QueueResponse(
-                              event_loop, std::move(callback),
+                              event_loop, callback,
                               BuildUserManagementErrorResponse(listed.error()));
                           return;
                         }
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(BuildManagementIpListJson(
                                           listed.value(), current_peer_ip)));
                       } catch (...) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3223,8 +3226,8 @@ void RegisterHandlers() {
          const std::string& raw_role) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_role](AuthorizedRequest authorized_request,
-                                HttpCallback callback) {
+            [request, raw_role](const AuthorizedRequest& authorized_request,
+                                const HttpCallback& callback) {
               try {
                 auto role = ParseManagedRole(raw_role);
                 if (!role.ok()) {
@@ -3261,7 +3264,7 @@ void RegisterHandlers() {
                             role, std::move(address), context);
                         address.clear();
                         if (!created.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             created.error()));
                           return;
@@ -3270,11 +3273,11 @@ void RegisterHandlers() {
                         body["management_ip"] =
                             BuildManagementIpJson(created.value());
                         QueueResponse(
-                            event_loop, std::move(callback),
+                            event_loop, callback,
                             JsonResponse(std::move(body), drogon::k201Created));
                       } catch (...) {
                         address.clear();
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3298,8 +3301,9 @@ void RegisterHandlers() {
          const std::string& raw_role, const std::string& raw_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_role, raw_id](AuthorizedRequest authorized_request,
-                                        HttpCallback callback) {
+            [request, raw_role, raw_id](
+                const AuthorizedRequest& authorized_request,
+                const HttpCallback& callback) {
               try {
                 auto role = ParseManagedRole(raw_role);
                 auto management_ip_id = ParseManagedResourceId(raw_id);
@@ -3345,18 +3349,18 @@ void RegisterHandlers() {
                             context);
                         address.clear();
                         if (!updated.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             updated.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
                         body["updated"] = true;
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
                         address.clear();
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3380,8 +3384,9 @@ void RegisterHandlers() {
          const std::string& raw_role, const std::string& raw_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request, raw_role, raw_id](AuthorizedRequest authorized_request,
-                                        HttpCallback callback) {
+            [request, raw_role, raw_id](
+                const AuthorizedRequest& authorized_request,
+                const HttpCallback& callback) {
               try {
                 auto role = ParseManagedRole(raw_role);
                 auto management_ip_id = ParseManagedResourceId(raw_id);
@@ -3422,17 +3427,17 @@ void RegisterHandlers() {
                         auto deleted = service->DeleteManagementIp(
                             management_ip_id, role, context);
                         if (!deleted.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             deleted.error()));
                           return;
                         }
                         Json::Value body(Json::objectValue);
                         body["deleted"] = true;
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       JsonResponse(std::move(body)));
                       } catch (...) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3475,8 +3480,8 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request, secure_body, body_error = std::move(body_error)](
-                AuthorizedRequest authorized_request,
-                HttpCallback callback) mutable {
+                const AuthorizedRequest& authorized_request,
+                const HttpCallback& callback) mutable {
               std::shared_ptr<ParsedOwnPasswordRequest> parsed_request;
               try {
                 if (body_error.has_value()) {
@@ -3527,7 +3532,7 @@ void RegisterHandlers() {
                         parsed_request->current_password.clear();
                         parsed_request->replacement_password.clear();
                         if (!changed.ok()) {
-                          QueueResponse(event_loop, std::move(callback),
+                          QueueResponse(event_loop, callback,
                                         BuildUserManagementErrorResponse(
                                             changed.error()));
                           return;
@@ -3537,12 +3542,12 @@ void RegisterHandlers() {
                         body["logged_out"] = true;
                         auto response = JsonResponse(std::move(body));
                         response->addCookie(SessionCookie("", 0));
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       std::move(response));
                       } catch (...) {
                         parsed_request->current_password.clear();
                         parsed_request->replacement_password.clear();
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       BuildUserManagementErrorResponse(
                                           {"E_USER_MANAGEMENT_UNAVAILABLE",
                                            "user management unavailable"}));
@@ -3575,7 +3580,8 @@ void RegisterHandlers() {
         const std::string peer_ip = request->peerAddr().toIp();
         AuthorizeRequest(
             request, std::move(callback),
-            [request, peer_ip](AuthorizedRequest, HttpCallback callback) {
+            [request, peer_ip](const AuthorizedRequest&,
+                               const HttpCallback& callback) {
               auto token =
                   ParseSessionCookieHeaders(request->getRawCookieHeaders());
               if (!token.ok()) {
@@ -3604,7 +3610,7 @@ void RegisterHandlers() {
                       {secure_token->data(), secure_token->size()}, peer_ip);
                   secure_token->clear();
                   if (!logged_out.ok()) {
-                    QueueResponse(event_loop, std::move(callback),
+                    QueueResponse(event_loop, callback,
                                   SecurityErrorResponse(logged_out.error()));
                     return;
                   }
@@ -3612,11 +3618,10 @@ void RegisterHandlers() {
                   body["logged_out"] = true;
                   auto response = JsonResponse(std::move(body));
                   response->addCookie(SessionCookie("", 0));
-                  QueueResponse(event_loop, std::move(callback),
-                                std::move(response));
+                  QueueResponse(event_loop, callback, std::move(response));
                 } catch (...) {
                   secure_token->clear();
-                  QueueResponse(event_loop, std::move(callback),
+                  QueueResponse(event_loop, callback,
                                 SecurityUnavailableResponse());
                 }
               });
@@ -3652,7 +3657,8 @@ void RegisterHandlers() {
         AuthorizeRequest(
             request, std::move(callback),
             [request, peer_ip, secure_body, body_error = std::move(body_error)](
-                AuthorizedRequest, HttpCallback callback) mutable {
+                const AuthorizedRequest&,
+                const HttpCallback& callback) mutable {
               if (body_error.has_value()) {
                 callback(SecurityErrorResponse(*body_error));
                 return;
@@ -3699,19 +3705,19 @@ void RegisterHandlers() {
                       secure_password->clear();
                       secure_token->clear();
                       if (!renewed.ok()) {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       SecurityErrorResponse(renewed.error()));
                         return;
                       }
                       Json::Value body(Json::objectValue);
                       body["management_expires_at_seconds"] =
                           static_cast<Json::Int64>(renewed.value());
-                      QueueResponse(event_loop, std::move(callback),
+                      QueueResponse(event_loop, callback,
                                     JsonResponse(std::move(body)));
                     } catch (...) {
                       secure_password->clear();
                       secure_token->clear();
-                      QueueResponse(event_loop, std::move(callback),
+                      QueueResponse(event_loop, callback,
                                     SecurityUnavailableResponse());
                     }
                   });
@@ -3727,15 +3733,16 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/health",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(request, std::move(callback),
-                         [](AuthorizedRequest, HttpCallback callback) {
-                           std::string status;
-                           {
-                             std::scoped_lock lock(StateMutex());
-                             status = GlobalState().args.health_status;
-                           }
-                           callback(JsonResponse(BuildHealthJson(status)));
-                         });
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
+              std::string status;
+              {
+                std::scoped_lock lock(StateMutex());
+                status = GlobalState().args.health_status;
+              }
+              callback(JsonResponse(BuildHealthJson(status)));
+            });
       },
       {Get});
 
@@ -3744,10 +3751,10 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(request, AuditRouteCallback(std::move(callback)),
                          [request](AuthorizedRequest authorized_request,
-                                   HttpCallback callback) {
+                                   const HttpCallback& callback) {
                            HandleAuditStatusRequest(
                                request, std::move(authorized_request),
-                               std::move(callback));
+                               callback);
                          });
       },
       {Get});
@@ -3757,10 +3764,10 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(request, AuditRouteCallback(std::move(callback)),
                          [request](AuthorizedRequest authorized_request,
-                                   HttpCallback callback) {
+                                   const HttpCallback& callback) {
                            HandleAuditEventRequest(
                                request, std::move(authorized_request),
-                               std::move(callback));
+                               callback);
                          });
       },
       {Get});
@@ -3770,7 +3777,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               const auto dependencies = CopySystemProtectionDependencies();
               if (!dependencies.Available()) {
                 callback(BuildSystemProtectionStatusResponse({}));
@@ -3798,15 +3805,15 @@ void RegisterHandlers() {
       },
       {Get});
 
-  const auto register_protection_start = [](std::string path,
+  const auto register_protection_start = [](const std::string& path,
                                             security::ProtectionSuite suite) {
     app().registerHandler(
-        std::move(path),
+        path,
         [suite](const HttpRequestPtr& request, DrogonCallback&& callback) {
           AuthorizeRequest(
               request, std::move(callback),
-              [request, suite](AuthorizedRequest authorized_request,
-                               HttpCallback callback) {
+              [request, suite](const AuthorizedRequest& authorized_request,
+                               const HttpCallback& callback) {
                 const auto dependencies = CopySystemProtectionDependencies();
                 if (!dependencies.Available()) {
                   callback(BuildSystemProtectionStartResponse({}));
@@ -3856,7 +3863,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -3879,7 +3886,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest, HttpCallback callback) {
+            [request](const AuthorizedRequest&, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -3900,11 +3907,10 @@ void RegisterHandlers() {
                           try {
                             auto result = save(update.expected_revision,
                                                std::move(update.settings));
-                            QueueRuntimeSettingsResult(event_loop,
-                                                       std::move(callback),
+                            QueueRuntimeSettingsResult(event_loop, callback,
                                                        std::move(result));
                           } catch (...) {
-                            QueueResponse(event_loop, std::move(callback),
+                            QueueResponse(event_loop, callback,
                                           RuntimeSettingsUnavailableResponse());
                           }
                         });
@@ -3917,7 +3923,7 @@ void RegisterHandlers() {
                     return {};
                   });
               if (response) {
-                callback(std::move(response));
+                callback(response);
               }
             });
       },
@@ -3928,7 +3934,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest, HttpCallback callback) {
+            [request](const AuthorizedRequest&, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -3954,7 +3960,7 @@ void RegisterHandlers() {
                             [apply = dependencies.apply,
                              protection_runtime_control_gate =
                                  dependencies.protection_runtime_control_gate,
-                             command = std::move(*command), callback,
+                             command = *command, callback,
                              event_loop = app().getLoop()]() mutable {
                               try {
                                 auto response = internal::
@@ -3963,11 +3969,11 @@ void RegisterHandlers() {
                                           return BuildRuntimeSettingsApplyResponse(
                                               apply(command.expected_revision));
                                         });
-                                QueueResponse(event_loop, std::move(callback),
+                                QueueResponse(event_loop, callback,
                                               std::move(response));
                               } catch (...) {
                                 QueueResponse(
-                                    event_loop, std::move(callback),
+                                    event_loop, callback,
                                     RuntimeSettingsUnavailableResponse());
                               }
                             });
@@ -3980,7 +3986,7 @@ void RegisterHandlers() {
                         return {};
                       });
               if (response) {
-                callback(std::move(response));
+                callback(response);
               }
             });
       },
@@ -3991,7 +3997,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest, HttpCallback callback) {
+            [request](const AuthorizedRequest&, HttpCallback callback) {
               const auto dependencies = CopyRuntimeSettingsDependencies();
               if (!dependencies.Available()) {
                 callback(RuntimeSettingsUnavailableResponse());
@@ -4011,11 +4017,10 @@ void RegisterHandlers() {
                          event_loop = app().getLoop()]() mutable {
                           try {
                             auto result = discard(command.expected_revision);
-                            QueueRuntimeSettingsResult(event_loop,
-                                                       std::move(callback),
+                            QueueRuntimeSettingsResult(event_loop, callback,
                                                        std::move(result));
                           } catch (...) {
-                            QueueResponse(event_loop, std::move(callback),
+                            QueueResponse(event_loop, callback,
                                           RuntimeSettingsUnavailableResponse());
                           }
                         });
@@ -4028,7 +4033,7 @@ void RegisterHandlers() {
                     return {};
                   });
               if (response) {
-                callback(std::move(response));
+                callback(response);
               }
             });
       },
@@ -4039,7 +4044,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               CameraStatusProvider provider;
               {
                 std::scoped_lock lock(StateMutex());
@@ -4064,7 +4069,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               Json::Value body(Json::objectValue);
               Json::Value cameras(Json::arrayValue);
               CameraStatusProvider provider;
@@ -4096,7 +4101,8 @@ void RegisterHandlers() {
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [camera_id](AuthorizedRequest, HttpCallback callback) {
+            [camera_id](const AuthorizedRequest&,
+                        const HttpCallback& callback) {
               SnapshotCallback snapshot_callback;
               {
                 std::scoped_lock lock(StateMutex());
@@ -4113,8 +4119,8 @@ void RegisterHandlers() {
          const std::string& camera_id) {
         AuthorizeRequest(
             request, std::move(callback),
-            [camera_id](AuthorizedRequest authorized_request,
-                        HttpCallback callback) mutable {
+            [camera_id](const AuthorizedRequest& authorized_request,
+                        const HttpCallback& callback) mutable {
               CancellableLiveMp4OpenCallback live_stream_callback;
               std::shared_ptr<internal::LiveMp4PumpManager> pump_manager;
               std::shared_ptr<internal::RuntimeCallbackLifecycle>
@@ -4146,11 +4152,11 @@ void RegisterHandlers() {
                 callback(SecurityUnavailableResponse());
                 return;
               }
-              callback(BuildManagedLiveMp4Response(
-                  live_stream_callback, camera_id,
-                  kDefaultLiveMp4ResponseByteLimit,
-                  std::move(authorized_request.stream_lease),
-                  std::move(pump_manager), std::move(runtime_lease)));
+              callback(
+                  BuildManagedLiveMp4Response(live_stream_callback, camera_id,
+                                              kDefaultLiveMp4ResponseByteLimit,
+                                              authorized_request.stream_lease,
+                                              pump_manager, runtime_lease));
             });
       },
       {Get});
@@ -4158,16 +4164,16 @@ void RegisterHandlers() {
   app().registerHandler(
       "/api/v1/ai/detections",
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
-        AuthorizeRequest(request, std::move(callback),
-                         [](AuthorizedRequest, HttpCallback callback) {
-                           DetectionSnapshotProvider provider;
-                           {
-                             std::scoped_lock lock(StateMutex());
-                             provider =
-                                 GlobalState().args.detection_snapshot_provider;
-                           }
-                           callback(BuildDetectionSnapshotResponse(provider));
-                         });
+        AuthorizeRequest(
+            request, std::move(callback),
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
+              DetectionSnapshotProvider provider;
+              {
+                std::scoped_lock lock(StateMutex());
+                provider = GlobalState().args.detection_snapshot_provider;
+              }
+              callback(BuildDetectionSnapshotResponse(provider));
+            });
       },
       {Get});
 
@@ -4176,7 +4182,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [request](AuthorizedRequest, HttpCallback callback) {
+            [request](const AuthorizedRequest&, HttpCallback callback) {
               RuntimeStartCallback restart;
               ProtectionRuntimeAllowedCallback protection_runtime_allowed;
               ProtectionRuntimeControlGate protection_runtime_control_gate;
@@ -4217,10 +4223,10 @@ void RegisterHandlers() {
                                           return BuildRuntimeRestartResponse(
                                               restart);
                                         });
-                                QueueResponse(event_loop, std::move(callback),
+                                QueueResponse(event_loop, callback,
                                               std::move(response));
                               } catch (...) {
-                                QueueResponse(event_loop, std::move(callback),
+                                QueueResponse(event_loop, callback,
                                               SecurityUnavailableResponse());
                               }
                             });
@@ -4228,7 +4234,7 @@ void RegisterHandlers() {
                                               : SecurityUnavailableResponse();
                       });
               if (response) {
-                callback(std::move(response));
+                callback(response);
               }
             });
       },
@@ -4239,7 +4245,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               AiControlCallback restart;
               AiStatusProvider status;
               ProtectionRuntimeAllowedCallback protection_runtime_allowed;
@@ -4259,7 +4265,7 @@ void RegisterHandlers() {
                   protection_runtime_allowed,
                   [] { return drogon::HttpResponsePtr{}; });
               if (admitted) {
-                callback(std::move(admitted));
+                callback(admitted);
                 return;
               }
               auto dispatched =
@@ -4271,7 +4277,7 @@ void RegisterHandlers() {
                       },
                       [callback, event_loop = app().getLoop()](
                           drogon::HttpResponsePtr response) mutable {
-                        QueueResponse(event_loop, std::move(callback),
+                        QueueResponse(event_loop, callback,
                                       std::move(response));
                       });
               if (!dispatched.ok()) {
@@ -4361,7 +4367,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [](const AuthorizedRequest&, const HttpCallback& callback) {
               const config::AppConfig* config = nullptr;
               std::string public_base_url;
               SecureStreamDiagnosticsProvider diagnostics_provider;
@@ -4752,7 +4758,7 @@ bool DetectionSsePendingResponse::CompleteInitialSnapshotIfChanged(
                    !state_->terminal_claimed;
   }
   if (finish_snapshot) {
-    Finish(std::move(snapshot));
+    Finish(snapshot);
   }
   return can_continue;
 }
@@ -4809,7 +4815,7 @@ void DetectionSsePendingResponse::CompleteFromProvider(
   } catch (...) {
     snapshot.clear();
   }
-  Finish(std::move(snapshot));
+  Finish(snapshot);
 }
 
 void DetectionSsePendingResponse::EndRuntimeCallback() noexcept {
@@ -4837,7 +4843,7 @@ void DetectionSsePendingResponse::Revoke() {
 }
 
 void DetectionSsePendingResponse::Finish(
-    std::vector<ai::DetectionEvent> events) {
+    const std::vector<ai::DetectionEvent>& events) {
   ResponseCallback callback;
   ai::DetectionBus::Subscription subscription;
   std::shared_ptr<SessionStreamLease> stream_lease;
@@ -5356,21 +5362,21 @@ drogon::HttpResponsePtr BuildSnapshotResponse(
 drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id, std::size_t maximum_response_bytes,
-    std::shared_ptr<SessionStreamLease> stream_lease) {
+    const std::shared_ptr<SessionStreamLease>& stream_lease) {
   static const auto pump_manager =
       std::make_shared<internal::LiveMp4PumpManager>();
   return BuildManagedLiveMp4Response(live_stream_callback, camera_id,
-                                     maximum_response_bytes,
-                                     std::move(stream_lease), pump_manager);
+                                     maximum_response_bytes, stream_lease,
+                                     pump_manager);
 }
 
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id, std::size_t maximum_response_bytes,
-    std::shared_ptr<SessionStreamLease> stream_lease) {
+    const std::shared_ptr<SessionStreamLease>& stream_lease) {
   auto cancellable = AdaptLegacyLiveMp4OpenCallback(live_stream_callback);
-  return BuildCancellableLiveMp4Response(
-      cancellable, camera_id, maximum_response_bytes, std::move(stream_lease));
+  return BuildCancellableLiveMp4Response(cancellable, camera_id,
+                                         maximum_response_bytes, stream_lease);
 }
 
 namespace {
@@ -5378,9 +5384,10 @@ namespace {
 drogon::HttpResponsePtr BuildManagedLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id, std::size_t maximum_response_bytes,
-    std::shared_ptr<SessionStreamLease> stream_lease,
-    std::shared_ptr<internal::LiveMp4PumpManager> pump_manager,
-    std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease> runtime_lease) {
+    const std::shared_ptr<SessionStreamLease>& stream_lease,
+    const std::shared_ptr<internal::LiveMp4PumpManager>& pump_manager,
+    const std::shared_ptr<internal::RuntimeCallbackLifecycle::Lease>&
+        runtime_lease) {
   if (!live_stream_callback) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);
@@ -5413,7 +5420,7 @@ drogon::HttpResponsePtr BuildManagedLiveMp4Response(
   std::shared_ptr<internal::LiveMp4PumpState> pump;
   try {
     pump = internal::LiveMp4PumpState::Create(
-        std::move(stream), maximum_response_bytes, std::move(stream_lease));
+        std::move(stream), maximum_response_bytes, stream_lease);
   } catch (...) {
     return JsonResponse(BuildLiveErrorJson("E_LIVE_UNAVAILABLE"),
                         drogon::k503ServiceUnavailable);

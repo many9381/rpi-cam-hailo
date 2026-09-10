@@ -57,7 +57,7 @@ class AiModelRunner {
   struct SharedState;
 
   void Run();
-  void ProcessFrame(media::FrameLease frame);
+  void ProcessFrame(const media::FrameLease& frame);
   void NotifySubmissionResolved(bool accepted) const noexcept;
   static void RecordDrop(const std::shared_ptr<SharedState>& state,
                          const common::Error& error);

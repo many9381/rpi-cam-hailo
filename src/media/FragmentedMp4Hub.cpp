@@ -61,7 +61,7 @@ struct FragmentedMp4Hub::Impl {
   ~Impl() { Stop(); }
 
   Result<void> Start(const FragmentedMp4HubConfig& requested_config) {
-    const auto validation = ValidateConfig(requested_config);
+    auto validation = ValidateConfig(requested_config);
     if (!validation.ok()) {
       return validation;
     }
@@ -99,7 +99,7 @@ struct FragmentedMp4Hub::Impl {
       assembler = std::move(next_assembler);
     }
 
-    const auto pipeline_result = CreatePipeline();
+    auto pipeline_result = CreatePipeline();
     if (!pipeline_result.ok()) {
       CleanupFailedStart(pipeline_result.error().code,
                          pipeline_result.error().message);

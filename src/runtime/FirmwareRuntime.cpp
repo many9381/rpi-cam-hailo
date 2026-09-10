@@ -121,7 +121,7 @@ struct ProductionRuntimeGraph {
 // of dependency lambdas around one ProductionRuntimeGraph, so the wiring
 // lives here once instead of being duplicated.
 FirmwareRuntimeDependencies BuildDependenciesForGraph(
-    std::shared_ptr<ProductionRuntimeGraph> graph) {
+    const std::shared_ptr<ProductionRuntimeGraph>& graph) {
   using common::Logger;
 
   FirmwareRuntimeDependencies dependencies;
@@ -279,7 +279,7 @@ FirmwareRuntime::~FirmwareRuntime() {
 
 common::Result<void> FirmwareRuntime::ValidateCandidateConfig(
     const config::AppConfig& config) {
-  const auto semantics = config::ValidateAppConfigSemantics(config);
+  auto semantics = config::ValidateAppConfigSemantics(config);
   if (!semantics.ok()) {
     return semantics;
   }
@@ -575,7 +575,7 @@ std::chrono::milliseconds FirmwareRuntime::SnapshotMaximumAge(
 FirmwareRuntimeDependencies FirmwareRuntime::BuildProductionDependencies(
     const config::AppConfig& config) {
   auto graph = std::make_shared<ProductionRuntimeGraph>(config);
-  return BuildDependenciesForGraph(std::move(graph));
+  return BuildDependenciesForGraph(graph);
 }
 
 FirmwareRuntime::ProductionSubStreamHandles

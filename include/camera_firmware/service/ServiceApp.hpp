@@ -234,12 +234,12 @@ drogon::HttpResponsePtr BuildCancellableLiveMp4Response(
     const CancellableLiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id,
     std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit,
-    std::shared_ptr<SessionStreamLease> stream_lease = {});
+    const std::shared_ptr<SessionStreamLease>& stream_lease = {});
 drogon::HttpResponsePtr BuildLiveMp4Response(
     const LiveMp4OpenCallback& live_stream_callback,
     const std::string& camera_id,
     std::size_t maximum_response_bytes = kDefaultLiveMp4ResponseByteLimit,
-    std::shared_ptr<SessionStreamLease> stream_lease = {});
+    const std::shared_ptr<SessionStreamLease>& stream_lease = {});
 
 namespace internal {
 

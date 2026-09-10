@@ -137,7 +137,7 @@ class UniqueFd {
 };
 
 int OpenDirectoryNoFollow(const std::filesystem::path& path) noexcept {
-  int descriptor;
+  int descriptor = 0;
   do {
     descriptor =
         ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -146,7 +146,7 @@ int OpenDirectoryNoFollow(const std::filesystem::path& path) noexcept {
 }
 
 int OpenDirectoryAtNoFollow(int parent_fd, const char* name) noexcept {
-  int descriptor;
+  int descriptor = 0;
   do {
     descriptor = ::openat(parent_fd, name,
                           O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -174,7 +174,7 @@ bool SameFileIdentity(const struct stat& first,
 }
 
 int DuplicateFd(int descriptor) noexcept {
-  int duplicate;
+  int duplicate = 0;
   do {
     duplicate = ::fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
   } while (duplicate < 0 && errno == EINTR);
@@ -182,7 +182,7 @@ int DuplicateFd(int descriptor) noexcept {
 }
 
 bool FsyncFd(int descriptor) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::fsync(descriptor);
   } while (result != 0 && errno == EINTR);
@@ -190,7 +190,7 @@ bool FsyncFd(int descriptor) noexcept {
 }
 
 void UnlinkAt(int parent_fd, const char* name) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::unlinkat(parent_fd, name, 0);
   } while (result != 0 && errno == EINTR);
@@ -350,7 +350,7 @@ common::Result<AuditInsertionState> ReadAuditInsertionState(sqlite3* database) {
   state.current_events = static_cast<std::uint64_t>(current_events);
   state.rotated_event_count = static_cast<std::uint64_t>(rotated_event_count);
   state.next_sequence = sequence_floor.has_value() ? *sequence_floor + 1 : 1;
-  return common::Result<AuditInsertionState>::Ok(std::move(state));
+  return common::Result<AuditInsertionState>::Ok(state);
 }
 
 common::Result<void> RotateAuditEvents(sqlite3* database,
@@ -702,7 +702,7 @@ common::Result<UniqueFd> OpenAnchoredDatabase(int state_directory_fd,
   if (!entry_exists) {
     flags |= O_CREAT | O_EXCL;
   }
-  int descriptor;
+  int descriptor = 0;
   do {
     descriptor =
         ::openat(state_directory_fd, "security.db", flags, kDatabaseMode);
@@ -1061,7 +1061,7 @@ bool ReadForeignKeys(sqlite3* database, const char* table_name,
     }
     return false;
   }
-  int step;
+  int step = 0;
   while ((step = ::sqlite3_step(statement)) == SQLITE_ROW) {
     const auto* table = ::sqlite3_column_text(statement, 0);
     const auto* from = ::sqlite3_column_text(statement, 1);
@@ -2588,7 +2588,7 @@ bool ValidateStoreAnchors(const std::filesystem::path& state_directory,
     return false;
   }
 
-  int descriptor;
+  int descriptor = 0;
   do {
     descriptor = ::openat(state_directory_fd, "security.db",
                           O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -3272,7 +3272,7 @@ SecurityStore::ReadAuditStatus() const {
   if (!committed.ok()) {
     return failure();
   }
-  return common::Result<AuditStatusSnapshot>::Ok(std::move(snapshot));
+  return common::Result<AuditStatusSnapshot>::Ok(snapshot);
 }
 
 common::Result<SecurityStore::AuditEventQueryResult>
@@ -3410,13 +3410,18 @@ SecurityStore::ReadAuditEvents(const AuditEventQuery& query) const {
   }
   if (query.cursor.has_value()) {
     if (query.cursor->integer_key.has_value()) {
-      if (!bind_integer(*query.cursor->integer_key) ||
-          !bind_integer(*query.cursor->integer_key)) {
+      // The cursor value fills two placeholders, hence two binds.
+      if (!bind_integer(*query.cursor->integer_key)) {
+        return failure();
+      }
+      if (!bind_integer(*query.cursor->integer_key)) {
         return failure();
       }
     } else if (query.cursor->text_key.has_value()) {
-      if (!bind_text(*query.cursor->text_key) ||
-          !bind_text(*query.cursor->text_key)) {
+      if (!bind_text(*query.cursor->text_key)) {
+        return failure();
+      }
+      if (!bind_text(*query.cursor->text_key)) {
         return failure();
       }
     } else {
@@ -4488,7 +4493,7 @@ SecurityStore::DeleteExpiredSessions(Transaction& transaction,
     }
     return failure();
   }
-  int step;
+  int step = 0;
   while ((step = ::sqlite3_step(statement)) == SQLITE_ROW) {
     const auto* token_hash =
         static_cast<const unsigned char*>(::sqlite3_column_blob(statement, 0));
@@ -5040,7 +5045,7 @@ common::Result<StoredManagedUser> SecurityStore::InsertViewer(
                                          "user management transaction failed");
   }
   auto transaction = std::move(started).value();
-  const auto reject = [&](std::string code, std::string detail) {
+  const auto reject = [&](std::string code, const std::string& detail) {
     auto audited =
         InsertAuditEvent(transaction, now_seconds, "viewer_created", "failure",
                          context.actor_user_id, context.normalized_peer_ip,
@@ -5153,7 +5158,7 @@ common::Result<CommittedRevocation> SecurityStore::SetViewerEnabled(
     }
     const std::string_view event =
         enabled ? "viewer_enabled" : "viewer_disabled";
-    const auto reject = [&](std::string code, std::string detail) {
+    const auto reject = [&](std::string code, const std::string& detail) {
       auto audited = InsertAuditEvent(
           transaction, now_seconds, event, "failure", context.actor_user_id,
           context.normalized_peer_ip, detail, "user", subject);
@@ -5286,7 +5291,7 @@ common::Result<CommittedRevocation> SecurityStore::ReplacePasswordIfCurrent(
       kind == PasswordMutationKind::kAdministratorReset
           ? "viewer_password_reset"
           : "password_changed";
-  const auto reject = [&](std::string code, std::string detail) {
+  const auto reject = [&](std::string code, const std::string& detail) {
     auto audited =
         InsertAuditEvent(transaction, now_seconds, event, "failure",
                          context.actor_user_id, context.normalized_peer_ip,
@@ -5463,7 +5468,7 @@ common::Result<CommittedRevocation> SecurityStore::DeleteViewer(
     } else if (row != SQLITE_DONE) {
       return UserMutationUnavailable<CommittedRevocation>(transaction);
     }
-    const auto reject = [&](std::string code, std::string detail) {
+    const auto reject = [&](std::string code, const std::string& detail) {
       auto audited =
           InsertAuditEvent(transaction, now_seconds, "viewer_deleted",
                            "failure", context.actor_user_id,
@@ -5572,7 +5577,7 @@ common::Result<StoredManagementIp> SecurityStore::InsertManagementIp(
                                           "user management transaction failed");
   }
   auto transaction = std::move(started).value();
-  const auto reject = [&](std::string code, std::string detail) {
+  const auto reject = [&](std::string code, const std::string& detail) {
     auto audited = InsertAuditEvent(
         transaction, now_seconds, "management_ip_created", "failure",
         context.actor_user_id, context.normalized_peer_ip, detail,
@@ -5691,7 +5696,7 @@ common::Result<CommittedRevocation> SecurityStore::UpdateManagementIp(
     std::string audit_subject = stored_role.has_value()
                                     ? old_normalized_ip
                                     : std::to_string(management_ip_id);
-    const auto reject = [&](std::string code, std::string detail,
+    const auto reject = [&](std::string code, const std::string& detail,
                             std::string_view subject) {
       auto audited = InsertAuditEvent(
           transaction, now_seconds, "management_ip_updated", "failure",
@@ -5852,7 +5857,7 @@ common::Result<CommittedRevocation> SecurityStore::DeleteManagementIp(
     const std::string audit_subject = stored_role.has_value()
                                           ? old_normalized_ip
                                           : std::to_string(management_ip_id);
-    const auto reject = [&](std::string code, std::string detail) {
+    const auto reject = [&](std::string code, const std::string& detail) {
       auto audited = InsertAuditEvent(
           transaction, now_seconds, "management_ip_deleted", "failure",
           context.actor_user_id, context.normalized_peer_ip, detail,

@@ -208,7 +208,7 @@ void AiModelRunner::Run() {
     }
 
     if (frame.has_value()) {
-      ProcessFrame(std::move(*frame));
+      ProcessFrame(*frame);
       // If ProcessFrame dropped the frame without submitting (backend
       // unavailable, invalid frame, preprocess failure), no async
       // completion will fire, so re-arm the pull demand here. When it did
@@ -229,7 +229,7 @@ void AiModelRunner::Run() {
   }
 }
 
-void AiModelRunner::ProcessFrame(media::FrameLease frame) {
+void AiModelRunner::ProcessFrame(const media::FrameLease& frame) {
   if (backend_ == nullptr) {
     RecordDrop(state_,
                {"E_AI_BACKEND_UNAVAILABLE", "AI backend is unavailable"});
@@ -245,7 +245,7 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
     return;
   }
 
-  const media::FrameHandle source_frame = frame.handle();
+  const media::FrameHandle& source_frame = frame.handle();
   // Recycled canvas: released back to the pool by its deleter once the last
   // holder (normally the Hailo completion callback) drops it.
   auto input_buffer = canvas_pool_->Acquire();

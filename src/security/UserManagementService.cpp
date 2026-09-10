@@ -411,7 +411,8 @@ common::Result<void> UserManagementService::ResetViewerPassword(
     }
     auto snapshot = std::move(read).value();
     const std::string subject = snapshot.canonical_username;
-    const auto fail_after_snapshot = [&](std::string code, std::string detail) {
+    const auto fail_after_snapshot = [&](std::string code,
+                                         const std::string& detail) {
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "viewer_password_reset", detail, subject,
                          context)
@@ -423,7 +424,7 @@ common::Result<void> UserManagementService::ResetViewerPassword(
     };
     auto policy = ValidatePassword(snapshot.canonical_username, password);
     if (!policy.ok()) {
-      const auto error = policy.error();
+      const auto& error = policy.error();
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "viewer_password_reset",
                          "password_policy", subject, context)
@@ -535,7 +536,8 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     }
     auto snapshot = std::move(read).value();
     const std::string subject = snapshot.canonical_username;
-    const auto fail_after_snapshot = [&](std::string code, std::string detail) {
+    const auto fail_after_snapshot = [&](std::string code,
+                                         const std::string& detail) {
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "password_changed", detail, subject,
                          context)
@@ -558,7 +560,7 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     auto policy =
         ValidatePassword(snapshot.canonical_username, replacement_password);
     if (!policy.ok()) {
-      const auto error = policy.error();
+      const auto& error = policy.error();
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "password_changed", "password_policy",
                          subject, context)

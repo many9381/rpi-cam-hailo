@@ -556,7 +556,7 @@ common::Result<RtspDigestNonceValidation> RtspDigestNonceManager::Validate(
                             : RtspDigestNonceStatus::kValid;
     std::copy_n(nonce_id.value().data(), validation.nonce_id.size(),
                 validation.nonce_id.begin());
-    return common::Result<RtspDigestNonceValidation>::Ok(std::move(validation));
+    return common::Result<RtspDigestNonceValidation>::Ok(validation);
   } catch (...) {
     return NonceFailure<RtspDigestNonceValidation>(kOperationFailed);
   }

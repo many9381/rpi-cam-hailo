@@ -108,7 +108,7 @@ void ManagedFirmwareRuntime::Stop() {
 
 RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
     const config::AppConfig& candidate_config,
-    std::function<common::Result<void>()> durable_promote) {
+    const std::function<common::Result<void>()>& durable_promote) {
   std::lock_guard command_lock(command_mutex_);
   const auto previous = ReadSnapshot();
   const bool running = previous.state == ManagedRuntimeState::kRunning &&
@@ -135,7 +135,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
 
   auto built = BuildRuntime(candidate_config);
   if (!built.ok()) {
-    const common::Error error = built.error();
+    const common::Error& error = built.error();
     const bool restored = RestorePrevious(previous.runtime);
     return {RuntimeReplacementResult::Outcome::kCandidateFailed, restored,
             error};
@@ -151,7 +151,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
 
   auto started = StartRuntime(candidate);
   if (!started.ok()) {
-    const common::Error error = started.error();
+    const common::Error& error = started.error();
     StopRuntime(candidate);
     const bool restored = RestorePrevious(previous.runtime);
     return {RuntimeReplacementResult::Outcome::kCandidateFailed, restored,
@@ -166,7 +166,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
         PromotionError("runtime configuration promotion failed"));
   }
   if (!promoted.ok()) {
-    const common::Error error = promoted.error();
+    const common::Error& error = promoted.error();
     StopRuntime(candidate);
     const bool restored = RestorePrevious(previous.runtime);
     return {RuntimeReplacementResult::Outcome::kCommitFailed, restored, error};

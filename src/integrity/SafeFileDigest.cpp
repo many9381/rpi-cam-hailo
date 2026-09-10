@@ -143,7 +143,7 @@ int HexValue(char value) noexcept {
 }
 
 common::Result<Sha256Digest> DigestRegularFileImpl(
-    const std::filesystem::path& path, DigestReadHook hook) {
+    const std::filesystem::path& path, const DigestReadHook& hook) {
   UniqueFd descriptor(
       OpenNoFollow(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (descriptor.get() < 0) {
@@ -237,8 +237,8 @@ common::Result<Sha256Digest> DigestRegularFile(
 
 namespace testing {
 common::Result<Sha256Digest> DigestRegularFileWithReadHook(
-    const std::filesystem::path& path, DigestReadHook hook) {
-  return DigestRegularFileImpl(path, std::move(hook));
+    const std::filesystem::path& path, const DigestReadHook& hook) {
+  return DigestRegularFileImpl(path, hook);
 }
 
 }  // namespace testing

@@ -25,9 +25,9 @@ MODE="${1:-all}"
 BUILD_DIR="${CF_CI_BUILD_DIR:-$ROOT/build-ci}"
 JOBS="${JOBS:-$(nproc)}"
 
-# Findings from these check families fail the gate; the rest of .clang-tidy is
-# reported as warnings.
-TIDY_ERRORS='bugprone-*,cert-*,clang-analyzer-*,concurrency-*'
+# Every enabled clang-tidy check fails the gate: the tree carries zero
+# findings since the 2026-09-10 warning pass, so any new one is a regression.
+TIDY_ERRORS='*'
 
 resolve_tool() {  # resolve_tool <name> <override>
   local name="$1" override="$2" candidate major

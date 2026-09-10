@@ -357,7 +357,7 @@ common::Result<CredentialState> ParseCredentialBytes(
 }
 
 int OpenReadOnlyNoFollow(const std::filesystem::path& path) noexcept {
-  int fd;
+  int fd = 0;
   do {
     fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   } while (fd < 0 && errno == EINTR);
@@ -365,7 +365,7 @@ int OpenReadOnlyNoFollow(const std::filesystem::path& path) noexcept {
 }
 
 bool FstatNoIntr(int fd, struct stat* status) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::fstat(fd, status);
   } while (result != 0 && errno == EINTR);
@@ -452,7 +452,7 @@ common::Result<LoadedCredentialState> LoadCredentialFile(
 }
 
 int OpenAtReadOnlyNoFollow(int parent_fd, const char* name) noexcept {
-  int fd;
+  int fd = 0;
   do {
     fd = ::openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   } while (fd < 0 && errno == EINTR);
@@ -606,7 +606,7 @@ common::Result<common::SecureBytes> SerializeCredentials(
 }
 
 bool Fchmod0600(int fd) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::fchmod(fd, 0600);
   } while (result != 0 && errno == EINTR);
@@ -630,7 +630,7 @@ bool WriteAll(int fd, const common::SecureBytes& bytes) noexcept {
 }
 
 bool FsyncNoIntr(int fd) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::fsync(fd);
   } while (result != 0 && errno == EINTR);
@@ -638,14 +638,14 @@ bool FsyncNoIntr(int fd) noexcept {
 }
 
 void UnlinkAtNoIntr(int parent_fd, const char* name) noexcept {
-  int result;
+  int result = 0;
   do {
     result = ::unlinkat(parent_fd, name, 0);
   } while (result != 0 && errno == EINTR);
 }
 
 int OpenDirectory(const std::filesystem::path& path) noexcept {
-  int fd;
+  int fd = 0;
   do {
     fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY);
   } while (fd < 0 && errno == EINTR);

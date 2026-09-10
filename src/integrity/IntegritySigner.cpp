@@ -566,7 +566,7 @@ namespace testing {
 
 common::Result<void> WriteIntegrityArtifactAtomicallyWithPrePublishHook(
     const std::filesystem::path& output, std::span<const unsigned char> bytes,
-    std::function<void()> before_publish) {
+    const std::function<void()>& before_publish) {
   return WriteIntegrityArtifactAtomicallyImpl(output, bytes, &before_publish);
 }
 

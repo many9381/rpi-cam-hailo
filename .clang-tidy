@@ -1,5 +1,7 @@
-# Static analysis gate (TTA 10.1). Bug-prone patterns, CERT rules, the Clang
-# static analyzer, concurrency, performance and portability checks are on;
+# Static analysis gate (TTA 10.1). tools/ci/check.sh treats every finding of
+# the checks enabled here as an error (the tree is at zero). Bug-prone
+# patterns, CERT rules, the Clang static analyzer, concurrency, performance
+# and portability checks are on;
 # stylistic families that produce noise without a security or correctness
 # payoff (magic numbers, trailing return types, member-variable privacy) are off.
 # Third-party code (vendor/, the copied Drogon/Trantor tree, system headers) is

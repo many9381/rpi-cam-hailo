@@ -54,7 +54,7 @@ class ManagedFirmwareRuntime final {
   void Stop();
   [[nodiscard]] RuntimeReplacementResult Replace(
       const config::AppConfig& candidate_config,
-      std::function<common::Result<void>()> durable_promote);
+      const std::function<common::Result<void>()>& durable_promote);
 
   [[nodiscard]] ManagedRuntimeState State() const;
   [[nodiscard]] config::AppConfig ActiveConfig() const;

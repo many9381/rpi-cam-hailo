@@ -84,7 +84,7 @@ void UnmapBuffer(MappedBuffer& buffer) {
   }
 }
 
-void RequeueRequest(std::weak_ptr<RequeueContext> weak_context,
+void RequeueRequest(const std::weak_ptr<RequeueContext>& weak_context,
                     libcamera::Request* request) {
   auto context = weak_context.lock();
   if (context == nullptr || request == nullptr) {

@@ -61,11 +61,11 @@ RuntimeSettingsService::RuntimeSettingsService(
       runtime_replacer_(std::move(runtime_replacer)),
       document_(store_.Snapshot()) {
   if (!runtime_replacer_) {
-    runtime_replacer_ = [&runtime](
-                            const config::AppConfig& candidate,
-                            std::function<common::Result<void>()> promote) {
-      return runtime.Replace(candidate, std::move(promote));
-    };
+    runtime_replacer_ =
+        [&runtime](const config::AppConfig& candidate,
+                   const std::function<common::Result<void>()>& promote) {
+          return runtime.Replace(candidate, promote);
+        };
   }
   const auto profile_span = profiles_.Profiles();
   camera_profiles_.assign(profile_span.begin(), profile_span.end());
