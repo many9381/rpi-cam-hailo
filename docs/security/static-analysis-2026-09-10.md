@@ -138,12 +138,17 @@ Google style). The one-time reformat is commit `bb7c43f`, listed in
 - `tools/ci/check.sh` on the final tree: format ok, clang-tidy ok (0 error-family
   findings), C++ build, `ctest` 1331/1331 passed, web suite (vitest 739/739 passed) and
   `npm run build`.
-- Two things the gate run surfaced that were not visible before it existed, both
+- Three things the gate run surfaced that were not visible before it existed, all
   fixed on the branch: vitest 5 had silently broken the jest-dom matcher types
-  (`npm run build` and therefore the firmware target failed; jest-dom 7.0.1), and
-  the web suite's 1 s Testing Library default timed out once under `ctest -j2`
-  load next to the C++ tests (raised to 5 s in `web/vitest.setup.ts`, assertions
-  unchanged).
+  (`npm run build` and therefore the firmware target failed; jest-dom 7.0.1); the
+  web suite's 1 s Testing Library default timed out once under `ctest -j2` load
+  next to the C++ tests (raised to 5 s in `web/vitest.setup.ts`, assertions
+  unchanged); and `AppConfigTest`'s inline-config helper named its temp file from
+  a per-process counter, so concurrently running test processes clobbered each
+  other's `/tmp/cf-app-config-0.yaml` (4 failures in 60 rounds at `-j4`; the pid
+  is now part of the name, 0 in 100 rounds).
+- The same gate was re-run with the apt-installed `clang-format-18` /
+  `clang-tidy-18` 1:18.1.8-18+b1 after the tool installation: identical result.
 
 ## Re-running
 

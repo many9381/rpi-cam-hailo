@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 namespace {
 
@@ -31,10 +32,12 @@ camera_firmware::config::AiConfig MakeValidAiConfig() {
 
 camera_firmware::common::Result<camera_firmware::config::AppConfig>
 LoadInlineConfig(std::string_view yaml) {
+  // ctest runs every test in its own process, concurrently, so the counter
+  // alone restarts at 0 in each of them; the pid keeps the files apart.
   static std::atomic<unsigned int> next_file{0U};
-  const auto path =
-      std::filesystem::temp_directory_path() /
-      ("cf-app-config-" + std::to_string(next_file.fetch_add(1U)) + ".yaml");
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("cf-app-config-" + std::to_string(::getpid()) + "-" +
+                     std::to_string(next_file.fetch_add(1U)) + ".yaml");
   {
     std::ofstream out(path);
     out << yaml;
