@@ -1,5 +1,8 @@
 # RTSPS 세션 격리 수정본 설치·운영 검증 — 2026-10-11
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 대상은 [RTSP-SESSION-ISOLATION-01 수정](rtsp-session-isolation-remediation-2026-10-11.md)을
 포함한 Hailo 이미지 `20261011T180648Z-e664cb9647e7`이다.
 **새 이미지의 실제 운영 서비스에서 재현 경로가 차단되고 정상 재생이 유지됨을

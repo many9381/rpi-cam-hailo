@@ -1,5 +1,8 @@
 # 플랫폼 보안 업데이트 이미지 설치·부팅 검증 — 2026-10-12
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 [커널·curl·FFmpeg 업데이트](platform-security-remediation-2026-10-12.md)를 포함한
 이미지 **`20261012T031641Z-e664cb9647e7`**, 프로필 `rpi5-camera-hailo`의 실제
 Pi 설치·부팅 검증을 통과했다. **Wi-Fi 재부팅 3회 후에도 카메라·웹·Hailo 추론이

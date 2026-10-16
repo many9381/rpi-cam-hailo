@@ -1,5 +1,8 @@
 # Setup recovery image deployment validation — 2026-10-12
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 Image: `20261012T162756Z-e664cb9647e7` / `rpi5-camera-hailo`.
 Recorded: 2026-10-12T17:02:14.647752+00:00.
 

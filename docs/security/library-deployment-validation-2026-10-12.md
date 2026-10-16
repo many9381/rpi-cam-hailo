@@ -1,5 +1,8 @@
 # Library image deployment validation — 2026-10-12
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 Image: `20261012T140609Z-e664cb9647e7` / `rpi5-camera-hailo`.
 Recorded: 2026-10-12T16:10:03.994206+00:00.
 

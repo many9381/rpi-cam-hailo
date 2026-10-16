@@ -1,5 +1,8 @@
 # 보안 후속 수정 이미지 설치·부팅 검증 — 2026-10-12
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 [보안 후속 수정](security-followup-2026-10-12.md)을 포함한 이미지
 **`20261012T080118Z-e664cb9647e7`**, 프로필 `rpi5-camera-hailo`의 실제 Pi
 설치·자동 실행 검증을 통과했다. **Wi-Fi 재부팅 3회 후 영상과 Hailo 추론이

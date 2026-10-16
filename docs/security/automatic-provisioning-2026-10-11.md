@@ -1,5 +1,8 @@
 # 앱 초기 설정과 자동 실행 — 2026-10-11
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 대상은 상위 `yocto-rpi5-cam-firmware` 저장소의 카메라 이미지와 SSD 설치 절차다.
 기존 앱의 TLS·인증·무결성 검사와 웹 초기 설정 절차를 유지한다.
 

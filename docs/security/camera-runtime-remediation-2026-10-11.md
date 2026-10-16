@@ -1,5 +1,8 @@
 # 초기 설정 후 카메라 런타임 시작 실패 — 2026-10-11
 
+> Privacy: Device/client addresses in this report are documentation-only
+> examples. Original local measurements are retained outside Git.
+
 ## 실기기 진단
 
 Wi-Fi Pi `198.51.100.60`에 `20261011T073859Z-e664cb9647e7` 이미지가 설치된

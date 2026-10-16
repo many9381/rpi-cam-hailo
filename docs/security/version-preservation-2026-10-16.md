@@ -64,3 +64,8 @@ companion workspace retains private validation logs under
 [snapshot runbook](../../../docs/runbooks/validated-snapshot-2026-10-16.md)
 documents private build prerequisites and why later builds require a new ID
 after committing. Existing accepted image/provenance files are preserved.
+
+Privacy follow-up: the shared tag now points to the sanitized checkpoint.
+See [address redaction](privacy-cleanup-2026-10-16.md) for rewritten history,
+fixture changes and the remaining GitHub retention boundary. The test counts
+above remain the results of the original preservation task.

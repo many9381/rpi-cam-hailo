@@ -222,3 +222,14 @@ format check. `tools/ci/install-hooks.sh` installs the pre-commit format gate an
 points `git blame` past the one-time reformat commit. Configuration lives in
 `.clang-format` and `.clang-tidy`; the record of the baseline, the fixes, and the
 remaining warnings is `static-analysis-<date>.md`.
+
+## Privacy of published evidence
+
+Use documentation-only addresses (`192.0.2.0/24`, `198.51.100.0/24`,
+`203.0.113.0/24`, or `2001:db8::/32`) for device/client examples, including
+URLs, test fixtures and copied logs. Keep actual site addresses, network
+configuration, machine identifiers and credentials in Git-ignored local
+evidence. `.gitignore` does not redact values pasted into tracked reports.
+Inspect report bodies and outgoing history before publication; scanning only
+for credential files or tokens is insufficient. See the
+[privacy cleanup record](privacy-cleanup-2026-10-16.md).
