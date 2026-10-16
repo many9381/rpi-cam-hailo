@@ -130,8 +130,9 @@ void InstallSignalHandlers() {
   drogon::app().setTermSignalHandler(RequestShutdown);
 }
 
-void WaitForShutdown() {
+void WaitForShutdown(const std::function<void()>& poll_runtime) {
   while (!g_stop_requested.load()) {
+    poll_runtime();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 }
@@ -233,6 +234,9 @@ std::vector<camera_firmware::service::CameraStatus> ToServiceStatus(
     service_status.capture_error_count = status.capture_error_count;
     service_status.encode_error_count = status.encode_error_count;
     service_status.last_encode_ms = status.last_encode_ms;
+    service_status.capture_error = status.capture_error;
+    service_status.recovery_attempts = status.recovery_attempts;
+    service_status.recovery_limit = status.recovery_limit;
     result.push_back(std::move(service_status));
   }
   return result;
@@ -624,6 +628,10 @@ int RunFirmware(const std::string& config_path) {
   }
   boot_dependencies.start_runtime = [&runtime] { return runtime->Start(); };
   boot_dependencies.stop_runtime = [&runtime] { runtime->Stop(); };
+  boot_dependencies.runtime_needs_start = [&runtime] {
+    return runtime->State() ==
+           camera_firmware::runtime::ManagedRuntimeState::kFailed;
+  };
   boot_dependencies.start_service =
       [&service, &service_args](
           camera_firmware::boot::RuntimeStartCallback start_runtime) {
@@ -660,7 +668,14 @@ int RunFirmware(const std::string& config_path) {
   }
 
   Logger::instance().log(Logger::Level::kInfo, "camera firmware running");
-  WaitForShutdown();
+  WaitForShutdown([&] {
+    if (system_protection) {
+      (void)system_protection->RunRuntimeControlIfAllowed(
+          [&] { runtime->PollCameraHealth(); });
+    } else {
+      runtime->PollCameraHealth();
+    }
+  });
 
   if (system_protection) {
     system_protection->Stop();

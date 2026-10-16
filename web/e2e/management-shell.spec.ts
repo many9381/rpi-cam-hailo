@@ -714,6 +714,14 @@ async function installApiMocks(
       });
       return;
     }
+    if (path === '/api/v1/security/management-ip-policy' && request.method() === 'GET') {
+      userManagementRequests.push(request);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ enabled: true }),
+      });
+      return;
+    }
     if (path === '/api/v1/security/management-ips' && request.method() === 'GET') {
       userManagementRequests.push(request);
       await route.fulfill({
@@ -1137,6 +1145,10 @@ test('first boot signs in with the initial account, runs the setup wizard, then 
   await page.getByRole('button', { name: 'Next' }).click();
 
   await expect(page.getByRole('heading', { name: 'Register management access' })).toBeVisible();
+  const restrictManagement = page.getByRole('checkbox', { name: 'Restrict management access by IP' });
+  await expect(restrictManagement).not.toBeChecked();
+  await expect(page.getByLabel('Add a management address')).toHaveCount(0);
+  await restrictManagement.check();
   await expect(
     page.getByRole('list', { name: 'Registered management hosts' }),
   ).toContainText('192.0.2.44 (current session)');
@@ -1160,6 +1172,7 @@ test('first boot signs in with the initial account, runs the setup wizard, then 
     password: 'NorthStar!9',
     peer_ip: '192.0.2.44',
     management_ips: ['198.51.100.20'],
+    management_ip_restriction_enabled: true,
   });
   expect(api.initializeRequests[0].headers()['content-type']).toBe('application/json');
   expect(api.initializeRequests[0].headers()['x-camera-request']).toBe('management');

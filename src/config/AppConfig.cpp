@@ -341,7 +341,8 @@ common::Result<void> ValidateSecuritySemantics(const AppConfig& config) {
     return common::Result<void>::Err(
         {"E_SECURITY_TLS", "security requires enabled HTTPS"});
   }
-  if (!config.http.public_base_url.starts_with("https://")) {
+  if (!config.http.public_base_url.empty() &&
+      !config.http.public_base_url.starts_with("https://")) {
     return common::Result<void>::Err(
         {"E_SECURITY_PUBLIC_URL", "security requires an https public URL"});
   }

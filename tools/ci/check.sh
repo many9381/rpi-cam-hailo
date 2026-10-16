@@ -6,7 +6,7 @@
 #   tools/ci/check.sh --lint     format + clang-tidy only
 #   tools/ci/check.sh --format   format only
 #
-# Requirements: clang-format and clang-tidy 18 or newer (Debian: apt install
+# Requirements: Python 3, clang-format and clang-tidy 18 or newer (Debian: apt install
 # clang-format-18 clang-tidy-18), the firmware build dependencies, and
 # node/npm for the web. Tool binaries come from CLANG_FORMAT / CLANG_TIDY when
 # set, else clang-format-18 / clang-tidy-18, else the unsuffixed name when it
@@ -49,19 +49,31 @@ resolve_tool() {  # resolve_tool <name> <override>
 CLANG_FORMAT="$(resolve_tool clang-format "${CLANG_FORMAT:-}")"
 CLANG_TIDY="$(resolve_tool clang-tidy "${CLANG_TIDY:-}")"
 
-# Tracked C++ sources. A git pathspec '*' matches across directory levels.
+# Existing tracked and non-ignored new C++ sources, separated by NUL so paths
+# with whitespace survive xargs. A git pathspec '*' matches across directories.
 sources() {
-  git ls-files -- 'src/*.cpp' 'src/*.hpp' 'include/*.hpp' 'apps/*.cpp' 'apps/*.hpp' \
-    'plugins/*.cpp' 'plugins/*.hpp' 'tests/*.cpp' 'tests/*.hpp'
+  git ls-files --cached --others --exclude-standard --deduplicate -z -- \
+    'src/*.cpp' 'src/*.hpp' 'include/*.hpp' 'apps/*.cpp' 'apps/*.hpp' \
+    'plugins/*.cpp' 'plugins/*.hpp' 'tests/*.cpp' 'tests/*.hpp' |
+    while IFS= read -r -d '' source; do
+      if [ -f "$source" ]; then
+        printf '%s\0' "$source"
+      fi
+    done
 }
 # clang-tidy analyses the product translation units. Tests are format-checked
 # and compiled but not analysed (docs/security/static-analysis-2026-09-10.md).
-tidy_sources() { sources | grep -E '^(src|apps|plugins)/.*\.cpp$'; }
+tidy_sources() { sources | grep -zE '^(src|apps|plugins)/.*\.cpp$'; }
 
 step() { printf '\n== %s ==\n' "$1"; }
 
+if [ "$MODE" != "--format" ]; then
+  step "quality gate source-selection regression tests"
+  CLANG_FORMAT="$CLANG_FORMAT" python3 "$ROOT/tools/ci/test_check.py"
+fi
+
 step "clang-format ($CLANG_FORMAT, dry run, deviations are errors)"
-sources | xargs -r "$CLANG_FORMAT" --dry-run --Werror
+sources | xargs -0 -r "$CLANG_FORMAT" --dry-run --Werror
 echo "format: ok"
 [ "$MODE" = "--format" ] && exit 0
 
@@ -83,7 +95,7 @@ trap 'rm -rf "$TIDY_OUT"' EXIT
 # One clang-tidy process per file, JOBS at a time. Each file's output goes to
 # its own log so the report is not interleaved; a non-zero exit (an error-level
 # finding or a compile error) records the file in "failed".
-tidy_sources | xargs -r -P "$JOBS" -I{} sh -c \
+tidy_sources | xargs -0 -r -P "$JOBS" -I{} sh -c \
   '"$1" -p "$2" --quiet --warnings-as-errors="$3" "$4" > "$5/$(echo "$4" | tr / _).log" 2>&1 || echo "$4" >> "$5/failed"' \
   _ "$CLANG_TIDY" "$BUILD_DIR" "$TIDY_ERRORS" {} "$TIDY_OUT"
 cat "$TIDY_OUT"/*.log 2>/dev/null \

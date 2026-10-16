@@ -51,7 +51,10 @@ struct GCharDeleter {
 };
 
 common::Result<std::string> NormalizePeerIp(std::string_view input) {
-  if (input.empty() || input.find('\0') != std::string_view::npos) {
+  // Confirmation carries a plain address. GLib may accept a scope suffix and
+  // discard it when serializing, so reject it before comparing the two peers.
+  if (input.empty() || input.find('\0') != std::string_view::npos ||
+      input.find('%') != std::string_view::npos) {
     return BootstrapError<std::string>("E_BOOTSTRAP_PEER",
                                        "peer address is invalid");
   }
@@ -373,7 +376,8 @@ common::Result<BootstrapResult> BootstrapService::Initialize(
                            std::move(password_record).value(),
                            std::move(confirmed).value(),
                            now,
-                           std::move(additional_management_ips)};
+                           std::move(additional_management_ips),
+                           request.management_ip_restriction_enabled};
     auto initialized =
         store_.InitializeDevice(std::move(record), [this, &request] {
           return store_.InstallBootstrapRtspCredential(

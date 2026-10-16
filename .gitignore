@@ -24,3 +24,9 @@ security.db-wal
 /integrity-manifest.yaml
 /integrity-manifest.sig
 /.superpowers/
+
+# Local interpreter caches and login sessions are not firmware sources.
+__pycache__/
+*.py[cod]
+auth.json
+codex-auth.json

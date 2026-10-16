@@ -370,12 +370,15 @@ TEST(BootstrapServiceTest, RejectsIpv4Ipv6MismatchAndNonAddressPeerText) {
   auto config = BootstrapConfig(state, state / "rtsp.credentials");
   BootstrapService service(*store.value(), config,
                            BuildReservedIdentities(config));
-  const std::array<std::pair<std::string, std::string>, 7> peers = {{
+  const std::array<std::pair<std::string, std::string>, 10> peers = {{
       {"192.0.2.10", "192.0.2.11"},
       {"2001:db8::1", "2001:db8::2"},
       {"192.0.2.10", "::ffff:192.0.2.10"},
       {"192.0.2.10:443", "192.0.2.10"},
       {"fe80::1%eth0", "fe80::1"},
+      {"fe80::1", "fe80::1%1"},
+      {"fe80::1%eth0", "fe80::1%eth0"},
+      {"fe80::1%", "fe80::1"},
       {" 192.0.2.10", "192.0.2.10"},
       {"forwarded=192.0.2.10", "192.0.2.10"},
   }};
@@ -884,6 +887,30 @@ TEST(BootstrapServiceTest, StoreFailureDuringSetupKeepsTheInitialAccount) {
   auto verified = VerifyPassword(credential.value().password, password_record);
   ASSERT_TRUE(verified.ok()) << verified.error().message;
   EXPECT_TRUE(verified.value());
+}
+
+TEST(BootstrapServiceTest,
+     ExplicitUnrestrictedSetupPersistsWithoutAdditionalAddresses) {
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok());
+    auto config = BootstrapConfig(state, state / "rtsp.credentials");
+    BootstrapService service(*store.value(), config,
+                             BuildReservedIdentities(config));
+    auto request =
+        Request("Operator.One", "NorthStar!9", "192.0.2.10", "192.0.2.10");
+    request.management_ip_restriction_enabled = false;
+    auto result = service.Initialize(std::move(request));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_FALSE(store.value()->ManagementIpRestrictionEnabled().value());
+    EXPECT_TRUE(store.value()->IsManagementPeer("198.51.100.44").value());
+  }
+  auto reopened = SecurityStore::Open({state});
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_FALSE(reopened.value()->ManagementIpRestrictionEnabled().value());
+  EXPECT_TRUE(reopened.value()->IsManagementPeer("198.51.100.45").value());
 }
 
 TEST(BootstrapServiceTest, RegistersEverySubmittedManagementIpAtSetup) {

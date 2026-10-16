@@ -1,0 +1,126 @@
+{
+  "result": "PASS",
+  "build_id": "20261016T111625Z-e664cb9647e7",
+  "checked_at": "2026-10-16T14:03:30.870912+00:00",
+  "elf_count": 867,
+  "glob_importers": [
+    "/usr/bin/aarch64-poky-linux-ld",
+    "/usr/bin/aarch64-poky-linux-ld.bfd",
+    "/usr/bin/cvtsudoers",
+    "/usr/bin/lsclocks",
+    "/usr/bin/make",
+    "/usr/lib/libavformat.so.61.7.103",
+    "/usr/lib/libhailort.so.4.24.0",
+    "/usr/lib/libnftables.so.1.1.0",
+    "/usr/lib/libnss_myhostname.so.2",
+    "/usr/lib/libnss_resolve.so.2",
+    "/usr/lib/libnss_systemd.so.2",
+    "/usr/lib/libsystemd.so.0.42.0",
+    "/usr/lib/libudev.so.1.7.12",
+    "/usr/lib/libv4l2.so.0.0.0",
+    "/usr/lib/sudo/sudoers.so",
+    "/usr/lib/systemd/libsystemd-shared-259.so",
+    "/usr/sbin/avahi-daemon",
+    "/usr/sbin/ip.iproute2",
+    "/usr/sbin/sysctl.procps",
+    "/usr/sbin/visudo"
+  ],
+  "camera": {
+    "binary_sha256": "aa51529c60556c6d4882eb77a49d628000fdef85df277f8bca8ca133f5476d78",
+    "direct_needed": [
+      "libsqlite3.so.0",
+      "libhailort.so.4.24.0",
+      "libyaml-cpp.so.0.9",
+      "libjpeg.so.62",
+      "libcamera.so.0.6",
+      "libcamera-base.so.0.6",
+      "libx264.so.165",
+      "libswscale.so.8",
+      "libgstapp-1.0.so.0",
+      "libgstrtsp-1.0.so.0",
+      "libgstsdp-1.0.so.0",
+      "libgstrtspserver-1.0.so.0",
+      "libgstreamer-1.0.so.0",
+      "libgio-2.0.so.0",
+      "libgobject-2.0.so.0",
+      "libglib-2.0.so.0",
+      "libssl.so.3",
+      "libcrypto.so.3",
+      "libuuid.so.1",
+      "libz.so.1",
+      "libstdc++.so.6",
+      "libm.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6",
+      "ld-linux-aarch64.so.1"
+    ],
+    "source_files_checked": 170,
+    "source_direct_api_matches": []
+  },
+  "libevent": {
+    "dynamic_http_importers": [],
+    "direct_library_users": [
+      "/usr/bin/cam"
+    ],
+    "cam_imports": [
+      "event_active",
+      "event_add",
+      "event_base_free",
+      "event_base_loop",
+      "event_base_loopbreak",
+      "event_base_new",
+      "event_del",
+      "event_free",
+      "event_new",
+      "evthread_use_pthreads",
+      "libevent_global_shutdown"
+    ],
+    "event_loop_source": {
+      "path": "build/kas-work/build/rpi5-camera-hailo/tmp/work/cortexa76-poky-linux/libcamera/0.6.0/sources/libcamera-0.6.0/src/apps/common/event_loop.cpp",
+      "sha256": "18071c02c764f50e15388d86de761154040cccdb476609980f66eb6b0020844c"
+    }
+  },
+  "hailort": {
+    "sha256": "5fb8e54bb9945a3566930701af8dfc600edb5a15a7aca328b59cc18ce8d5a12c",
+    "glob_relocations": [
+      "0000000000b2c7e8  0000016800000402 R_AARCH64_JUMP_SLOT    0000000000000000 glob@GLIBC_2.27 + 0"
+    ],
+    "direct_glob_calls": [
+      "  2066bc:\t97fb4d3d \tbl\td9bb0 <glob@plt>"
+    ],
+    "argument_address": "0x8e79d0",
+    "pattern": "/sys/class/hwmon/hwmon*/name",
+    "pattern_segment_writable": false,
+    "flags": "0x1000 (GLOB_TILDE)",
+    "scope": "One recorded direct call and relocation in this exact vendor binary; not an exhaustive indirect-control-flow proof"
+  },
+  "sudo": {
+    "policy_files": {
+      "etc/sudoers.d/rpi5-admin": "b175d396a215d78d02f591dbfcf98ab721b479b60d0324a39756cf534e1e92b3",
+      "etc/sudoers.d/rpi5-camera-acceptance": "944fba11c1dec18aa73db5bc722c027c6401219671b4be57aee5f3319eafff39",
+      "etc/sudoers.d/rpi5-security-status": "1d1ec6c5b7a8174363046b4e83164f6b8ae9f9c80646f5c57e23eb992aa87c72"
+    },
+    "literal_command_paths": [
+      "/usr/bin/systemctl",
+      "/usr/bin/systemctl",
+      "/usr/bin/journalctl",
+      "/usr/bin/journalctl",
+      "/usr/bin/dmesg",
+      "/usr/sbin/sshd",
+      "/usr/bin/systemctl",
+      "/usr/bin/systemctl",
+      "/usr/libexec/rpi5-security-status"
+    ],
+    "matching_source": {
+      "path": "build/kas-work/build/rpi5-camera-hailo/tmp/work/cortexa76-poky-linux/sudo/1.9.17p2/sources/sudo-1.9.17p2/plugins/sudoers/match_command.c",
+      "sha256": "09bc1452473f09b79872101995eda27a0f166e2f4394c4cbb53023ed948f6f95"
+    },
+    "scope": "Packaged rpiadmin rules only; glob matching is selected by command-pattern metacharacters, not the user's argv"
+  },
+  "limitations": [
+    "No universal static-link or computed-dlsym exclusion",
+    "No arbitrary filesystem-size resource bound",
+    "No CVE closure or runtime exploit test",
+    "No production recipe or device change"
+  ]
+}

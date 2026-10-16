@@ -34,6 +34,9 @@ struct CameraPipelineStatus {
   // Wall-clock cost of the most recent x264 encode call and the number of
   // encoded access units dropped from the ring before any reader saw them.
   double last_encode_ms{0.0};
+  std::string capture_error;
+  unsigned int recovery_attempts{0U};
+  unsigned int recovery_limit{3U};
   std::string ai_source{"main-fallback"};
 };
 

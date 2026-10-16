@@ -220,6 +220,7 @@ gtest_discover_tests(camera_firmware_security_tests)
 
 add_executable(camera_firmware_media_tests
     unit/media/CameraPipelineConfigTest.cpp
+    unit/media/CaptureHealthTest.cpp
     unit/media/CameraTimingTest.cpp
     unit/media/EncodeMailboxTest.cpp
     unit/media/EncodedRingTest.cpp

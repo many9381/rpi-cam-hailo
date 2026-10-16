@@ -41,6 +41,9 @@ export interface CameraStatus {
   capture_fps?: number;
   encoded_fps?: number;
   last_encode_ms?: number;
+  capture_error?: string;
+  recovery_attempts?: number;
+  recovery_limit?: number;
 }
 
 export interface MonitoringCamera extends CameraStatus {

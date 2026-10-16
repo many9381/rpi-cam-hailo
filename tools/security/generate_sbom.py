@@ -15,6 +15,8 @@ only inputs that change between runs are the installed package versions and
 the lockfile, so diffs of these files show exactly what changed.
 """
 import argparse
+import base64
+import binascii
 import datetime
 import hashlib
 import json
@@ -110,8 +112,30 @@ def platform_components():
     ]
 
 
+def integrity_hashes(integrity):
+    """Convert npm SRI base64 digests to validated CycloneDX hex digests."""
+    lengths = {"sha1": 20, "sha256": 32, "sha384": 48, "sha512": 64}
+    if not isinstance(integrity, str) or not integrity.split():
+        raise ValueError("invalid npm integrity value")
+    hashes = []
+    for value in integrity.split():
+        algorithm, _, encoded = value.partition("-")
+        if algorithm not in lengths:
+            raise ValueError(f"unsupported npm integrity algorithm: {algorithm}")
+        try:
+            digest = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError(f"invalid {algorithm} integrity encoding") from error
+        if len(digest) != lengths[algorithm]:
+            raise ValueError(f"invalid {algorithm} integrity length")
+        hashes.append({"alg": algorithm.upper().replace("SHA", "SHA-"),
+                       "content": digest.hex()})
+    return hashes
+
+
 def web_components():
-    lock = json.load(open(os.path.join(ROOT, "web", "package-lock.json")))
+    with open(os.path.join(ROOT, "web", "package-lock.json"), encoding="utf-8") as source:
+        lock = json.load(source)
     direct = set(lock["packages"][""].get("dependencies", {})) | set(lock["packages"][""].get("devDependencies", {}))
     comps = []
     for path, meta in lock["packages"].items():
@@ -123,8 +147,7 @@ def web_components():
                 "scope": "excluded" if meta.get("dev") else "required",
                 "properties": [{"name": "web:dependency-kind", "value": ("direct" if name in direct else "transitive") + (", dev" if meta.get("dev") else "")}]}
         if meta.get("integrity"):
-            alg, _, digest = meta["integrity"].partition("-")
-            comp["hashes"] = [{"alg": alg.upper().replace("SHA", "SHA-"), "content": digest}]
+            comp["hashes"] = integrity_hashes(meta["integrity"])
         if meta.get("license") and isinstance(meta["license"], str):
             comp["licenses"] = [{"license": {"id": meta["license"]}}]
         comps.append(comp)

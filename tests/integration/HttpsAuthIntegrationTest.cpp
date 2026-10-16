@@ -6759,6 +6759,113 @@ TEST(HttpsAuthIntegrationTest,
   service.Stop();
 }
 
+TEST(HttpsAuthIntegrationTest, DhcpSocketOriginAndOptionalIpPolicy) {
+  TemporaryDirectory directory;
+  const std::uint16_t port = ReserveLoopbackPort();
+  const std::string origin = "https://127.0.0.1:" + std::to_string(port);
+  auto config = MakePersistenceConfig(directory.path(), port);
+  config.http.public_base_url.clear();
+  camera_firmware::service::ServiceInitArgs args;
+  args.app_config = &config;
+  args.provider = &TestCryptoProvider();
+  args.document_root = config.http.web_root;
+  args.public_base_url.clear();
+  args.runtime_start_callback = [] {
+    return camera_firmware::common::Result<void>::Ok();
+  };
+  camera_firmware::service::ServiceApp service;
+  ASSERT_TRUE(service.Init(args).ok());
+  auto client = NewClient(port);
+  auto changed_address_client = NewClient(port, "127.0.0.2");
+  const std::string initial_cookie = InitialAccountCookie(client, origin);
+  ASSERT_FALSE(initial_cookie.empty());
+
+  // Arbitrary Host/forwarded metadata cannot grant an Origin permission.
+  auto hostile = Send(client, drogon::Post, "/api/v1/auth/login", "{}",
+                      "https://attacker.example", {}, true, 15.0,
+                      {{"Host", "attacker.example"},
+                       {"X-Forwarded-Host", "attacker.example"},
+                       {"X-Forwarded-Proto", "https"}});
+  ExpectStatus(hostile, drogon::k403Forbidden);
+  ASSERT_NE(hostile.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*hostile.response->getJsonObject())["code"].asString(),
+            "E_REQUEST_ORIGIN");
+
+  ExpectStatus(
+      Send(
+          client, drogon::Post, "/api/v1/setup/initialize",
+          R"({"username":"owner1","password":"StrongPass9!","peer_ip":"127.0.0.1","management_ips":[],"management_ip_restriction_enabled":false})",
+          origin, initial_cookie, true),
+      drogon::k200OK);
+  constexpr const char* credentials =
+      R"({"username":"owner1","password":"StrongPass9!"})";
+  auto first_login = Send(client, drogon::Post, "/api/v1/auth/login",
+                          credentials, origin, {}, true);
+  ExpectStatus(first_login, drogon::k200OK);
+  const std::string cookie =
+      "camera_session=" +
+      first_login.response->getCookie("camera_session").value();
+  auto policy = Send(client, drogon::Get,
+                     "/api/v1/security/management-ip-policy", {}, {}, cookie);
+  ExpectStatus(policy, drogon::k200OK);
+  ASSERT_NE(policy.response->getJsonObject(), nullptr);
+  EXPECT_FALSE((*policy.response->getJsonObject())["enabled"].asBool());
+  auto stream = Send(client, drogon::Get, "/api/v1/stream", {}, {}, cookie);
+  ExpectStatus(stream, drogon::k200OK);
+  ASSERT_NE(stream.response->getJsonObject(), nullptr);
+  EXPECT_EQ((*stream.response->getJsonObject())["url"].asString(),
+            "rtsps://127.0.0.1:8555/imx708/main");
+
+  // A changed PC address may sign in, but cannot replay the old IP-bound
+  // session.
+  ExpectStatus(Send(changed_address_client, drogon::Get, "/api/v1/auth/me", {},
+                    {}, cookie),
+               drogon::k401Unauthorized);
+  // Keep the one-active-session policy: sign out before changing the PC IP.
+  ExpectStatus(Send(client, drogon::Post, "/api/v1/auth/logout", {}, origin,
+                    cookie, true),
+               drogon::k200OK);
+  ExpectStatus(Send(changed_address_client, drogon::Post, "/api/v1/auth/login",
+                    R"({"username":"owner1","password":"WrongPass9!"})", origin,
+                    {}, true),
+               drogon::k401Unauthorized);
+  auto changed_login =
+      Send(changed_address_client, drogon::Post, "/api/v1/auth/login",
+           credentials, origin, {}, true);
+  ExpectStatus(changed_login, drogon::k200OK);
+  const std::string changed_cookie =
+      "camera_session=" +
+      changed_login.response->getCookie("camera_session").value();
+  ExpectStatus(Send(changed_address_client, drogon::Put,
+                    "/api/v1/security/management-ip-policy",
+                    R"({"enabled":true})", origin, changed_cookie, true),
+               drogon::k409Conflict);
+  ExpectStatus(Send(changed_address_client, drogon::Post, "/api/v1/auth/logout",
+                    {}, origin, changed_cookie, true),
+               drogon::k200OK);
+  auto registered_login = Send(client, drogon::Post, "/api/v1/auth/login",
+                               credentials, origin, {}, true);
+  ExpectStatus(registered_login, drogon::k200OK);
+  const std::string registered_cookie =
+      "camera_session=" +
+      registered_login.response->getCookie("camera_session").value();
+  ExpectStatus(
+      Send(client, drogon::Put, "/api/v1/security/management-ip-policy",
+           R"({"enabled":"false"})", origin, registered_cookie, true),
+      drogon::k400BadRequest);
+  ExpectStatus(
+      Send(client, drogon::Put, "/api/v1/security/management-ip-policy",
+           R"({"enabled":true})", origin, registered_cookie, true),
+      drogon::k200OK);
+  ExpectStatus(
+      Send(client, drogon::Get, "/api/v1/auth/me", {}, {}, registered_cookie),
+      drogon::k401Unauthorized);
+  ExpectStatus(Send(changed_address_client, drogon::Post, "/api/v1/auth/login",
+                    credentials, origin, {}, true),
+               drogon::k403Forbidden);
+  service.Stop();
+}
+
 TEST(HttpsAuthIntegrationTest, SetupLoginSessionCsrfLogoutAndOverflowFlow) {
   TemporaryDirectory directory;
   const std::uint16_t port = ReserveLoopbackPort();

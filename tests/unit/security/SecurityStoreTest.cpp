@@ -2246,7 +2246,7 @@ TEST(SecurityStoreTest, CommitFailureRetainsLeaseUntilRollback) {
   EXPECT_EQ(released_state.value(), DeviceState::kDefault);
 }
 
-TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
+TEST(SecurityStoreTest, CreatesExactRevisionSixSchemaAndConfiguresConnection) {
   ResetSqliteHooks();
   TemporaryDirectory root;
   auto store = SecurityStore::Open({root.Path("security")});
@@ -2271,9 +2271,10 @@ TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
           last_opened_database,
           "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk "
           "FROM pragma_table_info('device_state') ORDER BY cid;"),
-      std::vector<std::string>({"id:INTEGER:0:1", "state:TEXT:1:0",
-                                "schema_revision:INTEGER:1:0",
-                                "setup_completed_at_seconds:INTEGER:0:0"}));
+      std::vector<std::string>(
+          {"id:INTEGER:0:1", "state:TEXT:1:0", "schema_revision:INTEGER:1:0",
+           "setup_completed_at_seconds:INTEGER:0:0",
+           "management_ip_restriction_enabled:INTEGER:1:0"}));
   EXPECT_EQ(
       QueryTextRows(
           last_opened_database,
@@ -2370,10 +2371,10 @@ TEST(SecurityStoreTest, CreatesExactRevisionFiveSchemaAndConfiguresConnection) {
       QueryInt(last_opened_database, "SELECT COUNT(*) FROM schema_version;"),
       1);
   EXPECT_EQ(
-      QueryInt(last_opened_database, "SELECT version FROM schema_version;"), 5);
+      QueryInt(last_opened_database, "SELECT version FROM schema_version;"), 6);
   EXPECT_EQ(QueryInt(last_opened_database,
                      "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            5);
+            6);
   EXPECT_EQ(QueryText(last_opened_database,
                       "SELECT id || '|' || rotated_event_count || '|' || "
                       "COALESCE(last_rotation_at_seconds, -1) || '|' || "
@@ -2582,11 +2583,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionTwoDatabaseToRevisionFive) {
   opened.value().reset();
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT version FROM schema_version;"),
-            5);
+            6);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            5);
+            6);
   EXPECT_EQ(fixture.evidence(), before);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
@@ -2622,11 +2623,11 @@ TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFive) {
   opened.value().reset();
   EXPECT_EQ(QueryDatabaseInt(fixture.database_path(),
                              "SELECT version FROM schema_version;"),
-            5);
+            6);
   EXPECT_EQ(QueryDatabaseInt(
                 fixture.database_path(),
                 "SELECT schema_revision FROM device_state WHERE id = 1;"),
-            5);
+            6);
   EXPECT_EQ(
       QueryDatabaseTextRows(
           fixture.database_path(),
@@ -2656,8 +2657,8 @@ TEST(SecurityStoreTest, MigratesExactRevisionThreeDatabaseToRevisionFive) {
   EXPECT_TRUE(SecurityStore::Open({fixture.state_directory()}).ok());
 }
 
-TEST(SecurityStoreTest, CurrentSchemaRevisionIsFive) {
-  EXPECT_EQ(kSecuritySchemaRevision, 5);
+TEST(SecurityStoreTest, CurrentSchemaRevisionIsSix) {
+  EXPECT_EQ(kSecuritySchemaRevision, 6);
 }
 
 TEST(SecurityStoreTest, FreshSessionsTableCarriesManagementDeadline) {
@@ -2687,8 +2688,73 @@ TEST(SecurityStoreTest, FreshSessionsTableCarriesManagementDeadline) {
   int version = 0;
   EXPECT_TRUE(
       QuerySingleInt(database, "SELECT version FROM schema_version;", version));
-  EXPECT_EQ(version, 5);
+  EXPECT_EQ(version, 6);
   (void)::sqlite3_close_v2(database);
+}
+
+TEST(SecurityStoreTest,
+     RevisionFiveMigrationPreservesRestrictedOperationalDevice) {
+  ResetSqliteHooks();
+  TemporaryDirectory root;
+  const auto state = root.Path("security");
+  const auto database = state / "security.db";
+  {
+    auto store = SecurityStore::Open({state});
+    ASSERT_TRUE(store.ok());
+    ASSERT_TRUE(
+        store.value()
+            ->InitializeDevice(
+                MakeBootstrapRecord(),
+                [] { return camera_firmware::common::Result<void>::Ok(); })
+            .ok());
+  }
+  // Construct the exact revision-5 metadata tables around the same accounts,
+  // password material, audit trail and management addresses.
+  ExecuteDatabaseSql(database, R"sql(
+ALTER TABLE schema_version RENAME TO schema_version_current;
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 5)
+);
+INSERT INTO schema_version (version) VALUES (5);
+DROP TABLE schema_version_current;
+ALTER TABLE device_state RENAME TO device_state_current;
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 5),
+  setup_completed_at_seconds INTEGER,
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);
+INSERT INTO device_state
+  (id, state, schema_revision, setup_completed_at_seconds)
+SELECT id, state, 5, setup_completed_at_seconds FROM device_state_current;
+DROP TABLE device_state_current;
+)sql");
+  const auto before = QueryDatabaseTextRows(
+      database,
+      "SELECT canonical_username || '|' || hex(password_salt) || '|' || "
+      "hex(password_derived) FROM users;");
+  const int audits_before =
+      QueryDatabaseInt(database, "SELECT COUNT(*) FROM audit_events;");
+  auto reopened = SecurityStore::Open({state});
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_TRUE(reopened.value()->ManagementIpRestrictionEnabled().value());
+  EXPECT_TRUE(reopened.value()->IsManagementPeer("2001:db8::10").value());
+  EXPECT_FALSE(reopened.value()->IsManagementPeer("198.51.100.44").value());
+  EXPECT_EQ(
+      QueryDatabaseTextRows(
+          database,
+          "SELECT canonical_username || '|' || hex(password_salt) || '|' || "
+          "hex(password_derived) FROM users;"),
+      before);
+  EXPECT_EQ(QueryDatabaseInt(database, "SELECT COUNT(*) FROM audit_events;"),
+            audits_before);
+  EXPECT_EQ(QueryDatabaseInt(database, "SELECT version FROM schema_version;"),
+            6);
 }
 
 TEST(SecurityStoreTest, MigrationToRevisionFiveBackfillsZeroAndKeepsSessions) {
@@ -2719,7 +2785,7 @@ TEST(SecurityStoreTest, MigrationToRevisionFiveBackfillsZeroAndKeepsSessions) {
   int version = 0;
   EXPECT_TRUE(
       QuerySingleInt(database, "SELECT version FROM schema_version;", version));
-  EXPECT_EQ(version, 5);
+  EXPECT_EQ(version, 6);
   int sessions = 0;
   EXPECT_TRUE(
       QuerySingleInt(database, "SELECT COUNT(*) FROM sessions;", sessions));

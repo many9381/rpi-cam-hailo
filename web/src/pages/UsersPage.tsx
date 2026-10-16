@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useState } from 'react';
+import { type KeyboardEvent, type ReactNode, useState } from 'react';
 
 import { AccessIpsTab } from '../features/users/AccessIpsTab';
 import { AccountsTab } from '../features/users/AccountsTab';
@@ -7,6 +7,7 @@ import { useTranslation } from '../i18n/LanguageContext';
 
 interface UsersPageProps {
   controller: UserManagementController;
+  managementIpPolicy?: ReactNode;
 }
 
 type ActiveTab = 'accounts' | 'access_ips';
@@ -31,7 +32,7 @@ const tabs: ReadonlyArray<{
   },
 ];
 
-export function UsersPage({ controller }: UsersPageProps) {
+export function UsersPage({ controller, managementIpPolicy }: UsersPageProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ActiveTab>('accounts');
   const [createDialog, setCreateDialog] =
@@ -130,11 +131,14 @@ export function UsersPage({ controller }: UsersPageProps) {
             onCreateClose={() => setCreateDialog(null)}
           />
         ) : (
-          <AccessIpsTab
-            controller={controller}
-            createOpen={createDialog === 'management_ip'}
-            onCreateClose={() => setCreateDialog(null)}
-          />
+          <>
+            {managementIpPolicy}
+            <AccessIpsTab
+              controller={controller}
+              createOpen={createDialog === 'management_ip'}
+              onCreateClose={() => setCreateDialog(null)}
+            />
+          </>
         )}
       </section>
     </div>

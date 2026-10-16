@@ -22,6 +22,7 @@ struct BootstrapRequest {
   // setup. `confirmed_peer_ip` is registered whatever this holds, including
   // when it is empty: see Initialize.
   std::vector<std::string> management_ips;
+  bool management_ip_restriction_enabled{true};
 };
 
 struct BootstrapResult {

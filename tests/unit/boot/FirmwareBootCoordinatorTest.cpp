@@ -79,6 +79,26 @@ FirmwareBootDependencies SuccessfulDependencies(
   return dependencies;
 }
 
+TEST(FirmwareBootCoordinatorTest,
+     SelfStoppedRuntimeCanBeRetriedButProtectionStillApplies) {
+  Calls calls;
+  bool needs_start = false;
+  auto dependencies =
+      SuccessfulDependencies(calls, security::DeviceState::kOperational);
+  dependencies.runtime_needs_start = [&] { return needs_start; };
+  FirmwareBootCoordinator coordinator({true, true}, std::move(dependencies));
+  ASSERT_TRUE(coordinator.Start().ok());
+  ASSERT_TRUE(calls.runtime_start_callback().ok());
+  EXPECT_EQ(calls.runtime_starts, 1U);
+  needs_start = true;
+  calls.protection_allows_runtime = false;
+  EXPECT_FALSE(calls.runtime_start_callback().ok());
+  EXPECT_EQ(calls.runtime_starts, 1U);
+  calls.protection_allows_runtime = true;
+  ASSERT_TRUE(calls.runtime_start_callback().ok());
+  EXPECT_EQ(calls.runtime_starts, 2U);
+}
+
 TEST(FirmwareBootCoordinatorTest, DefaultStateStartsOnlyService) {
   Calls calls;
   FirmwareBootCoordinator coordinator({true, true},

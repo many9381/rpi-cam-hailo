@@ -4,6 +4,7 @@ import {
   parseDeletedResult,
   parseManagementIpCreateResult,
   parseManagementIpList,
+  parseManagementIpPolicy,
   parseManagedUserCreateResult,
   parseManagedUserList,
   parsePasswordResetResult,
@@ -141,4 +142,16 @@ describe('user-management mutation contracts', () => {
   ])('rejects malformed mutation result without echoing rejected data', (parser, value) => {
     expectRejectedWithoutEcho(parser, value, 'Invalid user management response');
   });
+});
+
+describe('management IP policy contract', () => {
+  it.each([true, false])('preserves the server policy value %s', (enabled) => {
+    expect(parseManagementIpPolicy({ enabled })).toEqual({ enabled });
+  });
+
+  it.each([null, {}, { enabled: 'false' }, { enabled: 0 }, { enabled: true, unknown: true }])(
+    'rejects malformed policy instead of defaulting its enabled state: %j', (value) => {
+      expect(() => parseManagementIpPolicy(value)).toThrow('Invalid management IP policy response');
+    },
+  );
 });

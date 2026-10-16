@@ -2,12 +2,28 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../api/client';
 import { LanguageProvider } from '../i18n';
 import { LoginPage } from './LoginPage';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.removeItem('cf.lang'); });
 
 describe('LoginPage', () => {
+  it.each([
+    ['en', /origin|address/i],
+    ['ko', /출처|주소/],
+  ])('distinguishes a rejected request origin from bad credentials in %s', async (language, expected) => {
+    localStorage.setItem('cf.lang', language);
+    const user = userEvent.setup();
+    const login = vi.fn().mockRejectedValue(new ApiError(403, 'E_REQUEST_ORIGIN', 'private backend detail'));
+    render(<LanguageProvider><LoginPage login={login} /></LanguageProvider>);
+    await user.type(screen.getByLabelText(/^(password|비밀번호)$/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /^(sign in|로그인)$/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/check your credentials|private backend detail/i);
+    expect(screen.getByLabelText(/^(password|비밀번호)$/i)).toHaveValue('');
+  });
+
   it('submits credentials through auth and clears the masked password on success', async () => {
     const user = userEvent.setup();
     const login = vi.fn().mockResolvedValue(undefined);

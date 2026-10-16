@@ -67,13 +67,19 @@ function optionalNonnegative(
 
 function parseCamera(value: unknown): CameraStatus {
   if (!isRecord(value) || !isString(value.id) || !isString(value.state) ||
-      typeof value.snapshot_available !== 'boolean') {
+      typeof value.snapshot_available !== 'boolean' ||
+      (value.capture_error !== undefined && !isString(value.capture_error))) {
     return invalid('Invalid camera response');
   }
   return {
     id: value.id,
     state: value.state,
     snapshot_available: value.snapshot_available,
+    capture_error: value.capture_error as string | undefined,
+    recovery_attempts: optionalNonnegative(
+      value.recovery_attempts, true, 'Invalid camera response'),
+    recovery_limit: optionalNonnegative(
+      value.recovery_limit, true, 'Invalid camera response'),
     capture_fps: optionalNonnegative(
       value.capture_fps, false, 'Invalid camera response'),
     encoded_fps: optionalNonnegative(

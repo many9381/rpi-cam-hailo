@@ -111,6 +111,11 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
     return std::nullopt;
   }
 
+  if (path == "/api/v1/security/management-ip-policy") {
+    return method == "GET" || method == "PUT"
+               ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
+               : std::nullopt;
+  }
   if (path == "/api/v1/security/management-ips") {
     return method == "GET"
                ? std::optional<RoutePolicy>(RoutePolicy::kAdministrator)
@@ -187,6 +192,9 @@ std::optional<RoutePolicy> ClassifySecurityRoute(std::string_view path,
 
 bool RouteRefreshesManagementDeadlineImpl(std::string_view path,
                                           std::string_view method) {
+  if (path == "/api/v1/security/management-ip-policy") {
+    return method == "GET" || method == "PUT";
+  }
   if (path == "/api/v1/security/users") {
     return method == "GET" || method == "POST";
   }
@@ -309,6 +317,13 @@ bool SameOrigin(std::string_view actual, std::string_view expected) {
          actual_origin.value() == expected_origin.value();
 }
 
+bool TrustedRequestOrigin(const SecurityRequestContext& context) {
+  return SameOrigin(context.origin, context.expected_origin) ||
+         SameOrigin(context.origin,
+                    SocketHttpsOrigin(context.local_ip, context.local_port,
+                                      context.local_tls));
+}
+
 bool IsJsonContentType(std::string_view content_type) {
   std::string normalized(content_type);
   std::transform(normalized.begin(), normalized.end(), normalized.begin(),
@@ -349,12 +364,11 @@ class InSituCredentialParser {
  public:
   explicit InSituCredentialParser(common::SecureBytes& body) : body_(body) {}
 
-  // `management_ips` is the one key whose value is not a string. Passing
-  // nullptr for it keeps the key rejected outright, which is what every caller
-  // but setup wants: an unrecognized key still fails the whole parse.
+  // Setup-only array and boolean fields stay rejected by other callers.
   bool Parse(bool require_peer, std::string& username,
              common::SecureBytes& password, std::string& peer_ip,
-             std::vector<std::string>* management_ips = nullptr) {
+             std::vector<std::string>* management_ips = nullptr,
+             bool* management_ip_restriction_enabled = nullptr) {
     if (body_.size() == 0U ||
         !g_utf8_validate(reinterpret_cast<const char*>(body_.data()),
                          static_cast<gssize>(body_.size()), nullptr)) {
@@ -373,6 +387,7 @@ class InSituCredentialParser {
     bool have_password = false;
     bool have_peer = false;
     bool have_management_ips = false;
+    bool have_ip_policy = false;
     for (;;) {
       DecodedJsonString key_slice;
       bool key_was_escaped = false;
@@ -392,6 +407,22 @@ class InSituCredentialParser {
           return false;
         }
         have_management_ips = true;
+      } else if (management_ip_restriction_enabled != nullptr &&
+                 key == "management_ip_restriction_enabled" &&
+                 !have_ip_policy) {
+        const auto remaining = std::string_view(
+            reinterpret_cast<const char*>(body_.data() + position_),
+            body_.size() - position_);
+        if (remaining.starts_with("true")) {
+          *management_ip_restriction_enabled = true;
+          position_ += 4;
+        } else if (remaining.starts_with("false")) {
+          *management_ip_restriction_enabled = false;
+          position_ += 5;
+        } else {
+          return false;
+        }
+        have_ip_policy = true;
       } else {
         DecodedJsonString value;
         if (!ParseString(value)) {
@@ -681,6 +712,29 @@ common::Result<common::SecureBytes> SecureRequestBody(std::string_view body) {
 
 }  // namespace
 
+std::string SocketHttpsOrigin(std::string_view local_ip,
+                              std::uint16_t local_port, bool local_tls) {
+  if (!local_tls || local_port == 0 || local_ip.empty() ||
+      local_ip.find('\0') != std::string_view::npos) {
+    return {};
+  }
+  const std::string text(local_ip);
+  std::unique_ptr<GInetAddress, GObjectDeleter> address(
+      g_inet_address_new_from_string(text.c_str()));
+  if (!address || g_inet_address_get_is_any(address.get()) ||
+      g_inet_address_get_is_multicast(address.get())) {
+    return {};
+  }
+  auto normalized = NormalizePeerIp(local_ip);
+  if (!normalized.ok()) {
+    return {};
+  }
+  const auto& ip = normalized.value();
+  return "https://" +
+         (ip.find(':') == std::string::npos ? ip : "[" + ip + "]") + ":" +
+         std::to_string(local_port);
+}
+
 common::Result<void> AuthorizeSecurityRequest(
     const SecurityRequestContext& context) {
   const std::string method = UpperMethod(context.method);
@@ -721,7 +775,7 @@ common::Result<void> AuthorizeSecurityRequest(
     // CSRF risk, so only they require a same-origin check and the
     // management header. The two GET routes above are safe reads.
     if (IsStateChanging(method)) {
-      if (!SameOrigin(context.origin, context.expected_origin)) {
+      if (!TrustedRequestOrigin(context)) {
         return GateError("E_REQUEST_ORIGIN", "request denied");
       }
       if (!context.has_management_header) {
@@ -746,7 +800,7 @@ common::Result<void> AuthorizeSecurityRequest(
     return GateError("E_AUTHENTICATION_REQUIRED", "authentication required");
   }
   if (IsStateChanging(method)) {
-    if (!SameOrigin(context.origin, context.expected_origin)) {
+    if (!TrustedRequestOrigin(context)) {
       return GateError("E_REQUEST_ORIGIN", "request denied");
     }
     if (!context.has_management_header) {
@@ -924,7 +978,8 @@ common::Result<ParsedSetupRequest> ParseSetupJson(
   ParsedSetupRequest parsed;
   InSituCredentialParser parser(body);
   if (!parser.Parse(true, parsed.username, parsed.password,
-                    parsed.confirmed_peer_ip, &parsed.management_ips) ||
+                    parsed.confirmed_peer_ip, &parsed.management_ips,
+                    &parsed.management_ip_restriction_enabled) ||
       parsed.username.empty() ||
       parsed.username.size() > kMaximumUsernameBytes ||
       parsed.password.size() == 0U ||

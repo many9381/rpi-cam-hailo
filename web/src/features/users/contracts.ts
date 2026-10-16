@@ -31,6 +31,10 @@ export interface ManagementIpList {
   current_peer_ip: string;
 }
 
+export interface ManagementIpPolicy {
+  enabled: boolean;
+}
+
 export interface ManagementIpCreateResult {
   management_ip: ManagementIp;
 }
@@ -182,4 +186,11 @@ export function parseSelfPasswordChangeResult(value: unknown): SelfPasswordChang
     return invalidResult();
   }
   return { password_changed: true, logged_out: true };
+}
+
+export function parseManagementIpPolicy(value: unknown): ManagementIpPolicy {
+  if (!hasExactKeys(value, ['enabled']) || typeof value.enabled !== 'boolean') {
+    throw new Error('Invalid management IP policy response');
+  }
+  return { enabled: value.enabled };
 }

@@ -25,6 +25,10 @@ struct SecurityRequestContext {
   bool peer_is_management{false};
   std::string origin;
   std::string expected_origin;
+  // Trusted transport metadata, never Host or X-Forwarded-* headers.
+  std::string local_ip;
+  std::uint16_t local_port{0};
+  bool local_tls{false};
   bool has_management_header{false};
   std::optional<security::Principal> principal;
 };
@@ -62,10 +66,14 @@ struct ParsedSetupRequest {
   // empty when the key is absent. These are candidates, not the whole answer:
   // `confirmed_peer_ip` is registered whatever this contains.
   std::vector<std::string> management_ips;
+  bool management_ip_restriction_enabled{true};
 };
 
 [[nodiscard]] common::Result<void> AuthorizeSecurityRequest(
     const SecurityRequestContext& context);
+[[nodiscard]] std::string SocketHttpsOrigin(std::string_view local_ip,
+                                            std::uint16_t local_port,
+                                            bool local_tls);
 [[nodiscard]] bool RouteRefreshesManagementDeadline(std::string_view path,
                                                     std::string_view method);
 [[nodiscard]] common::Result<std::string> NormalizePeerIp(

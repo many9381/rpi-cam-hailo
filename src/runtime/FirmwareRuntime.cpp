@@ -279,7 +279,7 @@ FirmwareRuntime::~FirmwareRuntime() {
 
 common::Result<void> FirmwareRuntime::ValidateCandidateConfig(
     const config::AppConfig& config) {
-  const auto semantics = config::ValidateAppConfigSemantics(config);
+  auto semantics = config::ValidateAppConfigSemantics(config);
   if (!semantics.ok()) {
     return semantics;
   }

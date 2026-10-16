@@ -987,6 +987,9 @@ std::mutex& StateMutex() {
 }
 
 bool IsRegisteredApiRoute(std::string_view path, drogon::HttpMethod method) {
+  if (path == "/api/v1/security/management-ip-policy") {
+    return method == drogon::Get || method == drogon::Put;
+  }
   if (path == "/api/v1/audit/status" || path == "/api/v1/audit/events") {
     return method == drogon::Get;
   }
@@ -1130,6 +1133,9 @@ Json::Value BuildCameraStatusJsonValue(const CameraStatus& camera) {
   json["capture_error_count"] = Json::UInt64(camera.capture_error_count);
   json["encode_error_count"] = Json::UInt64(camera.encode_error_count);
   json["last_encode_ms"] = camera.last_encode_ms;
+  json["capture_error"] = camera.capture_error;
+  json["recovery_attempts"] = camera.recovery_attempts;
+  json["recovery_limit"] = camera.recovery_limit;
   return json;
 }
 
@@ -1800,6 +1806,9 @@ void AuthorizeRequest(const drogon::HttpRequestPtr& request,
     context.normalized_peer_ip = std::move(normalized_peer).value();
     context.origin = request->getHeader("origin");
     context.expected_origin = dependencies.expected_origin;
+    context.local_ip = request->localAddr().toIp();
+    context.local_port = request->localAddr().toPort();
+    context.local_tls = request->isOnSecureConnection();
     context.has_management_header =
         request->getHeader("x-camera-request") == "management";
     std::shared_ptr<common::SecureBytes> session_token;
@@ -2377,6 +2386,8 @@ void RegisterHandlers() {
                   bootstrap_request.actual_peer_ip = actual_peer;
                   bootstrap_request.management_ips =
                       std::move(parsed_request->management_ips);
+                  bootstrap_request.management_ip_restriction_enabled =
+                      parsed_request->management_ip_restriction_enabled;
                   bool transition_allowed = false;
                   {
                     std::scoped_lock lock(StateMutex());
@@ -3152,6 +3163,90 @@ void RegisterHandlers() {
             });
       },
       {Delete});
+
+  app().registerHandler(
+      "/api/v1/security/management-ip-policy",
+      [](const HttpRequestPtr& request, DrogonCallback&& callback) {
+        AuthorizeRequest(
+            request, std::move(callback),
+            [request](AuthorizedRequest authorized_request,
+                      HttpCallback callback) {
+              try {
+                auto context =
+                    BuildUserMutationContext(request, authorized_request);
+                if (!context.ok()) {
+                  callback(BuildUserManagementErrorResponse(context.error()));
+                  return;
+                }
+                std::optional<bool> requested;
+                if (request->method() == Put) {
+                  // Same strict one-field boolean object as viewer enablement.
+                  auto parsed = ParseSetViewerEnabledJson(
+                      request->getBody(), request->getHeader("content-type"));
+                  if (!parsed.ok()) {
+                    callback(BuildUserManagementErrorResponse(parsed.error()));
+                    return;
+                  }
+                  requested = parsed.value().enabled;
+                } else {
+                  auto empty = ValidateEmptyRequestBody(request->getBody());
+                  if (!empty.ok()) {
+                    callback(BuildUserManagementErrorResponse(empty.error()));
+                    return;
+                  }
+                }
+                const auto dependencies = CopyAdministratorUserDependencies();
+                if (dependencies.shutting_down || !dependencies.service ||
+                    !dependencies.worker) {
+                  callback(SecurityUnavailableResponse());
+                  return;
+                }
+                auto submitted = dependencies.worker->Submit(
+                    [service = dependencies.service, requested,
+                     context = std::move(context).value(), callback,
+                     event_loop = app().getLoop()]() mutable {
+                      try {
+                        bool enabled = false;
+                        if (requested.has_value()) {
+                          auto updated =
+                              service->SetManagementIpRestrictionEnabled(
+                                  *requested, context);
+                          if (!updated.ok()) {
+                            QueueResponse(event_loop, std::move(callback),
+                                          BuildUserManagementErrorResponse(
+                                              updated.error()));
+                            return;
+                          }
+                          enabled = *requested;
+                        } else {
+                          auto current =
+                              service->ManagementIpRestrictionEnabled();
+                          if (!current.ok()) {
+                            QueueResponse(event_loop, std::move(callback),
+                                          BuildUserManagementErrorResponse(
+                                              current.error()));
+                            return;
+                          }
+                          enabled = current.value();
+                        }
+                        Json::Value body(Json::objectValue);
+                        body["enabled"] = enabled;
+                        QueueResponse(event_loop, std::move(callback),
+                                      JsonResponse(std::move(body)));
+                      } catch (...) {
+                        QueueResponse(event_loop, std::move(callback),
+                                      SecurityUnavailableResponse());
+                      }
+                    });
+                if (!submitted.ok()) {
+                  callback(BuildUserManagementErrorResponse(submitted.error()));
+                }
+              } catch (...) {
+                callback(SecurityUnavailableResponse());
+              }
+            });
+      },
+      {Get, Put});
 
   app().registerHandler(
       "/api/v1/security/management-ips",
@@ -4361,7 +4456,7 @@ void RegisterHandlers() {
       [](const HttpRequestPtr& request, DrogonCallback&& callback) {
         AuthorizeRequest(
             request, std::move(callback),
-            [](AuthorizedRequest, HttpCallback callback) {
+            [request](AuthorizedRequest, HttpCallback callback) {
               const config::AppConfig* config = nullptr;
               std::string public_base_url;
               SecureStreamDiagnosticsProvider diagnostics_provider;
@@ -4371,6 +4466,11 @@ void RegisterHandlers() {
                 public_base_url = GlobalState().args.public_base_url;
                 diagnostics_provider =
                     GlobalState().args.secure_stream_diagnostics_provider;
+              }
+              if (public_base_url.empty()) {
+                public_base_url = SocketHttpsOrigin(
+                    request->localAddr().toIp(), request->localAddr().toPort(),
+                    request->isOnSecureConnection());
               }
               if (config == nullptr) {
                 Json::Value body(Json::objectValue);

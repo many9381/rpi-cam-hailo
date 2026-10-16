@@ -247,8 +247,18 @@ gboolean Check(GstRTSPAuth* auth, GstRTSPContext* context, const gchar* check) {
   }
   if (g_strcmp0(check, GST_RTSP_AUTH_CHECK_URL) == 0 && context != nullptr &&
       context->method == GST_RTSP_OPTIONS) {
-    ClearContextToken(context);
-    return TRUE;
+    // Only sessionless discovery is public. Either selector can make
+    // GStreamer look up, touch and watch an existing session after this check.
+    gchar* selector = nullptr;
+    if (context->request != nullptr &&
+        gst_rtsp_message_get_header(context->request, GST_RTSP_HDR_SESSION,
+                                    &selector, 0) != GST_RTSP_OK &&
+        gst_rtsp_message_get_header(context->request,
+                                    GST_RTSP_HDR_PIPELINED_REQUESTS, &selector,
+                                    0) != GST_RTSP_OK) {
+      ClearContextToken(context);
+      return TRUE;
+    }
   }
   if (g_strcmp0(check, GST_RTSP_AUTH_CHECK_URL) == 0) {
     if (context == nullptr) {

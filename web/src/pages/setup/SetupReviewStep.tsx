@@ -7,6 +7,7 @@ export interface SetupReviewStepProps {
   password: string;
   peerIp: string;
   hosts: string[];
+  restrictionEnabled: boolean;
   submitting: boolean;
   onBack: () => void;
   onSubmit: () => void;
@@ -23,6 +24,7 @@ export function SetupReviewStep({
   password,
   peerIp,
   hosts,
+  restrictionEnabled,
   submitting,
   onBack,
   onSubmit,
@@ -42,16 +44,22 @@ export function SetupReviewStep({
           <dd aria-label={t('setup.passwordHiddenLabel')}>{PASSWORD_MASK}</dd>
         </div>
         <div className="wizard-review-row">
-          <dt>{t('setup.managementAddressesLabel')}</dt>
-          <dd>
-            <ul className="management-host-list">
-              <li>
-                {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
-              </li>
-              {hosts.map((host) => <li key={host}>{host}</li>)}
-            </ul>
-          </dd>
+          <dt>{t('setup.managementPolicyLabel')}</dt>
+          <dd>{t(restrictionEnabled ? 'setup.restrictionsEnabled' : 'setup.restrictionsDisabled')}</dd>
         </div>
+        {restrictionEnabled && (
+          <div className="wizard-review-row">
+            <dt>{t('setup.managementAddressesLabel')}</dt>
+            <dd>
+              <ul className="management-host-list">
+                <li>
+                  {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
+                </li>
+                {hosts.map((host) => <li key={host}>{host}</li>)}
+              </ul>
+            </dd>
+          </div>
+        )}
       </dl>
       <div className="wizard-actions">
         <button type="button" className="secondary-button" onClick={onBack} disabled={submitting}>

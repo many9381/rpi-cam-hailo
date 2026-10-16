@@ -396,12 +396,12 @@ bool ContainsCode(const std::array<std::string_view, Size>& codes,
 }
 
 bool IsConflictCode(std::string_view code) {
-  constexpr std::array<std::string_view, 9> kCodes = {
-      "E_USER_DUPLICATE",         "E_VIEWER_LIMIT",
-      "E_USER_PROTECTED",         "E_USER_CONFLICT",
-      "E_PASSWORD_REUSE",         "E_MANAGEMENT_IP_DUPLICATE",
-      "E_MANAGEMENT_IP_LIMIT",    "E_MANAGEMENT_IP_ROLE_MISMATCH",
-      "E_MANAGEMENT_IP_PROTECTED"};
+  constexpr std::array<std::string_view, 10> kCodes = {
+      "E_USER_DUPLICATE",          "E_VIEWER_LIMIT",
+      "E_USER_PROTECTED",          "E_USER_CONFLICT",
+      "E_PASSWORD_REUSE",          "E_MANAGEMENT_IP_DUPLICATE",
+      "E_MANAGEMENT_IP_LIMIT",     "E_MANAGEMENT_IP_ROLE_MISMATCH",
+      "E_MANAGEMENT_IP_PROTECTED", "E_MANAGEMENT_IP_LOCKOUT"};
   return ContainsCode(kCodes, code);
 }
 

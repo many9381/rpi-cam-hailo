@@ -1,0 +1,99 @@
+{
+  "date": "2026-10-10",
+  "scope": "Project layer security update inputs, relative to yocto-rpi5-cam-firmware",
+  "firmware_base_commit": "ba503a1fbc4ed68c1fd29aace7214a5c330d7021",
+  "files": [
+    {
+      "path": "meta-rpi-cam-hailo/recipes-camera/camera-firmware/camera-firmware-npm.inc",
+      "sha256": "d566faa59ac73c24d9b1a00d7915e9b2ac690ebdcccaa7006967fa704c1a4c12"
+    },
+    {
+      "path": "meta-rpi-cam-hailo/recipes-camera/camera-firmware/camera-firmware-web_git.bb",
+      "sha256": "dbadb0350e02dc4995860697a934e3323c142811a5aa84867eda935a642fd675"
+    },
+    {
+      "path": "meta-rpi-cam-hailo/recipes-camera/camera-firmware/files/0003-web-update-source-map-js-security-fix.patch",
+      "sha256": "35142511a2c3ac1b36619bbb204cf0530359e5a7dcfb8a6671e56faaa94c2674"
+    },
+    {
+      "path": "meta-rpi-cam-hailo/recipes-camera/camera-firmware/files/0004-security-fix-web-dependency-and-sbom-hashes.patch",
+      "sha256": "3444300651010a490a15a37bd3e42e7f89ee6a392eb38fd28011894ce5ebc79c"
+    },
+    {
+      "path": "meta-rpi-cam-hailo/recipes-camera/camera-firmware/rpi-cam-hailo-devrepo_git.bb",
+      "sha256": "ee9566e9014d6b8974d3ed5f79c93029c073fc7c75a3c4a9ca6d13852b096ffa"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-connectivity/openssl/openssl_3.5.7.bbappend",
+      "sha256": "a724dc5a9cdddfdcc8d5f0e2ce272d68ae11e7d6b5bc447838d4f7f70b8c7d65"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-core/glib-2.0/files/CVE-2026-58010.patch",
+      "sha256": "1ea604930e416afd045de27363a97ca9047bea05682c77c933c4ddb44dee4307"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-core/glib-2.0/glib-2.0_2.88.0.bbappend",
+      "sha256": "3b9a5c447a65176d60afd4a258dcbd74774e530fde79132b5d20336ea63edb89"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-core/zlib/files/0001-Fix-buffer-overflow-bug-in-non-blocking-gzwrite.patch",
+      "sha256": "82be3c498b950485a56fed0395e38c2ef377285029660b7e2acb1a9a067955a5"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-core/zlib/zlib_1.3.2.bbappend",
+      "sha256": "21b02d47f435ea5ba2e7cec2a0be83f5650b03f6735b042db197d70722d7fc5e"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gst-devtools_1.28.2.bbappend",
+      "sha256": "fe5e2c686ab012e4fa8c9b09f0159aa51ab788faadbb2115aab420496b8b7218"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gst-examples_1.28.2.bbappend",
+      "sha256": "75a226498c3f2238603dd0aa524f67d8e3a8a988a95c0d6d329fb09268ffa621"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer-security.inc",
+      "sha256": "9da85a5a74ddf5018426df087150ab33f31ca29fafc1199ba394dd5623f1edc0"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-libav_1.28.2.bbappend",
+      "sha256": "9a0b6bbce7d5e80dd20bbc5b1e8358942745e8af512fb388680bf45c5524c19f"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-plugins-bad_1.28.2.bbappend",
+      "sha256": "3626046d46f7468a77b0cd849c39117837592f288c7a3c40c6075cec987a799c"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-plugins-base_1.28.2.bbappend",
+      "sha256": "b0fdb8e3c886f8b0792b145597b6c432fcbebc1e08edb1b19c81682a7138b5b5"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-plugins-good_1.28.2.bbappend",
+      "sha256": "e5a12ae0317e05d8c60d9d053cf7dfe9667e4431524896f370f79571b1da284d"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-plugins-ugly_1.28.2.bbappend",
+      "sha256": "2491ab60c32fb18369b182f34fb4175c208edaef994026c0ff4cd41874b046d8"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-python_1.28.2.bbappend",
+      "sha256": "755df562f2a994961877e8359b0c5d6fdc526441089f2a2fb4a6c68a35fb0290"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0-rtsp-server_1.28.2.bbappend",
+      "sha256": "b92dc9a98d783783b36671e0e7640665d4607c5554e9cbe928fe993f771700d0"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-multimedia/gstreamer/gstreamer1.0_1.28.2.bbappend",
+      "sha256": "60a09e540e71da907a2016ee91bb652631a7fa8f7ee04cf196e6c761397e96e1"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-support/libpcre/libpcre2_10.47.bbappend",
+      "sha256": "f958fa36fa84ace9c557e4247e20ddac2b789b080b84bb37f380aef9d656dbf0"
+    },
+    {
+      "path": "meta-rpi5-cam/recipes-support/sqlite/sqlite3_3.51.3.bbappend",
+      "sha256": "a72e6e577edc3e90e8c0df13465b203a9884059e51881a7165e00284970a72da"
+    }
+  ]
+}

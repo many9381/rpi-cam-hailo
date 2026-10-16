@@ -41,6 +41,11 @@ export const en = {
     managementUnavailable: 'Camera management is unavailable.',
   },
   status: {
+    noCameraFrames: 'No camera frames received. Check the camera connection with power disconnected.',
+    captureStalled: 'Camera frame delivery stopped. Video and AI are unavailable.',
+    captureFailed: 'Camera capture failed.',
+    recoveringCapture: 'Automatic recovery: {n}/{max} attempts used. Recovery is in progress.',
+    captureRecoveryStopped: 'Automatic recovery stopped. Check the camera connection, then restart the camera runtime.',
     deviceOperational: 'Operational',
     deviceChecking: 'Checking',
     deviceRestricted: 'Restricted',
@@ -153,6 +158,8 @@ export const en = {
     signIn: 'Sign in',
     signingIn: 'Signing in...',
     signInFailed: 'Sign in failed. Check your credentials and try again.',
+    requestOriginFailed:
+      'The request origin or camera address was rejected. Open the camera directly at its current HTTPS address and try again.',
     initialSetupHeading: 'Initial setup account',
     initialSetupDescription:
       'This account is for initial setup only and is removed once setup completes.',
@@ -176,7 +183,14 @@ export const en = {
   },
   setup: {
     initializationFailed:
-      'Camera initialization failed. Check the credentials and try again.',
+      'Unable to confirm camera initialization. Check the connection to the camera and try again.',
+    sessionEnded:
+      'Your initial setup session has ended. Sign in again with the initial account shown below, then enter your administrator details again.',
+    serviceUnavailable:
+      'The camera service could not complete setup. Wait a moment and try again.',
+    rateLimited: 'Too many requests. Wait a moment and try again.',
+    requestInvalid: 'The setup request was rejected. Review your entries and try again.',
+    peerChanged: 'Your connection address changed. Review your settings and try again.',
     createAdministratorHeading: 'Create administrator',
     stepAccountProgress: 'Step 1 of 3 · Account',
     resolveRequirements: 'Resolve the password requirements listed below.',
@@ -194,9 +208,14 @@ export const en = {
     next: 'Next',
     registerAccessHeading: 'Register management access',
     stepAccessProgress: 'Step 2 of 3 · Management access',
+    restrictManagementAccess: 'Restrict management access by IP',
+    managementPolicyLabel: 'Management IP restrictions',
+    restrictionsEnabled: 'Enabled',
+    restrictionsDisabled: 'Disabled',
+    managementPolicyDescription:
+      'Leave this off if client addresses can change with DHCP. No camera or client IP needs to be entered during setup. Signing in is still required. You can enable restrictions later in Users & access.',
     singleHostsDescription:
-      'Only single hosts may manage this camera — no ranges, wildcards, ' +
-      'or CIDR blocks. Your current address is already registered.',
+      'Register individual client addresses, without ranges, wildcards, or CIDR blocks. Your current address will be included automatically. Choose stable addresses to avoid losing access after a DHCP change.',
     registeredHostsLabel: 'Registered management hosts',
     currentSessionTag: '(current session)',
     addHostLabel: 'Add a management address',
@@ -355,6 +374,17 @@ export const en = {
     resetViewerPasswordFailed: 'The viewer password could not be reset.',
     deleteViewerFailed: 'The viewer could not be deleted.',
 
+    policyDescription:
+      'When enabled, only the saved addresses for each role can sign in and access management. When disabled, those addresses are kept but are not enforced. Account sign-in remains required. DHCP changes can block access when restrictions are enabled.',
+    policyCurrentAddress: 'Current connection address: {address}',
+    policyCurrent: 'Current setting: {state}',
+    policyLoading: 'Loading management IP restrictions...',
+    policyLoadFailed: 'Management IP restrictions could not be loaded.',
+    policyRetry: 'Retry policy loading',
+    policySignInNotice: 'Saving this change ends all active sessions. Sign in again to continue.',
+    policySave: 'Save and sign in again',
+    policySaving: 'Saving restrictions...',
+    policySaveFailed: 'Management IP restrictions could not be saved.',
     loadingAccessIps: 'Loading access IPs...',
     accessIpListLoadFailed: 'The access IP list could not be loaded.',
     retryAccessIps: 'Retry access IPs',
@@ -529,6 +559,7 @@ export const en = {
     userConflict: 'This account was changed. Refresh and try again.',
     userNotFound: 'That account no longer exists.',
     notAuthorized: 'You are not authorized to perform this action.',
+    managementIpLockout: 'Add your current IP address to the administrator access list before enabling restrictions.',
     managementIpInvalid: 'Enter one valid IPv4 or IPv6 host address.',
     managementIpExists: 'That address already exists for this role.',
     managementIpLimitReached: 'The address limit for this role has been reached.',

@@ -6,27 +6,18 @@ import { useTranslation } from '../../i18n/LanguageContext';
 import { SetupCredentialsStep } from './SetupCredentialsStep';
 import { SetupIpStep } from './SetupIpStep';
 import { SetupReviewStep } from './SetupReviewStep';
+import { setupErrorMessage } from './publicError';
 
 export interface SetupWizardProps {
   client: CameraApiClient;
   peerIp: string;
   onInitialized: () => void;
-  onInitializationFailed?: () => Promise<boolean>;
+  onInitializationFailed?: (error: unknown) => Promise<boolean>;
 }
 
 type WizardStep = 'credentials' | 'ip' | 'review';
 
-/**
- * Owns every value collected across the three setup steps and performs the
- * single submission to /api/v1/setup/initialize: username, password, and
- * peer_ip (unchanged from before this session requirement was added; see
- * src/service/ServiceApp.cpp and SecurityRequestGate::ParseSetupJson), plus
- * management_ips — the additional single hosts collected in step 2. The
- * confirming peer is registered unconditionally by the server before it
- * reads that list (SecurityStore::InitializeDevice), so it is never
- * included in `hosts` here. Steps are client state only: no request is
- * sent until review submits.
- */
+/** Collects setup choices locally and submits them once at review. */
 export function SetupWizard({
   client,
   peerIp,
@@ -39,6 +30,7 @@ export function SetupWizard({
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [hosts, setHosts] = useState<string[]>([]);
+  const [restrictionEnabled, setRestrictionEnabled] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,7 +44,13 @@ export function SetupWizard({
     try {
       await client.postJson(
         '/api/v1/setup/initialize',
-        { username, password, peer_ip: peerIp, management_ips: hosts },
+        {
+          username,
+          password,
+          peer_ip: peerIp,
+          management_ip_restriction_enabled: restrictionEnabled,
+          management_ips: restrictionEnabled ? hosts : [],
+        },
         parseInitializeResult,
       );
       // Cleared before notifying the caller, not after: the plaintext has
@@ -62,13 +60,13 @@ export function SetupWizard({
       setPassword('');
       setConfirmation('');
       onInitialized();
-    } catch {
+    } catch (error) {
       setPassword('');
       setConfirmation('');
-      const advanced = await onInitializationFailed();
+      const advanced = await onInitializationFailed(error);
       if (!advanced) {
         setStep('credentials');
-        setFailure(t('setup.initializationFailed'));
+        setFailure(setupErrorMessage(error, t));
       }
     } finally {
       setSubmitting(false);
@@ -94,6 +92,8 @@ export function SetupWizard({
           <SetupIpStep
             peerIp={peerIp}
             hosts={hosts}
+            restrictionEnabled={restrictionEnabled}
+            onRestrictionChange={setRestrictionEnabled}
             onAddHost={addHost}
             onBack={() => setStep('credentials')}
             onNext={() => setStep('review')}
@@ -105,6 +105,7 @@ export function SetupWizard({
             password={password}
             peerIp={peerIp}
             hosts={hosts}
+            restrictionEnabled={restrictionEnabled}
             submitting={submitting}
             onBack={() => setStep('ip')}
             onSubmit={() => { void submit(); }}

@@ -1,6 +1,16 @@
 # Dependency inventory
 
-Generated 2026-09-10 on the development Raspberry Pi 5 (Debian 13 "trixie" arm64 + Raspberry Pi archive). Machine-readable form: `sbom/firmware.cdx.json`, `sbom/web.cdx.json` (CycloneDX 1.5, produced by `tools/security/generate_sbom.py`; see `README.md` for the procedure).
+**Historical Debian inventory — generated 2026-09-10.** The tables below
+describe the development Raspberry Pi 5 running Debian 13 "trixie" arm64 plus
+the Raspberry Pi archive. They are preserved as that environment's record and
+do not describe the current Yocto image.
+
+For the accepted Yocto image's package manifest, SPDX and deployment record,
+see [current Yocto image evidence](README.md#current-yocto-image-evidence).
+`sbom/firmware.cdx.json` is the historical Debian machine-readable inventory
+(CycloneDX 1.5, produced by `tools/security/generate_sbom.py`). The separate
+`sbom/web.cdx.json` was regenerated on 2026-10-10 from the updated web lockfile;
+the web table below remains the September 10 snapshot, not that newer SBOM.
 
 ## 1. Firmware binary — runtime shared libraries
 

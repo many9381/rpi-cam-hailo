@@ -501,7 +501,7 @@ TEST(UserManagementHttpTest, SemanticErrorsMapToPublicStatusClasses) {
     std::string_view code;
     drogon::HttpStatusCode status;
   };
-  for (const auto& mapping : std::array<Mapping, 21>{
+  for (const auto& mapping : std::array<Mapping, 22>{
            {{"E_INVALID_REQUEST", drogon::k400BadRequest},
             {"E_REQUEST_TOO_LARGE", drogon::k413RequestEntityTooLarge},
             {"E_USER_FORBIDDEN", drogon::k403Forbidden},
@@ -521,6 +521,7 @@ TEST(UserManagementHttpTest, SemanticErrorsMapToPublicStatusClasses) {
             {"E_MANAGEMENT_IP_LIMIT", drogon::k409Conflict},
             {"E_MANAGEMENT_IP_ROLE_MISMATCH", drogon::k409Conflict},
             {"E_MANAGEMENT_IP_PROTECTED", drogon::k409Conflict},
+            {"E_MANAGEMENT_IP_LOCKOUT", drogon::k409Conflict},
             {"E_USER_MANAGEMENT_UNAVAILABLE", drogon::k503ServiceUnavailable},
             {"E_PRIVATE_BACKEND_FAILURE", drogon::k503ServiceUnavailable}}}) {
     EXPECT_EQ(UserManagementErrorStatus(mapping.code), mapping.status)

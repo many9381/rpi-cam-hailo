@@ -177,6 +177,171 @@ std::shared_ptr<FirmwareRuntime> MakeRuntime(
   return std::make_shared<FirmwareRuntime>(config, DependenciesFor(probe));
 }
 
+// Use real lifecycle orchestration, replacing only the camera/device
+// dependencies.
+TEST(ManagedCameraRecoveryTest,
+     StopsStalledGraphRetriesThreeTimesThenAllowsManualStart) {
+  auto events = std::make_shared<EventLog>();
+  auto probe = std::make_shared<RuntimeProbe>("camera", events);
+  auto now = std::chrono::steady_clock::time_point{};
+  auto dependencies = DependenciesFor(probe);
+  dependencies.camera_statuses = [] {
+    media::CameraPipelineStatus status;
+    status.state = "error";
+    status.capture_error = "E_CAMERA_NO_FRAMES";
+    return std::vector{status};
+  };
+  config::AppConfig config;
+  ManagedFirmwareRuntime managed(
+      config,
+      [dependencies](const auto& cfg) {
+        return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(
+            std::make_shared<FirmwareRuntime>(cfg, dependencies));
+      },
+      [&] { return now; });
+  ASSERT_TRUE(managed.Start().ok());
+  // Reading status before the supervisor runs must not claim retries exhausted.
+  EXPECT_EQ(managed.CameraStatuses()[0].state, "recovering");
+  for (unsigned attempt = 0; attempt != 3; ++attempt) {
+    managed.PollCameraHealth();
+    EXPECT_EQ(managed.State(), ManagedRuntimeState::kFailed);
+    EXPECT_EQ(managed.CameraStatuses()[0].state, "recovering");
+    now += 4999ms;
+    managed.PollCameraHealth();
+    EXPECT_EQ(probe->camera_starts, attempt + 1);
+    now += 1ms;
+    managed.PollCameraHealth();
+    EXPECT_EQ(probe->camera_starts, attempt + 2);
+    EXPECT_EQ(managed.CameraStatuses()[0].state, "recovering");
+  }
+  managed.PollCameraHealth();
+  now += 1h;
+  managed.PollCameraHealth();
+  EXPECT_EQ(probe->camera_starts, 4U);
+  const auto status = managed.CameraStatuses()[0];
+  EXPECT_EQ(status.state, "error");
+  EXPECT_EQ(status.capture_error, "E_CAMERA_NO_FRAMES");
+  EXPECT_EQ(status.recovery_attempts, 3U);
+  EXPECT_FALSE(status.snapshot_available);
+  ASSERT_TRUE(managed.Start().ok());
+  EXPECT_EQ(probe->camera_starts, 5U);
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 0U);
+}
+
+TEST(ManagedCameraRecoveryTest, ExplicitStopCancelsPendingRetry) {
+  auto probe =
+      std::make_shared<RuntimeProbe>("camera", std::make_shared<EventLog>());
+  auto now = std::chrono::steady_clock::time_point{};
+  auto dependencies = DependenciesFor(probe);
+  dependencies.camera_statuses = [] {
+    media::CameraPipelineStatus status;
+    status.state = "error";
+    status.capture_error = "E_CAMERA_CAPTURE_STALLED";
+    return std::vector{status};
+  };
+  ManagedFirmwareRuntime managed(
+      {},
+      [dependencies](const auto& cfg) {
+        return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(
+            std::make_shared<FirmwareRuntime>(cfg, dependencies));
+      },
+      [&] { return now; });
+  ASSERT_TRUE(managed.Start().ok());
+  managed.PollCameraHealth();
+  managed.Stop();
+  now += 1h;
+  managed.PollCameraHealth();
+  EXPECT_EQ(probe->camera_starts, 1U);
+  EXPECT_EQ(managed.State(), ManagedRuntimeState::kStopped);
+  EXPECT_EQ(managed.CameraStatuses()[0].state, "stopped");
+}
+
+TEST(ManagedCameraRecoveryTest,
+     FailedRestartConsumesBudgetAndHealthyCaptureRearmsIt) {
+  auto probe =
+      std::make_shared<RuntimeProbe>("camera", std::make_shared<EventLog>());
+  auto now = std::chrono::steady_clock::time_point{};
+  bool stalled = true;
+  auto dependencies = DependenciesFor(probe);
+  dependencies.camera_statuses = [&] {
+    media::CameraPipelineStatus status;
+    status.state = stalled ? "error" : "running";
+    status.capture_error = stalled ? "E_CAMERA_CAPTURE_STALLED" : "";
+    return std::vector{status};
+  };
+  ManagedFirmwareRuntime managed(
+      {},
+      [dependencies](const auto& cfg) {
+        return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(
+            std::make_shared<FirmwareRuntime>(cfg, dependencies));
+      },
+      [&] { return now; });
+  ASSERT_TRUE(managed.Start().ok());
+  probe->failure = StartFailure::kCamera;
+  probe->failure_attempt = 2;
+  managed.PollCameraHealth();
+  now += 5s;
+  managed.PollCameraHealth();
+  EXPECT_EQ(managed.State(), ManagedRuntimeState::kFailed);
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 1U);
+  now += 5s;
+  managed.PollCameraHealth();
+  stalled = false;
+  managed.PollCameraHealth();
+  now += 59s;
+  managed.PollCameraHealth();
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 2U);
+  now += 1s;
+  managed.PollCameraHealth();
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 0U);
+  stalled = true;
+  managed.PollCameraHealth();
+  now += 5s;
+  managed.PollCameraHealth();
+  EXPECT_EQ(probe->camera_starts, 4U);
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 1U);
+}
+
+TEST(ManagedCameraRecoveryTest,
+     ApplyingConfigurationCancelsOldRetryAndKeepsCandidate) {
+  auto old_probe =
+      std::make_shared<RuntimeProbe>("old", std::make_shared<EventLog>());
+  auto new_probe =
+      std::make_shared<RuntimeProbe>("new", std::make_shared<EventLog>());
+  auto now = std::chrono::steady_clock::time_point{};
+  auto old_dependencies = DependenciesFor(old_probe);
+  old_dependencies.camera_statuses = [] {
+    media::CameraPipelineStatus status;
+    status.state = "error";
+    status.capture_error = "E_CAMERA_NO_FRAMES";
+    return std::vector{status};
+  };
+  unsigned created = 0;
+  ManagedFirmwareRuntime managed(
+      {},
+      [&](const auto& cfg) {
+        return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(
+            std::make_shared<FirmwareRuntime>(
+                cfg, ++created == 1 ? old_dependencies
+                                    : DependenciesFor(new_probe)));
+      },
+      [&] { return now; });
+  ASSERT_TRUE(managed.Start().ok());
+  managed.PollCameraHealth();
+  config::AppConfig candidate;
+  candidate.secure_rtsp.enabled = false;
+  candidate.security.enabled = false;
+  const auto replacement =
+      managed.Replace(candidate, [] { return common::Result<void>::Ok(); });
+  ASSERT_EQ(replacement.outcome, RuntimeReplacementResult::Outcome::kApplied);
+  now += 1h;
+  managed.PollCameraHealth();
+  EXPECT_EQ(old_probe->camera_starts, 1U);
+  EXPECT_EQ(new_probe->camera_starts, 1U);
+  EXPECT_EQ(managed.CameraStatuses()[0].id, "new");
+  EXPECT_EQ(managed.CameraStatuses()[0].recovery_attempts, 0U);
+}
+
 class FactorySequence {
  public:
   using Action = std::function<common::Result<std::shared_ptr<FirmwareRuntime>>(
@@ -577,6 +742,76 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<CandidateFailureCase>& info) {
       return info.param.name;
     });
+
+class ManagedFirmwareRuntimeErrorSnapshotTest
+    : public ::testing::TestWithParam<bool> {};
+
+TEST_P(ManagedFirmwareRuntimeErrorSnapshotTest,
+       PreservesFailureWhenRecoveryChangesStaticError) {
+  const bool fail_during_start = GetParam();
+  // Static lifetime does not imply an immutable diagnostic. Recovery may use
+  // the same callback-owned error storage as the failed operation.
+  static common::Error shared_error;
+  shared_error = {"E_ORIGINAL", "original operation failure"};
+  const auto old_config = ConfigNamed("old");
+  const auto candidate_config = ConfigNamed("candidate");
+  const auto events = std::make_shared<EventLog>();
+  const auto old_probe = std::make_shared<RuntimeProbe>("old", events);
+  auto old_dependencies = DependenciesFor(old_probe);
+  old_dependencies.start_rtsp = [old_probe] {
+    auto result = StartComponent(old_probe, "rtsp", StartFailure::kRtsp,
+                                 old_probe->rtsp_starts);
+    if (old_probe->rtsp_starts.load() > 1U) {
+      shared_error = {"E_RECOVERY", "diagnostic replaced during recovery"};
+    }
+    return result;
+  };
+  const auto old_runtime = std::make_shared<FirmwareRuntime>(
+      old_config, std::move(old_dependencies));
+  const auto candidate_probe =
+      std::make_shared<RuntimeProbe>("candidate", events);
+  auto candidate_dependencies = DependenciesFor(candidate_probe);
+  if (fail_during_start) {
+    candidate_dependencies.start_rtsp = [] {
+      return common::Result<void>::ErrFromStaticLifetime(shared_error);
+    };
+  }
+  const auto candidate_runtime = std::make_shared<FirmwareRuntime>(
+      candidate_config, std::move(candidate_dependencies));
+  const auto sequence = std::make_shared<FactorySequence>();
+  sequence->Push([old_runtime](const config::AppConfig&) {
+    return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(old_runtime);
+  });
+  sequence->Push([candidate_runtime](const config::AppConfig&) {
+    return common::Result<std::shared_ptr<FirmwareRuntime>>::Ok(
+        candidate_runtime);
+  });
+  ManagedFirmwareRuntime managed(old_config, FactoryFrom(sequence));
+  ASSERT_TRUE(managed.Start().ok());
+
+  const auto replaced = managed.Replace(candidate_config, [] {
+    return common::Result<void>::ErrFromStaticLifetime(shared_error);
+  });
+
+  EXPECT_EQ(replaced.outcome,
+            fail_during_start
+                ? RuntimeReplacementResult::Outcome::kCandidateFailed
+                : RuntimeReplacementResult::Outcome::kCommitFailed);
+  EXPECT_TRUE(replaced.restored);
+  EXPECT_EQ(replaced.error.code, "E_ORIGINAL");
+  EXPECT_EQ(replaced.error.message, "original operation failure");
+  EXPECT_EQ(old_probe->rtsp_starts.load(), 2U);
+  EXPECT_EQ(managed.State(), ManagedRuntimeState::kRunning);
+  EXPECT_EQ(managed.ActiveConfig().camera.id, "old");
+  EXPECT_EQ(candidate_runtime->State(), FirmwareRuntimeState::kStopped);
+  managed.Stop();
+}
+
+INSTANTIATE_TEST_SUITE_P(FailurePoints, ManagedFirmwareRuntimeErrorSnapshotTest,
+                         ::testing::Values(true, false),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                           return info.param ? "CandidateStart" : "Promotion";
+                         });
 
 TEST(ManagedFirmwareRuntimeTest,
      PromotionFailureStopsCandidateAndRestartsPreviousRuntime) {

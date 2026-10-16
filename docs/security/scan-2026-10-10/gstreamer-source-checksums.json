@@ -1,0 +1,65 @@
+[
+  {
+    "component": "gst-devtools",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-devtools/gst-devtools-1.28.8.tar.xz",
+    "sha256": "a85275f91e421ae55c8ec08779459a3f93f620d2acc25b6e6723ef43573c6ba5",
+    "size": 1650132
+  },
+  {
+    "component": "gst-libav",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.28.8.tar.xz",
+    "sha256": "98ad3d7f8932c495e268708903f1c3388d5f26a0db34727a9f861ee23b724177",
+    "size": 224460
+  },
+  {
+    "component": "gst-plugins-bad",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.8.tar.xz",
+    "sha256": "670d888bde8242579b0d8e91f60cf337aa7be20ca7c315ebfbdd6e5a9218d104",
+    "size": 8355328
+  },
+  {
+    "component": "gst-plugins-base",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.8.tar.xz",
+    "sha256": "ade70e3381fcbb024f1f20aa9ede9b5654aeed39d5bd70b1a98f53015e501117",
+    "size": 2566564
+  },
+  {
+    "component": "gst-plugins-good",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.8.tar.xz",
+    "sha256": "a7670ed900d3d03be744d25c1873b239896e9a82ce6d17f8febc6fffbaee9521",
+    "size": 6014472
+  },
+  {
+    "component": "gst-plugins-ugly",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-plugins-ugly/gst-plugins-ugly-1.28.8.tar.xz",
+    "sha256": "51ae53002e3bbe9ed0f2215020c5a248bf0ed41b9d9a2a4e102b8583fedab61c",
+    "size": 247988
+  },
+  {
+    "component": "gst-python",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-python/gst-python-1.28.8.tar.xz",
+    "sha256": "6e0d8dd920234b9feeb86003d8f43c1996491f9d8190882329bf56f60a70206e",
+    "size": 157884
+  },
+  {
+    "component": "gst-rtsp-server",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gst-rtsp-server/gst-rtsp-server-1.28.8.tar.xz",
+    "sha256": "59181ed21a5bc0533fb4f77cb7bc6005d89365e834b0c1294afb9ab5f7d96fe0",
+    "size": 306632
+  },
+  {
+    "component": "gstreamer",
+    "version": "1.28.8",
+    "url": "https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.28.8.tar.xz",
+    "sha256": "baa8e86985ad6417cc0ad6e7b79ff2884c6779c8b1c7a6240e7121822c86e524",
+    "size": 1965000
+  }
+]

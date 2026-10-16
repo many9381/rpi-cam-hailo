@@ -207,11 +207,11 @@ common::Result<void> ValidateRuntimeSettings(
     return common::Result<void>::Err(
         {"E_RUNTIME_SETTINGS_GOP", "camera GOP must be between 1 and 300"});
   }
-  const auto sub_stream_result = ValidateSubStreamSettings(settings);
+  auto sub_stream_result = ValidateSubStreamSettings(settings);
   if (!sub_stream_result.ok()) {
     return sub_stream_result;
   }
-  const auto osd_result = ValidateOsdSettings(settings);
+  auto osd_result = ValidateOsdSettings(settings);
   if (!osd_result.ok()) {
     return osd_result;
   }

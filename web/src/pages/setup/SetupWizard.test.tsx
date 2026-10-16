@@ -40,6 +40,47 @@ async function advanceToReview(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('SetupWizard', () => {
+  it('defaults to DHCP-friendly setup without entering management addresses', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<SetupWizard client={client} peerIp="192.0.2.44" onInitialized={vi.fn()} />);
+    await user.type(screen.getByLabelText(/^username$/i), 'operator.one');
+    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
+    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    expect(screen.getByRole('checkbox', { name: /restrict management access by ip/i })).not.toBeChecked();
+    expect(screen.queryByLabelText(/add a management address/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /registered management hosts/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    expect(screen.getByText('Disabled')).toBeVisible();
+    expect(screen.queryByText('192.0.2.44', { exact: false })).not.toBeInTheDocument();
+  });
+
+  it('omits staged hosts when IP restrictions are switched off again', async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.mocked(client.postJson).mockResolvedValue({ required: false, runtime: 'running' });
+    render(<SetupWizard client={client} peerIp="192.0.2.44" onInitialized={vi.fn()} />);
+    await user.type(screen.getByLabelText(/^username$/i), 'operator.one');
+    await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
+    await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    const restriction = screen.getByRole('checkbox', { name: /restrict management access by ip/i });
+    await user.click(restriction);
+    await user.type(screen.getByLabelText(/add a management address/i), '198.51.100.20');
+    await user.click(screen.getByRole('button', { name: /add host/i }));
+    await user.click(restriction);
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    expect(screen.getByText('Disabled')).toBeVisible();
+    expect(screen.queryByText('198.51.100.20')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /complete setup/i }));
+    await waitFor(() => expect(client.postJson).toHaveBeenCalledWith(
+      '/api/v1/setup/initialize',
+      expect.objectContaining({ management_ip_restriction_enabled: false, management_ips: [] }),
+      expect.any(Function),
+    ));
+  });
+
   it('walks credentials, IP, and review while preserving values moving forward and back', async () => {
     const user = userEvent.setup();
     const client = makeClient();
@@ -52,6 +93,7 @@ describe('SetupWizard', () => {
     await user.click(screen.getByRole('button', { name: /next/i }));
 
     await screen.findByRole('heading', { name: /management access/i });
+    await user.click(screen.getByRole('checkbox', { name: /restrict management access by ip/i }));
     await user.type(screen.getByLabelText(/add a management address/i), '198.51.100.20');
     await user.click(screen.getByRole('button', { name: /add host/i }));
     expect(screen.getByText('198.51.100.20')).toBeVisible();
@@ -95,6 +137,7 @@ describe('SetupWizard', () => {
         // advanceToReview never adds a host: an empty list here proves the
         // key is always sent, not only when the operator adds something.
         management_ips: [],
+        management_ip_restriction_enabled: false,
       },
       expect.any(Function),
     );
@@ -110,6 +153,7 @@ describe('SetupWizard', () => {
     await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.click(screen.getByRole('checkbox', { name: /restrict management access by ip/i }));
     await user.type(screen.getByLabelText(/add a management address/i), '198.51.100.20');
     await user.click(screen.getByRole('button', { name: /add host/i }));
     await user.click(screen.getByRole('button', { name: /^next$/i }));
@@ -119,7 +163,7 @@ describe('SetupWizard', () => {
     await waitFor(() => expect(client.postJson).toHaveBeenCalledTimes(1));
     expect(client.postJson).toHaveBeenCalledWith(
       '/api/v1/setup/initialize',
-      expect.objectContaining({ peer_ip: '192.0.2.44', management_ips: ['198.51.100.20'] }),
+      expect.objectContaining({ peer_ip: '192.0.2.44', management_ips: ['198.51.100.20'], management_ip_restriction_enabled: true }),
       expect.any(Function),
     );
   });
@@ -179,6 +223,7 @@ describe('SetupWizard', () => {
     await user.type(screen.getByLabelText(/^password$/i), 'NorthStar!9');
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.click(screen.getByRole('checkbox', { name: /restrict management access by ip/i }));
     await user.type(screen.getByLabelText(/add a management address/i), '198.51.100.20');
     await user.click(screen.getByRole('button', { name: /add host/i }));
     await user.click(screen.getByRole('button', { name: /^next$/i }));
@@ -188,7 +233,7 @@ describe('SetupWizard', () => {
 
     await screen.findByRole('heading', { name: /create administrator/i });
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Camera initialization failed. Check the credentials and try again.',
+      'Unable to confirm camera initialization. Check the connection to the camera and try again.',
     );
     expect(screen.queryByText(/reserved identity detail/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^username$/i)).toHaveValue('operator.one');

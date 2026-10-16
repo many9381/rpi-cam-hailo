@@ -78,6 +78,22 @@ export function StatusPanel({ health, cameras, selectedCameraId,
             <span className="camera-card-content">
               <strong>{camera.id}</strong>
               <span>{camera.state}</span>
+              {camera.capture_error && (
+                <small role="status">
+                  {t(camera.capture_error === 'E_CAMERA_NO_FRAMES'
+                    ? 'status.noCameraFrames'
+                    : camera.capture_error === 'E_CAMERA_CAPTURE_STALLED'
+                      ? 'status.captureStalled' : 'status.captureFailed')}
+                </small>
+              )}
+              {camera.state === 'recovering' && (
+                <small>{t('status.recoveringCapture', {
+                  n: camera.recovery_attempts ?? 0, max: camera.recovery_limit ?? 3,
+                })}</small>
+              )}
+              {camera.state === 'error' && camera.capture_error && (
+                <small>{t('status.captureRecoveryStopped')}</small>
+              )}
               <small>{camera.snapshot_available
                 ? t('status.snapshotAvailable') : t('status.snapshotUnavailable')}</small>
               {camera.capture_fps !== undefined && (

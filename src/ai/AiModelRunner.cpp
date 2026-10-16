@@ -245,7 +245,7 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
     return;
   }
 
-  const media::FrameHandle source_frame = frame.handle();
+  const media::FrameHandle& source_frame = frame.handle();
   // Recycled canvas: released back to the pool by its deleter once the last
   // holder (normally the Hailo completion callback) drops it.
   auto input_buffer = canvas_pool_->Acquire();
@@ -291,6 +291,8 @@ void AiModelRunner::ProcessFrame(media::FrameLease frame) {
           on_idle();
         }
       };
+  // Keep an owned metadata snapshot in the asynchronous callback after the
+  // input frame lease is released; only the intermediate local copy is avoided.
   auto complete_output = [weak_state, processor, source_frame, preprocess_ms,
                           detection_publisher = detection_publisher_,
                           submission,

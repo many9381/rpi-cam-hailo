@@ -818,6 +818,110 @@ TEST(SecurityRequestGateTest, RejectsUnknownMethodsAndRouteMethodMismatch) {
   EXPECT_EQ(malformed_result.error().code, "E_ACCESS_DENIED");
 }
 
+TEST(SecurityRequestGateTest,
+     SocketAddressAllowsDhcpOriginsBeforeAndAfterSetup) {
+  for (const auto state : {DeviceState::kDefault, DeviceState::kOperational}) {
+    for (const std::string address :
+         {"198.51.100.60", "198.51.100.81", "2001:db8::60"}) {
+      auto context = Operational("/api/v1/auth/login", "POST");
+      context.state = state;
+      context.expected_origin = "https://198.51.100.61:8443";
+      context.local_ip = address;
+      context.local_port = 8443;
+      context.local_tls = true;
+      context.origin =
+          "https://" +
+          (address.find(':') == std::string::npos ? address
+                                                  : "[" + address + "]") +
+          ":8443";
+      context.has_management_header = true;
+      EXPECT_TRUE(AuthorizeSecurityRequest(context).ok()) << address;
+      context.has_management_header = false;
+      auto denied = AuthorizeSecurityRequest(context);
+      ASSERT_FALSE(denied.ok());
+      EXPECT_EQ(denied.error().code, "E_REQUEST_HEADER");
+    }
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     SocketOriginStillRejectsOtherSitesAndInvalidEndpoints) {
+  auto context = Operational("/api/v1/auth/login", "POST");
+  context.expected_origin.clear();
+  context.local_ip = "198.51.100.60";
+  context.local_port = 8443;
+  context.local_tls = true;
+  context.has_management_header = true;
+  for (const std::string origin :
+       {"https://attacker.example:8443", "https://198.51.100.61:8443",
+        "http://198.51.100.60:8443", "https://198.51.100.60:443",
+        "https://198.51.100.60:8443/path", "null", ""}) {
+    context.origin = origin;
+    auto denied = AuthorizeSecurityRequest(context);
+    ASSERT_FALSE(denied.ok()) << origin;
+    EXPECT_EQ(denied.error().code, "E_REQUEST_ORIGIN") << origin;
+  }
+  context.origin = "https://198.51.100.60:8443";
+  context.local_tls = false;
+  EXPECT_FALSE(AuthorizeSecurityRequest(context).ok());
+  context.local_tls = true;
+  context.local_port = 0;
+  EXPECT_FALSE(AuthorizeSecurityRequest(context).ok());
+  context.local_port = 8443;
+  for (const std::string address : {"0.0.0.0", "::", "attacker.example", ""}) {
+    context.local_ip = address;
+    EXPECT_FALSE(AuthorizeSecurityRequest(context).ok());
+  }
+}
+
+TEST(SecurityRequestGateTest,
+     ManagementIpPolicyRequiresAdministratorAndFreshAuthority) {
+  auto context =
+      ValidManagementRequest("/api/v1/security/management-ip-policy", "PUT");
+  EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
+  EXPECT_TRUE(RouteRefreshesManagementDeadline(context.path, context.method));
+  context.principal = Viewer();
+  auto denied = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(denied.ok());
+  EXPECT_EQ(denied.error().code, "E_AUTHORIZATION_REQUIRED");
+  context.principal = Administrator();
+  context.principal->management_authority_valid = false;
+  denied = AuthorizeSecurityRequest(context);
+  ASSERT_FALSE(denied.ok());
+  EXPECT_EQ(denied.error().code, "E_MANAGEMENT_REAUTHENTICATION_REQUIRED");
+  context.method = "GET";
+  context.principal = Administrator();
+  EXPECT_TRUE(AuthorizeSecurityRequest(context).ok());
+  context.state = DeviceState::kDefault;
+  EXPECT_FALSE(AuthorizeSecurityRequest(context).ok());
+}
+
+TEST(SecurityRequestGateTest,
+     SetupAcceptsExplicitIpPolicyAndDefaultsLegacyRequestsToRestricted) {
+  const std::string prefix =
+      R"({"username":"operator","password":"T4m#pR9vLw","peer_ip":"192.0.2.10")";
+  auto legacy = ParseSetupJson(prefix + "}", "application/json");
+  ASSERT_TRUE(legacy.ok());
+  EXPECT_TRUE(legacy.value().management_ip_restriction_enabled);
+  for (const bool enabled : {false, true}) {
+    auto parsed =
+        ParseSetupJson(prefix + ",\"management_ip_restriction_enabled\":" +
+                           (enabled ? "true}" : "false}"),
+                       "application/json");
+    ASSERT_TRUE(parsed.ok());
+    EXPECT_EQ(parsed.value().management_ip_restriction_enabled, enabled);
+  }
+  for (const std::string suffix :
+       {"0}", "\"false\"}", "null}", "falsejunk}",
+        "false,\"management_ip_restriction_enabled\":true}"}) {
+    EXPECT_FALSE(
+        ParseSetupJson(
+            prefix + ",\"management_ip_restriction_enabled\":" + suffix,
+            "application/json")
+            .ok());
+  }
+}
+
 TEST(SecurityRequestGateTest, SessionCookieIsStrictAndRejectsDuplicates) {
   const std::string token(64U, 'a');
   auto parsed = ParseSessionCookie("camera_session=" + token);

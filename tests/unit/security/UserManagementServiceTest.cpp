@@ -439,6 +439,110 @@ class UserManagementServiceTest : public ::testing::Test {
   std::vector<SessionIdentity> revoked_;
 };
 
+TEST_F(UserManagementServiceTest,
+       DisablingIpRestrictionPersistsAndRevokesAllSessions) {
+  const auto viewer_id = SeedViewer("monitor.east", "Monitor.East");
+  SeedSession(viewer_id, UserRole::kViewer, 0x51U);
+  SeedSession(administrator_id_, UserRole::kAdministrator, 0x52U, "192.0.2.10");
+  StartService();
+  auto changed = service_->SetManagementIpRestrictionEnabled(
+      false, AdministratorContext());
+  ASSERT_TRUE(changed.ok()) << changed.error().message;
+  ASSERT_TRUE(service_->ManagementIpRestrictionEnabled().ok());
+  EXPECT_FALSE(service_->ManagementIpRestrictionEnabled().value());
+  EXPECT_TRUE(store_->IsManagementPeer("198.51.100.44").value());
+  EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM sessions;"), 0);
+  EXPECT_EQ(exact_revocation_calls_, 1);
+  EXPECT_EQ(revoked_,
+            (std::vector<SessionIdentity>{Identity(0x51U), Identity(0x52U)}));
+  EXPECT_EQ(
+      QueryText(database_path(),
+                "SELECT detail_code FROM audit_events WHERE event_type = "
+                "'management_ip_policy_changed' AND outcome = 'success';"),
+      "disabled");
+  service_.reset();
+  const auto state_directory = store_->state_directory();
+  store_.reset();
+  auto reopened = SecurityStore::Open({state_directory});
+  ASSERT_TRUE(reopened.ok()) << reopened.error().message;
+  EXPECT_FALSE(reopened.value()->ManagementIpRestrictionEnabled().value());
+  EXPECT_TRUE(reopened.value()->IsManagementPeer("198.51.100.44").value());
+}
+
+TEST_F(UserManagementServiceTest, EnablingIpRestrictionRejectsActorLockout) {
+  StartService();
+  ASSERT_TRUE(
+      service_->SetManagementIpRestrictionEnabled(false, AdministratorContext())
+          .ok());
+  auto roaming = AdministratorContext();
+  roaming.normalized_peer_ip = "198.51.100.44";
+  auto denied = service_->SetManagementIpRestrictionEnabled(true, roaming);
+  ASSERT_FALSE(denied.ok());
+  EXPECT_EQ(denied.error().code, "E_MANAGEMENT_IP_LOCKOUT");
+  EXPECT_FALSE(service_->ManagementIpRestrictionEnabled().value());
+  EXPECT_EQ(QueryInt(database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'management_ip_policy_changed' AND outcome = 'failure';"),
+            1);
+  ASSERT_TRUE(service_
+                  ->AddManagementIp(UserRole::kAdministrator, "198.51.100.44",
+                                    AdministratorContext())
+                  .ok());
+  ASSERT_TRUE(service_->SetManagementIpRestrictionEnabled(true, roaming).ok());
+  EXPECT_TRUE(service_->ManagementIpRestrictionEnabled().value());
+  EXPECT_TRUE(store_->IsManagementPeer("198.51.100.44").value());
+  EXPECT_FALSE(store_->IsManagementPeer("198.51.100.45").value());
+}
+
+TEST_F(UserManagementServiceTest, ViewerCannotChangeIpRestriction) {
+  const auto viewer_id = SeedViewer("monitor.east", "Monitor.East");
+  StartService();
+  auto changed = service_->SetManagementIpRestrictionEnabled(
+      false, ViewerContext(viewer_id, "monitor.east"));
+  ASSERT_FALSE(changed.ok());
+  EXPECT_EQ(changed.error().code, "E_MANAGEMENT_IP_FORBIDDEN");
+  EXPECT_TRUE(service_->ManagementIpRestrictionEnabled().value());
+}
+
+TEST_F(UserManagementServiceTest,
+       EnablingIpRestrictionRequiresEnabledAdministratorAddress) {
+  StartService();
+  ASSERT_TRUE(
+      service_->SetManagementIpRestrictionEnabled(false, AdministratorContext())
+          .ok());
+  auto roaming = AdministratorContext();
+  roaming.normalized_peer_ip = "198.51.100.44";
+  SeedManagementIp(UserRole::kViewer, roaming.normalized_peer_ip);
+  auto viewer_only = service_->SetManagementIpRestrictionEnabled(true, roaming);
+  ASSERT_FALSE(viewer_only.ok());
+  EXPECT_EQ(viewer_only.error().code, "E_MANAGEMENT_IP_LOCKOUT");
+  SeedManagementIp(UserRole::kAdministrator, roaming.normalized_peer_ip, false);
+  auto disabled = service_->SetManagementIpRestrictionEnabled(true, roaming);
+  ASSERT_FALSE(disabled.ok());
+  EXPECT_EQ(disabled.error().code, "E_MANAGEMENT_IP_LOCKOUT");
+  EXPECT_FALSE(service_->ManagementIpRestrictionEnabled().value());
+}
+
+TEST_F(UserManagementServiceTest,
+       PolicyCommitFailurePreservesSessionsAndRestriction) {
+  SeedSession(administrator_id_, UserRole::kAdministrator, 0x52U, "192.0.2.10");
+  StartService();
+  ScopedTransactionFailureReset reset;
+  ConfigureSecurityStoreTransactionFailuresForTest(true, false);
+  auto changed = service_->SetManagementIpRestrictionEnabled(
+      false, AdministratorContext());
+  ConfigureSecurityStoreTransactionFailuresForTest(false, false);
+  EXPECT_FALSE(changed.ok());
+  EXPECT_TRUE(service_->ManagementIpRestrictionEnabled().value());
+  EXPECT_EQ(QueryInt(database_path(), "SELECT COUNT(*) FROM sessions;"), 1);
+  EXPECT_EQ(exact_revocation_calls_, 0);
+  EXPECT_EQ(global_revocation_calls_, 0);
+  EXPECT_EQ(QueryInt(database_path(),
+                     "SELECT COUNT(*) FROM audit_events WHERE event_type = "
+                     "'management_ip_policy_changed';"),
+            0);
+}
+
 TEST_F(UserManagementServiceTest, CreatesCanonicalViewerAndListsStableIdOrder) {
   StartService();
   auto east = service_->CreateViewer("Monitor.East", Secret("SouthMoon!8"),

@@ -1,0 +1,2095 @@
+{
+  "baseline_date": "2026-10-15",
+  "total": 208,
+  "dispositions": {
+    "retained-assigned-before-use": 30,
+    "deferred-no-runtime-gain": 70,
+    "retained-required-side-effects": 2,
+    "deferred-ownership-or-cold-path": 89,
+    "selected": 10,
+    "deferred-style": 5,
+    "retained-required-error-snapshot": 2
+  },
+  "diagnostics": [
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 128,
+      "column": 9,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 165,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 275,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'raw_descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 354,
+      "column": 9,
+      "severity": "warning",
+      "message": "variable 'raw_descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 370,
+      "column": 11,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 380,
+      "column": 11,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 395,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'status_result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 416,
+      "column": 9,
+      "severity": "warning",
+      "message": "variable 'link_result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 543,
+      "column": 9,
+      "severity": "warning",
+      "message": "variable 'link_result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 622,
+      "column": 11,
+      "severity": "warning",
+      "message": "variable 'link_result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettingsStore.cpp",
+      "line": 645,
+      "column": 9,
+      "severity": "warning",
+      "message": "variable 'link_result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 141,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 150,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 178,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'duplicate' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 186,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 194,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 354,
+      "column": 50,
+      "severity": "warning",
+      "message": "std::move of the variable 'state' of the trivially-copyable type 'AuditInsertionState' has no effect; remove std::move()",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 706,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 1065,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'step' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 2671,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'descriptor' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 3375,
+      "column": 50,
+      "severity": "warning",
+      "message": "std::move of the variable 'snapshot' of the trivially-copyable type 'AuditStatusSnapshot' has no effect; remove std::move()",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 3513,
+      "column": 53,
+      "severity": "warning",
+      "message": "both sides of operator are equivalent",
+      "check": "misc-redundant-expression",
+      "disposition": "retained-required-side-effects",
+      "reason": "Two same-value SQLite binds advance the parameter index for two separate cursor placeholders; deleting one changes the query."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 3518,
+      "column": 47,
+      "severity": "warning",
+      "message": "both sides of operator are equivalent",
+      "check": "misc-redundant-expression",
+      "disposition": "retained-required-side-effects",
+      "reason": "Two same-value SQLite binds advance the parameter index for two separate cursor placeholders; deleting one changes the query."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 4646,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'step' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5190,
+      "column": 57,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5303,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5436,
+      "column": 57,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5613,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5722,
+      "column": 57,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 5841,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 6002,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/SecurityStore.cpp",
+      "line": 6100,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/media/FragmentedMp4Hub.cpp",
+      "line": 66,
+      "column": 14,
+      "severity": "warning",
+      "message": "constness of 'validation' prevents automatic move",
+      "check": "performance-no-automatic-move",
+      "disposition": "selected",
+      "reason": "Allow implicit move of a local Result on return; preserve error values and cleanup order."
+    },
+    {
+      "path": "src/media/FragmentedMp4Hub.cpp",
+      "line": 106,
+      "column": 14,
+      "severity": "warning",
+      "message": "constness of 'pipeline_result' prevents automatic move",
+      "check": "performance-no-automatic-move",
+      "disposition": "selected",
+      "reason": "Allow implicit move of a local Result on return; preserve error values and cleanup order."
+    },
+    {
+      "path": "include/camera_firmware/media/CaptureHealth.hpp",
+      "line": 31,
+      "column": 33,
+      "severity": "warning",
+      "message": "statement should be inside braces",
+      "check": "readability-braces-around-statements",
+      "disposition": "deferred-style",
+      "reason": "Existing single-statement guards; style cleanup is outside the selected copy/lifetime work."
+    },
+    {
+      "path": "src/media/CameraPipeline.cpp",
+      "line": 88,
+      "column": 51,
+      "severity": "warning",
+      "message": "the parameter 'weak_context' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "selected",
+      "reason": "Synchronously lock a weak pointer by const reference; callback retains its own weak-pointer capture."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 360,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'fd' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 368,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 455,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'fd' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 609,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 633,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 641,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'result' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/rtsp/RtspDigestCredentials.cpp",
+      "line": 648,
+      "column": 7,
+      "severity": "warning",
+      "message": "variable 'fd' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/settings/RuntimeSettings.cpp",
+      "line": 212,
+      "column": 12,
+      "severity": "warning",
+      "message": "constness of 'sub_stream_result' prevents automatic move",
+      "check": "performance-no-automatic-move",
+      "disposition": "selected",
+      "reason": "Allow implicit move of a local Result on return; preserve error values and cleanup order."
+    },
+    {
+      "path": "src/settings/RuntimeSettings.cpp",
+      "line": 216,
+      "column": 12,
+      "severity": "warning",
+      "message": "constness of 'osd_result' prevents automatic move",
+      "check": "performance-no-automatic-move",
+      "disposition": "selected",
+      "reason": "Allow implicit move of a local Result on return; preserve error values and cleanup order."
+    },
+    {
+      "path": "src/security/UserManagementService.cpp",
+      "line": 415,
+      "column": 72,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/UserManagementService.cpp",
+      "line": 427,
+      "column": 18,
+      "severity": "warning",
+      "message": "the const qualified variable 'error' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "selected",
+      "reason": "Remove a local intermediate copy; preserve the owning Result or the by-value asynchronous metadata capture."
+    },
+    {
+      "path": "src/security/UserManagementService.cpp",
+      "line": 539,
+      "column": 72,
+      "severity": "warning",
+      "message": "the parameter 'detail' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Cold audit/error-detail helper parameter; conversion/interface cleanup deferred without a demonstrated product impact."
+    },
+    {
+      "path": "src/security/UserManagementService.cpp",
+      "line": 562,
+      "column": 18,
+      "severity": "warning",
+      "message": "the const qualified variable 'error' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "selected",
+      "reason": "Remove a local intermediate copy; preserve the owning Result or the by-value asynchronous metadata capture."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 118,
+      "column": 43,
+      "severity": "warning",
+      "message": "the parameter 'durable_promote' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Existing owning frame, graph or callback boundary; retain value lifetime while limiting this change to local copies and synchronous request requeue."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 146,
+      "column": 25,
+      "severity": "warning",
+      "message": "the const qualified variable 'error' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "selected",
+      "reason": "Remove a local intermediate copy; preserve the owning Result or the by-value asynchronous metadata capture."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 162,
+      "column": 25,
+      "severity": "warning",
+      "message": "the const qualified variable 'error' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "retained-required-error-snapshot",
+      "reason": "StartRuntime and durable_promote can return mutable static-lifetime error storage. Preserve the original diagnostic before cleanup and recovery callbacks; a reference failed both new regressions."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 177,
+      "column": 25,
+      "severity": "warning",
+      "message": "the const qualified variable 'error' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "retained-required-error-snapshot",
+      "reason": "StartRuntime and durable_promote can return mutable static-lifetime error storage. Preserve the original diagnostic before cleanup and recovery callbacks; a reference failed both new regressions."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 383,
+      "column": 25,
+      "severity": "warning",
+      "message": "statement should be inside braces",
+      "check": "readability-braces-around-statements",
+      "disposition": "deferred-style",
+      "reason": "Existing single-statement guards; style cleanup is outside the selected copy/lifetime work."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 388,
+      "column": 25,
+      "severity": "warning",
+      "message": "statement should be inside braces",
+      "check": "readability-braces-around-statements",
+      "disposition": "deferred-style",
+      "reason": "Existing single-statement guards; style cleanup is outside the selected copy/lifetime work."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 407,
+      "column": 55,
+      "severity": "warning",
+      "message": "statement should be inside braces",
+      "check": "readability-braces-around-statements",
+      "disposition": "deferred-style",
+      "reason": "Existing single-statement guards; style cleanup is outside the selected copy/lifetime work."
+    },
+    {
+      "path": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "line": 414,
+      "column": 60,
+      "severity": "warning",
+      "message": "statement should be inside braces",
+      "check": "readability-braces-around-statements",
+      "disposition": "deferred-style",
+      "reason": "Existing single-statement guards; style cleanup is outside the selected copy/lifetime work."
+    },
+    {
+      "path": "src/rtsp/RtspDigestNonce.cpp",
+      "line": 559,
+      "column": 58,
+      "severity": "warning",
+      "message": "std::move of the variable 'validation' of the trivially-copyable type 'RtspDigestNonceValidation' has no effect; remove std::move()",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/integrity/SafeFileDigest.cpp",
+      "line": 146,
+      "column": 55,
+      "severity": "warning",
+      "message": "the parameter 'hook' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Existing owning frame, graph or callback boundary; retain value lifetime while limiting this change to local copies and synchronous request requeue."
+    },
+    {
+      "path": "src/runtime/FirmwareRuntime.cpp",
+      "line": 124,
+      "column": 45,
+      "severity": "warning",
+      "message": "the parameter 'graph' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Existing owning frame, graph or callback boundary; retain value lifetime while limiting this change to local copies and synchronous request requeue."
+    },
+    {
+      "path": "src/runtime/FirmwareRuntime.cpp",
+      "line": 284,
+      "column": 12,
+      "severity": "warning",
+      "message": "constness of 'semantics' prevents automatic move",
+      "check": "performance-no-automatic-move",
+      "disposition": "selected",
+      "reason": "Allow implicit move of a local Result on return; preserve error values and cleanup order."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 439,
+      "column": 43,
+      "severity": "warning",
+      "message": "the parameter 'stream_lease' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 705,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'output' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1245,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter 'response' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1461,
+      "column": 27,
+      "severity": "warning",
+      "message": "the parameter 'error' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1463,
+      "column": 60,
+      "severity": "warning",
+      "message": "the parameter 'terminal' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1464,
+      "column": 69,
+      "severity": "warning",
+      "message": "the parameter #2 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1471,
+      "column": 31,
+      "severity": "warning",
+      "message": "the parameter 'terminal' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1472,
+      "column": 41,
+      "severity": "warning",
+      "message": "the parameter 'continuation' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1833,
+      "column": 31,
+      "severity": "warning",
+      "message": "variable 'process_state' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 1998,
+      "column": 55,
+      "severity": "warning",
+      "message": "the parameter 'dependencies' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2026,
+      "column": 55,
+      "severity": "warning",
+      "message": "the parameter 'dependencies' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2054,
+      "column": 44,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2084,
+      "column": 43,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2124,
+      "column": 50,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2127,
+      "column": 31,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2131,
+      "column": 29,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2160,
+      "column": 37,
+      "severity": "warning",
+      "message": "the parameter 'json' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2227,
+      "column": 31,
+      "severity": "warning",
+      "message": "variable 'state' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2302,
+      "column": 30,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2400,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2408,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2430,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2444,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2464,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2471,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2474,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2492,
+      "column": 53,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2492,
+      "column": 68,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2528,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2543,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2563,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2570,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2573,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2608,
+      "column": 34,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2608,
+      "column": 49,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2626,
+      "column": 37,
+      "severity": "warning",
+      "message": "variable 'device_state' is not initialized",
+      "check": "cppcoreguidelines-init-variables",
+      "disposition": "retained-assigned-before-use",
+      "reason": "Value assigned before every read: syscall do/while loop, sqlite3_step loop condition, or locked state snapshot. No uninitialized read established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2667,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2675,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2686,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2689,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2706,
+      "column": 36,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2737,
+      "column": 41,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2738,
+      "column": 36,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2765,
+      "column": 43,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2775,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2778,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2821,
+      "column": 35,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2822,
+      "column": 30,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2874,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2882,
+      "column": 41,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2886,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2917,
+      "column": 54,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2918,
+      "column": 49,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2954,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2961,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 2964,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3009,
+      "column": 35,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3010,
+      "column": 30,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3064,
+      "column": 43,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3070,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3074,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3105,
+      "column": 54,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3106,
+      "column": 49,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3139,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3146,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3149,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3172,
+      "column": 41,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3173,
+      "column": 36,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3215,
+      "column": 55,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3225,
+      "column": 55,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3234,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3237,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3256,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3256,
+      "column": 55,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3289,
+      "column": 43,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3293,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3297,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3321,
+      "column": 51,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3322,
+      "column": 46,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3359,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3368,
+      "column": 41,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3372,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3396,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3397,
+      "column": 54,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3443,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3450,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3454,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3478,
+      "column": 59,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3479,
+      "column": 54,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3520,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3527,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3530,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3573,
+      "column": 35,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3574,
+      "column": 30,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3625,
+      "column": 53,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3635,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3640,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3673,
+      "column": 49,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3673,
+      "column": 64,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3702,
+      "column": 47,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3710,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3714,
+      "column": 45,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3750,
+      "column": 34,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3750,
+      "column": 49,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3797,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3804,
+      "column": 49,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3809,
+      "column": 49,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3826,
+      "column": 46,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3826,
+      "column": 61,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3868,
+      "column": 33,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3868,
+      "column": 48,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3896,
+      "column": 57,
+      "severity": "warning",
+      "message": "the parameter 'path' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3899,
+      "column": 9,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3903,
+      "column": 50,
+      "severity": "warning",
+      "message": "the parameter 'authorized_request' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3904,
+      "column": 45,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3954,
+      "column": 33,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3954,
+      "column": 48,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 3977,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4002,
+      "column": 55,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4026,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4052,
+      "column": 40,
+      "severity": "warning",
+      "message": "std::move of the expression of the trivially-copyable type 'camera_firmware::service::RuntimeSettingsCommandRequest' has no effect; remove std::move()",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4061,
+      "column": 59,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4065,
+      "column": 49,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4089,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4113,
+      "column": 55,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4137,
+      "column": 33,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4137,
+      "column": 48,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4162,
+      "column": 33,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4162,
+      "column": 48,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4194,
+      "column": 42,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4194,
+      "column": 57,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4212,
+      "column": 38,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4257,
+      "column": 46,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4257,
+      "column": 61,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4274,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4315,
+      "column": 59,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4318,
+      "column": 59,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4337,
+      "column": 33,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4337,
+      "column": 48,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4369,
+      "column": 51,
+      "severity": "warning",
+      "message": "passing result of std::move() as a const reference argument; no move will actually happen",
+      "check": "performance-move-const-arg",
+      "disposition": "deferred-no-runtime-gain",
+      "reason": "No-op move into a const-reference callback or trivially-copyable value. Removing it alone does not eliminate a copy; callback interface/lifetime changes are not included."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4459,
+      "column": 40,
+      "severity": "warning",
+      "message": "the parameter #1 is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4459,
+      "column": 55,
+      "severity": "warning",
+      "message": "the parameter 'callback' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 4940,
+      "column": 37,
+      "severity": "warning",
+      "message": "the parameter 'events' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 5482,
+      "column": 51,
+      "severity": "warning",
+      "message": "the parameter 'pump_manager' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/service/ServiceApp.cpp",
+      "line": 5483,
+      "column": 64,
+      "severity": "warning",
+      "message": "the parameter 'runtime_lease' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Deferred callback/ownership API review. Retain existing value ownership and reentrant/async callback contracts; no lifetime defect or measured performance bottleneck established."
+    },
+    {
+      "path": "src/ai/AiModelRunner.cpp",
+      "line": 232,
+      "column": 52,
+      "severity": "warning",
+      "message": "the parameter 'frame' is copied for each invocation but only used as a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-value-param",
+      "disposition": "deferred-ownership-or-cold-path",
+      "reason": "Existing owning frame, graph or callback boundary; retain value lifetime while limiting this change to local copies and synchronous request requeue."
+    },
+    {
+      "path": "src/ai/AiModelRunner.cpp",
+      "line": 248,
+      "column": 28,
+      "severity": "warning",
+      "message": "the const qualified variable 'source_frame' is copy-constructed from a const reference; consider making it a const reference",
+      "check": "performance-unnecessary-copy-initialization",
+      "disposition": "selected",
+      "reason": "Remove a local intermediate copy; preserve the owning Result or the by-value asynchronous metadata capture."
+    }
+  ]
+}

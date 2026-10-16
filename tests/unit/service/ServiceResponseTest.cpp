@@ -205,6 +205,19 @@ TEST(ServiceResponseTest, CameraStatusJsonIncludesCaptureDiagnostics) {
   EXPECT_DOUBLE_EQ(json["last_encode_ms"].asDouble(), 7.25);
 }
 
+TEST(ServiceResponseTest, CameraCaptureFailureAndRetryBudgetReachHttpClients) {
+  camera_firmware::service::CameraStatus status;
+  status.state = "recovering";
+  status.capture_error = "E_CAMERA_NO_FRAMES";
+  status.recovery_attempts = 2;
+  const auto json = camera_firmware::service::BuildCameraStatusJson(status);
+  EXPECT_EQ(json["state"].asString(), "recovering");
+  EXPECT_EQ(json["capture_error"].asString(), "E_CAMERA_NO_FRAMES");
+  EXPECT_EQ(json["recovery_attempts"].asUInt(), 2U);
+  EXPECT_EQ(json["recovery_limit"].asUInt(), 3U);
+  EXPECT_FALSE(json["snapshot_available"].asBool());
+}
+
 TEST(ServiceResponseTest, StreamJsonUsesConfiguredPublicHost) {
   camera_firmware::config::SecureRtspConfig secure_rtsp;
   secure_rtsp.control_tls = true;

@@ -33,6 +33,7 @@ constexpr int kBusyTimeoutMilliseconds = 1000;
 constexpr int kRevisionTwoSecuritySchema = 2;
 constexpr int kRevisionThreeSecuritySchema = 3;
 constexpr int kRevisionFourSecuritySchema = 4;
+constexpr int kRevisionFiveSecuritySchema = 5;
 
 enum class ForeignKeyValidation {
   kStrict,
@@ -1193,11 +1194,9 @@ WHERE NOT (
   if (schema_revision == kRevisionThreeSecuritySchema) {
     unexpected_object_count = kRevisionThreeUnexpectedObjectCount;
     expected_count = 19;
-  } else if (schema_revision == kRevisionFourSecuritySchema ||
-             schema_revision == kSecuritySchemaRevision) {
-    // Revision 5 only adds a column to `sessions`; the named table/index
-    // inventory introduced at revision 4 is unchanged, so the same
-    // allowlist applies to both revisions.
+  } else if (schema_revision >= kRevisionFourSecuritySchema) {
+    // Revisions 5 and 6 add columns; the named table/index inventory
+    // introduced at revision 4 is unchanged.
     unexpected_object_count = kRevisionFourUnexpectedObjectCount;
     expected_count = 20;
   }
@@ -1214,7 +1213,7 @@ bool HasValidCommittedState(sqlite3* database, int schema_revision,
   const bool allow_legacy_audit_actor_orphans =
       foreign_key_validation ==
           ForeignKeyValidation::kAllowLegacyAuditActorOrphans &&
-      schema_revision < kSecuritySchemaRevision;
+      schema_revision < kRevisionFiveSecuritySchema;
   const char* foreign_key_check =
       allow_legacy_audit_actor_orphans
           ? "SELECT COUNT(*) FROM pragma_foreign_key_check "
@@ -1352,8 +1351,7 @@ FROM device_state
 WHERE id = 1;
 )sql";
   const bool revision_four_or_later_state =
-      schema_revision == kRevisionFourSecuritySchema ||
-      schema_revision == kSecuritySchemaRevision;
+      schema_revision >= kRevisionFourSecuritySchema;
   const char* state_invariant = revision_four_or_later_state
                                     ? kRevisionFourStateInvariant
                                     : kLegacyStateInvariant;
@@ -1382,6 +1380,7 @@ common::Result<void> ValidateSchema(
   if (schema_revision != kRevisionTwoSecuritySchema &&
       schema_revision != kRevisionThreeSecuritySchema &&
       schema_revision != kRevisionFourSecuritySchema &&
+      schema_revision != kRevisionFiveSecuritySchema &&
       schema_revision != kSecuritySchemaRevision) {
     return StoreError("E_SECURITY_DB_SCHEMA",
                       "security database schema is invalid");
@@ -1391,7 +1390,8 @@ common::Result<void> ValidateSchema(
   // unapproved trigger cannot run from the destructive constraint probes.
   const bool revision_three_or_later =
       schema_revision >= kRevisionThreeSecuritySchema;
-  const bool revision_five = schema_revision == kSecuritySchemaRevision;
+  const bool revision_five = schema_revision >= kRevisionFiveSecuritySchema;
+  const bool revision_six = schema_revision == kSecuritySchemaRevision;
   const bool revision_four = schema_revision == kRevisionFourSecuritySchema;
   const int expected_table_count =
       (revision_four || revision_five) ? 9 : (revision_three_or_later ? 8 : 7);
@@ -1555,11 +1555,19 @@ common::Result<void> ValidateSchema(
           std::vector<ColumnInfo>{{"version", "INTEGER", 1, 0}} ||
       !ReadColumns(database, "device_state", device_state_columns) ||
       device_state_columns !=
-          std::vector<ColumnInfo>{
-              {"id", "INTEGER", 0, 1},
-              {"state", "TEXT", 1, 0},
-              {"schema_revision", "INTEGER", 1, 0},
-              {"setup_completed_at_seconds", "INTEGER", 0, 0}} ||
+          (revision_six
+               ? std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
+                                         {"state", "TEXT", 1, 0},
+                                         {"schema_revision", "INTEGER", 1, 0},
+                                         {"setup_completed_at_seconds",
+                                          "INTEGER", 0, 0},
+                                         {"management_ip_restriction_enabled",
+                                          "INTEGER", 1, 0}}
+               : std::vector<ColumnInfo>{{"id", "INTEGER", 0, 1},
+                                         {"state", "TEXT", 1, 0},
+                                         {"schema_revision", "INTEGER", 1, 0},
+                                         {"setup_completed_at_seconds",
+                                          "INTEGER", 0, 0}}) ||
       !ReadColumns(database, "users", users_columns) ||
       users_columns !=
           std::vector<ColumnInfo>{
@@ -1675,7 +1683,9 @@ common::Result<void> ValidateSchema(
               {"lease_token", "BLOB", 0, 0},
               {"lease_expires_at_seconds", "INTEGER", 0, 0}} ||
       !QuerySingleInt(database,
-                      revision_five   ? "SELECT COUNT(*) FROM schema_version "
+                      revision_six    ? "SELECT COUNT(*) FROM schema_version "
+                                        "WHERE version = 6;"
+                      : revision_five ? "SELECT COUNT(*) FROM schema_version "
                                         "WHERE version = 5;"
                       : revision_four ? "SELECT COUNT(*) FROM schema_version "
                                         "WHERE version = 4;"
@@ -1691,7 +1701,15 @@ common::Result<void> ValidateSchema(
       value != 1 ||
       !QuerySingleInt(
           database,
-          revision_five
+          revision_six
+              ? "SELECT COUNT(*) FROM device_state "
+                "WHERE id = 1 AND schema_revision = 6 AND "
+                "typeof(management_ip_restriction_enabled) = 'integer' AND "
+                "management_ip_restriction_enabled IN (0, 1) AND "
+                "((state = 'default' AND setup_completed_at_seconds IS NULL) "
+                "OR (state = 'operational' AND setup_completed_at_seconds >= "
+                "0));"
+          : revision_five
               ? "SELECT COUNT(*) FROM device_state "
                 "WHERE id = 1 AND schema_revision = 5 AND "
                 "((state = 'default' AND setup_completed_at_seconds IS NULL) "
@@ -1739,6 +1757,24 @@ CREATE TABLE schema_version (
   constexpr std::string_view kRevisionFiveSchemaVersionSql = R"sql(
 CREATE TABLE schema_version (
   version INTEGER NOT NULL CHECK (version = 5)
+))sql";
+  constexpr std::string_view kRevisionSixSchemaVersionSql = R"sql(
+CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 6)
+))sql";
+  constexpr std::string_view kRevisionSixDeviceStateSql = R"sql(
+CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 6),
+  setup_completed_at_seconds INTEGER,
+  management_ip_restriction_enabled INTEGER NOT NULL DEFAULT 1
+    CHECK (management_ip_restriction_enabled IN (0, 1)),
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
 ))sql";
   constexpr std::string_view kRevisionTwoDeviceStateSql = R"sql(
 CREATE TABLE device_state (
@@ -1906,12 +1942,14 @@ CREATE TABLE sessions (
 
   const std::array<std::pair<const char*, std::string_view>, 7>
       expected_table_definitions = {{
-          {"schema_version", revision_five   ? kRevisionFiveSchemaVersionSql
+          {"schema_version", revision_six    ? kRevisionSixSchemaVersionSql
+                             : revision_five ? kRevisionFiveSchemaVersionSql
                              : revision_four ? kRevisionFourSchemaVersionSql
                              : revision_three_or_later
                                  ? kRevisionThreeSchemaVersionSql
                                  : kRevisionTwoSchemaVersionSql},
-          {"device_state", revision_five   ? kRevisionFiveDeviceStateSql
+          {"device_state", revision_six    ? kRevisionSixDeviceStateSql
+                           : revision_five ? kRevisionFiveDeviceStateSql
                            : revision_four ? kRevisionFourDeviceStateSql
                            : revision_three_or_later
                                ? kRevisionThreeDeviceStateSql
@@ -2017,11 +2055,20 @@ CREATE TABLE firmware_log_outbox (
   const bool prepared = preparation.ok();
   const bool constraints_valid =
       prepared &&
+      (!revision_six ||
+       (StatementIsRejectedByConstraint(
+            database,
+            "UPDATE device_state SET management_ip_restriction_enabled = 2;") &&
+        StatementIsRejectedByConstraint(
+            database,
+            "UPDATE device_state SET management_ip_restriction_enabled = "
+            "NULL;"))) &&
       StatementIsRejectedByConstraint(
           database, "INSERT INTO schema_version (version) VALUES (NULL);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_five   ? "INSERT INTO schema_version (version) VALUES (4);"
+          revision_six    ? "INSERT INTO schema_version (version) VALUES (5);"
+          : revision_five ? "INSERT INTO schema_version (version) VALUES (4);"
           : revision_four ? "INSERT INTO schema_version (version) VALUES (3);"
           : revision_three_or_later
               ? "INSERT INTO schema_version (version) VALUES (2);"
@@ -2029,7 +2076,10 @@ CREATE TABLE firmware_log_outbox (
                 "VALUES (3);") &&
       StatementIsRejectedByConstraint(
           database,
-          revision_five
+          revision_six
+              ? "INSERT INTO device_state "
+                "(id, state, schema_revision) VALUES (2, 'default', 6);"
+          : revision_five
               ? "INSERT INTO device_state "
                 "(id, state, schema_revision) VALUES (2, 'default', 5);"
           : revision_four
@@ -2481,6 +2531,36 @@ FROM audit_events_revision_three AS old;)sql",
 );)sql",
     "INSERT INTO audit_state (id) VALUES (1);"};
 
+// Revision 6 preserves the restrictions of every existing device. These
+// statements run inside MigrateToRevisionSix's rollback-protected transaction.
+constexpr const char* kRevisionSixMigrationStatements[] = {
+    "ALTER TABLE schema_version RENAME TO schema_version_revision_five;",
+    R"sql(CREATE TABLE schema_version (
+  version INTEGER NOT NULL CHECK (version = 6)
+);)sql",
+    "INSERT INTO schema_version (version) VALUES (6);",
+    "DROP TABLE schema_version_revision_five;",
+    "ALTER TABLE device_state RENAME TO device_state_revision_five;",
+    R"sql(CREATE TABLE device_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 6),
+  setup_completed_at_seconds INTEGER,
+  management_ip_restriction_enabled INTEGER NOT NULL DEFAULT 1
+    CHECK (management_ip_restriction_enabled IN (0, 1)),
+  CHECK (
+    (state = 'default' AND setup_completed_at_seconds IS NULL) OR
+    (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
+     setup_completed_at_seconds >= 0)
+  )
+);)sql",
+    R"sql(INSERT INTO device_state
+      (id, state, schema_revision, setup_completed_at_seconds,
+       management_ip_restriction_enabled)
+      SELECT id, state, 6, setup_completed_at_seconds, 1
+      FROM device_state_revision_five;)sql",
+    "DROP TABLE device_state_revision_five;"};
+
 constexpr const char* kRevisionFiveMigrationStatements[] = {
     "ALTER TABLE schema_version RENAME TO schema_version_revision_four;",
     R"sql(CREATE TABLE schema_version (
@@ -2796,23 +2876,26 @@ common::Result<void> SecurityStore::InitializeSchema() {
                         source_revision) ||
         (source_revision != kRevisionTwoSecuritySchema &&
          source_revision != kRevisionThreeSecuritySchema &&
-         source_revision != kRevisionFourSecuritySchema)) {
+         source_revision != kRevisionFourSecuritySchema &&
+         source_revision != kRevisionFiveSecuritySchema)) {
       return StoreError("E_SECURITY_DB_SCHEMA",
                         "security database schema is invalid");
     }
-    return MigrateToRevisionFive(source_revision);
+    return MigrateToRevisionSix(source_revision);
   }
 
   constexpr const char* kSchema = R"sql(
 CREATE TABLE schema_version (
-  version INTEGER NOT NULL CHECK (version = 5)
+  version INTEGER NOT NULL CHECK (version = 6)
 );
-INSERT INTO schema_version (version) VALUES (5);
+INSERT INTO schema_version (version) VALUES (6);
 CREATE TABLE device_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state TEXT NOT NULL CHECK (state IN ('default', 'operational')),
-  schema_revision INTEGER NOT NULL CHECK (schema_revision = 5),
+  schema_revision INTEGER NOT NULL CHECK (schema_revision = 6),
   setup_completed_at_seconds INTEGER,
+  management_ip_restriction_enabled INTEGER NOT NULL DEFAULT 1
+    CHECK (management_ip_restriction_enabled IN (0, 1)),
   CHECK (
     (state = 'default' AND setup_completed_at_seconds IS NULL) OR
     (state = 'operational' AND setup_completed_at_seconds IS NOT NULL AND
@@ -2820,7 +2903,7 @@ CREATE TABLE device_state (
   )
 );
 INSERT INTO device_state (id, state, schema_revision)
-VALUES (1, 'default', 5);
+VALUES (1, 'default', 6);
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -2992,7 +3075,7 @@ common::Result<void> SecurityStore::RollbackSchemaTransaction() {
   return rollback;
 }
 
-common::Result<void> SecurityStore::MigrateToRevisionFive(int source_revision) {
+common::Result<void> SecurityStore::MigrateToRevisionSix(int source_revision) {
   auto begin =
       Execute(impl_->database.get(), "BEGIN IMMEDIATE;", "E_SECURITY_DB_SCHEMA",
               "failed to migrate security database");
@@ -3061,7 +3144,24 @@ common::Result<void> SecurityStore::MigrateToRevisionFive(int source_revision) {
     }
   }
 
-  for (const char* statement : kRevisionFiveMigrationStatements) {
+  if (source_revision < kRevisionFiveSecuritySchema) {
+    for (const char* statement : kRevisionFiveMigrationStatements) {
+      auto migrated =
+          Execute(impl_->database.get(), statement, "E_SECURITY_DB_SCHEMA",
+                  "failed to migrate security database");
+      if (!migrated.ok()) {
+        (void)RollbackSchemaTransaction();
+        return migrated;
+      }
+    }
+  }
+  auto revision_five_validated =
+      ValidateSchema(impl_->database.get(), kRevisionFiveSecuritySchema);
+  if (!revision_five_validated.ok()) {
+    (void)RollbackSchemaTransaction();
+    return revision_five_validated;
+  }
+  for (const char* statement : kRevisionSixMigrationStatements) {
     auto migrated =
         Execute(impl_->database.get(), statement, "E_SECURITY_DB_SCHEMA",
                 "failed to migrate security database");
@@ -3071,11 +3171,11 @@ common::Result<void> SecurityStore::MigrateToRevisionFive(int source_revision) {
     }
   }
 
-  auto revision_five_validated =
+  auto revision_six_validated =
       ValidateSchema(impl_->database.get(), kSecuritySchemaRevision);
-  if (!revision_five_validated.ok()) {
+  if (!revision_six_validated.ok()) {
     (void)RollbackSchemaTransaction();
-    return revision_five_validated;
+    return revision_six_validated;
   }
 
   auto commit =
@@ -3797,7 +3897,9 @@ common::Result<void> SecurityStore::InitializeDevice(
     sqlite3_stmt* raw_state = nullptr;
     constexpr const char* kSetOperational =
         "UPDATE device_state SET state = 'operational', "
-        "setup_completed_at_seconds = ?1 WHERE id = 1 AND state = 'default';";
+        "setup_completed_at_seconds = ?1, management_ip_restriction_enabled = "
+        "?2 "
+        "WHERE id = 1 AND state = 'default';";
     if (::sqlite3_prepare_v2(impl_->database.get(), kSetOperational, -1,
                              &raw_state, nullptr) != SQLITE_OK) {
       return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
@@ -3806,6 +3908,9 @@ common::Result<void> SecurityStore::InitializeDevice(
                                                                       finalize);
     if (::sqlite3_bind_int64(state_statement.get(), 1,
                              record.completed_at_seconds) != SQLITE_OK ||
+        ::sqlite3_bind_int(state_statement.get(), 2,
+                           record.management_ip_restriction_enabled ? 1 : 0) !=
+            SQLITE_OK ||
         ::sqlite3_step(state_statement.get()) != SQLITE_DONE ||
         ::sqlite3_changes(impl_->database.get()) != 1) {
       return fail("E_BOOTSTRAP_STORE", "bootstrap transaction failed");
@@ -3844,6 +3949,10 @@ SecurityStore::ReadAuthenticationContext(
     return failure();
   }
   context.state = state.value();
+  auto restriction = ManagementIpRestrictionEnabledUnderConnectionLease();
+  if (!restriction.ok()) {
+    return failure();
+  }
 
   const auto finalize = [](sqlite3_stmt* statement) {
     if (statement != nullptr) {
@@ -3851,8 +3960,11 @@ SecurityStore::ReadAuthenticationContext(
     }
   };
   const auto read_peer_for_role =
-      [this, normalized_peer_ip, &failure,
+      [this, normalized_peer_ip, restricted = restriction.value(), &failure,
        &finalize](std::string_view role_scope) -> common::Result<bool> {
+    if (!restricted) {
+      return common::Result<bool>::Ok(true);
+    }
     sqlite3_stmt* raw_peer = nullptr;
     constexpr const char* kReadPeer =
         "SELECT EXISTS(SELECT 1 FROM management_ips "
@@ -3956,6 +4068,41 @@ SecurityStore::ReadAuthenticationContext(
   return common::Result<AuthenticationContext>::Ok(std::move(context));
 }
 
+common::Result<bool>
+SecurityStore::ManagementIpRestrictionEnabledUnderConnectionLease() const {
+  const auto failure = [] {
+    return StoreError<bool>("E_SECURITY_DB_SCHEMA",
+                            "management IP policy is invalid");
+  };
+  PreparedStatement policy(impl_->database.get(),
+                           "SELECT management_ip_restriction_enabled FROM "
+                           "device_state WHERE id = 1;");
+  if (!policy.valid() || ::sqlite3_step(policy.get()) != SQLITE_ROW ||
+      ::sqlite3_column_type(policy.get(), 0) != SQLITE_INTEGER) {
+    return failure();
+  }
+  const auto enabled = ::sqlite3_column_int64(policy.get(), 0);
+  if ((enabled != 0 && enabled != 1) ||
+      ::sqlite3_step(policy.get()) != SQLITE_DONE) {
+    return failure();
+  }
+  return common::Result<bool>::Ok(enabled == 1);
+}
+
+common::Result<bool> SecurityStore::ManagementIpRestrictionEnabled() const {
+  auto started = BeginReadTransaction();
+  if (!started.ok()) {
+    return common::Result<bool>::Err(started.error());
+  }
+  auto transaction = std::move(started).value();
+  auto policy = ManagementIpRestrictionEnabledUnderConnectionLease();
+  if (!policy.ok()) {
+    return policy;
+  }
+  auto committed = transaction.Commit();
+  return committed.ok() ? policy : common::Result<bool>::Err(committed.error());
+}
+
 common::Result<bool> SecurityStore::IsManagementPeer(
     std::string_view normalized_peer_ip) {
   const auto failure = [] {
@@ -3967,6 +4114,14 @@ common::Result<bool> SecurityStore::IsManagementPeer(
     return failure();
   }
   auto transaction = std::move(started).value();
+  auto restriction = ManagementIpRestrictionEnabledUnderConnectionLease();
+  if (!restriction.ok()) {
+    return failure();
+  }
+  if (!restriction.value()) {
+    auto committed = transaction.Commit();
+    return committed.ok() ? common::Result<bool>::Ok(true) : failure();
+  }
   sqlite3_stmt* raw_peer = nullptr;
   constexpr const char* kReadPeer =
       "SELECT EXISTS(SELECT 1 FROM management_ips "
@@ -4628,20 +4783,15 @@ SecurityStore::ReadSessionByTokenHash(Transaction& transaction,
       impl_->database == nullptr) {
     return failure();
   }
-  // The management_ips join is what stops a session that is still inside its
-  // idle deadline from being used once its peer has stopped being a management
-  // peer for that role. An uninitialized device has no management_ips row at
-  // all — the first one is written by InitializeDevice — so on that device
-  // the join can only ever fail, which is what made the initial account's
-  // session unusable for auth/me and auth/logout.
-  //
-  // The state is read from this same transaction, so the operational statement
-  // is selected from the instant InitializeDevice commits. That is the same
-  // transaction that deletes the initial account, and sessions.user_id is
-  // ON DELETE CASCADE, so there is no session left for the default-state
-  // statement to find even if it could be selected.
+  // Read state and policy in this transaction so a policy change applies to
+  // every session validation immediately. Both query variants retain the
+  // account, role, expiry and exact peer binding checks.
   auto state = StateUnderConnectionLease();
   if (!state.ok()) {
+    return failure();
+  }
+  auto restriction = ManagementIpRestrictionEnabledUnderConnectionLease();
+  if (!restriction.ok()) {
     return failure();
   }
   sqlite3_stmt* statement = nullptr;
@@ -4652,17 +4802,14 @@ SecurityStore::ReadSessionByTokenHash(Transaction& transaction,
       "management_ips.enabled = 1 WHERE sessions.token_hash = ?1 AND "
       "sessions.peer_ip = ?2 AND sessions.expires_at_seconds > ?3 AND "
       "users.enabled = 1 AND users.role = sessions.role;");
-  // Identical apart from the join it cannot satisfy — the shared column list
-  // makes that literal rather than a claim. Same bind parameters, and every
-  // other restriction intact: the session is still bound to the one peer that
-  // created it, to an enabled user, and to a role that matches that user's.
-  static constexpr auto kDefaultStateSql = StoredSessionSql(
+  static constexpr auto kUnrestrictedSql = StoredSessionSql(
       "WHERE sessions.token_hash = ?1 AND "
       "sessions.peer_ip = ?2 AND sessions.expires_at_seconds > ?3 AND "
       "users.enabled = 1 AND users.role = sessions.role;");
-  const char* const kSql = state.value() == DeviceState::kOperational
-                               ? kOperationalSql.data()
-                               : kDefaultStateSql.data();
+  const char* const kSql =
+      state.value() == DeviceState::kOperational && restriction.value()
+          ? kOperationalSql.data()
+          : kUnrestrictedSql.data();
   if (::sqlite3_prepare_v2(impl_->database.get(), kSql, -1, &statement,
                            nullptr) != SQLITE_OK ||
       ::sqlite3_bind_blob(statement, 1, token_hash.data(),
@@ -5934,6 +6081,112 @@ common::Result<CommittedRevocation> SecurityStore::DeleteManagementIp(
     }
     return common::Result<CommittedRevocation>::Ok(
         {std::move(collected).value()});
+  } catch (...) {
+    return UserMutationUnavailable<CommittedRevocation>(transaction);
+  }
+}
+
+common::Result<CommittedRevocation>
+SecurityStore::SetManagementIpRestrictionEnabled(
+    bool enabled, std::int64_t now_seconds,
+    const SecurityMutationContext& context) {
+  auto started = BeginTransaction();
+  if (!started.ok()) {
+    return StoreError<CommittedRevocation>(
+        "E_USER_MANAGEMENT_STORE", "user management transaction failed");
+  }
+  auto transaction = std::move(started).value();
+  try {
+    const auto reject = [&](std::string code, std::string detail) {
+      auto audited = InsertAuditEvent(
+          transaction, now_seconds, "management_ip_policy_changed", "failure",
+          context.actor_user_id, context.normalized_peer_ip, detail,
+          "management_ip_policy", enabled ? "enabled" : "disabled");
+      if (!audited.ok() || !transaction.Commit().ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return StoreError<CommittedRevocation>(
+          std::move(code), "management IP policy change was rejected");
+    };
+    if (context.actor_role != UserRole::kAdministrator) {
+      return reject("E_MANAGEMENT_IP_FORBIDDEN", "role_forbidden");
+    }
+    auto state = StateUnderConnectionLease();
+    auto current = ManagementIpRestrictionEnabledUnderConnectionLease();
+    if (!state.ok() || state.value() != DeviceState::kOperational ||
+        !current.ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    if (enabled) {
+      PreparedStatement peer(
+          impl_->database.get(),
+          "SELECT EXISTS(SELECT 1 FROM management_ips WHERE normalized_ip = ?1 "
+          "AND role_scope = 'administrator' AND enabled = 1);");
+      if (!peer.valid() ||
+          ::sqlite3_bind_text(
+              peer.get(), 1, context.normalized_peer_ip.data(),
+              static_cast<int>(context.normalized_peer_ip.size()),
+              SQLITE_TRANSIENT) != SQLITE_OK ||
+          ::sqlite3_step(peer.get()) != SQLITE_ROW) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      if (::sqlite3_column_int(peer.get(), 0) != 1) {
+        return reject("E_MANAGEMENT_IP_LOCKOUT",
+                      "current_peer_not_allowlisted");
+      }
+    }
+    if (current.value() == enabled) {
+      if (!transaction.Commit().ok()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      return common::Result<CommittedRevocation>::Ok({{}});
+    }
+    std::vector<SessionIdentity> identities;
+    {
+      PreparedStatement sessions(
+          impl_->database.get(),
+          "SELECT token_hash FROM sessions ORDER BY id;");
+      if (!sessions.valid()) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+      int step = SQLITE_ROW;
+      while ((step = ::sqlite3_step(sessions.get())) == SQLITE_ROW) {
+        const auto* bytes = static_cast<const unsigned char*>(
+            ::sqlite3_column_blob(sessions.get(), 0));
+        if (bytes == nullptr || ::sqlite3_column_bytes(sessions.get(), 0) !=
+                                    static_cast<int>(kSessionIdentityBytes)) {
+          return UserMutationUnavailable<CommittedRevocation>(transaction);
+        }
+        SessionIdentity identity;
+        std::copy_n(bytes, kSessionIdentityBytes, identity.bytes.begin());
+        identities.emplace_back(std::move(identity));
+      }
+      if (step != SQLITE_DONE) {
+        return UserMutationUnavailable<CommittedRevocation>(transaction);
+      }
+    }
+    PreparedStatement policy(
+        impl_->database.get(),
+        "UPDATE device_state SET management_ip_restriction_enabled = ?1 WHERE "
+        "id = 1;");
+    if (!policy.valid() ||
+        ::sqlite3_bind_int(policy.get(), 1, enabled ? 1 : 0) != SQLITE_OK ||
+        ::sqlite3_step(policy.get()) != SQLITE_DONE ||
+        ::sqlite3_changes(impl_->database.get()) != 1 ||
+        !Execute(impl_->database.get(), "DELETE FROM sessions;",
+                 "E_USER_MANAGEMENT_STORE", "session revocation failed")
+             .ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    auto audited = InsertAuditEvent(
+        transaction, now_seconds, "management_ip_policy_changed", "success",
+        context.actor_user_id, context.normalized_peer_ip,
+        enabled ? "enabled" : "disabled", "management_ip_policy",
+        enabled ? "enabled" : "disabled");
+    if (!audited.ok() || !transaction.Commit().ok()) {
+      return UserMutationUnavailable<CommittedRevocation>(transaction);
+    }
+    return common::Result<CommittedRevocation>::Ok({std::move(identities)});
   } catch (...) {
     return UserMutationUnavailable<CommittedRevocation>(transaction);
   }

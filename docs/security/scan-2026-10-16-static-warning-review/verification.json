@@ -1,0 +1,301 @@
+{
+  "date": "2026-10-16",
+  "result": "PASS",
+  "scope": "Selective behavior-preserving intermediate-copy reductions; source/layer verification only",
+  "installed_image_unchanged": "20261015T204138Z-e664cb9647e7",
+  "image_build_performed": false,
+  "deployment_performed": false,
+  "qemu_used": false,
+  "source_changes": [
+    "src/ai/AiModelRunner.cpp",
+    "src/media/CameraPipeline.cpp",
+    "src/media/FragmentedMp4Hub.cpp",
+    "src/runtime/FirmwareRuntime.cpp",
+    "src/runtime/ManagedFirmwareRuntime.cpp",
+    "src/security/UserManagementService.cpp",
+    "src/settings/RuntimeSettings.cpp",
+    "tests/unit/runtime/ManagedFirmwareRuntimeTest.cpp"
+  ],
+  "baseline_input_count": 431,
+  "unchanged_baseline_inputs": 423,
+  "static_analysis": {
+    "result": "PASS",
+    "translation_units": 79,
+    "errors": 0,
+    "warnings": 198,
+    "warning_checks": {
+      "cppcoreguidelines-init-variables": 30,
+      "misc-redundant-expression": 2,
+      "performance-move-const-arg": 70,
+      "performance-unnecessary-copy-initialization": 2,
+      "performance-unnecessary-value-param": 89,
+      "readability-braces-around-statements": 5
+    },
+    "source_paths_match_current": true
+  },
+  "warnings_before": 208,
+  "warnings_removed": 10,
+  "warning_dispositions": {
+    "retained-assigned-before-use": 30,
+    "deferred-no-runtime-gain": 70,
+    "retained-required-side-effects": 2,
+    "deferred-ownership-or-cold-path": 89,
+    "selected": 10,
+    "deferred-style": 5,
+    "retained-required-error-snapshot": 2
+  },
+  "format": {
+    "result": "PASS",
+    "files": 257,
+    "version": "18.1.3"
+  },
+  "target_tests": {
+    "before": {
+      "result": "PASS",
+      "tests": 359,
+      "failures": 0,
+      "disabled": 0,
+      "errors": 0,
+      "binary_sha256": "e595c44a742c412839aca849c1473437e8442380e1b0a4816883f91c687ee371",
+      "excluded_hardware_tests": [
+        "AiRuntimeTest.HailortBackendReportsDeviceInitFailureWithoutFallback"
+      ],
+      "production_unchanged": true
+    },
+    "rejected_reference_negative_control": {
+      "result": "FAIL",
+      "tests": 2,
+      "failures": 2,
+      "disabled": 0,
+      "errors": 0,
+      "binary_sha256": "f04cdaf05c946f9331b51a72e8fe3c98fbfa587de6fa93dc16d5bbafc7d45d9e",
+      "excluded_hardware_tests": [
+        "AiRuntimeTest.HailortBackendReportsDeviceInitFailureWithoutFallback"
+      ],
+      "production_unchanged": true
+    },
+    "after": {
+      "result": "PASS",
+      "tests": 361,
+      "failures": 0,
+      "disabled": 0,
+      "errors": 0,
+      "binary_sha256": "8a26814391813c81f033671db56b129d9c04bdfd33a1facb32517207a1dec90f",
+      "excluded_hardware_tests": [
+        "AiRuntimeTest.HailortBackendReportsDeviceInitFailureWithoutFallback"
+      ],
+      "production_unchanged": true
+    },
+    "suites": [
+      {
+        "name": "AiFramePumpTest",
+        "tests": 6,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "AiFrameTapTest",
+        "tests": 10,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "AiModelProcessorTest",
+        "tests": 23,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "AiRuntimeTest",
+        "tests": 27,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "AlignedBufferPoolTest",
+        "tests": 6,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "DetectionBusTest",
+        "tests": 5,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "DetectionEventStoreTest",
+        "tests": 3,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "ModelInputBufferPoolTest",
+        "tests": 4,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "Nv12RgbPreprocessorTest",
+        "tests": 13,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "YoloPostprocessTest",
+        "tests": 9,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "FirmwareRuntimeTest",
+        "tests": 17,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "ManagedCameraRecoveryTest",
+        "tests": 4,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "ManagedFirmwareRuntimeTest",
+        "tests": 19,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "RuntimeSettingsTest",
+        "tests": 31,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "FrameLeaseTest",
+        "tests": 3,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "CameraPipelineConfigTest",
+        "tests": 8,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "FragmentedMp4HubTest",
+        "tests": 2,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "SecurityTypesTest",
+        "tests": 2,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "SecurityStoreTest",
+        "tests": 97,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "UserManagementServiceTest",
+        "tests": 37,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "DeviceTlsManagerTest",
+        "tests": 28,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "FailurePoints/ManagedFirmwareRuntimeCandidateFailureTest",
+        "tests": 5,
+        "failures": 0,
+        "disabled": 0
+      },
+      {
+        "name": "FailurePoints/ManagedFirmwareRuntimeErrorSnapshotTest",
+        "tests": 2,
+        "failures": 0,
+        "disabled": 0
+      }
+    ],
+    "method": "Isolated AArch64 executable on Pi using newly compiled production objects and the existing Yocto sysroot/static libraries",
+    "full_ctest_rerun": false,
+    "web_tests_rerun": false
+  },
+  "host_firmware_packaging_tests": {
+    "result": "PASS",
+    "tests": 25,
+    "failures": 0
+  },
+  "layer": {
+    "result": "PASS",
+    "recipes": [
+      "camera-firmware_git.bb",
+      "rpi-cam-hailo-devrepo_git.bb"
+    ],
+    "files_match_per_recipe": 8,
+    "patch_sha256": "fa3ed3b5c910c4f0c5ec672e29e2571c06d79b4fddec2a315a918b13dbb291b6"
+  },
+  "independent_review": {
+    "result": "APPROVED",
+    "critical": 0,
+    "important": 0,
+    "minor": 0,
+    "review_scope": "Final source delta, error-snapshot regressions, both recipe patch chains, source hashes and completed static analysis",
+    "earlier_finding": "Retain two Error snapshots across callbacks that may mutate static-lifetime error storage",
+    "resolution": "Both snapshots retained; two regression tests fail with rejected references and pass in the final 361-test run",
+    "exclusions": [
+      "deferred warnings outside the delta",
+      "actual Hailo initialization",
+      "image build and deployment"
+    ]
+  },
+  "cleanup_and_service": {
+    "result": "PASS",
+    "temporary_target_tree_removed": true,
+    "local_harness_build_removed": true,
+    "local_build_bytes_removed": 47417383,
+    "production_boot_unchanged": true,
+    "production_service_pid_unchanged": true,
+    "production_service_restarts_unchanged": true,
+    "https_status": 200,
+    "installed_build": "20261015T204138Z-e664cb9647e7"
+  },
+  "initial_setup_failures": "The harness initially lacked wrapper/source fixtures; final baseline and after suites passed. Format-only tool resolution needed explicit existing clang tool paths; the repository gate was not changed.",
+  "private_log_root": ".state/static-warning-review-2026-10-16",
+  "private_evidence_sha256": {
+    "baseline-build.log": "6a46d33d17e28cb04477c1575c4bf2a4817631bf75c336a71af3f2cb58da067c",
+    "baseline-tests.log": "e6ce504194aa0bf2360945e23c65455803c0330c25df41241f29aa36d8a8ce33",
+    "baseline-tests.xml": "03d4c306f321e1cbab218e85d0534c1881d6bad6660d829f36d9870a5deee39c",
+    "baseline-missing-source-fixture-tests.log": "6bcfe57b0ca2b40f10672f669e2095bb38a9312d71c293865bc33e0fb6298869",
+    "candidate-pre-review-tests.log": "dcd67546d1cfa8557967cbe93340fdf29ce48ef58d681df400ff89eebf0244c1",
+    "candidate-pre-review-tests.xml": "84ef0d141459f1dcff08b9a53dd973645a29e51cb1e79396899d8c722dae4269",
+    "red-build.log": "7f91b0e52c8be77b0b6fe105f501f49d1e05c7f0001ddaf4328a80d6b84378f3",
+    "red-tests.log": "99e895813af60bde45f437ec2f21dbe179a3cb61e1279c6e942fe296e35881ff",
+    "red-tests.xml": "817e42387347b35466d67c4ffb37099849b75d5d3767be3839203d2fc089b15d",
+    "after-build.log": "6fbf52df09e533e1db981a94ce5968c2cfc0cb6b83f5a9b13ad349730927bdc7",
+    "after-tests.log": "249073e24df25f42cb0d5b3fb08e4d3e7c817682a335418138e41953b7d13e03",
+    "after-tests.xml": "28864e7467d50681087a0f0fff915573457f2f4cb9f6e78c9c71dcbe157fb90b",
+    "format-missing-tool.log": "042dfb0537e9fe06c66b0ab11890787e3f31300d18231b93428d08bd907fcddd",
+    "format.log": "aa8113502d60600c9a8228bde32c6660c280aeed49c65660013738802630d90f",
+    "packaging-tests.log": "15e0686b49a30f6195902c0e6a42a4b8cf28997962b6e488131c8f3e23ce5512",
+    "source-changes.patch": "448ff3bd5d39ead4e333066560a5a36c5ada01641764c64103e3103e0c5d9013",
+    "harness/CMakeLists.txt": "1eb56fa64b9840aa9c99afa4cd691bef03f0cd52e990a8db9bce5092c83f5842",
+    "build.sh": "cffa107ca909fd1a3fd749f96b983d2f2e327cc90a1296f3374aec5ffca2ef04",
+    "run-device-tests.py": "56ae664389cf1ed53619d2c7cf575793b366b77c874224a9cf3080f84f4fe432",
+    "run-tidy.py": "24820c51ae0f7771050868d8c8d56baaca17420f7bcc211c328d23135be1b0e3",
+    "refresh-managed-tidy.py": "9d5849f05f4a13ee888fa72efac4eddf0503a463874c640232badeab145c3b15",
+    "summarize-tidy.py": "65d645afec4e6d63f7159e58dd5684d248340e791bba02cd3993f759d2b5e116",
+    "verify-layer.py": "6a2a924536daa2db0952ca6de2dac26e18b49c081a0faceb9470f8f444f752ed",
+    "independent-review.json": "cfcf2e61e2784df151d536f7524873e56fcd0cc581bbfd3f2071746d97eed142",
+    "cleanup.json": "31358569183f0c8c3fb3b2fe05511ffecf4116e8f9f2b52aed91a9a2befebcaf"
+  }
+}

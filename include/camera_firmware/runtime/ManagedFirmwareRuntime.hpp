@@ -42,7 +42,9 @@ struct RuntimeReplacementResult {
 class ManagedFirmwareRuntime final {
  public:
   ManagedFirmwareRuntime(config::AppConfig initial_config,
-                         FirmwareRuntimeFactory factory);
+                         FirmwareRuntimeFactory factory,
+                         std::function<std::chrono::steady_clock::time_point()>
+                             clock = std::chrono::steady_clock::now);
   ~ManagedFirmwareRuntime();
 
   ManagedFirmwareRuntime(const ManagedFirmwareRuntime&) = delete;
@@ -52,6 +54,8 @@ class ManagedFirmwareRuntime final {
 
   [[nodiscard]] common::Result<void> Start();
   void Stop();
+  // Caller must hold the protection runtime-control gate, when enabled.
+  void PollCameraHealth();
   [[nodiscard]] RuntimeReplacementResult Replace(
       const config::AppConfig& candidate_config,
       std::function<common::Result<void>()> durable_promote);
@@ -78,6 +82,8 @@ class ManagedFirmwareRuntime final {
     std::shared_ptr<FirmwareRuntime> runtime;
     config::AppConfig config;
     ManagedRuntimeState state{ManagedRuntimeState::kStopped};
+    std::string capture_error;
+    unsigned int recovery_attempts{0U};
   };
 
   [[nodiscard]] RuntimeSnapshot ReadSnapshot() const;
@@ -90,6 +96,7 @@ class ManagedFirmwareRuntime final {
   [[nodiscard]] bool RestorePrevious(
       const std::shared_ptr<FirmwareRuntime>& previous);
   void SetState(ManagedRuntimeState state);
+  void ResetRecovery();
 
   mutable std::mutex command_mutex_;
   mutable std::mutex snapshot_mutex_;
@@ -97,6 +104,12 @@ class ManagedFirmwareRuntime final {
   config::AppConfig active_config_;
   FirmwareRuntimeFactory factory_;
   ManagedRuntimeState state_{ManagedRuntimeState::kStopped};
+  std::function<std::chrono::steady_clock::time_point()> clock_;
+  // Published fields are guarded by snapshot_mutex_; timers by command_mutex_.
+  std::string capture_error_;
+  unsigned int recovery_attempts_{0U};
+  std::chrono::steady_clock::time_point retry_at_{};
+  std::optional<std::chrono::steady_clock::time_point> healthy_since_;
 };
 
 }  // namespace camera_firmware::runtime

@@ -21,6 +21,7 @@ describe('SetupReviewStep', () => {
   it('shows the collected values with the password masked', () => {
     render(
       <SetupReviewStep
+        restrictionEnabled
         username="operator.one"
         password="NorthStar!9"
         peerIp="192.0.2.44"
@@ -43,6 +44,7 @@ describe('SetupReviewStep', () => {
     const onSubmit = vi.fn();
     render(
       <SetupReviewStep
+        restrictionEnabled
         username="operator.one"
         password="NorthStar!9"
         peerIp="192.0.2.44"
@@ -63,6 +65,7 @@ describe('SetupReviewStep', () => {
   it('disables the controls while submitting', () => {
     render(
       <SetupReviewStep
+        restrictionEnabled
         username="operator.one"
         password="NorthStar!9"
         peerIp="192.0.2.44"

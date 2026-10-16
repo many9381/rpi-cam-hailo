@@ -68,6 +68,9 @@ class UserManagementService {
                         UserManagementDependencies dependencies = {});
 
   common::Result<std::vector<ManagedUser>> ListUsers() const;
+  common::Result<bool> ManagementIpRestrictionEnabled() const;
+  common::Result<void> SetManagementIpRestrictionEnabled(
+      bool enabled, const UserMutationContext& context);
   common::Result<ManagedUser> CreateViewer(std::string username,
                                            common::SecureBytes password,
                                            const UserMutationContext& context);

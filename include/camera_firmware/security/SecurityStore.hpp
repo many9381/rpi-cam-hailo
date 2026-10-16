@@ -23,7 +23,7 @@ class AuditLogService;
 class AuditLogServiceTestAccess;
 class UserManagementService;
 
-inline constexpr int kSecuritySchemaRevision = 5;
+inline constexpr int kSecuritySchemaRevision = 6;
 
 enum class DeviceState { kDefault, kOperational };
 
@@ -44,6 +44,7 @@ struct BootstrapRecord {
   // an entry repeating the peer is redundant rather than harmful, and an empty
   // vector still leaves the device reachable.
   std::vector<std::string> additional_management_ips;
+  bool management_ip_restriction_enabled{true};
 };
 
 using CredentialInstaller = std::function<common::Result<void>()>;
@@ -128,6 +129,7 @@ class SecurityStore {
   common::Result<void> InitializeDevice(
       BootstrapRecord record, const CredentialInstaller& install_credential);
   common::Result<DeviceState> State() const;
+  common::Result<bool> ManagementIpRestrictionEnabled() const;
   common::Result<void> CheckHealth() const;
   common::Result<bool> IsManagementPeer(std::string_view normalized_peer_ip);
   [[nodiscard]] const std::filesystem::path& state_directory() const noexcept;
@@ -239,13 +241,15 @@ class SecurityStore {
 
   explicit SecurityStore(std::shared_ptr<Impl> impl) noexcept;
   common::Result<void> InitializeSchema();
-  common::Result<void> MigrateToRevisionFive(int source_revision);
+  common::Result<void> MigrateToRevisionSix(int source_revision);
   common::Result<void> RollbackSchemaTransaction();
   common::Result<Transaction> BeginReadTransaction() const;
   common::Result<AuditStatusSnapshot> ReadAuditStatus() const;
   common::Result<AuditEventQueryResult> ReadAuditEvents(
       const AuditEventQuery& query) const;
   common::Result<DeviceState> StateUnderConnectionLease() const;
+  common::Result<bool> ManagementIpRestrictionEnabledUnderConnectionLease()
+      const;
   common::Result<AuthenticationContext> ReadAuthenticationContext(
       Transaction& transaction, std::string_view canonical_username,
       std::string_view normalized_peer_ip) const;
@@ -325,6 +329,9 @@ class SecurityStore {
       std::int64_t user_id, std::int64_t now_seconds,
       const SecurityMutationContext& context);
   common::Result<std::vector<StoredManagementIp>> ReadManagementIps() const;
+  common::Result<CommittedRevocation> SetManagementIpRestrictionEnabled(
+      bool enabled, std::int64_t now_seconds,
+      const SecurityMutationContext& context);
   common::Result<StoredManagementIp> InsertManagementIp(
       UserRole role, std::string normalized_ip, std::int64_t now_seconds,
       const SecurityMutationContext& context);

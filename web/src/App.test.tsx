@@ -12,7 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode, type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiClient, UnauthorizedError } from './api/client';
+import { ApiClient, ApiError, UnauthorizedError } from './api/client';
 import type { CameraApiClient, SetupStatus } from './api/types';
 import { App } from './App';
 import { LanguageProvider } from './i18n';
@@ -328,6 +328,7 @@ describe('App bootstrap gate', () => {
         password: 'NorthStar!9',
         peer_ip: '192.0.2.10',
         management_ips: [],
+        management_ip_restriction_enabled: false,
       },
       expect.any(Function),
     );
@@ -385,6 +386,7 @@ describe('App bootstrap gate', () => {
     await user.type(screen.getByLabelText(/confirm password/i), 'NorthStar!9');
     await user.click(screen.getByRole('button', { name: /next/i }));
     await screen.findByRole('heading', { name: /management access/i });
+    await user.click(screen.getByRole('checkbox', { name: /restrict management access by ip/i }));
     expect(screen.getByRole('list', { name: /registered management hosts/i }))
       .toHaveTextContent('192.0.2.10 (current session)');
     await user.click(screen.getByRole('button', { name: /^next$/i }));
@@ -1387,6 +1389,81 @@ describe('App role-specific route trees', () => {
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Camera login' })).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])('saves a management IP policy change from %s and returns to sign in', async (enabled) => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/users', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': { management_ips: [], current_peer_ip: '192.0.2.44' },
+      '/api/v1/security/management-ip-policy': { enabled },
+    });
+    vi.mocked(client.putJson).mockImplementation(async (_path, _body, parser) => parser({ enabled: !enabled }));
+    vi.mocked(client.postJson).mockResolvedValue({ logged_out: true });
+    await user.click(await screen.findByRole('tab', { name: 'Access IPs' }));
+    const toggle = screen.getByRole('checkbox', { name: /restrict management access by ip/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect((toggle as HTMLInputElement).checked).toBe(enabled);
+    const save = screen.getByRole('button', { name: /save and sign in again/i });
+    expect(save).toBeDisabled();
+    await user.click(toggle);
+    expect(client.putJson).not.toHaveBeenCalled();
+    await user.click(save);
+    expect(await screen.findByRole('heading', { name: 'Camera login' })).toBeVisible();
+    expect(client.putJson).toHaveBeenCalledWith(
+      '/api/v1/security/management-ip-policy', { enabled: !enabled },
+      expect.any(Function), expect.any(AbortSignal),
+    );
+  });
+
+  it('explains a management IP policy lockout without logging out or losing the draft', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/users', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': { management_ips: [], current_peer_ip: '192.0.2.44' },
+      '/api/v1/security/management-ip-policy': { enabled: false },
+    });
+    vi.mocked(client.putJson).mockRejectedValue(new ApiError(409, 'E_MANAGEMENT_IP_LOCKOUT', 'private backend detail'));
+    await user.click(await screen.findByRole('tab', { name: 'Access IPs' }));
+    const toggle = screen.getByRole('checkbox', { name: /restrict management access by ip/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: /save and sign in again/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/add your current IP address.*administrator/i);
+    expect(screen.getByText('Current connection address: 192.0.2.44')).toBeVisible();
+    expect(toggle).toBeChecked();
+    expect(screen.getByRole('heading', { name: 'Users & access' })).toBeVisible();
+    expect(client.postJson).not.toHaveBeenCalled();
+    expect(screen.queryByText(/private backend detail/i)).not.toBeInTheDocument();
+  });
+
+  it('reauthenticates a management IP policy save and allows an explicit retry', async () => {
+    const user = userEvent.setup();
+    const client = renderRecoveredSession('administrator', '/users', {
+      '/api/v1/security/users': { users: [] },
+      '/api/v1/security/management-ips': { management_ips: [], current_peer_ip: '192.0.2.44' },
+      '/api/v1/security/management-ip-policy': { enabled: true },
+    });
+    vi.mocked(client.putJson)
+      .mockRejectedValueOnce(new UnauthorizedError('E_MANAGEMENT_REAUTHENTICATION_REQUIRED'))
+      .mockImplementationOnce(async (_path, _body, parser) => parser({ enabled: false }));
+    vi.mocked(client.postJson).mockImplementation(async (path, _body, parser) => parser(
+      path === '/api/v1/auth/reauthenticate'
+        ? { management_expires_at_seconds: 4_000 }
+        : { logged_out: true },
+    ));
+    await user.click(await screen.findByRole('tab', { name: 'Access IPs' }));
+    const toggle = screen.getByRole('checkbox', { name: /restrict management access by ip/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: /save and sign in again/i }));
+    await user.type(await screen.findByLabelText(/password/i), 'NorthStar!9');
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByText('Your session has ended.')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /save and sign in again/i }));
+    expect(await screen.findByRole('heading', { name: 'Camera login' })).toBeVisible();
   });
 
   it('loads administrator users with only the two management resources', async () => {

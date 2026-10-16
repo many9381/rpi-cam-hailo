@@ -198,7 +198,8 @@ common::Result<void> FirmwareBootCoordinator::StartRuntimeAfterBootstrap() {
       return BootError("E_BOOT_TRANSITION",
                        "runtime transition is not available");
     }
-    if (runtime_started_) {
+    if (runtime_started_ && (!dependencies_.runtime_needs_start ||
+                             !dependencies_.runtime_needs_start())) {
       return common::Result<void>::Ok();
     }
     authorization_generation = runtime_transition_generation_;
@@ -218,7 +219,8 @@ common::Result<void> FirmwareBootCoordinator::StartRuntimeAfterBootstrap() {
       return BootError("E_BOOT_TRANSITION",
                        "runtime transition is not available");
     }
-    if (runtime_started_) {
+    if (runtime_started_ && (!dependencies_.runtime_needs_start ||
+                             !dependencies_.runtime_needs_start())) {
       return common::Result<void>::Ok();
     }
     if (authorization_generation != runtime_transition_generation_) {

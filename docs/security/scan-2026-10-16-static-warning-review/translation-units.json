@@ -1,0 +1,638 @@
+{
+  "complete": true,
+  "expected": 79,
+  "results": [
+    {
+      "file": "plugins/gst-secure-srtp/gstcfsecuresrtpenc.cpp",
+      "returncode": 0,
+      "seconds": 4.175,
+      "source_sha256": "013e4975de880e83e363f7eff260aa368b8f19b2d5419005edd3d29296dcfa82",
+      "log": "plugins_gst-secure-srtp_gstcfsecuresrtpenc.cpp.log",
+      "log_sha256": "630d375bf8e9577a0bb45af5085d630b16a7b8df75bb06c086830a778413aead"
+    },
+    {
+      "file": "apps/camera-firmware-integrity/main.cpp",
+      "returncode": 0,
+      "seconds": 8.54,
+      "source_sha256": "29361afa853f2bea464f5ea5972a56e72c5e852299a77fae14291178b670722b",
+      "log": "apps_camera-firmware-integrity_main.cpp.log",
+      "log_sha256": "1d1fe2b21c4fb2b054a7aa3fa0d3acacea2beb71bc82bea1700e50761a6a73ca"
+    },
+    {
+      "file": "src/ai/AiFramePump.cpp",
+      "returncode": 0,
+      "seconds": 6.781,
+      "source_sha256": "f5afd35d6f5d6257d07ee12c773c16128b4ecad8dc769f689ec2aa8ac6e3fb55",
+      "log": "src_ai_AiFramePump.cpp.log",
+      "log_sha256": "0702b01133f9cea8798e59ffb4d3e8ea6c81f8576c0265eab3bd397d644463da"
+    },
+    {
+      "file": "apps/rtsp-digest-credential/main.cpp",
+      "returncode": 0,
+      "seconds": 12.15,
+      "source_sha256": "63dc89f7d0c96a7709acf950e9c6f0a3c175294eb9d102aa48a8874c01fc9ccb",
+      "log": "apps_rtsp-digest-credential_main.cpp.log",
+      "log_sha256": "098d0457bb1f875c059f21d25b743f49f7481486388aaf0c35be966cfcb902a5"
+    },
+    {
+      "file": "src/ai/AiFrameTap.cpp",
+      "returncode": 0,
+      "seconds": 7.992,
+      "source_sha256": "22afde1d1794d3c33cc6c6c53b1c8bcd3f9cd9fba06dd755fd914acfe048e877",
+      "log": "src_ai_AiFrameTap.cpp.log",
+      "log_sha256": "ec1dd3b224811070f81b60fbc2cc21bddebe0d3579798b1770ea8a2a7084df83"
+    },
+    {
+      "file": "apps/camera-firmware/main.cpp",
+      "returncode": 0,
+      "seconds": 18.069,
+      "source_sha256": "afbe70ceef3c870fffe628ed07a3af24b0cac261cb63d35a54fd13beb3dc28ee",
+      "log": "apps_camera-firmware_main.cpp.log",
+      "log_sha256": "044e0d0b823b36388bfdac659e45be3d13d5e0519dfb0597102e8f0ddc34ed81"
+    },
+    {
+      "file": "src/ai/AiModelProcessor.cpp",
+      "returncode": 0,
+      "seconds": 7.734,
+      "source_sha256": "908385e385af59d566b8d23ddb9f242e18ab0b4de389124731f4c8594b17217f",
+      "log": "src_ai_AiModelProcessor.cpp.log",
+      "log_sha256": "eeb19fb73adbf44045decb5c42b15d80b6b10311960584fbf23921167c276b79"
+    },
+    {
+      "file": "src/ai/AiModelRunner.cpp",
+      "returncode": 0,
+      "seconds": 11.401,
+      "source_sha256": "667afaaec48bb30588984b65ce1ed1502b300318b786da619c305983c6a59073",
+      "log": "src_ai_AiModelRunner.cpp.log",
+      "log_sha256": "6eacf25a72fb8e5fedf12e5f924181787d2ec895fdad21d12057cbc8d0c5e061"
+    },
+    {
+      "file": "src/ai/AiRuntimeController.cpp",
+      "returncode": 0,
+      "seconds": 6.435,
+      "source_sha256": "4df2d34cb31db6463afe6cc14522c63ff1fb7eda3b5c6c329f80fd0f84332b5e",
+      "log": "src_ai_AiRuntimeController.cpp.log",
+      "log_sha256": "ba37d35c6b9cd7896848b6ffdfeb93d89d8f03c30d91f2ca327aebc0c368b9c1"
+    },
+    {
+      "file": "src/ai/DetectionBus.cpp",
+      "returncode": 0,
+      "seconds": 5.978,
+      "source_sha256": "96d7f6cd6753943f974d0028a0769aa09a11cf6d1f0a21bbc149afc6ac1f0d4d",
+      "log": "src_ai_DetectionBus.cpp.log",
+      "log_sha256": "f198a87e7b03a5173e255190987fe5069dc5367e2a4c107f875029cfbde1eccc"
+    },
+    {
+      "file": "src/ai/AiRuntime.cpp",
+      "returncode": 0,
+      "seconds": 11.347,
+      "source_sha256": "70b1dc7087e56cc9339b7ce3f61f9f7d9d4c2d6de2a57d09d0cacb00e4caac0c",
+      "log": "src_ai_AiRuntime.cpp.log",
+      "log_sha256": "8e5e64d4e4e9b790bd7ebf69acdfa0f35c1a1099327932687899213dfbfa49bc"
+    },
+    {
+      "file": "src/ai/DetectionEventStore.cpp",
+      "returncode": 0,
+      "seconds": 7.988,
+      "source_sha256": "e000748e339ae32c25ca2bb5c258ac9a7e8fc37ff47486d3e4a37eeb04a0a089",
+      "log": "src_ai_DetectionEventStore.cpp.log",
+      "log_sha256": "abc9066e5cd02ec7b71d871925c20c5ca8273915e2db6e531b263b1383157604"
+    },
+    {
+      "file": "src/ai/Nv12RgbPreprocessor.cpp",
+      "returncode": 0,
+      "seconds": 8.991,
+      "source_sha256": "fcf28c95af75596c25aaa58f4a1ba42b2ff783a8d15104fea1cff2de534c0a38",
+      "log": "src_ai_Nv12RgbPreprocessor.cpp.log",
+      "log_sha256": "ad2dcfedaf7df749ad20a9c6e8611a47eb5564018e8f196752ba1c78b59268b6"
+    },
+    {
+      "file": "src/ai/YoloPostprocess.cpp",
+      "returncode": 0,
+      "seconds": 5.983,
+      "source_sha256": "395c45b32237bb4a9bcd08d8fda81cc04e8fd27aa3180fe100f26d9a9bc33cbe",
+      "log": "src_ai_YoloPostprocess.cpp.log",
+      "log_sha256": "fedeb6488183af86579bef6f6d33ae6eb13665b6acb93f6b13387f27f3b50ef3"
+    },
+    {
+      "file": "src/common/Logger.cpp",
+      "returncode": 0,
+      "seconds": 2.021,
+      "source_sha256": "f92a0b5508c28183b7d954123bf3ff041a99c34176fdc90240e89812b09094d1",
+      "log": "src_common_Logger.cpp.log",
+      "log_sha256": "49ec3e63fcce85d5f3db4a619c39892db1dad89e5d9da06c4b9d01a2197a40a2"
+    },
+    {
+      "file": "src/common/ThreadTuning.cpp",
+      "returncode": 0,
+      "seconds": 0.165,
+      "source_sha256": "c821559e2d1434b7c1336347fcf073f494652ffac6ff75e3addd29a029465feb",
+      "log": "src_common_ThreadTuning.cpp.log",
+      "log_sha256": "be9d808ca974f6c8c2bca969aabd24ef188a3cdd9e50a40a099e1a40746a1ec6"
+    },
+    {
+      "file": "src/ai/HailoBackend.cpp",
+      "returncode": 0,
+      "seconds": 11.55,
+      "source_sha256": "38906b4cdcd1476c2f7bf28fe9de480498f41b9d1659f39d794769dbc3dfcf52",
+      "log": "src_ai_HailoBackend.cpp.log",
+      "log_sha256": "d24d650c22f377319322f4aa39b4b1067bc157a749eb7accdec8adf6c1a50ac9"
+    },
+    {
+      "file": "src/common/SecureBytes.cpp",
+      "returncode": 0,
+      "seconds": 2.222,
+      "source_sha256": "0a4c9bd806424a817884c223686a585b9fd472e33a59954e960af55818baf2c2",
+      "log": "src_common_SecureBytes.cpp.log",
+      "log_sha256": "f0f42c74443f42a04306b633d98473efff4dd76d835fbcbf1d9ac57c2899322b"
+    },
+    {
+      "file": "src/config/OsdRules.cpp",
+      "returncode": 0,
+      "seconds": 0.867,
+      "source_sha256": "f96acf550a982028c6a6982172f7fa5bd9b3d3f7c5abdcdc0838ba9cf7a84134",
+      "log": "src_config_OsdRules.cpp.log",
+      "log_sha256": "733ca7c68bda47d6d8e740e8d6d23884e67e9bea8926f26f9a133ce1b1916aba"
+    },
+    {
+      "file": "src/boot/FirmwareBootCoordinator.cpp",
+      "returncode": 0,
+      "seconds": 6.633,
+      "source_sha256": "73c77c15805e6ac9af0b5d82378280f8975b88e1422725bf3d2ed01ca3d4ba6a",
+      "log": "src_boot_FirmwareBootCoordinator.cpp.log",
+      "log_sha256": "c59e6f81414729cf34363eb52411835b93a4cca4f3129fd353fce77402aa0b43"
+    },
+    {
+      "file": "src/crypto/OpenSslCryptoProvider.cpp",
+      "returncode": 0,
+      "seconds": 3.928,
+      "source_sha256": "5ebf5f3421f29ac0917591e829038d0cd914c91abd77ab78775454fe696b3ca5",
+      "log": "src_crypto_OpenSslCryptoProvider.cpp.log",
+      "log_sha256": "243cc6dbe89837cf185b9b2b1c15ac8411e4dbed75d82dcf0e956a5c5b0de576"
+    },
+    {
+      "file": "src/config/AppConfig.cpp",
+      "returncode": 0,
+      "seconds": 8.842,
+      "source_sha256": "5a90f3db507ee50925724212772ba4656be9f4c53df78e48a9ea0e7b331ad71b",
+      "log": "src_config_AppConfig.cpp.log",
+      "log_sha256": "d04682404574a0ae4ac4788a189ecfc3c21198ab71959019ae6331f71058df4d"
+    },
+    {
+      "file": "src/integrity/IntegrityManifest.cpp",
+      "returncode": 0,
+      "seconds": 8.79,
+      "source_sha256": "24856a9f3c6beb6cbb40c72b8da60bde118af59f9dfcf6c9374999add9e890c8",
+      "log": "src_integrity_IntegrityManifest.cpp.log",
+      "log_sha256": "4b0f82ba8e94174250891fe22257003e95b0722262aeb3dd437209cb7b782842"
+    },
+    {
+      "file": "src/integrity/IntegrityVerifier.cpp",
+      "returncode": 0,
+      "seconds": 7.036,
+      "source_sha256": "1184183d4f0fcd000d2f58cb74054bbecd2cf7c1539ed9e81f9469f44ada5068",
+      "log": "src_integrity_IntegrityVerifier.cpp.log",
+      "log_sha256": "ab36e56021ca44d3788dc573f9603340b605a56821c91410e2088d2cd17f9601"
+    },
+    {
+      "file": "src/integrity/SafeFileDigest.cpp",
+      "returncode": 0,
+      "seconds": 5.784,
+      "source_sha256": "3d81d0329c43b298cf6decf8a9241f728c6380026a4975e2468efc5a0b72ef58",
+      "log": "src_integrity_SafeFileDigest.cpp.log",
+      "log_sha256": "5b84d67e14110b39b7ffbadf2dcfc1df5d44a244c11cec0c9217a414115fb756"
+    },
+    {
+      "file": "src/integrity/IntegritySigner.cpp",
+      "returncode": 0,
+      "seconds": 12.554,
+      "source_sha256": "20522311754ba97a919af1ddeb031e3f759443df53a6159dec793a422381c300",
+      "log": "src_integrity_IntegritySigner.cpp.log",
+      "log_sha256": "966315df0fdaf11f12ad9066d1486a4d76930bf6976ce22f615685a1403a4136"
+    },
+    {
+      "file": "src/media/CameraTiming.cpp",
+      "returncode": 0,
+      "seconds": 5.433,
+      "source_sha256": "9c9d1ed96453b905a8624656f3630b158a74bee2f14fb3e4808293a861d2e7d8",
+      "log": "src_media_CameraTiming.cpp.log",
+      "log_sha256": "f75b459e2f1ea9a12f2ae8c9f073c06cac4e93e6412bdf6bcc289827c889379f"
+    },
+    {
+      "file": "src/media/EncodeMailbox.cpp",
+      "returncode": 0,
+      "seconds": 6.085,
+      "source_sha256": "4569148b976e70f35adf10446628f9b1b40d5c765febcbcb6d792fc0bcaadfb0",
+      "log": "src_media_EncodeMailbox.cpp.log",
+      "log_sha256": "164d7bd86b829caef1a4993868bce3b8550bcd397f3e74fb091171b3bdc85b8f"
+    },
+    {
+      "file": "src/media/EncodedRing.cpp",
+      "returncode": 0,
+      "seconds": 6.485,
+      "source_sha256": "1fc9097774adc623298f02fcd8e1a51ab05ec790ae4031cf98755746e2350656",
+      "log": "src_media_EncodedRing.cpp.log",
+      "log_sha256": "55478871b1af27ad8ab6265f389150fcf82fbc8b474e9cc1cbaeacba73f8adde"
+    },
+    {
+      "file": "src/media/FragmentRing.cpp",
+      "returncode": 0,
+      "seconds": 9.899,
+      "source_sha256": "fde783840f0bff47f1aa2f0e5042ee82c207973cc42b7fdbe6d3b5ac5bdb10f7",
+      "log": "src_media_FragmentRing.cpp.log",
+      "log_sha256": "d9cc84e5dcc25c1128a0577223d8c6d7d007cf2d674b01397ae11904925e0611"
+    },
+    {
+      "file": "src/media/FrameLease.cpp",
+      "returncode": 0,
+      "seconds": 5.733,
+      "source_sha256": "04b2e0ced967831c05a44420772147c50fcd4c6851ea53c9fd1eef3faba67129",
+      "log": "src_media_FrameLease.cpp.log",
+      "log_sha256": "d768ea70329afefdca0eefb9a7cc4afab9fd3d36ac0cfd540b763818bd462488"
+    },
+    {
+      "file": "src/media/CameraPipeline.cpp",
+      "returncode": 0,
+      "seconds": 17.922,
+      "source_sha256": "4e7104341d9146a39a2e14c0ab1602afccd2bddbbee4a1b56e8008285108e5d7",
+      "log": "src_media_CameraPipeline.cpp.log",
+      "log_sha256": "ca7d4bd54874b1e4344cd0732f25242d6a1c30f4fd2ff0200e3685a7ed21a7b1"
+    },
+    {
+      "file": "src/media/Nv12Downscaler.cpp",
+      "returncode": 0,
+      "seconds": 1.869,
+      "source_sha256": "ec7b609f82cd0feaf540366b0632450d4445e41b3196dd2ca041ea09d2d2034d",
+      "log": "src_media_Nv12Downscaler.cpp.log",
+      "log_sha256": "b29c6b04cea33701139690e670793b26af638fe6a048fc65e2080f5b5a2e9343"
+    },
+    {
+      "file": "src/media/IsoBmffAssembler.cpp",
+      "returncode": 0,
+      "seconds": 6.183,
+      "source_sha256": "a8771053dd76f8a997687f5ca6aecaf9518d5237e7b4a83f28df52649257a6fc",
+      "log": "src_media_IsoBmffAssembler.cpp.log",
+      "log_sha256": "32077f5b956aced0b618e79ad2732b398f119ca00843c04d6c9292dbee72dd9a"
+    },
+    {
+      "file": "src/media/OsdFontData.cpp",
+      "returncode": 0,
+      "seconds": 0.616,
+      "source_sha256": "b29dc53cf80357309796643433bf44a620c5b213f08913c9ae0db9537a81148d",
+      "log": "src_media_OsdFontData.cpp.log",
+      "log_sha256": "cb1946c93dacaf52a00933c33ea210f25fbab5785ee80b5a4146891d8dfffc8f"
+    },
+    {
+      "file": "src/media/FragmentedMp4Hub.cpp",
+      "returncode": 0,
+      "seconds": 13.006,
+      "source_sha256": "092660936818133564df24cf3d1e0b253314a1a91105cad05de6eda54187d48a",
+      "log": "src_media_FragmentedMp4Hub.cpp.log",
+      "log_sha256": "0e259c565eb110a03eb38ecd8858925f1cd7ceb948f69a33813ad7176e4ab845"
+    },
+    {
+      "file": "src/media/JpegEncoder.cpp",
+      "returncode": 0,
+      "seconds": 7.889,
+      "source_sha256": "aae47cd60ca8c71b1865c7d8c43c5ff4296232f26df99978b6fa00c37848985d",
+      "log": "src_media_JpegEncoder.cpp.log",
+      "log_sha256": "5afd283d94a825ae860a43150d5da0404148d171b522c55f8bcf2923e7d6bc18"
+    },
+    {
+      "file": "src/media/OsdCompositor.cpp",
+      "returncode": 0,
+      "seconds": 7.889,
+      "source_sha256": "aacdccc38d35b2a91e59c049513da32376d0ee99b4c6148d051acfa983284a5c",
+      "log": "src_media_OsdCompositor.cpp.log",
+      "log_sha256": "0011b19f74032e40cd8f5520576371e7ee4c6f2c758e0539da140f8aee473f7e"
+    },
+    {
+      "file": "src/media/SnapshotTap.cpp",
+      "returncode": 0,
+      "seconds": 6.482,
+      "source_sha256": "96c29bc3c6519a79ac963482f3522a4d9e64e0a4a727a4659bd64a0c5099b607",
+      "log": "src_media_SnapshotTap.cpp.log",
+      "log_sha256": "5c44a7bf1192857c0da9db54aaafeea15608f4db9f494e4ce0abe4e4cff95870"
+    },
+    {
+      "file": "src/media/SubStreamTap.cpp",
+      "returncode": 0,
+      "seconds": 6.232,
+      "source_sha256": "5b613b0b3f633829075d818eed42eedfad408a4e6b106894fb414cc368f6d04f",
+      "log": "src_media_SubStreamTap.cpp.log",
+      "log_sha256": "f2d1f21d7e8331aa978d7df21d0a221e1963c1289928801d20455cf7b6818479"
+    },
+    {
+      "file": "src/media/SubStreamEncoder.cpp",
+      "returncode": 0,
+      "seconds": 8.392,
+      "source_sha256": "adbfcc8417552d4a11d1a5bc763f35fa36c0e0eada014e1c4474040d0d24c996",
+      "log": "src_media_SubStreamEncoder.cpp.log",
+      "log_sha256": "06d3c52ceff956267f3f223d51d9f81d1f7a25e7d06de5240fa420d51d1504ee"
+    },
+    {
+      "file": "src/rtsp/GstRtspClientLifecycle.cpp",
+      "returncode": 0,
+      "seconds": 4.828,
+      "source_sha256": "abbf3f723f4e898f17acc26cf2f8c1a633323de3069a009781fc29e269718573",
+      "log": "src_rtsp_GstRtspClientLifecycle.cpp.log",
+      "log_sha256": "21c83c781a8781c4017a407426e20316cc2e7d4a0962406f07f33755379d9319"
+    },
+    {
+      "file": "src/media/TextRasterizer.cpp",
+      "returncode": 0,
+      "seconds": 8.04,
+      "source_sha256": "2370df3217dba75deca091eacf3d49e5ae9f6b420970bbcea7f0f986996a8d5c",
+      "log": "src_media_TextRasterizer.cpp.log",
+      "log_sha256": "d28cc8ef5a7b1f19cec944df24e302d5b273b6fc71587902141cd5b134bc5522"
+    },
+    {
+      "file": "src/rtsp/RtspDigestCrypto.cpp",
+      "returncode": 0,
+      "seconds": 4.778,
+      "source_sha256": "c015dcb5b6788fbcebf88c62a757758047697296e3499ee90b8d76bb41e1179b",
+      "log": "src_rtsp_RtspDigestCrypto.cpp.log",
+      "log_sha256": "955c9a88ef71bed4ea1f4bdd48faeec21a5ead59c8e6497420b94a0ffeaeee42"
+    },
+    {
+      "file": "src/rtsp/GstRtspDigestAuth.cpp",
+      "returncode": 0,
+      "seconds": 9.84,
+      "source_sha256": "67a86e1a90065548376dae81dcc4663dbd96eaad744da9ad4c4f8857bee4d8bd",
+      "log": "src_rtsp_GstRtspDigestAuth.cpp.log",
+      "log_sha256": "28d959f9cca16b23875d9f4e2745290434501d5778fb457af8ff17b161ed62d5"
+    },
+    {
+      "file": "src/rtsp/RtspDigestNonce.cpp",
+      "returncode": 0,
+      "seconds": 11.098,
+      "source_sha256": "09b536ce4f77f8fcb5c2c70430fb640bc42fb10d9e71aea94b6a070bbf6294d9",
+      "log": "src_rtsp_RtspDigestNonce.cpp.log",
+      "log_sha256": "297ea5299e88e4bf3e934e2a2eef7a0ead8554e4b3a53aaaaa2340e91c66f96c"
+    },
+    {
+      "file": "src/rtsp/RtspDigestCredentials.cpp",
+      "returncode": 0,
+      "seconds": 14.913,
+      "source_sha256": "edd4972173efb635037e847dae5de16ed35a3be6b9401c506cbc946893bc9cc6",
+      "log": "src_rtsp_RtspDigestCredentials.cpp.log",
+      "log_sha256": "6be11ebf5ff954adc312f0139bbcbe1908e33cf90c12ac306ea1a75c81ae6306"
+    },
+    {
+      "file": "src/rtsp/SrtpSessionKey.cpp",
+      "returncode": 0,
+      "seconds": 3.876,
+      "source_sha256": "645ee9767442a95b3a63568a2e1363d93cab44f5389cb911baf0147d919d51c6",
+      "log": "src_rtsp_SrtpSessionKey.cpp.log",
+      "log_sha256": "800da44c1981f23fd146eddd175295ee39214da741dcfd2f7ca10ee5f247026d"
+    },
+    {
+      "file": "src/rtsp/RtspDigestVerifier.cpp",
+      "returncode": 0,
+      "seconds": 13.157,
+      "source_sha256": "9f2cc16bd6caa9d9fc28dfdffa57190b50b0416785ed76394aa8b31e2784055b",
+      "log": "src_rtsp_RtspDigestVerifier.cpp.log",
+      "log_sha256": "a6d6422a41f653598e3a8e66ddb2d02d92b0ad7a11f0fdbba6ac94ec476f62f0"
+    },
+    {
+      "file": "src/rtsp/SecureRtspServer.cpp",
+      "returncode": 0,
+      "seconds": 15.914,
+      "source_sha256": "44822f15cd5062ad04291d72db07e29e31b24e25e87f8cff5bcc2894be22178c",
+      "log": "src_rtsp_SecureRtspServer.cpp.log",
+      "log_sha256": "b6d20aa605dd159c72fc11abab365473f890165c45f69c22eddaa12fc45ab940"
+    },
+    {
+      "file": "src/runtime/ManagedFirmwareRuntime.cpp",
+      "returncode": 0,
+      "seconds": 8.844,
+      "source_sha256": "78fc921df2cdc146e7a9f95f334478bb0fabec2d63edc6492f12b2967f806140",
+      "log": "src_runtime_ManagedFirmwareRuntime.cpp.log",
+      "log_sha256": "08919496ad0982ceacb9f3364225f6fa2b61033ba25d6291742df276d2f2c31f"
+    },
+    {
+      "file": "src/security/AuditLogService.cpp",
+      "returncode": 0,
+      "seconds": 9.795,
+      "source_sha256": "800c91cac65df7e05e81047583fdaf6910818f344eba4231b846a0b680fb4d7b",
+      "log": "src_security_AuditLogService.cpp.log",
+      "log_sha256": "8af6b745c459ef8095b76204e3009d08ff95baf221c49072b873e8331ebc63a6"
+    },
+    {
+      "file": "src/runtime/FirmwareRuntime.cpp",
+      "returncode": 0,
+      "seconds": 16.067,
+      "source_sha256": "22d64571e9fe53b6bdcf6bb54033b8c672d7b7c30b2e79997977b17d77d269b5",
+      "log": "src_runtime_FirmwareRuntime.cpp.log",
+      "log_sha256": "cddcf738d89a5c522e59bfefea1095a801fd97c629df52d13fd2e4c60756ff9f"
+    },
+    {
+      "file": "src/security/DeviceTlsPlatform.cpp",
+      "returncode": 0,
+      "seconds": 0.165,
+      "source_sha256": "71a6c9628209aa9ca88cbe6de0a991619cdae309ef03204fc29a448a6f765523",
+      "log": "src_security_DeviceTlsPlatform.cpp.log",
+      "log_sha256": "7d3ec9060c2d327b09fdb602e6eee1183eb68c7826d91c8aa4117946ed986f42"
+    },
+    {
+      "file": "src/security/LoginRateLimiter.cpp",
+      "returncode": 0,
+      "seconds": 2.021,
+      "source_sha256": "04d280e6945b8dd1fbb6cbf192ae060b11cdbfdadcf3753b2fcd23429a4d7e66",
+      "log": "src_security_LoginRateLimiter.cpp.log",
+      "log_sha256": "e8756f44e42281a92ff277ca53e88efba1ee25ec17daeace1fc348bdb5823c69"
+    },
+    {
+      "file": "src/security/PasswordHasher.cpp",
+      "returncode": 0,
+      "seconds": 5.028,
+      "source_sha256": "ec826b42cc384c28878916a218ca3df66ccb5c8b1f50a00b74083cf5376bd325",
+      "log": "src_security_PasswordHasher.cpp.log",
+      "log_sha256": "6afc99838a99591ba316c8885776bfd01b50004d0091014397b0173844dc481f"
+    },
+    {
+      "file": "src/security/BootstrapService.cpp",
+      "returncode": 0,
+      "seconds": 11.351,
+      "source_sha256": "e7b55a35b7b7c7a1fb31bb7b175330b8fe0d6117e917cde4c5081a37a7f14b18",
+      "log": "src_security_BootstrapService.cpp.log",
+      "log_sha256": "ae4d3cdf6a173f5bb1119c86296b909e0c536ea827a863fd17c157f107e2e0a1"
+    },
+    {
+      "file": "src/security/DeviceTlsManager.cpp",
+      "returncode": 0,
+      "seconds": 14.712,
+      "source_sha256": "13e1d4cc4938fb6ee05d03e34014f21632954f06c476a6dd22947f66ff761714",
+      "log": "src_security_DeviceTlsManager.cpp.log",
+      "log_sha256": "eca3015ccd6c8503bcc6489ba7c2ab21d1dcc27f9f18d48736c52966d11f26a6"
+    },
+    {
+      "file": "src/security/PasswordPolicy.cpp",
+      "returncode": 0,
+      "seconds": 7.034,
+      "source_sha256": "23cf16dab2c07abfcd45984b77f58872467190f450edb9ab10563a6bba890d88",
+      "log": "src_security_PasswordPolicy.cpp.log",
+      "log_sha256": "789e7939357bc4fe6983706f0097e229bbf532094f8b057da76fb57b942beb1b"
+    },
+    {
+      "file": "src/security/SecuritySelfTest.cpp",
+      "returncode": 0,
+      "seconds": 5.833,
+      "source_sha256": "904b2425bda5055de8a61854f6b4890e12f772cdbd7d13a628aab4f3ca36dabc",
+      "log": "src_security_SecuritySelfTest.cpp.log",
+      "log_sha256": "f7c47c00cf8507b3805c9b608bf90dcd5de160ed4122f9d60c44f47f7ca68754"
+    },
+    {
+      "file": "src/security/SecurityTypes.cpp",
+      "returncode": 0,
+      "seconds": 1.669,
+      "source_sha256": "5021e11ecd8d6a83125fa550d30f86626c7771af17f1f6f49b94be8c83626d4b",
+      "log": "src_security_SecurityTypes.cpp.log",
+      "log_sha256": "bedc6dce3414a0333a96ce55397cfafc927e85ba66bd38563e103fe76ac3e3c7"
+    },
+    {
+      "file": "src/security/AuthService.cpp",
+      "returncode": 0,
+      "seconds": 25.545,
+      "source_sha256": "3f84e4a158001096fd273cc4a2a371e413293a7caf54c0864a3f2e5e8400f2f6",
+      "log": "src_security_AuthService.cpp.log",
+      "log_sha256": "9da88597b56c03a87371afe684a30dcb228e765100f4ebe6146841edcb0d7a84"
+    },
+    {
+      "file": "src/service/AuditLogHttp.cpp",
+      "returncode": 0,
+      "seconds": 7.69,
+      "source_sha256": "0ca17384d63b32a3f5082f580f6262dc2272f9471c9c8dc13637abaa5067b1d9",
+      "log": "src_service_AuditLogHttp.cpp.log",
+      "log_sha256": "3ac20d6df278fc4df25ca18a01f3f5eb0298bbbd9b2477d85828a93eaac2ca95"
+    },
+    {
+      "file": "src/service/BoundedWorker.cpp",
+      "returncode": 0,
+      "seconds": 5.482,
+      "source_sha256": "13999c86368ad98d65a94073f250a65432eceed89b42e327af4e7c447f948531",
+      "log": "src_service_BoundedWorker.cpp.log",
+      "log_sha256": "35a041aa76f5c2d7289121d33729e7d85cd57b7956ee7f2db00d399b0622f41b"
+    },
+    {
+      "file": "src/security/SystemProtectionService.cpp",
+      "returncode": 0,
+      "seconds": 18.321,
+      "source_sha256": "29ba28ee8862fff44ab3e37df9f605297437e150ddfa5ecea2aaf28a4caab846",
+      "log": "src_security_SystemProtectionService.cpp.log",
+      "log_sha256": "15aab8ec47ee96e3c7852fdd33042cd37cf9e5d4a66e3cd62c50102a40bfc5ae"
+    },
+    {
+      "file": "src/security/UserManagementService.cpp",
+      "returncode": 0,
+      "seconds": 21.181,
+      "source_sha256": "f8e20bf5d45166a712f90e852754f3a8e9f1291ebe2da9860527fe9be7faafc5",
+      "log": "src_security_UserManagementService.cpp.log",
+      "log_sha256": "1edb4b12d17ed13dd4b828a4f00e82bed14bebeac7196d17c7319016ec82c973"
+    },
+    {
+      "file": "src/service/SecurityRequestGate.cpp",
+      "returncode": 0,
+      "seconds": 14.915,
+      "source_sha256": "1f811f89954c1c7804246bdb6ca453955e602402220b2dbcfc0db5a7dfef8183",
+      "log": "src_service_SecurityRequestGate.cpp.log",
+      "log_sha256": "873b5ac04650f97778ec1abc2dff3b49f8650fc7494b64270e702e4d17f69329"
+    },
+    {
+      "file": "src/service/RuntimeSettingsHttp.cpp",
+      "returncode": 0,
+      "seconds": 15.566,
+      "source_sha256": "6d230d5139dbdb19ab75c41e173361723d329b5d1e6109aff2ad7c78ad9dc114",
+      "log": "src_service_RuntimeSettingsHttp.cpp.log",
+      "log_sha256": "8eaea33e334c703ec8aa956fb22c4c332bdbf9685691dea366910dce7c0f7953"
+    },
+    {
+      "file": "src/service/ServiceStartup.cpp",
+      "returncode": 0,
+      "seconds": 6.032,
+      "source_sha256": "c91104021d685365f385c465f76aac81aa30fda164b6c20fd2e0a73ca0a37790",
+      "log": "src_service_ServiceStartup.cpp.log",
+      "log_sha256": "2de903a5ab7dfd2b94b6d6a4aa646efda87f1b8b63cd213fcc8db5e1bc430c7d"
+    },
+    {
+      "file": "src/security/SecurityStore.cpp",
+      "returncode": 0,
+      "seconds": 41.496,
+      "source_sha256": "768feab9b578d542b0167d18862e2db2aeb7d16ff082d82823d0ffd2b72c0002",
+      "log": "src_security_SecurityStore.cpp.log",
+      "log_sha256": "b4c80e989c0bf52d4123fd226d6efd62279806832b66a48605a6aef3ce26dc94"
+    },
+    {
+      "file": "src/service/SessionStreamRegistry.cpp",
+      "returncode": 0,
+      "seconds": 12.859,
+      "source_sha256": "5e4979ba8a9f77db6bfcecda89799a6e3eef624caf830c9a8b9cd962735c074b",
+      "log": "src_service_SessionStreamRegistry.cpp.log",
+      "log_sha256": "bfc12091424af5613f6faae4dbf569cd5a44152cbf70431be3e09e408dd3a22d"
+    },
+    {
+      "file": "src/service/SystemProtectionHttp.cpp",
+      "returncode": 0,
+      "seconds": 10.349,
+      "source_sha256": "2b44660d68458d2473f1a22057115bf855dff259c712d83d3dc50ee48660b5aa",
+      "log": "src_service_SystemProtectionHttp.cpp.log",
+      "log_sha256": "45a5e9f6bd2f5d234de3558c8777d73023131509f75911009625041c44a412fd"
+    },
+    {
+      "file": "src/settings/RuntimeSettings.cpp",
+      "returncode": 0,
+      "seconds": 6.935,
+      "source_sha256": "d3282cccb7d111d364ed7e60030b0b21b87c1da4e8b9d8d814773599b473ac04",
+      "log": "src_settings_RuntimeSettings.cpp.log",
+      "log_sha256": "c459029278880f49714b158c04e9d96188ebbffa5824dda41585adf79559dcb6"
+    },
+    {
+      "file": "src/service/UserManagementHttp.cpp",
+      "returncode": 0,
+      "seconds": 15.115,
+      "source_sha256": "e5d35e5ebbb2c3ffeb098704801d3a96255c25aee224cb993199150646e339bc",
+      "log": "src_service_UserManagementHttp.cpp.log",
+      "log_sha256": "07e7ceafc32b9f797e457069d4bcf4c43089d4b63a06d7987189583283b606b1"
+    },
+    {
+      "file": "src/settings/RuntimeSettingsDocumentCodec.cpp",
+      "returncode": 0,
+      "seconds": 9.042,
+      "source_sha256": "f4bce1444689f870d195ddc271e82ad884ca87cafa1dcdf146fabf095bdf8671",
+      "log": "src_settings_RuntimeSettingsDocumentCodec.cpp.log",
+      "log_sha256": "f02c69a56f9223874a6807e1d63c3df1121750a7cc95d86fffe23026d47fb42a"
+    },
+    {
+      "file": "src/settings/RuntimeSettingsStorePlatform.cpp",
+      "returncode": 0,
+      "seconds": 0.216,
+      "source_sha256": "3a3c5ff570638dfab9b20fb031a27a1a78fdaede8b311f3de8fda68e114cf5af",
+      "log": "src_settings_RuntimeSettingsStorePlatform.cpp.log",
+      "log_sha256": "553b6645ed4b4834fd8145590af1632f7b3b677c50f794435f77db42267694a1"
+    },
+    {
+      "file": "src/settings/RuntimeSettingsService.cpp",
+      "returncode": 0,
+      "seconds": 10.1,
+      "source_sha256": "7d207579d1f5887fa2b16af5f6f1bf4694848f8427d59dc76b2db55dc082cf6a",
+      "log": "src_settings_RuntimeSettingsService.cpp.log",
+      "log_sha256": "997b5d36c361a0457b3460b71e747e90b169664101c0355395e4d57a1e93a04b"
+    },
+    {
+      "file": "src/settings/RuntimeSettingsStore.cpp",
+      "returncode": 0,
+      "seconds": 13.454,
+      "source_sha256": "f9231a177a38c732e2aad87226eba526d2aca30e8ff30eb5adfc24a96dd5c4fd",
+      "log": "src_settings_RuntimeSettingsStore.cpp.log",
+      "log_sha256": "4807031dc14c42dfca5fd7b085b986e21569b46f62d181c9c08721d3a2b5884c"
+    },
+    {
+      "file": "src/service/ServiceApp.cpp",
+      "returncode": 0,
+      "seconds": 100.242,
+      "source_sha256": "778bb84f0f069d09ea818c107699f75771ed2d394575ee31b94a9f139ac12786",
+      "log": "src_service_ServiceApp.cpp.log",
+      "log_sha256": "db7b0b7a82ad407b59435e9653b2774196b57a162910ca7ab859ddb7152ca811"
+    }
+  ]
+}

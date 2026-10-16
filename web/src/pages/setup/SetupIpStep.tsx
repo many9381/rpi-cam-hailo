@@ -82,18 +82,17 @@ const MAXIMUM_ADDITIONAL_HOSTS = 31;
 export interface SetupIpStepProps {
   peerIp: string;
   hosts: string[];
+  restrictionEnabled: boolean;
+  onRestrictionChange: (enabled: boolean) => void;
   onAddHost: (host: string) => void;
   onBack: () => void;
   onNext: () => void;
 }
 
-/**
- * Step 2 of the setup wizard: the current peer is already registered (it is
- * what /api/v1/setup/initialize confirms as the administrator's pinned
- * address), and the operator may stage further single-host addresses here
- * for review in step 3.
- */
-export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupIpStepProps) {
+/** Step 2: optional single-host restrictions for installations with stable client addresses. */
+export function SetupIpStep({
+  peerIp, hosts, restrictionEnabled, onRestrictionChange, onAddHost, onBack, onNext,
+}: SetupIpStepProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -118,39 +117,51 @@ export function SetupIpStep({ peerIp, hosts, onAddHost, onBack, onNext }: SetupI
     <>
       <h1 id="wizard-heading">{t('setup.registerAccessHeading')}</h1>
       <p className="wizard-progress">{t('setup.stepAccessProgress')}</p>
-      <p>
-        {t('setup.singleHostsDescription')}
-      </p>
-      {/* Explicit role: list-style none strips the implicit list role (and
-          with it the aria-label) in WebKit accessibility trees. */}
-      <ul className="management-host-list" role="list" aria-label={t('setup.registeredHostsLabel')}>
-        <li>
-          {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
-        </li>
-        {hosts.map((host) => <li key={host}>{host}</li>)}
-      </ul>
-      <form className="auth-form" onSubmit={addHost} noValidate>
-        <div className="field">
-          <label htmlFor="wizard-add-host">{t('setup.addHostLabel')}</label>
-          <input
-            id="wizard-add-host"
-            value={draft}
-            disabled={atCapacity}
-            aria-describedby={error ? 'wizard-add-host-error' : undefined}
-            aria-invalid={error ? true : undefined}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          {error && <p className="form-error" id="wizard-add-host-error">{error}</p>}
-          {atCapacity && (
-            <p className="form-error">
-              {t('setup.hostCapacityReached', { max: MAXIMUM_ADDITIONAL_HOSTS })}
-            </p>
-          )}
-        </div>
-        <button className="secondary-button" type="submit" disabled={atCapacity}>
-          {t('setup.addHost')}
-        </button>
-      </form>
+      <label className="management-policy-toggle">
+        <input
+          type="checkbox"
+          checked={restrictionEnabled}
+          onChange={(event) => onRestrictionChange(event.target.checked)}
+          aria-describedby="setup-management-policy-description"
+        />
+        {t('setup.restrictManagementAccess')}
+      </label>
+      <p id="setup-management-policy-description">{t('setup.managementPolicyDescription')}</p>
+      {restrictionEnabled && (
+        <>
+          <p>{t('setup.singleHostsDescription')}</p>
+          {/* Explicit role: list-style none strips the implicit list role (and
+              with it the aria-label) in WebKit accessibility trees. */}
+          <ul className="management-host-list" role="list" aria-label={t('setup.registeredHostsLabel')}>
+            <li>
+              {peerIp} <span className="management-host-tag">{t('setup.currentSessionTag')}</span>
+            </li>
+            {hosts.map((host) => <li key={host}>{host}</li>)}
+          </ul>
+          <form className="auth-form" onSubmit={addHost} noValidate>
+            <div className="field">
+              <label htmlFor="wizard-add-host">{t('setup.addHostLabel')}</label>
+              <input
+                id="wizard-add-host"
+                value={draft}
+                disabled={atCapacity}
+                aria-describedby={error ? 'wizard-add-host-error' : undefined}
+                aria-invalid={error ? true : undefined}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              {error && <p className="form-error" id="wizard-add-host-error">{error}</p>}
+              {atCapacity && (
+                <p className="form-error">
+                  {t('setup.hostCapacityReached', { max: MAXIMUM_ADDITIONAL_HOSTS })}
+                </p>
+              )}
+            </div>
+            <button className="secondary-button" type="submit" disabled={atCapacity}>
+              {t('setup.addHost')}
+            </button>
+          </form>
+        </>
+      )}
       <div className="wizard-actions">
         <button type="button" className="secondary-button" onClick={onBack}>{t('setup.back')}</button>
         <button type="button" className="primary-button" onClick={onNext}>{t('setup.next')}</button>

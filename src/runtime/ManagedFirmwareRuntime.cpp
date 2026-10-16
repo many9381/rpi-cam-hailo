@@ -1,9 +1,11 @@
 #include "camera_firmware/runtime/ManagedFirmwareRuntime.hpp"
 
 #include <exception>
+
 #include <string>
 #include <type_traits>
 #include <utility>
+#include "camera_firmware/common/Logger.hpp"
 
 namespace camera_firmware::runtime {
 namespace {
@@ -46,9 +48,12 @@ std::string CameraStateForManagedRuntime(ManagedRuntimeState state) {
 
 }  // namespace
 
-ManagedFirmwareRuntime::ManagedFirmwareRuntime(config::AppConfig initial_config,
-                                               FirmwareRuntimeFactory factory)
-    : active_config_(std::move(initial_config)), factory_(std::move(factory)) {}
+ManagedFirmwareRuntime::ManagedFirmwareRuntime(
+    config::AppConfig initial_config, FirmwareRuntimeFactory factory,
+    std::function<std::chrono::steady_clock::time_point()> clock)
+    : active_config_(std::move(initial_config)),
+      factory_(std::move(factory)),
+      clock_(std::move(clock)) {}
 
 ManagedFirmwareRuntime::~ManagedFirmwareRuntime() {
   try {
@@ -65,6 +70,7 @@ common::Result<void> ManagedFirmwareRuntime::Start() {
     return common::Result<void>::Ok();
   }
 
+  ResetRecovery();
   SetState(ManagedRuntimeState::kStarting);
   bool newly_built = false;
   if (!snapshot.runtime) {
@@ -101,6 +107,7 @@ void ManagedFirmwareRuntime::Stop() {
     return;
   }
 
+  ResetRecovery();
   SetState(ManagedRuntimeState::kStopping);
   StopRuntime(snapshot.runtime);
   SetState(ManagedRuntimeState::kStopped);
@@ -130,12 +137,13 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
   }
 
   config::AppConfig published_config = candidate_config;
+  ResetRecovery();
   SetState(ManagedRuntimeState::kApplying);
   StopRuntime(previous.runtime);
 
   auto built = BuildRuntime(candidate_config);
   if (!built.ok()) {
-    const common::Error error = built.error();
+    const common::Error& error = built.error();
     const bool restored = RestorePrevious(previous.runtime);
     return {RuntimeReplacementResult::Outcome::kCandidateFailed, restored,
             error};
@@ -151,6 +159,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
 
   auto started = StartRuntime(candidate);
   if (!started.ok()) {
+    // Snapshot callback-owned static errors before cleanup/recovery callbacks.
     const common::Error error = started.error();
     StopRuntime(candidate);
     const bool restored = RestorePrevious(previous.runtime);
@@ -166,6 +175,7 @@ RuntimeReplacementResult ManagedFirmwareRuntime::Replace(
         PromotionError("runtime configuration promotion failed"));
   }
   if (!promoted.ok()) {
+    // Promotion may also borrow error storage changed by recovery callbacks.
     const common::Error error = promoted.error();
     StopRuntime(candidate);
     const bool restored = RestorePrevious(previous.runtime);
@@ -195,7 +205,26 @@ std::vector<media::CameraPipelineStatus>
 ManagedFirmwareRuntime::CameraStatuses() const {
   auto snapshot = ReadSnapshot();
   if (snapshot.runtime) {
-    return snapshot.runtime->CameraStatuses();
+    auto statuses = snapshot.runtime->CameraStatuses();
+    for (auto& status : statuses) {
+      status.recovery_attempts = snapshot.recovery_attempts;
+      // A status read can beat the next lifecycle poll. Report pending recovery
+      // until that poll has stopped the graph, including after the last
+      // attempt.
+      if (snapshot.state == ManagedRuntimeState::kRunning &&
+          (status.capture_error == "E_CAMERA_NO_FRAMES" ||
+           status.capture_error == "E_CAMERA_CAPTURE_STALLED")) {
+        status.state = "recovering";
+      }
+      if (snapshot.state == ManagedRuntimeState::kFailed &&
+          !snapshot.capture_error.empty()) {
+        status.state = snapshot.recovery_attempts < 3U ? "recovering" : "error";
+        status.capture_error = snapshot.capture_error;
+        status.snapshot_available = false;
+        status.capture_fps = status.encoded_fps = 0.0;
+      }
+    }
+    return statuses;
   }
 
   media::CameraPipelineStatus status;
@@ -282,7 +311,8 @@ std::uint64_t ManagedFirmwareRuntime::PerMediaKeyZeroizeCount() const noexcept {
 ManagedFirmwareRuntime::RuntimeSnapshot ManagedFirmwareRuntime::ReadSnapshot()
     const {
   std::lock_guard snapshot_lock(snapshot_mutex_);
-  return {current_runtime_, active_config_, state_};
+  return {current_runtime_, active_config_, state_, capture_error_,
+          recovery_attempts_};
 }
 
 common::Result<std::shared_ptr<FirmwareRuntime>>
@@ -340,6 +370,74 @@ bool ManagedFirmwareRuntime::RestorePrevious(
   SetState(restored ? ManagedRuntimeState::kRunning
                     : ManagedRuntimeState::kFailed);
   return restored;
+}
+
+void ManagedFirmwareRuntime::ResetRecovery() {
+  std::lock_guard lock(snapshot_mutex_);
+  capture_error_.clear();
+  recovery_attempts_ = 0U;
+  healthy_since_.reset();
+}
+
+void ManagedFirmwareRuntime::PollCameraHealth() {
+  std::lock_guard command_lock(command_mutex_);
+  auto snapshot = ReadSnapshot();
+  if (!snapshot.runtime)
+    return;
+  const auto now = clock_();
+  if (snapshot.state == ManagedRuntimeState::kFailed) {
+    if (snapshot.capture_error.empty() || snapshot.recovery_attempts >= 3U ||
+        now < retry_at_)
+      return;
+    {
+      std::lock_guard lock(snapshot_mutex_);
+      ++recovery_attempts_;
+    }
+    common::Logger::instance().log(
+        common::Logger::Level::kWarn,
+        "camera capture recovery attempt " +
+            std::to_string(snapshot.recovery_attempts + 1U));
+    auto started = StartRuntime(snapshot.runtime);
+    if (started.ok()) {
+      SetState(ManagedRuntimeState::kRunning);
+    } else {
+      StopRuntime(snapshot.runtime);
+      retry_at_ = clock_() + std::chrono::seconds(5);
+    }
+    return;
+  }
+  if (snapshot.state != ManagedRuntimeState::kRunning)
+    return;
+  const auto statuses = snapshot.runtime->CameraStatuses();
+  bool healthy = !statuses.empty();
+  for (const auto& status : statuses) {
+    healthy = healthy && status.state == "running";
+    if (status.capture_error != "E_CAMERA_NO_FRAMES" &&
+        status.capture_error != "E_CAMERA_CAPTURE_STALLED")
+      continue;
+    common::Logger::instance().log(
+        common::Logger::Level::kError,
+        "camera capture unhealthy: " + status.capture_error);
+    // No libcamera callback holds this command lock. Stop the entire graph so
+    // AI/RTSP cannot keep claiming readiness with a dead input.
+    StopRuntime(snapshot.runtime);
+    {
+      std::lock_guard lock(snapshot_mutex_);
+      capture_error_ = status.capture_error;
+      state_ = ManagedRuntimeState::kFailed;
+    }
+    healthy_since_.reset();
+    retry_at_ = clock_() + std::chrono::seconds(5);
+    return;
+  }
+  if (!healthy) {
+    healthy_since_.reset();
+  } else if (!healthy_since_) {
+    healthy_since_ = now;
+  } else if (now - *healthy_since_ >= std::chrono::seconds(60)) {
+    ResetRecovery();
+    healthy_since_ = now;
+  }
 }
 
 void ManagedFirmwareRuntime::SetState(ManagedRuntimeState state) {

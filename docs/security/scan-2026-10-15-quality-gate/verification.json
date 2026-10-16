@@ -1,0 +1,169 @@
+{
+  "recorded_at": "2026-10-15T20:20:01.691664+00:00",
+  "scope": "Current working source quality gate; no new image or production installation",
+  "result": "PASS_WITH_WARNINGS_AND_EXPLICIT_HARDWARE_SKIPS",
+  "format": {
+    "files": 257,
+    "result": "PASS"
+  },
+  "gate_regressions": {
+    "passed": 8
+  },
+  "static_analysis": {
+    "translation_units": 79,
+    "errors": 0,
+    "warnings": 208,
+    "warning_checks": {
+      "cppcoreguidelines-init-variables": 30,
+      "misc-redundant-expression": 2,
+      "performance-move-const-arg": 70,
+      "performance-no-automatic-move": 5,
+      "performance-unnecessary-copy-initialization": 6,
+      "performance-unnecessary-value-param": 90,
+      "readability-braces-around-statements": 5
+    }
+  },
+  "cpp": {
+    "discovered": 1366,
+    "passed": 1356,
+    "skipped": 10,
+    "failed": 0,
+    "seconds": 194.69,
+    "skipped_tests": [
+      "SystemProtectionHardwareSmokeTest.RestrictionStopsCameraAndHailoRuntimeAndReleasesResources",
+      "AiHardwareSmokeTest.StartsConfiguredHailoRuntimeWhenEnabled",
+      "AiHardwareSmokeTest.SubmitsSyntheticNv12FrameWhenEnabled",
+      "CameraPipelineHardwareSmokeTest.Sustains1080p50CaptureAndEncoding",
+      "CameraPipelineHardwareSmokeTest.Packages1080p50AsFragmentedMp4",
+      "CameraPipelineHardwareSmokeTest.Sustains1080p30CaptureAndEncoding",
+      "CameraPipelineHardwareSmokeTest.Packages1080p30AsFragmentedMp4",
+      "CameraPipelineHardwareSmokeTest.Sustains720p50CaptureAndEncoding",
+      "CameraPipelineHardwareSmokeTest.Packages720p50AsFragmentedMp4",
+      "CameraPipelineHardwareSmokeTest.RoutesAiInferenceToHardwareLoresStream"
+    ],
+    "build": "Original full CMake project, Yocto AArch64 sysroot, -O1 -g0, HailoRT enabled"
+  },
+  "web": {
+    "files": 56,
+    "passed": 770,
+    "production_build": "PASS"
+  },
+  "yocto_host_tests": {
+    "passed": 372,
+    "affected_tests_rerun_after_layer_changes": 10
+  },
+  "layer": {
+    "patch": "0009-quality-gate-and-plain-bootstrap-peers.patch",
+    "patch_sha256": "9af936f72494f84625b3d7e51171f88e606f49c1c795423b0d05018621982299",
+    "results": [
+      {
+        "recipe": "camera-firmware",
+        "source_revision": "ba503a1fbc4ed68c1fd29aace7214a5c330d7021",
+        "patches": [
+          "0001-cmake-support-packaged-web-and-target-installation.patch",
+          "0002-cmake-check-source-content-not-cached-file-stats.patch",
+          "0005-dhcp-setup-and-optional-management-ip-policy.patch",
+          "0006-rtsp-protect-existing-sessions-before-authentication.patch",
+          "0007-setup-session-recovery-and-error-messages.patch",
+          "0008-camera-capture-health-and-bounded-recovery.patch",
+          "0009-quality-gate-and-plain-bootstrap-peers.patch"
+        ],
+        "files": {
+          "src/runtime/ManagedFirmwareRuntime.cpp": "fdef06eee6d10e4dce3e46db3844d1382f38e3433f4ad2a977d343180bbbf178",
+          "tests/unit/security/AuthServiceTest.cpp": "9ee771774a1d96f2ee01fdc8a8d0221287b72b6d40ca80ee30c53f307e4c1482",
+          "src/security/BootstrapService.cpp": "e7b55a35b7b7c7a1fb31bb7b175330b8fe0d6117e917cde4c5081a37a7f14b18",
+          "tests/unit/security/BootstrapServiceTest.cpp": "bab20395d46e1cff85bebd3c515fb881a230688f8d4f65f892636c883cf4e0c5",
+          "tools/ci/check.sh": "14d3eb97e24906442e031d59b5d7f030debdb1cdfa5d764ce3b610a6d325857d",
+          "tools/ci/test_check.py": "2b45f9b45eb58d0d4c321ebfe5101f5b53ea9422e6f8c526923833f88760f000"
+        },
+        "result": "PASS"
+      },
+      {
+        "recipe": "camera-firmware-web",
+        "source_revision": "ba503a1fbc4ed68c1fd29aace7214a5c330d7021",
+        "patches": [
+          "0003-web-update-source-map-js-security-fix.patch",
+          "0005-dhcp-setup-and-optional-management-ip-policy.patch",
+          "0007-setup-session-recovery-and-error-messages.patch",
+          "0008-camera-capture-health-and-bounded-recovery.patch",
+          "0009-quality-gate-and-plain-bootstrap-peers.patch"
+        ],
+        "files": {
+          "src/runtime/ManagedFirmwareRuntime.cpp": "fdef06eee6d10e4dce3e46db3844d1382f38e3433f4ad2a977d343180bbbf178",
+          "tests/unit/security/AuthServiceTest.cpp": "9ee771774a1d96f2ee01fdc8a8d0221287b72b6d40ca80ee30c53f307e4c1482",
+          "src/security/BootstrapService.cpp": "e7b55a35b7b7c7a1fb31bb7b175330b8fe0d6117e917cde4c5081a37a7f14b18",
+          "tests/unit/security/BootstrapServiceTest.cpp": "bab20395d46e1cff85bebd3c515fb881a230688f8d4f65f892636c883cf4e0c5",
+          "tools/ci/check.sh": "14d3eb97e24906442e031d59b5d7f030debdb1cdfa5d764ce3b610a6d325857d",
+          "tools/ci/test_check.py": "2b45f9b45eb58d0d4c321ebfe5101f5b53ea9422e6f8c526923833f88760f000"
+        },
+        "result": "PASS"
+      },
+      {
+        "recipe": "rpi-cam-hailo-devrepo",
+        "source_revision": "ba503a1fbc4ed68c1fd29aace7214a5c330d7021",
+        "patches": [
+          "0004-security-fix-web-dependency-and-sbom-hashes.patch",
+          "0005-dhcp-setup-and-optional-management-ip-policy.patch",
+          "0006-rtsp-protect-existing-sessions-before-authentication.patch",
+          "0007-setup-session-recovery-and-error-messages.patch",
+          "0008-camera-capture-health-and-bounded-recovery.patch",
+          "0009-quality-gate-and-plain-bootstrap-peers.patch"
+        ],
+        "files": {
+          "src/runtime/ManagedFirmwareRuntime.cpp": "fdef06eee6d10e4dce3e46db3844d1382f38e3433f4ad2a977d343180bbbf178",
+          "tests/unit/security/AuthServiceTest.cpp": "9ee771774a1d96f2ee01fdc8a8d0221287b72b6d40ca80ee30c53f307e4c1482",
+          "src/security/BootstrapService.cpp": "e7b55a35b7b7c7a1fb31bb7b175330b8fe0d6117e917cde4c5081a37a7f14b18",
+          "tests/unit/security/BootstrapServiceTest.cpp": "bab20395d46e1cff85bebd3c515fb881a230688f8d4f65f892636c883cf4e0c5",
+          "tools/ci/check.sh": "14d3eb97e24906442e031d59b5d7f030debdb1cdfa5d764ce3b610a6d325857d",
+          "tools/ci/test_check.py": "2b45f9b45eb58d0d4c321ebfe5101f5b53ea9422e6f8c526923833f88760f000"
+        },
+        "result": "PASS"
+      }
+    ]
+  },
+  "installed_device_check": {
+    "result": "PASS",
+    "same_boot": true,
+    "same_production_pid": true,
+    "production_pid": "307",
+    "restarts": "0",
+    "https_status": 200,
+    "isolated_target_tree_removed": true,
+    "installed_build": "20261015T185424Z-e664cb9647e7"
+  },
+  "image_build_performed": false,
+  "qemu_used": false,
+  "raw_evidence_directory": ".state/quality-gate-2026-10-15 (parent workspace, Git ignored)",
+  "raw_evidence_sha256": {
+    "gate-red.log": "60ca0e06f1b794298cba80389827bfd8764ce6d5d1947f68fcbf3ff152d4385c",
+    "gate-green.log": "2f3f6cdf625eeec6fc29809c56d9fc2f037be76010e418552653de3a59b1cb6e",
+    "missing-tool-red.log": "5714a3b0b921bfc1b325b6254253cf3d87dfd9b0c3db2c614e691c981f06ec47",
+    "relative-tool-red.log": "4d253242fba60999ecb20b386ef708c86bc6d909066dc235052c6fc827d0133a",
+    "gate-final.log": "6eae4d2aaa32900cd831e698607db899699745221c6d52613f5764d967ccbe08",
+    "format-before.log": "8ef41e6352b519af3fa3256f1f81c54db9da259bdeb0dfca3c0daeff718617c1",
+    "format-final.log": "8a8cc30158591cd3bfe9ba01a478356c149472b9879a2a4e8cbae31933c5a307",
+    "bootstrap-red.log": "50eb2bf94d23e2798c707f3a87416b6fb7aa9f306c9d1d6babeee962cae9a904",
+    "cpp-build.log": "08a157997afb582b276d0c91f03f7789adb5e096e4ae50020f77343b6c70022a",
+    "cpp-build-final.log": "1534c75c322782ae4a62799f3ad9b1f1e9854b79dfa9bc1bb163d30ba9fc0277",
+    "cpp-tests.log": "9130ddc0787213b0635790178ae2f272855369633297db53f0c239435fc6c923",
+    "cpp-tests.xml": "70020c2b3c317941a7a8348caf0f965a37c0d650906094ff1a1549fc9b42cc46",
+    "cpp-previous-failures.log": "2a472d9f0951e5680ffeba190894a1bb9f6a129c17fca81767fb66198b074c8d",
+    "cpp-tests-final.log": "3029303cc026cded575007ce71cb3b543b3c7558812d223a1419ea895a42e682",
+    "cpp-tests-final.xml": "710d0e6c20afc989c126e8721b69bd4df5b4eac1fa9467ad0d7c2753407ea232",
+    "web-tests.log": "0aa3df47e1edaf862d460ac77024c41d4e1bf28c9c26fea793cbf6f1e648ef8c",
+    "web-build.log": "6f02e0667d9b8d92fc16b1661c2f9b346799a8d85c442692eca071cb05928d49",
+    "yocto-host-tests-unrestricted.log": "18cf7edbcc7dd1d6aee07845b445feaa2f25292b7ba62f7b27eefb744188a9de",
+    "yocto-packaging-final.log": "f125f52cf0e4d07aaad9dd49985173fcccddf21c59ed22fa6af2bb352da380c9",
+    "tidy-negative-control.log": "8d23d53df3e82184a3e0818a8313721b977540379543f6e434220eeda9247600",
+    "tidy-bootstrap-final.log": "ae4d3cdf6a173f5bb1119c86296b909e0c536ea827a863fd17c157f107e2e0a1",
+    "tidy-results-final.json": "46ebc5a441813ece43c690a6a1af65c7c4a967348076f083fbedbd97f8a58b16",
+    "static-analysis-summary-final.json": "7efb4285c80c9c6e5541da5a5322716c289ccc74d99a76b90214cf6992217e66",
+    "patch-validation.json": "53bf1a0fe8c3d7eb164216f9d69b70558d2a92820d22e3c206b837387eac483f",
+    "tool-package.json": "bf4f5bfade030b747b6eaa87d648eeff9cf45bd6e7902e962bada2c8ac548b7e"
+  },
+  "public_evidence_sha256": {
+    "static-analysis.json": "7efb4285c80c9c6e5541da5a5322716c289ccc74d99a76b90214cf6992217e66",
+    "translation-units.json": "46ebc5a441813ece43c690a6a1af65c7c4a967348076f083fbedbd97f8a58b16",
+    "source-sha256.json": "db7a4e7aaaf4c8b116df46325d2cf93afcadffd8435c80e7a091f8ee4c2deacb"
+  }
+}

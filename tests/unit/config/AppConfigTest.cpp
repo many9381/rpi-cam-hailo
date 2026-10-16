@@ -485,6 +485,15 @@ TEST(AppConfigTest, RejectsSecurityWithoutHttpsOrSha256RtspAuth) {
       "E_SECURITY_CREDENTIAL_PATH");
 }
 
+TEST(AppConfigTest,
+     SecurityModeAllowsAutomaticSocketOriginWithoutStaticPublicUrl) {
+  auto config = LoadInlineConfig(SecurityConfigWithPublicUrl("''"));
+  ASSERT_TRUE(config.ok()) << config.error().code;
+  EXPECT_TRUE(config.value().http.public_base_url.empty());
+  EXPECT_TRUE(config.value().security.enabled);
+  EXPECT_TRUE(config.value().http.tls.enabled);
+}
+
 TEST(AppConfigTest, AcceptsSecurityWithSha256AndMd5RtspAuth) {
   // Security mode requires SHA-256 but MAY additionally offer MD5 so that
   // MD5-only RTSP clients (GStreamer/FFmpeg/live555) can authenticate; the

@@ -33,6 +33,7 @@ import {
 } from './features/audit/useAuditStatus';
 import { ReauthenticateModal } from './features/auth/ReauthenticateModal';
 import { useRuntimeSettings } from './features/settings/useRuntimeSettings';
+import { ManagementIpPolicyPanel } from './features/users/ManagementIpPolicyPanel';
 import { useUserManagement } from './features/users/useUserManagement';
 import { useSystemProtection } from './features/protection/useSystemProtection';
 import type { SystemProtectionController } from './features/protection/useSystemProtection';
@@ -140,10 +141,20 @@ export function BootstrapGate({
   // established. /api/v1/setup/initialize requires that session now — see
   // SetupWizard.tsx.
   const [wizardActive, setWizardActive] = useState(false);
+  const [setupSessionEnded, setSetupSessionEnded] = useState(false);
 
   const reconcilePhase = async (
     expected: Extract<SetupStatus, { required: true }>['phase'],
+    error?: unknown,
   ): Promise<boolean> => {
+    const sessionEnded = expected === 'administrator' && error instanceof UnauthorizedError;
+    if (sessionEnded) {
+      // Unmount the rejected wizard and fetch current bootstrap credentials:
+      // the service may have restarted and replaced the initial account.
+      setWizardActive(false);
+      setSetupSessionEnded(true);
+      setState({ kind: 'checking' });
+    }
     const controller = new AbortController();
     let timeoutId: number | undefined;
     const timeout = new Promise<null>((resolve) => {
@@ -163,18 +174,20 @@ export function BootstrapGate({
         timeout,
       ]);
       if (status === null) {
-        return false;
+        if (sessionEnded) setState({ kind: 'unavailable' });
+        return sessionEnded;
       }
       if (status.required && status.phase === expected) {
         setState({ kind: 'required', status });
-        return false;
+        return sessionEnded;
       }
       setState(status.required
         ? { kind: 'required', status }
         : { kind: 'operational' });
       return true;
     } catch {
-      return false;
+      if (sessionEnded) setState({ kind: 'unavailable' });
+      return sessionEnded;
     } finally {
       window.clearTimeout(timeoutId);
     }
@@ -237,6 +250,7 @@ export function BootstrapGate({
       { username, password },
       parseLoginResult,
     );
+    setSetupSessionEnded(false);
     setWizardActive(true);
   }, [client]);
 
@@ -275,7 +289,7 @@ export function BootstrapGate({
             setWizardActive(false);
             setAttempt((value) => value + 1);
           }}
-          onInitializationFailed={() => reconcilePhase('administrator')}
+          onInitializationFailed={(error) => reconcilePhase('administrator', error)}
         />
       );
     }
@@ -287,7 +301,11 @@ export function BootstrapGate({
         }
       : null;
     return (
-      <LoginPage login={bootstrapLogin} initialCredential={initialCredential} />
+      <LoginPage
+        login={bootstrapLogin}
+        initialCredential={initialCredential}
+        notice={setupSessionEnded ? t('setup.sessionEnded') : undefined}
+      />
     );
   }
   return operationalChild ?? (
@@ -385,7 +403,11 @@ function AdministratorUsersShell({ auditStatus, client, protection, registerView
       protection={protection}
       onRefresh={onRefresh}
     >
-      <UsersPage controller={controller} />
+      <UsersPage controller={controller} managementIpPolicy={
+        <ManagementIpPolicyPanel client={client} disabled={controller.mutation !== null}
+          currentPeerIp={controller.managementIps.data.current_peer_ip}
+          onSaved={() => { void auth.logout(); }} />
+      } />
     </AppShell>
   );
 }

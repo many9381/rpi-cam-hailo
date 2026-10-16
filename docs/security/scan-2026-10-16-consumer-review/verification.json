@@ -1,0 +1,56 @@
+{
+  "result": "PASS",
+  "assessment_date": "2026-10-16",
+  "checked_at": "2026-10-16T14:40:05.981633+00:00",
+  "build_id": "20261016T111625Z-e664cb9647e7",
+  "image_sha256": "49417cfdc898f1cb0ab9aae7a2f78de92d19f45666a0e4c0a5f2d4276f7a9c12",
+  "wic_files_checked": 871,
+  "elf_files_checked": 867,
+  "product_source_files_checked": 170,
+  "previous_caller_source_files_unchanged": 20,
+  "primary_cve_records_refreshed": 14,
+  "primary_cve_records_unchanged": 14,
+  "cvelist_revision": "88c7335ba41ef6558f3785078e9d0830b2dda6b2",
+  "dynamic_evhttp_importers": 0,
+  "direct_libevent_users": [
+    "/usr/bin/cam"
+  ],
+  "glob_importing_paths": 20,
+  "hailort_glob_argument": "/sys/class/hwmon/hwmon*/name",
+  "packaged_sudo_literal_command_entries": 9,
+  "new_production_patch_justified": false,
+  "changed_layer_files": [],
+  "reviewed_product_work_status": "COMPLETED_NO_CURRENT_ACTION",
+  "reviewed_paths_removed_from_active_backlog": [
+    "libevent camera/cam callers",
+    "HailoRT fixed-pattern glob call"
+  ],
+  "reopen_on": [
+    "Relevant feature or input-path change",
+    "Relevant package or configuration change",
+    "New upstream applicability or correction evidence"
+  ],
+  "unchanged_advisory_count_reopens_task": false,
+  "other_glob_consumers_or_residual_cves_closed": false,
+  "previous_ledger_counts": {
+    "open": 11,
+    "notaffected": 331,
+    "fixed": 200,
+    "partially_mitigated_open": 3,
+    "unassessed": 1
+  },
+  "ledger_changed": false,
+  "previous_ledger_sha256": "3d7343df521ba56553efba5bdc63a0ba3bb3c3e8aad134bd073916b9b9e52b61",
+  "new_cve_closures": 0,
+  "image_rebuild_required": false,
+  "image_build_performed": false,
+  "pi_access_or_change": false,
+  "dynamic_target_tests_run": false,
+  "full_vulnerability_database_scan": false,
+  "qemu_used": false,
+  "long_duration_test": "EXCLUDED_BY_USER",
+  "mov_allocator_redesign": "EXCLUDED_BY_USER",
+  "temporary_image_extraction_removed": true,
+  "temporary_full_disassembly_removed": true,
+  "scope": "Current-image static caller audit and selected primary-record refresh; no exhaustive static/dlopen absence proof or universal library CVE exclusion"
+}

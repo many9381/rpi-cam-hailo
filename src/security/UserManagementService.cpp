@@ -124,6 +124,7 @@ bool IsSemanticUserError(std::string_view code) {
 
 bool IsSemanticManagementIpError(std::string_view code) {
   return code == "E_MANAGEMENT_IP_FORBIDDEN" ||
+         code == "E_MANAGEMENT_IP_LOCKOUT" ||
          code == "E_MANAGEMENT_IP_DUPLICATE" ||
          code == "E_MANAGEMENT_IP_LIMIT" ||
          code == "E_MANAGEMENT_IP_NOT_FOUND" ||
@@ -423,7 +424,7 @@ common::Result<void> UserManagementService::ResetViewerPassword(
     };
     auto policy = ValidatePassword(snapshot.canonical_username, password);
     if (!policy.ok()) {
-      const auto error = policy.error();
+      const auto& error = policy.error();
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "viewer_password_reset",
                          "password_policy", subject, context)
@@ -558,7 +559,7 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
     auto policy =
         ValidatePassword(snapshot.canonical_username, replacement_password);
     if (!policy.ok()) {
-      const auto error = policy.error();
+      const auto& error = policy.error();
       ClearSnapshot(snapshot);
       if (!RecordFailure(now_seconds, "password_changed", "password_policy",
                          subject, context)
@@ -606,6 +607,35 @@ common::Result<void> UserManagementService::ChangeOwnPassword(
                  : UnavailableVoid();
     }
     auto identities = std::move(replaced).value().session_identities;
+    PublishSessionRevocations(identities, dependencies_.revoke_sessions,
+                              dependencies_.revoke_all_streams);
+    return common::Result<void>::Ok();
+  } catch (...) {
+    return UnavailableVoid();
+  }
+}
+
+common::Result<bool> UserManagementService::ManagementIpRestrictionEnabled()
+    const {
+  auto policy = store_.ManagementIpRestrictionEnabled();
+  return policy.ok() ? policy : Unavailable<bool>();
+}
+
+common::Result<void> UserManagementService::SetManagementIpRestrictionEnabled(
+    bool enabled, const UserMutationContext& context) {
+  try {
+    const std::int64_t now_seconds = dependencies_.now_seconds();
+    if (now_seconds < 0) {
+      return UnavailableVoid();
+    }
+    auto changed = store_.SetManagementIpRestrictionEnabled(
+        enabled, now_seconds, StoreContext(context));
+    if (!changed.ok()) {
+      return IsSemanticManagementIpError(changed.error().code)
+                 ? common::Result<void>::Err(changed.error())
+                 : UnavailableVoid();
+    }
+    auto identities = std::move(changed).value().session_identities;
     PublishSessionRevocations(identities, dependencies_.revoke_sessions,
                               dependencies_.revoke_all_streams);
     return common::Result<void>::Ok();

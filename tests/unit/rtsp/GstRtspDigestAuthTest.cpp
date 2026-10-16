@@ -278,7 +278,8 @@ std::string ChallengeNonce(std::string_view challenge) {
 }
 
 std::string BuildAuthorization(std::string_view password,
-                               std::string_view nonce) {
+                               std::string_view nonce,
+                               std::string_view method = kMethod) {
   auto ha1 = ComputeRtspDigestHa1(RtspDigestAlgorithm::kSha256, kUsername,
                                   kRealm, Bytes(password));
   if (!ha1.ok()) {
@@ -286,7 +287,7 @@ std::string BuildAuthorization(std::string_view password,
   }
   auto response = ComputeRtspDigestResponse(
       RtspDigestAlgorithm::kSha256, {ha1.value().data(), ha1.value().size()},
-      kMethod, kUri, nonce, kNonceCount, kCnonce);
+      method, kUri, nonce, kNonceCount, kCnonce);
   if (!response.ok()) {
     throw std::runtime_error("failed to calculate test response");
   }
@@ -444,6 +445,199 @@ TEST(GstRtspDigestAuthTest, ProtectedUrlCheckCreatesViewerToken) {
 
   ClearContextToken(&context);
   (void)gst_rtsp_message_unset(&request);
+}
+
+TEST(GstRtspDigestAuthTest, OptionsWithSessionSelectorsRequiresAuthorization) {
+  TemporaryDirectory directory;
+  const auto credentials = directory.File("credentials");
+  WriteFile(credentials, CredentialFile(kOldPassword));
+  DeterministicNonceInputs inputs;
+  AuthPtr auth = CreateAuth(AuthConfig(credentials), inputs);
+  ASSERT_NE(auth, nullptr);
+
+  for (const auto header :
+       {GST_RTSP_HDR_SESSION, GST_RTSP_HDR_PIPELINED_REQUESTS}) {
+    for (const char* value : {"active-session", ""}) {
+      GstRTSPMessage request{};
+      GstRTSPMessage response{};
+      ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_OPTIONS,
+                                              std::string(kUri).c_str()),
+                GST_RTSP_OK);
+      ASSERT_EQ(gst_rtsp_message_add_header(&request, header, value),
+                GST_RTSP_OK);
+      GstRTSPClient* client = gst_rtsp_client_new();
+      SentMessageCapture capture;
+      gst_rtsp_client_set_send_func(client, CaptureSentMessage, &capture,
+                                    nullptr);
+      GstRTSPContext context{};
+      context.client = client;
+      context.request = &request;
+      context.response = &response;
+      context.method = GST_RTSP_OPTIONS;
+
+      EXPECT_FALSE(CheckUrl(auth.get(), &context));
+      EXPECT_EQ(context.token, nullptr);
+      EXPECT_EQ(capture.count, 1);
+      EXPECT_EQ(capture.status, GST_RTSP_STS_UNAUTHORIZED);
+      EXPECT_EQ(capture.challenges.size(), 1U);
+
+      gst_object_unref(client);
+      (void)gst_rtsp_message_unset(&request);
+      (void)gst_rtsp_message_unset(&response);
+    }
+  }
+}
+
+TEST(GstRtspDigestAuthTest, RejectedRequestDoesNotWatchExistingSession) {
+  TemporaryDirectory directory;
+  const auto credentials = directory.File("credentials");
+  WriteFile(credentials, CredentialFile(kOldPassword));
+  DeterministicNonceInputs inputs;
+  AuthPtr auth = CreateAuth(AuthConfig(credentials), inputs);
+  ASSERT_NE(auth, nullptr);
+
+  GstRTSPSessionPool* pool = gst_rtsp_session_pool_new();
+  GstRTSPSession* session = gst_rtsp_session_pool_create(pool);
+  GstRTSPClient* client = gst_rtsp_client_new();
+  gst_rtsp_client_set_session_pool(client, pool);
+  gst_rtsp_client_set_auth(client, auth.get());
+  SentMessageCapture capture;
+  gst_rtsp_client_set_send_func(client, CaptureSentMessage, &capture, nullptr);
+  GstRTSPMessage request{};
+  ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_PLAY,
+                                          std::string(kUri).c_str()),
+            GST_RTSP_OK);
+  ASSERT_EQ(
+      gst_rtsp_message_add_header(&request, GST_RTSP_HDR_SESSION,
+                                  gst_rtsp_session_get_sessionid(session)),
+      GST_RTSP_OK);
+  ASSERT_EQ(gst_rtsp_message_add_header(&request, GST_RTSP_HDR_CSEQ, "1"),
+            GST_RTSP_OK);
+
+  const gint64 fixed_now = g_get_monotonic_time();
+  const gint timeout_before =
+      gst_rtsp_session_next_timeout_usec(session, fixed_now);
+  ASSERT_GT(timeout_before, 0);
+  // next_timeout_usec returns milliseconds; separate any accidental touch
+  // from the initial value without waiting for the real session to expire.
+  g_usleep(5000);
+  EXPECT_EQ(gst_rtsp_client_handle_message(client, &request), GST_RTSP_OK);
+  EXPECT_EQ(capture.status, GST_RTSP_STS_UNAUTHORIZED);
+  EXPECT_EQ(gst_rtsp_session_next_timeout_usec(session, fixed_now),
+            timeout_before);
+  GList* watched = gst_rtsp_client_session_filter(client, nullptr, nullptr);
+  EXPECT_EQ(g_list_length(watched), 0U);
+  g_list_free_full(watched, g_object_unref);
+
+  (void)gst_rtsp_message_unset(&request);
+  gst_rtsp_session_pool_remove(pool, session);
+  g_object_unref(session);
+  g_object_unref(client);
+  g_object_unref(pool);
+}
+
+TEST(GstRtspDigestAuthTest, UnsolicitedResponseDoesNotWatchExistingSession) {
+  gst_init(nullptr, nullptr);
+  GstRTSPSessionPool* pool = gst_rtsp_session_pool_new();
+  GstRTSPSession* session = gst_rtsp_session_pool_create(pool);
+  GstRTSPClient* client = gst_rtsp_client_new();
+  gst_rtsp_client_set_session_pool(client, pool);
+  GstRTSPMessage response{};
+  ASSERT_EQ(gst_rtsp_message_init_response(&response, GST_RTSP_STS_OK, nullptr,
+                                           nullptr),
+            GST_RTSP_OK);
+  ASSERT_EQ(
+      gst_rtsp_message_add_header(&response, GST_RTSP_HDR_SESSION,
+                                  gst_rtsp_session_get_sessionid(session)),
+      GST_RTSP_OK);
+  ASSERT_EQ(gst_rtsp_message_add_header(&response, GST_RTSP_HDR_CSEQ, "1"),
+            GST_RTSP_OK);
+
+  const gint64 fixed_now = g_get_monotonic_time();
+  const gint timeout_before =
+      gst_rtsp_session_next_timeout_usec(session, fixed_now);
+  ASSERT_GT(timeout_before, 0);
+  g_usleep(5000);
+  EXPECT_EQ(gst_rtsp_client_handle_message(client, &response), GST_RTSP_OK);
+  EXPECT_EQ(gst_rtsp_session_next_timeout_usec(session, fixed_now),
+            timeout_before);
+  GList* watched = gst_rtsp_client_session_filter(client, nullptr, nullptr);
+  EXPECT_EQ(g_list_length(watched), 0U);
+  g_list_free_full(watched, g_object_unref);
+
+  (void)gst_rtsp_message_unset(&response);
+  gst_rtsp_session_pool_remove(pool, session);
+  g_object_unref(session);
+  g_object_unref(client);
+  g_object_unref(pool);
+}
+
+TEST(GstRtspDigestAuthTest,
+     ResponseForAuthenticatedSessionStillReachesHandler) {
+  TemporaryDirectory directory;
+  const auto credentials = directory.File("credentials");
+  WriteFile(credentials, CredentialFile(kOldPassword));
+  DeterministicNonceInputs inputs;
+  AuthPtr auth = CreateAuth(AuthConfig(credentials), inputs);
+  ASSERT_NE(auth, nullptr);
+  const auto authorization =
+      BuildAuthorization(kOldPassword, IssueChallenge(auth.get()), "OPTIONS");
+  GstRTSPSessionPool* pool = gst_rtsp_session_pool_new();
+  GstRTSPSession* session = gst_rtsp_session_pool_create(pool);
+  GstRTSPClient* client = gst_rtsp_client_new();
+  gst_rtsp_client_set_session_pool(client, pool);
+  gst_rtsp_client_set_auth(client, auth.get());
+  SentMessageCapture sent;
+  gst_rtsp_client_set_send_func(client, CaptureSentMessage, &sent, nullptr);
+  GstRTSPMessage request{};
+  ASSERT_EQ(gst_rtsp_message_init_request(&request, GST_RTSP_OPTIONS,
+                                          std::string(kUri).c_str()),
+            GST_RTSP_OK);
+  gst_rtsp_message_add_header(&request, GST_RTSP_HDR_CSEQ, "1");
+  gst_rtsp_message_add_header(&request, GST_RTSP_HDR_SESSION,
+                              gst_rtsp_session_get_sessionid(session));
+  gst_rtsp_message_add_header(&request, GST_RTSP_HDR_AUTHORIZATION,
+                              authorization.c_str());
+  ASSERT_EQ(gst_rtsp_client_handle_message(client, &request), GST_RTSP_OK);
+  ASSERT_EQ(sent.count, 1);
+  ASSERT_EQ(sent.status, GST_RTSP_STS_OK);
+
+  struct HandledResponse {
+    int count{0};
+    GstRTSPSession* session{nullptr};
+  } handled;
+  const auto handler =
+      +[](GstRTSPClient*, GstRTSPContext* context, gpointer data) {
+        auto* capture = static_cast<HandledResponse*>(data);
+        ++capture->count;
+        capture->session = context->session;
+      };
+  g_signal_connect(client, "handle-response", G_CALLBACK(handler), &handled);
+  GstRTSPMessage response{};
+  gst_rtsp_message_init_response(&response, GST_RTSP_STS_OK, nullptr, nullptr);
+  gst_rtsp_message_add_header(&response, GST_RTSP_HDR_CSEQ, "2");
+  gst_rtsp_message_add_header(&response, GST_RTSP_HDR_SESSION,
+                              gst_rtsp_session_get_sessionid(session));
+  const gint64 fixed_now = g_get_monotonic_time();
+  const gint timeout_before =
+      gst_rtsp_session_next_timeout_usec(session, fixed_now);
+  g_usleep(5000);
+  EXPECT_EQ(gst_rtsp_client_handle_message(client, &response), GST_RTSP_OK);
+  EXPECT_EQ(handled.count, 1);
+  EXPECT_EQ(handled.session, session);
+  EXPECT_GT(gst_rtsp_session_next_timeout_usec(session, fixed_now),
+            timeout_before);
+  GList* watched = gst_rtsp_client_session_filter(client, nullptr, nullptr);
+  EXPECT_EQ(g_list_length(watched), 1U);
+  EXPECT_EQ(watched == nullptr ? nullptr : watched->data, session);
+  g_list_free_full(watched, g_object_unref);
+
+  (void)gst_rtsp_message_unset(&request);
+  (void)gst_rtsp_message_unset(&response);
+  gst_rtsp_session_pool_remove(pool, session);
+  g_object_unref(session);
+  g_object_unref(client);
+  g_object_unref(pool);
 }
 
 TEST(GstRtspDigestAuthTest, UnauthorizedCheckAddsOnlyDigestChallenges) {

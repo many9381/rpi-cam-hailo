@@ -28,6 +28,7 @@
 #include "camera_firmware/ai/AiFrameTap.hpp"
 #include "camera_firmware/common/Logger.hpp"
 #include "camera_firmware/media/CameraTiming.hpp"
+#include "camera_firmware/media/CaptureHealth.hpp"
 #include "camera_firmware/media/EncodeMailbox.hpp"
 #include "camera_firmware/media/LoresGeometry.hpp"
 #include "camera_firmware/media/OsdCompositor.hpp"
@@ -84,7 +85,7 @@ void UnmapBuffer(MappedBuffer& buffer) {
   }
 }
 
-void RequeueRequest(std::weak_ptr<RequeueContext> weak_context,
+void RequeueRequest(const std::weak_ptr<RequeueContext>& weak_context,
                     libcamera::Request* request) {
   auto context = weak_context.lock();
   if (context == nullptr || request == nullptr) {
@@ -348,6 +349,7 @@ struct CameraPipeline::Impl {
       std::scoped_lock lock(mutex);
       running = true;
       state = "running";
+      capture_health.Start(std::chrono::steady_clock::now());
     }
 
     encode_mailbox.Reopen();
@@ -470,6 +472,16 @@ struct CameraPipeline::Impl {
     status.capture_error_count = capture_error_count;
     status.encode_error_count = encode_error_count;
     status.last_encode_ms = last_encode_ms;
+    if (running) {
+      const auto now = std::chrono::steady_clock::now();
+      status.state = capture_health.State(now);
+      status.capture_error = capture_health.ErrorCode(now);
+      if (status.state != "running") {
+        status.snapshot_available = false;
+        status.capture_fps = 0.0;
+        status.encoded_fps = 0.0;
+      }
+    }
     status.ai_source = ai_uses_lores ? (ai_lores_rgb ? "lores-rgb" : "lores")
                                      : "main-fallback";
     return status;
@@ -772,6 +784,8 @@ struct CameraPipeline::Impl {
       RequeueRequest(requeue_context, request);
       return;
     }
+
+    capture_health.Frame(std::chrono::steady_clock::now());
 
     // Burn the OSD in before any lease exists: this is the only moment the
     // buffer is exclusively ours. Every downstream reader (x264, the sub
@@ -1128,6 +1142,7 @@ struct CameraPipeline::Impl {
   EncodeMailbox encode_mailbox;
   std::thread encoder_thread;
   config::CameraConfig configured_camera;
+  CaptureHealth capture_health;
   FrameRateEstimator capture_rate;
   FrameRateEstimator encoded_rate;
   std::uint64_t next_pts{0};

@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from 'react';
 
+import { ApiError } from '../api/client';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { useTranslation } from '../i18n/LanguageContext';
 
@@ -11,9 +12,10 @@ export interface InitialCredential {
 interface LoginPageProps {
   login(username: string, password: string): Promise<void>;
   initialCredential?: InitialCredential | null;
+  notice?: string;
 }
 
-export function LoginPage({ login, initialCredential = null }: LoginPageProps) {
+export function LoginPage({ login, initialCredential = null, notice }: LoginPageProps) {
   const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -26,8 +28,10 @@ export function LoginPage({ login, initialCredential = null }: LoginPageProps) {
     setSubmitting(true);
     try {
       await login(username, password);
-    } catch {
-      setFailure(t('auth.signInFailed'));
+    } catch (error) {
+      setFailure(t(error instanceof ApiError && error.code === 'E_REQUEST_ORIGIN'
+        ? 'auth.requestOriginFailed'
+        : 'auth.signInFailed'));
     } finally {
       setPassword('');
       setSubmitting(false);
@@ -40,6 +44,7 @@ export function LoginPage({ login, initialCredential = null }: LoginPageProps) {
       <section className="auth-panel" aria-labelledby="login-heading">
         <div className="brand-mark" aria-hidden="true">{t('common.brandShort')}</div>
         <h1 id="login-heading">{t('auth.loginHeading')}</h1>
+        {notice && <p role="status">{notice}</p>}
         <form className="auth-form" onSubmit={submit} noValidate>
           <div className="field">
             <label htmlFor="login-username">{t('common.username')}</label>

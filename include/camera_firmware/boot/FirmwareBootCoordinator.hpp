@@ -33,6 +33,8 @@ struct FirmwareBootDependencies {
   std::function<common::Result<void>(RuntimeStartCallback)> start_service;
   std::function<void()> quiesce_service;
   std::function<void()> stop_service;
+  // Optional: true when a previously started graph self-stopped after failure.
+  std::function<bool()> runtime_needs_start;
 };
 
 class FirmwareBootCoordinator {

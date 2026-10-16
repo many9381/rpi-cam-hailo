@@ -23,6 +23,7 @@ const messageKeys: Readonly<Record<string, string>> = {
   E_USER_CONFLICT: 'errors.userConflict',
   E_USER_NOT_FOUND: 'errors.userNotFound',
   E_AUTHORIZATION_REQUIRED: 'errors.notAuthorized',
+  E_MANAGEMENT_IP_LOCKOUT: 'errors.managementIpLockout',
   E_MANAGEMENT_IP_INVALID: 'errors.managementIpInvalid',
   E_MANAGEMENT_IP_DUPLICATE: 'errors.managementIpExists',
   E_MANAGEMENT_IP_LIMIT: 'errors.managementIpLimitReached',

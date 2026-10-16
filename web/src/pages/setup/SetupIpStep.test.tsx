@@ -20,7 +20,7 @@ afterEach(cleanup);
 describe('SetupIpStep', () => {
   it('lists the current peer as already registered', () => {
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={vi.fn()}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={vi.fn()}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -42,7 +42,7 @@ describe('SetupIpStep', () => {
     const user = userEvent.setup();
     const onAddHost = vi.fn();
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -57,7 +57,7 @@ describe('SetupIpStep', () => {
     const user = userEvent.setup();
     const onAddHost = vi.fn();
     const { rerender } = render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -67,7 +67,7 @@ describe('SetupIpStep', () => {
 
     rerender(
       <LanguageProvider>
-        <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20']} onAddHost={onAddHost}
+        <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={['198.51.100.20']} onAddHost={onAddHost}
           onBack={vi.fn()} onNext={vi.fn()} />
       </LanguageProvider>,
     );
@@ -77,7 +77,7 @@ describe('SetupIpStep', () => {
 
     rerender(
       <LanguageProvider>
-        <SetupIpStep peerIp="192.0.2.44" hosts={['198.51.100.20', '203.0.113.7']}
+        <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={['198.51.100.20', '203.0.113.7']}
           onAddHost={onAddHost} onBack={vi.fn()} onNext={vi.fn()} />
       </LanguageProvider>,
     );
@@ -89,7 +89,7 @@ describe('SetupIpStep', () => {
     const user = userEvent.setup();
     const onAddHost = vi.fn();
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -103,7 +103,7 @@ describe('SetupIpStep', () => {
     const user = userEvent.setup();
     const onAddHost = vi.fn();
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={onAddHost}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -119,7 +119,7 @@ describe('SetupIpStep', () => {
     const onAddHost = vi.fn();
     const hosts = Array.from({ length: 31 }, (_, index) => `198.51.100.${index}`);
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={hosts} onAddHost={onAddHost}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={hosts} onAddHost={onAddHost}
         onBack={vi.fn()} onNext={vi.fn()} />,
     );
 
@@ -133,7 +133,7 @@ describe('SetupIpStep', () => {
     const onBack = vi.fn();
     const onNext = vi.fn();
     render(
-      <SetupIpStep peerIp="192.0.2.44" hosts={[]} onAddHost={vi.fn()}
+      <SetupIpStep restrictionEnabled onRestrictionChange={vi.fn()} peerIp="192.0.2.44" hosts={[]} onAddHost={vi.fn()}
         onBack={onBack} onNext={onNext} />,
     );
 

@@ -577,6 +577,100 @@ class AuthServiceTest : public ::testing::Test {
   int random_calls_{0};
 };
 
+TEST_F(AuthServiceTest,
+       UnrestrictedBootstrapAdmitsUnknownPeerWithValidCredentials) {
+  TemporaryDirectory root;
+  auto opened = SecurityStore::Open({root.path() / "security"});
+  ASSERT_TRUE(opened.ok());
+  auto record = AdministratorRecord();
+  record.management_ip_restriction_enabled = false;
+  ASSERT_TRUE(opened.value()
+                  ->InitializeDevice(std::move(record),
+                                     [] { return common::Result<void>::Ok(); })
+                  .ok());
+  auto service = AuthServiceTestAccess::Create(*opened.value(), Dependencies());
+  auto rejected =
+      service->Login(Login("Operator.One", "BadSecret!9", "198.51.100.44"));
+  ExpectAuthenticationFailure(rejected);
+  auto unknown =
+      service->Login(Login("missing.user", "NorthStar!9", "198.51.100.44"));
+  ExpectAuthenticationFailure(unknown);
+  auto admitted = opened.value()->IsManagementPeer("198.51.100.44");
+  ASSERT_TRUE(admitted.ok());
+  EXPECT_TRUE(admitted.value());
+  auto login =
+      service->Login(Login("Operator.One", "NorthStar!9", "198.51.100.44"));
+  ASSERT_TRUE(login.ok()) << login.error().message;
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+  auto principal =
+      service->Verify(token, "198.51.100.44", ManagementActivity::kNone);
+  ASSERT_TRUE(principal.ok()) << principal.error().message;
+  EXPECT_EQ(principal.value().role, UserRole::kAdministrator);
+  EXPECT_FALSE(
+      service->Verify(token, "198.51.100.45", ManagementActivity::kNone).ok());
+  EXPECT_FALSE(
+      service->Reauthenticate(token, "198.51.100.44", Bytes("BadSecret!9"))
+          .ok());
+  EXPECT_TRUE(
+      service->Reauthenticate(token, "198.51.100.44", Bytes("NorthStar!9"))
+          .ok());
+  now_seconds_ += 600;
+  EXPECT_FALSE(
+      service->Verify(token, "198.51.100.44", ManagementActivity::kNone).ok());
+}
+
+TEST_F(AuthServiceTest,
+       UnrestrictedAuthenticationRetainsViewerRoleAndAccountLockout) {
+  ExecuteSql(store_->database_path(),
+             "UPDATE device_state SET management_ip_restriction_enabled = 0;");
+  InsertUser(store_->database_path(), "monitor.east", "Monitor.East", "viewer");
+  auto viewer =
+      service_->Login(Login("Monitor.East", "NorthStar!9", "198.51.100.44"));
+  ASSERT_TRUE(viewer.ok()) << viewer.error().message;
+  const auto token = std::span<const unsigned char>(
+      viewer.value().session_token.data(), viewer.value().session_token.size());
+  auto principal =
+      service_->Verify(token, "198.51.100.44", ManagementActivity::kNone);
+  ASSERT_TRUE(principal.ok());
+  EXPECT_EQ(principal.value().role, UserRole::kViewer);
+  ExecuteSql(store_->database_path(),
+             "UPDATE users SET enabled = 0 WHERE role = 'viewer';");
+  EXPECT_FALSE(
+      service_->Verify(token, "198.51.100.44", ManagementActivity::kNone).ok());
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    ExpectAuthenticationFailure(
+        service_->Login(Login("Operator.One", "BadSecret!9", "198.51.100.45")));
+  }
+  EXPECT_EQ(
+      QueryInt(
+          store_->database_path(),
+          "SELECT failed_login_count FROM users WHERE role = 'administrator';"),
+      5);
+  ExpectAuthenticationFailure(
+      service_->Login(Login("Operator.One", "NorthStar!9", "198.51.100.45")));
+}
+
+TEST_F(AuthServiceTest, CorruptIpPolicyFailsClosedForExistingSessionsAndPeers) {
+  auto login = service_->Login(Login());
+  ASSERT_TRUE(login.ok());
+  const auto token = std::span<const unsigned char>(
+      login.value().session_token.data(), login.value().session_token.size());
+  ExecuteSql(store_->database_path(),
+             "PRAGMA ignore_check_constraints=ON; "
+             "UPDATE device_state SET management_ip_restriction_enabled = 2;");
+  EXPECT_FALSE(store_->ManagementIpRestrictionEnabled().ok());
+  EXPECT_FALSE(store_->IsManagementPeer("192.0.2.10").ok());
+  EXPECT_FALSE(
+      service_->Verify(token, "192.0.2.10", ManagementActivity::kNone).ok());
+  EXPECT_FALSE(
+      service_->Reauthenticate(token, "192.0.2.10", Bytes("NorthStar!9")).ok());
+  EXPECT_FALSE(service_->Login(Login()).ok());
+  const auto reopened = SecurityStore::Open({store_->state_directory()});
+  ASSERT_FALSE(reopened.ok());
+  EXPECT_EQ(reopened.error().code, "E_SECURITY_DB_SCHEMA");
+}
+
 TEST_F(AuthServiceTest, UnknownAndWrongPasswordUseSameKdfAndError) {
   const auto unknown = service_->Login(Login("missing.user", "BadSecret!9"));
   const int unknown_kdf_calls = kdf_calls_;
@@ -705,6 +799,42 @@ TEST_F(AuthServiceTest, InitialAccountSignsInWhileTheDeviceIsInDefaultState) {
                      "'authentication_succeeded' AND detail_code = "
                      "'authenticated_login';"),
             1);
+}
+
+TEST_F(AuthServiceTest,
+       InitialSetupCanSignInAgainAfterIdleExpiryOrForwardClockStep) {
+  service_.reset();
+  // Characterize the existing wall-clock policy: both ordinary inactivity and
+  // a first-boot NTP correction can invalidate an initial-account session.
+  for (const auto elapsed : {600, 19 * 60}) {
+    SCOPED_TRACE(elapsed);
+    auto service = OpenDefaultStateService();
+    auto first =
+        service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"));
+    ASSERT_TRUE(first.ok()) << first.error().message;
+    const auto old_token = std::span<const unsigned char>(
+        first.value().session_token.data(), first.value().session_token.size());
+    service->WaitForSessionExpiryIdleForTesting();
+    now_seconds_ += elapsed;
+
+    auto expired =
+        service->Verify(old_token, "192.0.2.55", ManagementActivity::kNone);
+    ASSERT_FALSE(expired.ok());
+    EXPECT_EQ(expired.error().code, "E_AUTHENTICATION_FAILED");
+    EXPECT_EQ(default_store_->State().value(), DeviceState::kDefault);
+
+    auto next =
+        service->Login(Login("InitialAccount", "NorthStar!9", "192.0.2.55"));
+    ASSERT_TRUE(next.ok()) << next.error().message;
+    auto principal = service->Verify(
+        {next.value().session_token.data(), next.value().session_token.size()},
+        "192.0.2.55", ManagementActivity::kNone);
+    ASSERT_TRUE(principal.ok()) << principal.error().message;
+    EXPECT_EQ(principal.value().username, "InitialAccount");
+    EXPECT_FALSE(
+        service->Verify(old_token, "192.0.2.55", ManagementActivity::kNone)
+            .ok());
+  }
 }
 
 TEST_F(AuthServiceTest, DefaultStateAdmitsOnlyTheMintedInitialAccount) {

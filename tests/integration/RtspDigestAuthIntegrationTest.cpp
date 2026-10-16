@@ -328,8 +328,10 @@ class TlsRtspTestClient {
   TlsRtspTestClient(const TlsRtspTestClient&) = delete;
   TlsRtspTestClient& operator=(const TlsRtspTestClient&) = delete;
 
-  RtspTestResponse Request(std::string_view method, std::string_view uri,
-                           std::string_view authorization = {}) {
+  RtspTestResponse Request(
+      std::string_view method, std::string_view uri,
+      std::string_view authorization = {},
+      const std::vector<std::pair<std::string, std::string>>& headers = {}) {
     std::string request;
     request.reserve(method.size() + uri.size() + authorization.size() + 160U);
     request.append(method);
@@ -346,11 +348,14 @@ class TlsRtspTestClient {
       request.append(authorization);
       request.append("\r\n");
     }
+    for (const auto& [name, value] : headers) {
+      request.append(name).append(": ").append(value).append("\r\n");
+    }
     request.append("\r\n");
     return Send(request);
   }
 
-  RtspTestResponse Send(std::string_view request) {
+  void SendOnly(std::string_view request) {
     std::size_t sent = 0U;
     while (sent < request.size()) {
       const int result = SSL_write(ssl_.get(), request.data() + sent,
@@ -360,7 +365,12 @@ class TlsRtspTestClient {
       }
       sent += static_cast<std::size_t>(result);
     }
+  }
 
+  RtspTestResponse Send(std::string_view request) {
+    SendOnly(request);
+    while (ReadInterleavedFrame()) {
+    }
     const std::string separator = "\r\n\r\n";
     while (pending_.find(separator) == std::string::npos) {
       ReadMore(kMaximumHeaderBytes);
@@ -431,6 +441,18 @@ class TlsRtspTestClient {
     return response;
   }
 
+  std::size_t ReceiveRtpFor(std::chrono::milliseconds duration) {
+    const auto before = rtp_packets_;
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (!ReadInterleavedFrame()) {
+        throw std::runtime_error(
+            "unexpected RTSP response during media receive");
+      }
+    }
+    return rtp_packets_ - before;
+  }
+
  private:
   TlsRtspTestClient(UniqueFd socket_fd, SslContextPtr context, SslPtr ssl)
       : socket_(std::move(socket_fd)),
@@ -449,11 +471,35 @@ class TlsRtspTestClient {
     }
   }
 
+  bool ReadInterleavedFrame() {
+    while (pending_.empty()) {
+      ReadMore(kMaximumBodyBytes + kMaximumHeaderBytes);
+    }
+    if (pending_.front() != '$') {
+      return false;
+    }
+    while (pending_.size() < 4U) {
+      ReadMore(kMaximumBodyBytes + kMaximumHeaderBytes);
+    }
+    const auto channel = static_cast<unsigned char>(pending_[1]);
+    const std::size_t size = (static_cast<unsigned char>(pending_[2]) << 8U) |
+                             static_cast<unsigned char>(pending_[3]);
+    while (pending_.size() < size + 4U) {
+      ReadMore(kMaximumBodyBytes + kMaximumHeaderBytes);
+    }
+    if (channel == 0U) {
+      ++rtp_packets_;
+    }
+    pending_.erase(0U, size + 4U);
+    return true;
+  }
+
   UniqueFd socket_;
   SslContextPtr context_;
   SslPtr ssl_;
   std::string pending_;
   unsigned int next_cseq_{1U};
+  std::size_t rtp_packets_{0U};
 };
 
 class TemporaryDirectory {
@@ -814,6 +860,130 @@ std::string AuthorizationFromChallenge(const std::string& challenge,
   }
   return BuildAuthorization(algorithm, username, password, *realm, "DESCRIBE",
                             uri, *nonce);
+}
+
+RtspTestResponse AuthenticatedRequest(
+    TlsRtspTestClient& client, const LiveSecureServer& server,
+    std::string_view method, std::string_view uri,
+    const std::vector<std::pair<std::string, std::string>>& headers = {}) {
+  // Each challenge issues a fresh nonce; the test's fixed nc=1 is never reused.
+  const auto challenge = client.Request("DESCRIBE", server.url());
+  const auto nonce =
+      DigestParameter(ChallengeFor(challenge, "SHA-256"), "nonce");
+  if (challenge.status_code != 401 || !nonce.has_value()) {
+    throw std::runtime_error(
+        "test server did not issue a fresh Digest challenge");
+  }
+  const auto authorization =
+      BuildAuthorization(RtspDigestAlgorithm::kSha256, kUsername, kPassword,
+                         kRealm, method, uri, *nonce);
+  return client.Request(method, uri, authorization, headers);
+}
+
+std::string SetupSession(TlsRtspTestClient& client,
+                         const LiveSecureServer& server) {
+  const auto describe =
+      AuthenticatedRequest(client, server, "DESCRIBE", server.url());
+  if (describe.status_code != 200) {
+    throw std::runtime_error("authenticated DESCRIBE failed");
+  }
+  const auto setup = AuthenticatedRequest(
+      client, server, "SETUP", server.url() + "/stream=0",
+      {{"Transport", "RTP/SAVPF/TCP;unicast;interleaved=0-1"}});
+  const auto headers = HeaderValues(setup, "Session");
+  if (setup.status_code != 200 || headers.size() != 1U) {
+    throw std::runtime_error("authenticated SETUP failed");
+  }
+  return headers.front().substr(0U, headers.front().find(';'));
+}
+
+class RtspSessionIsolationTest : public testing::TestWithParam<const char*> {};
+
+TEST_P(RtspSessionIsolationTest, RejectedConnectionCannotInterruptPlayback) {
+  LiveSecureServer server;
+  auto owner = TlsRtspTestClient::Connect(server.port());
+  ASSERT_NE(owner, nullptr);
+  const auto session = SetupSession(*owner, server);
+  const std::vector<std::pair<std::string, std::string>> headers{
+      {"Session", session}};
+  ASSERT_EQ(AuthenticatedRequest(*owner, server, "PLAY", server.url(), headers)
+                .status_code,
+            200);
+  ASSERT_GT(owner->ReceiveRtpFor(std::chrono::milliseconds(100)), 0U);
+
+  auto rejected = TlsRtspTestClient::Connect(server.port());
+  ASSERT_NE(rejected, nullptr);
+  if (std::string_view(GetParam()) == "RESPONSE") {
+    rejected->SendOnly("RTSP/1.0 200 OK\r\nCSeq: 1\r\nSession: " + session +
+                       "\r\n\r\n");
+    // An ordered round trip proves the preceding response reached dispatch.
+    ASSERT_EQ(rejected->Request("OPTIONS", server.url()).status_code, 200);
+  } else {
+    const auto response =
+        rejected->Request(GetParam(), server.url(), {}, headers);
+    EXPECT_EQ(response.status_code, 401);
+    EXPECT_TRUE(response.body.empty());
+  }
+  rejected.reset();
+
+  // Checking process health or GET_PARAMETER alone misses the session teardown.
+  EXPECT_NO_THROW(
+      EXPECT_GT(owner->ReceiveRtpFor(std::chrono::milliseconds(500)), 0U));
+  EXPECT_EQ(AuthenticatedRequest(*owner, server, "PLAY", server.url(), headers)
+                .status_code,
+            200);
+  EXPECT_EQ(
+      AuthenticatedRequest(*owner, server, "TEARDOWN", server.url(), headers)
+          .status_code,
+      200);
+}
+
+INSTANTIATE_TEST_SUITE_P(Unauthenticated, RtspSessionIsolationTest,
+                         testing::Values("PLAY", "OPTIONS", "GET_PARAMETER",
+                                         "TEARDOWN", "RESPONSE"));
+
+TEST(RtspDigestAuthIntegrationTest,
+     SessionExistenceIsHiddenBeforeAuthentication) {
+  LiveSecureServer server;
+  auto client = TlsRtspTestClient::Connect(server.port());
+  ASSERT_NE(client, nullptr);
+  const std::vector<std::pair<std::string, std::string>> headers{
+      {"Session", "nonexistent-session"}};
+  for (const char* method : {"PLAY", "OPTIONS"}) {
+    EXPECT_EQ(client->Request(method, server.url(), {}, headers).status_code,
+              401);
+    EXPECT_EQ(
+        AuthenticatedRequest(*client, server, method, server.url(), headers)
+            .status_code,
+        454);
+  }
+}
+
+TEST(RtspDigestAuthIntegrationTest, AuthenticatedOptionsAndReconnectStillWork) {
+  LiveSecureServer server;
+  // A new connection can establish a fresh stream after a normal teardown.
+  for (int connection = 0; connection < 2; ++connection) {
+    auto client = TlsRtspTestClient::Connect(server.port());
+    ASSERT_NE(client, nullptr);
+    const auto session = SetupSession(*client, server);
+    const std::vector<std::pair<std::string, std::string>> headers{
+        {"Session", session}};
+    client->SendOnly("RTSP/1.0 200 OK\r\nCSeq: 1\r\nSession: " + session +
+                     "\r\n\r\n");
+    EXPECT_EQ(
+        AuthenticatedRequest(*client, server, "OPTIONS", server.url(), headers)
+            .status_code,
+        200);
+    ASSERT_EQ(
+        AuthenticatedRequest(*client, server, "PLAY", server.url(), headers)
+            .status_code,
+        200);
+    EXPECT_GT(client->ReceiveRtpFor(std::chrono::milliseconds(100)), 0U);
+    EXPECT_EQ(
+        AuthenticatedRequest(*client, server, "TEARDOWN", server.url(), headers)
+            .status_code,
+        200);
+  }
 }
 
 class InjectedClockTlsServer {

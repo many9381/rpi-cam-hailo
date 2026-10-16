@@ -56,6 +56,28 @@ describe('StatusPanel', () => {
     expect(screen.queryByText(/capture/i)).not.toBeInTheDocument();
   });
 
+  it('explains capture failure and exhausted retries without blaming credentials', () => {
+    render(<LanguageProvider><StatusPanel health={{ status: 'ok' }}
+      cameras={[{ id: 'cam-a', state: 'error', snapshot_available: false,
+        capture_error: 'E_CAMERA_NO_FRAMES', recovery_attempts: 3, recovery_limit: 3 }]}
+      selectedCameraId="cam-a" onSelectCamera={() => undefined}
+      onRestartRuntime={async () => undefined} /></LanguageProvider>);
+    expect(screen.getByText(/No camera frames received/i)).toBeVisible();
+    expect(screen.getByText(/Automatic recovery stopped/i)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Restart camera runtime' })).toBeEnabled();
+  });
+
+  it('shows pending recovery without offering a competing manual retry', () => {
+    render(<LanguageProvider><StatusPanel health={{ status: 'ok' }}
+      cameras={[{ id: 'cam-a', state: 'recovering', snapshot_available: false,
+        capture_error: 'E_CAMERA_CAPTURE_STALLED', recovery_attempts: 1, recovery_limit: 3 }]}
+      selectedCameraId="cam-a" onSelectCamera={() => undefined}
+      onRestartRuntime={async () => undefined} /></LanguageProvider>);
+    expect(screen.getByText(/Camera frame delivery stopped/i)).toBeVisible();
+    expect(screen.getByText(/Automatic recovery: 1.*3/i)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Restart camera runtime' })).not.toBeInTheDocument();
+  });
+
   it('offers one bounded runtime retry for an error camera', async () => {
     const user = userEvent.setup();
     const restart = vi.fn(() => new Promise<void>(() => {}));

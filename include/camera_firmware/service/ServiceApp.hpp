@@ -61,6 +61,9 @@ struct CameraStatus {
   std::uint64_t capture_error_count{0U};
   std::uint64_t encode_error_count{0U};
   double last_encode_ms{0.0};
+  std::string capture_error;
+  unsigned int recovery_attempts{0U};
+  unsigned int recovery_limit{3U};
 };
 
 using CameraStatusProvider = std::function<std::vector<CameraStatus>()>;

@@ -43,6 +43,11 @@ export const ko: Messages = {
     managementUnavailable: '카메라 관리를 사용할 수 없습니다.',
   },
   status: {
+    noCameraFrames: '카메라 프레임을 받지 못했습니다. 전원을 분리한 상태에서 카메라 연결을 점검하세요.',
+    captureStalled: '카메라 프레임 수신이 멈췄습니다. 영상과 AI를 사용할 수 없습니다.',
+    captureFailed: '카메라 촬영에 실패했습니다.',
+    recoveringCapture: '자동 복구 시도 {n}/{max}회 사용. 복구를 진행하고 있습니다.',
+    captureRecoveryStopped: '자동 복구를 중단했습니다. 카메라 연결을 점검한 뒤 카메라 런타임을 다시 시작하세요.',
     deviceOperational: '정상',
     deviceChecking: '확인 중',
     deviceRestricted: '제한됨',
@@ -155,6 +160,8 @@ export const ko: Messages = {
     signIn: '로그인',
     signingIn: '로그인하는 중...',
     signInFailed: '로그인에 실패했습니다. 자격 증명을 확인한 후 다시 시도하세요.',
+    requestOriginFailed:
+      '요청 출처 또는 카메라 주소가 거부되었습니다. 카메라의 현재 HTTPS 주소로 직접 접속한 후 다시 시도하세요.',
     initialSetupHeading: '초기 설정 계정',
     initialSetupDescription:
       '이 계정은 초기 설정 전용이며 설정이 완료되면 삭제됩니다.',
@@ -177,7 +184,14 @@ export const ko: Messages = {
   },
   setup: {
     initializationFailed:
-      '카메라 초기화에 실패했습니다. 자격 증명을 확인한 후 다시 시도하세요.',
+      '카메라 초기화 결과를 확인하지 못했습니다. 카메라 연결 상태를 확인한 후 다시 시도하세요.',
+    sessionEnded:
+      '초기 설정 로그인 세션이 종료되었습니다. 아래에 표시된 초기 계정으로 다시 로그인한 뒤 관리자 정보를 다시 입력하세요.',
+    serviceUnavailable:
+      '카메라 서비스가 초기 설정을 완료하지 못했습니다. 잠시 후 다시 시도하세요.',
+    rateLimited: '요청이 너무 많습니다. 잠시 후 다시 시도하세요.',
+    requestInvalid: '초기 설정 요청이 거부되었습니다. 입력 내용을 확인한 후 다시 시도하세요.',
+    peerChanged: '접속 주소가 변경되었습니다. 설정 내용을 확인한 후 다시 시도하세요.',
     createAdministratorHeading: '관리자 계정 생성',
     stepAccountProgress: '3단계 중 1단계 · 계정',
     resolveRequirements: '아래에 나열된 비밀번호 요구 사항을 해결하세요.',
@@ -195,9 +209,14 @@ export const ko: Messages = {
     next: '다음',
     registerAccessHeading: '관리 액세스 등록',
     stepAccessProgress: '3단계 중 2단계 · 관리 액세스',
+    restrictManagementAccess: 'IP로 관리 접근 제한',
+    managementPolicyLabel: '관리 IP 제한',
+    restrictionsEnabled: '사용',
+    restrictionsDisabled: '사용 안 함',
+    managementPolicyDescription:
+      'DHCP로 클라이언트 주소가 바뀔 수 있다면 이 설정을 끄세요. 초기 설정에서 카메라나 클라이언트 IP를 입력할 필요가 없습니다. 로그인은 계속 필요합니다. 사용자 및 접근에서 나중에 제한을 켤 수 있습니다.',
     singleHostsDescription:
-      '이 카메라는 단일 호스트만 관리할 수 있습니다 — 범위, 와일드카드, ' +
-      'CIDR 블록은 사용할 수 없습니다. 현재 주소는 이미 등록되어 있습니다.',
+      '범위, 와일드카드, CIDR 블록 대신 개별 클라이언트 주소를 등록하세요. 현재 주소는 자동으로 포함됩니다. DHCP 변경 후에도 접근하려면 고정된 주소를 사용하세요.',
     registeredHostsLabel: '등록된 관리 호스트',
     currentSessionTag: '(현재 세션)',
     addHostLabel: '관리 주소 추가',
@@ -356,6 +375,17 @@ export const ko: Messages = {
     resetViewerPasswordFailed: '뷰어 비밀번호를 재설정할 수 없습니다.',
     deleteViewerFailed: '뷰어를 삭제할 수 없습니다.',
 
+    policyDescription:
+      '사용하면 역할별로 저장된 주소에서만 로그인하고 관리 기능에 접근할 수 있습니다. 끄면 주소는 보관되지만 접근 제한에 적용되지 않습니다. 계정 로그인은 계속 필요합니다. 제한을 켠 상태에서 DHCP 주소가 바뀌면 접근이 차단될 수 있습니다.',
+    policyCurrentAddress: '현재 연결 주소: {address}',
+    policyCurrent: '현재 설정: {state}',
+    policyLoading: '관리 IP 제한을 불러오는 중...',
+    policyLoadFailed: '관리 IP 제한을 불러오지 못했습니다.',
+    policyRetry: '제한 설정 다시 불러오기',
+    policySignInNotice: '변경 내용을 저장하면 모든 활성 세션이 종료됩니다. 계속하려면 다시 로그인하세요.',
+    policySave: '저장 후 다시 로그인',
+    policySaving: '제한을 저장하는 중...',
+    policySaveFailed: '관리 IP 제한을 저장하지 못했습니다.',
     loadingAccessIps: '액세스 IP를 불러오는 중...',
     accessIpListLoadFailed: '액세스 IP 목록을 불러올 수 없습니다.',
     retryAccessIps: '액세스 IP 다시 시도',
@@ -530,6 +560,7 @@ export const ko: Messages = {
     userConflict: '이 계정이 변경되었습니다. 새로고침한 후 다시 시도하세요.',
     userNotFound: '해당 계정이 더 이상 존재하지 않습니다.',
     notAuthorized: '이 작업을 수행할 권한이 없습니다.',
+    managementIpLockout: '제한을 켜기 전에 현재 IP 주소를 관리자 접근 목록에 추가하세요.',
     managementIpInvalid: '유효한 IPv4 또는 IPv6 호스트 주소를 하나 입력하세요.',
     managementIpExists: '해당 주소는 이 역할에 이미 존재합니다.',
     managementIpLimitReached: '이 역할의 주소 한도에 도달했습니다.',
