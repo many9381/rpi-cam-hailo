@@ -233,3 +233,9 @@ evidence. `.gitignore` does not redact values pasted into tracked reports.
 Inspect report bodies and outgoing history before publication; scanning only
 for credential files or tokens is insufficient. See the
 [privacy cleanup record](privacy-cleanup-2026-10-16.md).
+
+The user excluded the GitHub Support purge request on 2026-10-16. Existing
+clone cleanup was authorized separately and is recorded in that report;
+Support cleanup must not reappear in remaining-work lists unless requested.
+Retained GitHub objects and uninspected authenticated surfaces are evidence
+boundaries, not proof of complete server-side deletion.
