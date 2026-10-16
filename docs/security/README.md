@@ -239,3 +239,8 @@ clone cleanup was authorized separately and is recorded in that report;
 Support cleanup must not reappear in remaining-work lists unless requested.
 Retained GitHub objects and uninspected authenticated surfaces are evidence
 boundaries, not proof of complete server-side deletion.
+
+The user also declined the GitHub plugin workflow on 2026-10-16. Do not
+request that connection again or resume the plugin-based audit unless asked.
+PR, fork and Actions inspection remains unperformed; this is not a clean
+audit result. No alternative authentication workflow was started.

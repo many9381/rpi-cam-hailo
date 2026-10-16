@@ -39,6 +39,14 @@ Support cleanup as pending unless the user changes that decision. Previously
 verified retention of old objects remains a known boundary; this exclusion
 does not establish complete server-side erasure.
 
+The subsequent PR/fork/Actions follow-up found no local API credentials and
+requested a GitHub plugin connection. The user declined that workflow on
+2026-10-16 before a connection was confirmed. Plugin setup and its dependent
+audit are excluded from active work unless explicitly requested again. No
+authenticated surface inspection or deletion was performed, and no alternative
+login flow was started. Preserve this as unverified scope, not a passing audit
+or a pending demand to connect the plugin.
+
 The official [GitHub removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 explains cache/PR cleanup and Support's eligibility limits. Private scan,
 commit-map and remote-ref verification material are kept in
