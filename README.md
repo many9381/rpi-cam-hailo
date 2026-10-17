@@ -1,280 +1,379 @@
-# rpi-cam-hailo — camera firmware for Raspberry Pi 5 + Hailo
+# rpi-cam-hailo Camera Firmware
 
-A single-binary C++20 camera firmware for the Raspberry Pi 5 with the IMX708
-camera module and an optional Hailo-8 AI accelerator, plus the React web
-application it serves. It captures 1080p50 from libcamera, encodes with x264,
-serves fragmented MP4 over HTTPS and SRTP over RTSPS, runs object detection on
-the Hailo device, burns an on-screen display into every output, and is built
-to the hardening requirements of a certified network camera: authenticated
-HTTPS API and web UI, audit log, integrity self-protection with a signed
-manifest, and a source/dependency security gate in the repository.
+**rpi-cam-hailo** is the application firmware for an embedded Linux network
+camera built around **Raspberry Pi 5**, **Camera Module 3 Wide (IMX708)** and
+an optional **Hailo-8 AI accelerator**. A C++20 service captures and encodes
+video, runs object detection, serves secure streams and manages the device.
+Its React web UI provides setup, live viewing and administration.
 
-## Features
+This firmware and the companion
+[**rpi-cam-bsp OS image project**](https://github.com/many9381/rpi-cam-bsp)
+form one embedded system. The BSP supplies the bootable Yocto Linux image,
+kernel, drivers and provisioning. This repository supplies the application
+and UI running on that OS. The supported installation route packages both
+into an SSD image with device-specific setup.
 
-- **Video**: libcamera (PiSP) capture at 1920x1080 NV12 up to 50 fps, x264
-  encode on a dedicated thread, an on-demand software-downscaled sub stream.
-- **Streaming**: `live.mp4` fragmented MP4 over HTTPS with per-client
-  back-pressure, JPEG snapshots, and an RTSPS control channel with SDES/MIKEY
-  keyed SRTP media (`/imx708/main`, `/imx708/sub`) that stock GStreamer plays.
-- **AI**: HailoRT object detection on a low-resolution ISP output (no software
-  colour conversion), detections as JSON and as a server-sent-event stream,
-  multi-model configuration.
-- **OSD**: up to 8 items (timestamp, camera id, custom text) laid out from the
-  same ratios in the web preview and the firmware compositor, rendered from an
-  embedded Korean-capable font.
-- **Web UI / API**: setup wizard, dashboard with live preview, camera / sub
-  stream / OSD settings, users and access, optional management IP restrictions, audit
-  records, system protection; Korean and English.
-- **Security**: HTTPS with device TLS material, session cookies, password
-  hashing, per-IP login rate limit, role-based access (administrator /
-  viewer), RTSP digest authentication, SQLite security store, bounded audit
-  log with rotation.
-- **Integrity**: a signed manifest over the firmware binary, its configuration
-  and the kernel image, verified at start and on a schedule; the device runs
-  restricted when verification fails.
-- **Runtime settings**: camera, sub-stream and OSD settings editable from the
-  web with validation shared between backend and frontend, durable apply /
-  rollback markers, and restart-safe storage.
+**Current status:** the integrated image has passed internal device
+acceptance. Security features and TTA preparation evidence are documented;
+this repository does **not** establish that the product holds TTA
+certification. See [the status and evidence table](#tta-certification-preparation).
 
-## Platform
+- **Users:** [first boot and everyday use](#first-boot-and-everyday-use)
+- **System developers:** [Pi 5 architecture and limits](#raspberry-pi-5-architecture-and-limits)
+- **Security reviewers:** [TTA certification preparation](#tta-certification-preparation)
+- **Contributors:** [build and test](#build-and-test), [source layout](#source-layout)
 
-The current deployed target is the companion Yocto project's
-`rpi5-camera-hailo` image. Image `20261016T111625Z-e664cb9647e7` passed
-[installation and device validation on 2026-10-16](docs/security/static-warning-deployment-validation-2026-10-16.md).
-Runtime versions below describe that image; build requirements come from the
-current source configuration.
+## One system, two repositories
 
-| Item | Validated Yocto image |
+| Repository | Responsibility | Change it when you need to… |
+|---|---|---|
+| **rpi-cam-hailo** — this repository | Camera service, streaming, AI integration, web UI, access control, audit and integrity checks | Change application behavior, UI, APIs or application security |
+| [**rpi-cam-bsp**](https://github.com/many9381/rpi-cam-bsp) | Yocto layers, kernel/driver integration, runtime libraries, image generation, SSD installation and provisioning | Change the OS, hardware support, packaged versions or device installation |
+
+The BSP builds a pinned firmware revision plus reviewed layer patches.
+A source checkout's current `HEAD` is not automatically the version shipped
+in an image. Application fixes that depend on library or kernel changes must
+be integrated and validated with the corresponding BSP changes. The
+[RTSP session-isolation correction](docs/security/rtsp-session-isolation-remediation-2026-10-11.md)
+is one example: it requires both application and GStreamer library changes.
+
+## What the camera provides
+
+| Capability | Behavior |
 |---|---|
-| Board | Raspberry Pi 5, Camera Module 3 Wide (IMX708), Hailo-8 (`/dev/hailo0`) |
+| Video | libcamera capture, software x264 H.264 encoding, HTTPS fragmented MP4 preview and JPEG snapshots |
+| Secure streaming | RTSPS control with SRTP media, Digest authentication and main/sub-stream mounts |
+| AI | HailoRT object detection; labels, confidence and processing status through the UI, JSON API and server-sent events |
+| Overlay | Up to eight timestamp, camera-ID or custom-text items; rendered into the main video, snapshots and derived sub stream |
+| Administration | Initial administrator setup, camera/encoder/sub-stream settings, users, roles and optional management IP restrictions |
+| Protection | Password hashing, session controls, login rate limiting, audit rotation, signed integrity checks and restricted operation on verification failure |
+| Web UI | Korean and English; served by the C++ service, with no Node.js server required on the device |
+
+## First boot and everyday use
+
+On a configured device, the camera service starts automatically at boot.
+Use the browser to complete initial administrator setup, then sign in to
+view video and manage the camera.
+
+1. Find the Pi's current Ethernet or Wi-Fi address and open
+   `https://<current-Pi-IP>:8443/`.
+2. Sign in with the initial account displayed by the application and create
+   the permanent administrator in the setup wizard.
+3. Check live video. With Hailo enabled, also check `hailo / ready`, an
+   increasing processed-frame count, and object names with confidence values.
+4. Use the dashboard to adjust camera, overlay and sub-stream settings.
+   Users, access rules, audit records and system protection have their own
+   administration pages.
+
+The Pi's future DHCP address does not need to be registered during setup.
+Management IP restrictions default **off** for new web setup; authentication
+is still required. An optional allowed address is a **client PC's address**,
+not the Pi's server address. Manage this policy in **Users → Access IPs**.
+Enabling it requires the current administrator's address in the allowed list.
+
+Sessions remain bound to the login client's IP, so moving that client to
+another network can require another login. Reboots preserve accounts and
+settings. **A full SSD reflash replaces them and requires setup again.**
+An application update that preserves its security database has a different
+state-preservation boundary; see [setup and access policy](docs/security/dhcp-setup-2026-10-11.md).
+
+The default bootstrap TLS certificate is self-signed for `camera.local`.
+It does not create DNS/mDNS records, and direct IP access can produce trust
+or name warnings. For trusted TLS access, provision a resolvable name and a
+matching trusted certificate using the
+[BSP provisioning guide](https://github.com/many9381/rpi-cam-bsp/blob/feature/root-firmware-layers/docs/runbooks/camera-firmware.md#device-provisioning).
+
+Stream addresses are:
+
+- Browser preview and snapshots: provided by the authenticated dashboard.
+- Main RTSPS stream: `rtsps://<device>:8555/imx708/main`.
+- Sub stream: `rtsps://<device>:8555/imx708/sub`, when enabled.
+
+Use an RTSPS/SRTP-compatible client; the documented interoperability tests
+use GStreamer. Initial administrator setup creates the RTSP Digest
+credential. The `rtsp-digest-credential` tool supports explicit provisioning.
+
+## Raspberry Pi 5 architecture and limits
+
+### The missing accelerator is the video encoder
+
+Raspberry Pi 5 has **no hardware H.264 encoder**. This is confirmed by a
+[Raspberry Pi engineer](https://forums.raspberrypi.com/viewtopic.php?t=367583).
+The official [camera software documentation](https://www.raspberrypi.com/documentation/computers/camera_software.html#low-latency-video-with-raspberry-pi-5)
+also describes its software-encoding latency trade-offs.
+
+Image processing still uses the **hardware image signal processor (ISP)**
+through libcamera, and **Hailo-8 accelerates inference** when installed.
+The GPU and Hailo device do
+not provide an H.264 encoder for this pipeline. Installing another codec
+plugin cannot add the missing dedicated encoder; the shipped path uses x264
+on the Arm CPU.
+
+The comparison below is with embedded camera SoCs that provide dedicated
+video-processing blocks. Capabilities and vendor SDKs vary by platform.
+
+| Stage | Camera SoC with dedicated video blocks | This implementation on Pi 5 |
+|---|---|---|
+| Sensor and image processing | Sensor → ISP → image buffers | IMX708 → libcamera/CFE/PiSP → image buffers; ISP acceleration remains in use |
+| H.264 compression | A hardware video encoder consumes frames | A CPU x264 worker compresses the main stream |
+| Secondary stream | May have hardware scaling and an additional encoder channel | CPU NV12 downscaling plus a separate x264 worker, activated by sub-stream demand |
+| Text overlay and JPEG | May be handled by dedicated media blocks | CPU overlay compositor and libjpeg snapshot encoding |
+| AI | A separate NPU/DSP or CPU path, depending on the SoC | ISP low-resolution output → preprocessing → Hailo-8; AI and video encoding have separate workloads |
+| Buffer hand-off | Vendor DMA/fence APIs may connect hardware stages | Shared frame leases keep capture buffers alive across CPU consumers; this is not an end-to-end zero-copy pipeline |
+
+### How that changes the software design
+
+```mermaid
+flowchart TD
+    A["IMX708 camera"] --> B["libcamera and hardware ISP"]
+    B --> C["Main NV12 frame and CPU overlay"]
+    C --> D["Latest-frame mailbox"]
+    D --> E["Dedicated CPU x264 encoder"]
+    E --> F["Encoded buffer: HTTPS fMP4 and RTSPS/SRTP"]
+    C --> G["On-demand CPU downscale and sub x264 encoder"]
+    G --> H["Sub-stream RTSPS/SRTP"]
+    C --> I["On-demand CPU JPEG snapshot"]
+    B --> J["Low-resolution RGB preferred; NV12 fallback"]
+    J --> K["Preprocessing and Hailo inference"]
+    K --> L["Detection JSON, events and dashboard"]
+```
+
+1. **Capture does not wait for H.264 encoding.** The capture callback hands a
+   frame to a dedicated encoder thread. A one-slot mailbox replaces an
+   unconsumed frame with the newest one, releasing the stale frame. When
+   encoding falls behind, encoded frame rate can drop instead of growing an
+   ever-longer queue. See [CameraPipeline](src/media/CameraPipeline.cpp) and
+   [EncodeMailbox](include/camera_firmware/media/EncodeMailbox.hpp).
+2. **Buffer ownership is explicit.** Snapshots, encoding and AI can outlive a
+   capture callback. A [FrameLease](include/camera_firmware/media/FrameLease.hpp)
+   delays requeueing the camera request until its consumers finish. CPU
+   mapping and compressed-output copies still exist. A hardware-encoder port
+   must account for its own buffer formats, synchronization and lifetime rules.
+3. **AI preprocessing uses the ISP where possible.** A low-resolution RGB
+   stream avoids CPU color conversion when accepted by libcamera. The code
+   falls back to low-resolution NV12 conversion, then to the main stream if
+   necessary. AI takes frames when ready rather than holding a capture buffer
+   between inferences. See [preprocessing](src/ai/Nv12RgbPreprocessor.cpp).
+4. **A sub stream has a real CPU cost.** The
+   [sub-stream tap](include/camera_firmware/media/SubStreamTap.hpp) requests
+   work only while active clients need it. The
+   [sub-stream encoder](src/media/SubStreamEncoder.cpp) scales and encodes on
+   the CPU; adding a stream is not a free hardware channel.
+5. **Overlay and output sharing happen before transport.** Text is stamped
+   into the main frame before readers receive it, so snapshots and both video
+   streams share the overlay. Main H.264 output is reused for MP4 and RTSP
+   delivery; each viewer does not need its own main-stream encoder.
+
+The [reference configuration](config/app-rpi5-dev.yaml) requests
+**1920×1080 at 50 fps**. Treat capture rate, encoded output rate and inference
+rate as separate measurements.
+CPU load, scene complexity, x264 preset, additional streams, snapshots,
+network clients and cooling affect the result. A successful capture check
+is not a guarantee of sustained 50 fps encoding under every workload.
+The dashboard exposes capture/encoded rates and encode time to make this
+visible. Endurance testing is outside the agreed validation scope.
+
+For another embedded platform, the application/security layers can be reused,
+but the media integration needs a deliberate port: capture API and formats,
+encoder implementation, buffer synchronization, scaling/overlay and driver
+packaging must be assessed. A vendor hardware encoder is not a drop-in
+replacement for the current x264 worker.
+
+## TTA certification preparation
+
+**Status as of 2026-10-17: security implementation and internal validation
+are documented; formal TTA certification is not established.** No issued
+certificate or complete external certification test report is recorded in
+this repository. The following is an engineering progress summary, not a
+percentage of certification completed or a declaration of conformity.
+
+TTA is the Telecommunications Technology Association. The project organizes
+its source-weakness and known-vulnerability evidence as **TTA 10.1** and
+**TTA 10.2**. Those labels follow the repository's evidence scheme; they do
+not replace the full applicable criteria and evaluation procedure from the
+[TTA service portal](https://cs.tta.or.kr/tta/main/main.do).
+
+| Work area | Recorded progress | Evidence and boundary |
+|---|---|---|
+| Accounts and access control | Setup, password policy, roles, session expiry, recent-authentication checks and optional IP policy implemented and regression-tested | [DHCP-safe setup](docs/security/dhcp-setup-2026-10-11.md) and [setup recovery](docs/security/setup-session-recovery-2026-10-12.md); deployment policy still matters |
+| Secure transport and session isolation | HTTPS and RTSPS/SRTP implemented; the identified RTSP session-isolation defect was corrected in both app and library | [October 11 deployment tests](docs/security/rtsp-deployment-validation-2026-10-11.md): 170 RTSP unit/integration tests and authenticated encrypted-video verification; historical evidence for that image |
+| Audit and self-protection | Bounded audit storage, integrity signatures, security self-tests and restricted-state handling implemented with automated coverage | [Audit tests](tests/unit/security/AuditLogServiceTest.cpp), [protection tests](tests/integration/SystemProtectionIntegrationTest.cpp) and [quality gate](docs/security/static-analysis-2026-10-15.md); application integrity checks do not establish hardware secure boot |
+| TTA 10.1 — source weaknesses | Formatting and clang-tidy gate implemented; October 16 review covered 79 product translation units with **0 errors and 198 remaining warnings** | [Warning review and dispositions](docs/security/static-warning-review-2026-10-16.md); zero gate errors is not zero findings |
+| TTA 10.2 — known vulnerabilities | Package/SPDX inventory, web SBOM, source/backport assessments, remediation and consumer reviews recorded | [Security evidence index](docs/security/README.md) and [residual review](docs/security/consumer-boundary-review-2026-10-16.md); open, partial and unassessed findings remain |
+| Integrated OS and firmware | October 17 image accepted: 391 readable installed-file hashes, three Wi-Fi reboots, capture progress and operator-confirmed video/Hailo results | [Current deployment record](docs/security/buildtools-deployment-validation-2026-10-17.md); this is functional/device acceptance, not an external certification result |
+| Formal certification | No certificate or complete external evaluation result documented | A complete mapping to the applicable criteria, the evaluated product/configuration and external results is not established by these engineering records |
+
+The **October 15 full quality run** recorded 1,356 CTest passes, 10 explicit
+hardware skips and 770 web-test passes. The **October 16 selective follow-up**
+recorded 361 selected target-test passes and reduced the warning count to
+198. These are separate runs; the full source suite was not rerun during
+October 17 device acceptance.
+
+The last residual advisory ledger, reviewed on October 15–16, retained
+**11 open, 3 partially mitigated/open and 1 unassessed association** for its
+recorded image/source baseline. This is not a fresh vulnerability count for
+the October 17 image with development packages removed. Preserve the dated
+assessments and their applicability conditions; successful video operation
+cannot close a vulnerability finding.
+
+The reviewed libevent camera paths and HailoRT fixed-pattern `glob` task are
+[complete with no further implementation currently assigned](docs/security/consumer-boundary-review-2026-10-16.md#product-work-status).
+Endurance testing, additional MOV/common-allocator redesign and separate
+validation of the development-tools image remain
+[excluded by agreement](docs/security/README.md#agreed-work-exclusions).
+Exclusions describe scope; they do not count as certification passes.
+
+The current image is a development baseline: bootstrap certificates,
+optional access restrictions, development utilities and personal login
+restoration must be distinguished from any future evaluated deployment
+configuration. Use the [security evidence index](docs/security/README.md)
+for dated reports, unresolved dispositions and exact image/package evidence.
+
+## Validated platform
+
+The current accepted integrated image is **`20261017T051814Z-63b1d2587b1b`**,
+profile `rpi5-camera-hailo`. Its [deployment report](docs/security/buildtools-deployment-validation-2026-10-17.md)
+records what was measured and what the operator confirmed.
+
+| Component | Validated image or build requirement |
+|---|---|
+| Hardware | Raspberry Pi 5, Camera Module 3 Wide, USB SSD, Hailo-8 |
 | OS | Yocto 6.0 (`wrynose`), AArch64, kernel `6.18.55-v8-16k` |
-| Capture | Raspberry Pi libcamera `0.6.0+rpt20251202`, matching the downstream CFE/ISP drivers |
-| AI runtime | HailoRT 4.24.0 and matching 4.24.0 PCIe driver built for the image kernel |
-| C++ toolchain | Yocto GCC 15.3.0; project requires C++20 and CMake 3.25+ |
-| Web build | Node.js `^20.19.0` or `>=22.12.0` + npm, as declared in `web/package.json`; no Node.js runtime needed by the served UI |
-| Lint | clang-format / clang-tidy 18.1.3 in the latest source-quality run |
+| Capture stack | Raspberry Pi libcamera `0.6.0+rpt20251202`, matched to downstream CFE/ISP drivers |
+| AI stack | HailoRT and PCIe driver 4.24.0; a compatible checksum-pinned HEF model |
+| C++ build | C++20, CMake 3.25+; image cross-built with Yocto GCC 15.3.0 |
+| Web build | Node.js `^20.19.0` or `>=22.12.0` and npm, per `web/package.json`; build-time only |
+| Installed development tools | Target GCC/G++, CMake, Ninja and development headers absent by default; required `libgcc`/`libstdc++` runtime libraries retained |
 
-The companion project also offers a camera profile without Hailo. Earlier
-Raspberry Pi OS / Debian 13 development used a different kernel and libcamera
-0.7; its [dependency inventory](docs/security/dependency-inventory.md) is
-historical evidence. Use the actual image package manifest and SPDX for Yocto,
-as described in the [security evidence index](docs/security/README.md#current-yocto-image-evidence).
+The BSP also offers a camera profile without Hailo. Earlier Raspberry Pi OS /
+Debian development used a different kernel and libcamera stack; its
+[dependency inventory](docs/security/dependency-inventory.md) is historical.
+Use the actual image manifest/SPDX for installed package versions.
 
-## Repository layout
+## Build and test
 
-| Path | Contents |
-|---|---|
-| `apps/camera-firmware/` | the firmware executable (`main.cpp`, live MP4 byte stream) |
-| `apps/camera-firmware-integrity/` | CLI that creates and signs the integrity manifest |
-| `apps/rtsp-digest-credential/` | CLI that provisions RTSP digest credentials |
-| `src/`, `include/camera_firmware/` | library modules: `ai`, `boot`, `common`, `config`, `crypto`, `integrity`, `media`, `rtsp`, `runtime`, `security`, `service`, `settings` |
-| `plugins/gst-secure-srtp/` | GStreamer element that applies SRTP with firmware-owned keys |
-| `web/` | React 18 + TypeScript application (Vite, Vitest, Playwright e2e) |
-| `config/` | sample YAML configurations for the Pi 5 (`app-rpi5-dev.yaml`, AI variants) |
-| `cmake/` | dependency handling, including the vendored Drogon/Trantor copy and patches |
-| `patches/` | the patches applied to Drogon 1.9.0 and Trantor 1.5.20 |
-| `vendor/` | `stb_truetype`, the embedded NanumGothic Bold font (OFL) |
-| `tests/` | GoogleTest unit and integration suites (`tests/unit/<module>`, `tests/integration`) |
-| `tools/ci/` | quality gate script, pre-commit hook, hook installer |
-| `tools/security/` | SBOM generator and Debian security-tracker scanner |
-| `docs/security/` | dependency inventory, SBOMs, vulnerability scan and static-analysis records |
+### Build the complete appliance with Yocto
 
-## Building
-
-### Yocto image
-
-When this checkout is `rpi-cam-hailo/` inside the companion
-`yocto-rpi5-cam-firmware` workspace, run these commands from that workspace's
-root after preparing the local inputs in the
-[firmware integration runbook](../docs/runbooks/camera-firmware.md):
+Use the [BSP build instructions](https://github.com/many9381/rpi-cam-bsp#build-and-install)
+to prepare the host, source access, Hailo packages/model, Wi-Fi and SSD inputs.
+Run from the **BSP repository root**, not this firmware directory:
 
 ```bash
-BUILD_ID="$(./scripts/new-build-id.sh)"
-./scripts/build.sh --build-id "$BUILD_ID" rpi5-camera-hailo build
+./scripts/build-image.sh
 ./scripts/install-ssd.sh --check
-# With the registered target SSD attached, install the latest completed image:
+# Replaces the registered SSD with the latest completed image:
 ./scripts/install-ssd.sh
 ```
 
-The application, static web UI and optional development checkout are separate
-packages. Recipes use a pinned upstream commit plus reviewed layer patches;
-uncommitted edits here are not automatically included in an image. The web
-recipe builds offline with native Node.js. Routine Hailo image builds and
-installation do not require QEMU. See the runbook for source updates, private
-Hailo/Wi-Fi inputs, SSD selection and per-device provisioning.
+In a combined workspace this repository is checked out as `rpi-cam-hailo/`.
+Application, web assets and the optional editable source checkout are separate
+packages. Update the BSP source pin/patches deliberately when integrating
+firmware changes. The web recipe builds offline with host Node.js. Neither
+routine image generation nor installation requires a QEMU image.
 
-### Standalone source build
+### Build the application from source
 
-Install the development packages for the libraries the firmware links:
-libcamera, GStreamer core / app / rtsp / rtsp-server, libsrtp2 (2.7+), x264,
-libavutil, libswscale, OpenSSL, SQLite3, yaml-cpp, jsoncpp, libjpeg, GLib/GIO,
-and HailoRT with its headers. Use a libcamera build compatible with the target
-kernel's camera drivers. The historical Debian package list is a reference for
-that earlier environment, not a package-installation list for Yocto.
+This route is for a suitably provisioned development system or target
+sysroot. The default installed camera image intentionally omits build tools.
+Required development libraries include libcamera, GStreamer core/app/RTSP
+and RTSP server, libsrtp2 2.7+, x264, libavutil, libswscale, OpenSSL, SQLite3,
+yaml-cpp, jsoncpp, libjpeg and GLib/GIO; include HailoRT headers/libraries for
+a Hailo build. libcamera must match the target kernel's camera drivers.
 
-The HTTP server is Drogon 1.9.0 on Trantor 1.5.20. Both are copied from local
-source checkouts at configure time and patched (`patches/`), so the checkouts
-must be passed to CMake:
+CMake copies and patches exact, clean source checkouts of Drogon 1.9.0 and
+Trantor 1.5.20, validated by revision in
+[Dependencies.cmake](cmake/Dependencies.cmake). Configure and build:
 
 ```bash
 cmake -S . -B build \
   -DCAMERA_FIRMWARE_DROGON_SOURCE_DIR=/path/to/drogon-1.9.0 \
   -DCAMERA_FIRMWARE_TRANTOR_SOURCE_DIR=/path/to/trantor-1.5.20 \
   -DBUILD_TESTING=ON
-cmake --build build --target camera-firmware -j4
+cmake --build build -j4
+ctest --test-dir build --output-on-failure -j2
 ```
 
-The `camera-firmware` target also runs `npm ci` and `npm run build` in `web/`;
-the result is served from the `http.web_root` directory in the configuration.
-The default build type is RelWithDebInfo with `-DNDEBUG` stripped, so
-optimisation is on and assertions stay active. `compile_commands.json` is
-always written.
+The default build also builds the web assets with npm. The default
+`RelWithDebInfo` configuration keeps assertions enabled and writes
+`compile_commands.json`. Configure the intended integrity public key with
+`CF_INTEGRITY_PUBLIC_KEY_FILE` for deployment builds; CMake's bundled key is
+for development. The BSP handles its own signing identity integration.
 
-## Configuration
+To run the quality gate from this repository's root:
 
-One YAML file, validated on start (`camera-firmware --validate-config
-<file>`). Sections, with `config/app-rpi5-dev.yaml` as the reference:
+```bash
+tools/ci/check.sh
+# Optional local pre-commit format hook:
+tools/ci/install-hooks.sh
+# Web tests alone:
+(cd web && npx vitest run)
+```
 
-| Section | Purpose |
+The gate runs formatting, clang-tidy, the C++ build/tests and web tests/build.
+Its error families include `bugprone-*`, `cert-*`, `clang-analyzer-*` and
+`concurrency-*`. [CI](.github/workflows/ci.yml) is configured for a prepared
+self-hosted ARM64 runner. Hardware tests require their documented opt-in
+conditions; skipped tests are not passes.
+
+## Configuration and APIs
+
+The base YAML defines `platform`, `camera`, `http`, `security`,
+`self_protection`, `ai` and `secure_rtsp`. Validate it with
+`camera-firmware --validate-config <file>`.
+[Development examples](config/) are starting points and may disable TLS or
+authentication; the provisioned Yocto configuration is the supported
+appliance setup.
+
+Camera, sub-stream and OSD settings changed through the web are persisted
+under the security state directory and applied over the base YAML, with
+validation and rollback handling. Integrity protection covers the application
+binary, base configuration and kernel. Changing a covered file requires a
+new signed manifest; normal app-managed mutable settings do not. The Yocto
+kernel path is `/boot/kernel_2712.img`. See the
+[BSP provisioning guide](https://github.com/many9381/rpi-cam-bsp/blob/feature/root-firmware-layers/docs/runbooks/camera-firmware.md#device-provisioning)
+for signing and device material.
+
+All API groups are under `/api/v1`:
+
+| Group | Examples |
 |---|---|
-| `platform` | target board |
-| `camera` | capture source and format, x264 encoder settings, AI model attachment, sub stream, OSD |
-| `http` | bind address and port, TLS material, `web_root`, optional explicit `public_base_url`, snapshot and live-stream limits |
-| `security` | security store on/off, state directory, audit log bounds |
-| `self_protection` | manifest and signature paths, check interval |
-| `ai` | Hailo backend, models (`hef_path`, input format, labels, thresholds) |
-| `secure_rtsp` | RTSPS/SRTP server: port, mount, keying mode, digest client authentication |
+| Setup and authentication | `setup/status`, `setup/initialize`, `auth/login`, `auth/reauthenticate` |
+| Camera and AI | `cameras`, `cameras/{id}/live.mp4`, `cameras/{id}/snapshot.jpg`, `ai/detections`, `ai/detections/stream` |
+| Runtime configuration | `settings/runtime`, `settings/runtime/apply`, `runtime/restart` |
+| Administration and protection | `security/users…`, `security/management-ips…`, `audit/events`, `system/protection`, `system/integrity-checks` |
 
-Settings that are editable from the web (camera, sub stream, OSD) are stored
-under the security state directory and applied on top of the file.
+Direct HTTPS origin checks use the actual server socket address, port and
+TLS state. `http.public_base_url` can be empty for DHCP, or allow an explicit
+additional HTTPS origin. Arbitrary `Host` or forwarded headers do not grant
+access. Origin validation is separate from certificate trust/name validation.
 
-Direct HTTPS browser requests are checked against the server socket's actual
-IP address, port and TLS state. `http.public_base_url` can be empty for DHCP;
-when set, it permits an additional explicit HTTPS origin. `Host` and forwarded
-headers do not authorize arbitrary origins. No future Pi IP needs to be
-registered in the setup wizard. Certificate trust/name validation is separate
-from this origin check; see [first-boot setup](#first-boot-setup-on-yocto).
+## Source layout
 
-When `self_protection` is enabled the firmware refuses to run unrestricted
-unless the manifest covers the binary, the configuration and the kernel image
-and its signature verifies against the embedded public key:
-
-```bash
-camera-firmware-integrity create \
-  --entry configuration:app-config:/abs/path/app.yaml \
-  --entry firmware:camera-firmware:/abs/path/camera-firmware \
-  --entry kernel:kernel-image:/boot/firmware/kernel_2712.img \
-  --output /var/lib/camera-firmware/integrity/manifest.yaml
-camera-firmware-integrity sign \
-  --manifest /var/lib/camera-firmware/integrity/manifest.yaml \
-  --private-key /path/to/signing.private.pem \
-  --output /var/lib/camera-firmware/integrity/manifest.sig
-```
-
-That example uses a Raspberry Pi OS kernel path. The Yocto image uses
-`/boot/kernel_2712.img`; `install-ssd.sh` signs the actual installed files with
-the build PC's private signing key. Re-create and re-sign the manifest after
-changing a covered binary, base YAML or kernel. App-managed mutable settings
-do not require manually editing or re-signing the base YAML.
-
-## Running
-
-### First-boot setup on Yocto
-
-Normal SSD installation provisions the signed configuration and device TLS/SRTP
-material. `camera-firmware.service` starts automatically on boot and becomes
-reachable when Ethernet or Wi-Fi receives an address. A raw WIC written without
-provisioning has no active app configuration and does not start the service.
-
-1. Open `https://<current-Pi-IP>:8443/`. The installer defaults to
-   `public_host: null`, so the address need not be known at image-build time.
-   Its self-signed bootstrap certificate identifies `camera.local`; direct IP
-   access can show trust and name warnings. This does not configure DNS/mDNS.
-   Strict TLS validation requires a resolvable stable name and a matching
-   trusted certificate, as described in the provisioning runbook.
-2. Sign in with the initial account displayed by the app, then create the
-   permanent administrator in the wizard. New web setup defaults management IP
-   restrictions **off**. Account/password authentication remains required.
-3. The IP shown during setup is the connecting **client PC's address**, used
-   to validate the setup session and saved for optional access restrictions.
-   It is not the Pi's future server address. If restrictions are needed, manage
-   them in **Users → Access IPs**. Enabling them requires the current
-   administrator's address in the allowed list; policy changes require recent
-   authentication and end existing sessions.
-4. Check live video and, on the Hailo profile, `hailo / ready`, increasing
-   inference frames and object labels/confidence. Service startup alone is not
-   proof that capture or inference is working.
-
-Reboots preserve setup. A full SSD reflash replaces accounts and app state and
-requires setup again. An app update that preserves the existing security DB
-preserves its accounts and existing enabled IP restrictions. Sessions remain
-bound to the login client's IP even when restrictions are off; a client IP
-change requires a fresh login. If setup reports session expiry, sign in again
-and re-enter the administrator details instead of repeatedly submitting the
-expired wizard.
-
-### Standalone executable
-
-```bash
-./build/apps/camera-firmware/camera-firmware config/app-rpi5-dev.yaml
-```
-
-- Web UI and API: `https://<device>:8443/` (or `http://` when `http.tls` is
-  off in a development configuration). With security enabled, use the setup
-  wizard to create the first administrator and choose the IP restriction policy.
-- RTSP: `rtsps://<device>:8555/imx708/main` and `/imx708/sub` (when the sub
-  stream is enabled), digest-authenticated when `secure_rtsp.client_auth` is on;
-  initial administrator setup creates its RTSP Digest credential. The
-  `rtsp-digest-credential` CLI is available for explicit manual provisioning.
-
-### HTTP API (all under `/api/v1`)
-
-| Group | Endpoints |
+| Path | Contents |
 |---|---|
-| Health / setup | `health`, `setup/status`, `setup/initialize`, `setup/runtime` |
-| Authentication | `auth/login`, `auth/logout`, `auth/me`, `auth/password`, `auth/reauthenticate` |
-| Cameras | `cameras`, `cameras/{id}/live.mp4`, `cameras/{id}/snapshot.jpg`, `monitoring/cameras`, `stream` |
-| AI | `ai/detections`, `ai/detections/stream` (SSE), `ai/restart` |
-| Runtime settings | `settings/runtime`, `settings/runtime/apply`, `settings/runtime/discard`, `runtime/restart` |
-| Users and access | `security/users…`, `security/management-ips…` |
-| Audit and protection | `audit/events`, `audit/status`, `system/protection`, `system/integrity-checks`, `system/self-tests` |
+| `apps/camera-firmware/` | Service executable and live MP4 delivery |
+| `apps/camera-firmware-integrity/`, `apps/rtsp-digest-credential/` | Signing/manifest and RTSP credential tools |
+| `src/`, `include/camera_firmware/` | Capture, media, AI, runtime, security, integrity, settings and service modules |
+| `plugins/gst-secure-srtp/` | GStreamer SRTP encoder using firmware-owned keys |
+| `web/` | React/TypeScript UI, unit tests and browser-test definitions |
+| `config/` | Development configuration examples |
+| `cmake/`, `patches/` | Dependency integration and Drogon/Trantor patches |
+| `tests/` | C++, CMake and integration tests |
+| `tools/ci/`, `tools/security/` | Quality gate, hooks, SBOM and vulnerability tooling |
+| `docs/security/` | Dated security and device evidence, with a current-status index |
+| `vendor/` | Third-party resources, including the embedded font |
 
-## Tests and quality gate
+## Dependencies and licensing
 
-```bash
-ctest --test-dir build --output-on-failure -j2   # C++ suites + the web suite as one case
-cd web && npx vitest run                          # web unit tests
-tools/ci/check.sh                                 # format, clang-tidy, build, all tests, web build
-tools/ci/install-hooks.sh                         # once per clone: pre-commit format gate, blame config
-```
+Runtime dependencies include libcamera, GStreamer, HailoRT when enabled,
+x264, libsrtp2, FFmpeg libavutil/libswscale, Drogon/Trantor, OpenSSL, SQLite,
+yaml-cpp, jsoncpp, libjpeg and GLib. The web uses React, react-router and
+Vite; exact versions are in `web/package-lock.json`. `stb_truetype` and the
+NanumGothic Bold font are included under `vendor/`; the font uses the SIL
+Open Font License.
 
-`tools/ci/check.sh` is the gate CI runs (`.github/workflows/ci.yml`, a
-self-hosted ARM64 runner): clang-format dry run, clang-tidy over the product
-translation units with bugprone / CERT / analyzer / concurrency findings as
-errors, the C++ build with tests, `ctest`, then the web tests and build.
-`--lint` and `--format` run the first stages only. On a Pi 5 the clang-tidy
-stage takes about half an hour.
-
-## Security documentation
-
-`docs/security/` holds the evidence for the known-vulnerability and
-source-weakness work. The [security evidence index](docs/security/README.md)
-separates current Yocto image SPDX/package manifests, web lockfile/SBOM,
-historical Debian inventory, vulnerability assessments and source-quality
-results. Device acceptance and source tests are tied to their recorded build
-and inputs; they do not imply that all remaining security findings are closed.
-
-## Third-party components
-
-Drogon and Trantor (vendored from source with the patches in `patches/`),
-GStreamer and its RTSP server, libcamera, HailoRT, x264, libsrtp2, FFmpeg's
-libavutil/libswscale, OpenSSL, SQLite, yaml-cpp, jsoncpp, libjpeg, GLib;
-`stb_truetype` and the NanumGothic Bold font (SIL Open Font License) under
-`vendor/`; React, react-router and Vite for the web application. Current image
-versions are in its package manifest/SPDX; web versions are pinned in
-`web/package-lock.json`. See the [security evidence index](docs/security/README.md#current-yocto-image-evidence)
-for the artifact paths and historical-inventory boundary.
-
-## License
-
-No license file is included yet.
+No project-wide license file is included yet. Third-party notices and
+licenses remain applicable. Image redistribution must also follow the BSP's
+[H.264 licensing gate](https://github.com/many9381/rpi-cam-bsp/blob/feature/root-firmware-layers/docs/licensing/camera-h264.md).
+Keep credentials, raw device evidence, actual deployment addresses and device
+identifiers outside Git; publish sanitized reports only.
