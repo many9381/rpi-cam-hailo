@@ -22,9 +22,26 @@ firmware work under the separate
 These scope decisions do not turn unperformed tests into passes or close
 unresolved vulnerability findings.
 
+The separate image with target development tools enabled
+(`RPI5_LOCAL_BUILDTOOLS=1`) and its on-device C/C++ compile validation were
+declined by the user on 2026-10-17. They are excluded from active remaining
+work unless requested again. The default image acceptance below does not
+validate that optional variant.
+
 ## Current Yocto image evidence
 
-As of 2026-10-16, the accepted development image is
+As of 2026-10-17, the accepted default image is
+`20261017T051814Z-63b1d2587b1b`, profile `rpi5-camera-hailo`. Its 368-package
+manifest and installed device exclude target development tools while retaining
+required runtime libraries. Acceptance includes 391 readable installed-file
+hashes, three Wi-Fi reboots, actual capture progress, Codex login/daemon checks
+and fresh operator-confirmed video, Hailo readiness, increasing inference
+frames and detected object names/confidence. Initial setup was already complete
+when inspected and stayed complete. See the
+[October 17 deployment record](buildtools-deployment-validation-2026-10-17.md).
+The preceding accepted image and its historical evidence are retained below.
+
+The previously accepted development image on 2026-10-16 was
 `20261016T111625Z-e664cb9647e7`, profile `rpi5-camera-hailo`.
 [Build verification](static-warning-image-2026-10-16.md) and
 [installed-device acceptance](static-warning-deployment-validation-2026-10-16.md)
@@ -45,17 +62,20 @@ records 1,356 CTest passes, 10 explicit hardware skips and 770 web tests on the
 earlier 208-warning baseline; that full suite was not rerun for this deployment.
 
 In the companion Yocto workspace, use
-`artifacts/20261016T111625Z-e664cb9647e7/rpi5-camera-hailo/`:
+`artifacts/20261017T051814Z-63b1d2587b1b/rpi5-camera-hailo/` for current evidence:
 
 | Relative path | What it establishes |
 |---|---|
-| `manifests/rpi5-camera-image-raspberrypi5.rootfs.manifest` | Installed Yocto package names, architectures and versions; 460 entries in this build |
+| `manifests/rpi5-camera-image-raspberrypi5.rootfs.manifest` | Installed Yocto package names, architectures and versions; 368 entries in this build |
 | `manifests/image.spdx.json` | SPDX collected from this image's actual build output |
 | `manifests/layer-revisions.txt` | Fetched upstream layer revisions |
 | `provenance/inputs.json`, `provenance/sources.tar` | Local integration inputs, recipe pins and patch bytes; versions alone do not describe applied backports |
 | `checksums/SHA256SUMS` | Image, manifest and provenance integrity |
-| `security/static-warning-image-2026-10-16/` | Actual WIC verification and matching source-quality inputs |
-| `security/static-warning-deployment-2026-10-16/` | Installation and hardware acceptance, with its own evidence checksums |
+| `security/buildtools-deployment-2026-10-17/` | Actual WIC verification, installation and hardware acceptance, with its own evidence checksums |
+
+Historical source-quality and consumer-review evidence remains under the
+preceding image's `artifacts/20261016T111625Z-e664cb9647e7/rpi5-camera-hailo/`
+directory; those checks were not rerun for this deployment.
 
 These generated/private artifacts remain outside Git. When this firmware
 checkout is nested in the image workspace, the
@@ -70,7 +90,7 @@ those classifications. Additional MOV allocator redesign remains
 [deferred by agreement](ffmpeg-mov-fragment-followup-2026-10-15.md).
 
 The [October 16 consumer review](consumer-boundary-review-2026-10-16.md) verified
-867 ELF paths against that accepted WIC, narrowed the HailoRT `glob` call to a
+867 ELF paths against the October 16 WIC, narrowed the HailoRT `glob` call to a
 fixed hardware-monitor pattern, and found no dynamic `evhttp_*` consumer.
 Fourteen non-MOV primary records are unchanged. No additional layer patch or
 image build was justified; retain the existing dispositions and reopen work
@@ -88,8 +108,9 @@ be presented as an equivalent count of required development tasks.
 
 | File | What it is |
 |---|---|
+| [buildtools-deployment-validation-2026-10-17.md](buildtools-deployment-validation-2026-10-17.md) | Current default image accepted without target development tools: 391 readable installed-file hashes, three Wi-Fi reboots, capture and Codex checks, and user-confirmed video/Hailo PASS |
 | [consumer-boundary-review-2026-10-16.md](consumer-boundary-review-2026-10-16.md) | Actual-image consumer review: 871 file hashes, fixed HailoRT glob argument, libevent event-loop-only identified consumer, fourteen unchanged primary records; no new production patch or rebuild required |
-| [static-warning-deployment-validation-2026-10-16.md](static-warning-deployment-validation-2026-10-16.md) | Current image accepted: 415 readable installed files, three Wi-Fi reboots, actual capture progress, Codex 0.163.0 login/daemon checks and user-confirmed video/Hailo PASS |
+| [static-warning-deployment-validation-2026-10-16.md](static-warning-deployment-validation-2026-10-16.md) | Previous image accepted: 415 readable installed files, three Wi-Fi reboots, actual capture progress, Codex 0.163.0 login/daemon checks and user-confirmed video/Hailo PASS |
 | [static-warning-image-2026-10-16.md](static-warning-image-2026-10-16.md) | Hailo image built with `0010`; 417 WIC files and 257 C++ source hashes verified; configured Codex update to 0.163.0; subsequent installation/hardware acceptance PASS recorded above |
 | [static-warning-review-2026-10-16.md](static-warning-review-2026-10-16.md) | Ten selected warnings removed; 79 product units, 0 errors / 198 warnings; 361 selected target tests and 25 packaging tests; subsequent image build recorded above |
 | [quality-gate-deployment-validation-2026-10-16.md](quality-gate-deployment-validation-2026-10-16.md) | New quality-gate image accepted: 400 readable installed files, three Wi-Fi reboots, actual capture progress and user-confirmed video/Hailo PASS |
